@@ -6,8 +6,9 @@ import sys
 import json
 import sqlite3
 import webbrowser
+import re
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory
@@ -56,6 +57,19 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
     
+    # Tabela de compromissos (agenda)
+    c.execute('''CREATE TABLE IF NOT EXISTS commitments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL,
+        activity_id INTEGER,
+        title TEXT NOT NULL,
+        notes TEXT,
+        due_date TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+        FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
+    )''')
+
     # Tabela de atividades
     c.execute('''CREATE TABLE IF NOT EXISTS activities (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +117,72 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+
+
+def extract_future_commitment_dates(text):
+    if not text:
+        return []
+
+    now = datetime.now()
+    matches = []
+
+    # dd/mm ou dd/mm/aaaa
+    for m in re.finditer(r'\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b', text):
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year = int(m.group(3)) if m.group(3) else now.year
+        if year < 100:
+            year += 2000
+        try:
+            dt = datetime(year, month, day)
+            if dt.date() < now.date() and not m.group(3):
+                dt = datetime(year + 1, month, day)
+            if dt.date() >= now.date():
+                matches.append(dt.date().isoformat())
+        except ValueError:
+            pass
+
+    # em X dias
+    for m in re.finditer(r'\bem\s+(\d{1,3})\s+dias?\b', text.lower()):
+        days = int(m.group(1))
+        if days >= 0:
+            matches.append((now.date() + timedelta(days=days)).isoformat())
+
+    lower = text.lower()
+    if 'depois de amanhã' in lower or 'depois de amanha' in lower:
+        matches.append((now.date() + timedelta(days=2)).isoformat())
+    elif 'amanh' in lower:
+        matches.append((now.date() + timedelta(days=1)).isoformat())
+
+    seen = set()
+    ordered = []
+    for d in matches:
+        if d not in seen:
+            seen.add(d)
+            ordered.append(d)
+    return ordered
+
+
+def create_commitments_from_activity(cursor, client_id, activity_id, text):
+    dates = extract_future_commitment_dates(text)
+    if not dates:
+        return 0
+
+    safe_title = (text or '').strip().replace('\n', ' ')
+    if len(safe_title) > 120:
+        safe_title = safe_title[:117] + '...'
+
+    count = 0
+    for due_date in dates:
+        cursor.execute(
+            '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date)
+               VALUES (?, ?, ?, ?, ?)''',
+            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date)
+        )
+        count += 1
+    return count
 
 
 def _col_index(cell_ref):
@@ -377,6 +457,10 @@ def create_atividade():
                   (client_id, contact_type, information))
         conn.commit()
         activity_id = c.lastrowid
+
+        # Detectar compromissos futuros no texto da atividade e registrar na agenda
+        create_commitments_from_activity(c, client_id, activity_id, information)
+        conn.commit()
         
         # Atualizar last_activity_date do cliente
         c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
@@ -419,6 +503,10 @@ def create_activity():
                   (client_id, description))
         conn.commit()
         activity_id = c.lastrowid
+
+        # Detectar compromissos futuros no texto da atividade e registrar na agenda
+        create_commitments_from_activity(c, client_id, activity_id, description)
+        conn.commit()
         
         # Atualizar last_activity_date do cliente
         c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
@@ -481,6 +569,60 @@ def delete_activity(activity_id):
         return jsonify({'message': 'Atividade deletada'})
     except Exception as e:
         print(f'[ERROR] DELETE /api/activities/{activity_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/agenda', methods=['GET'])
+def get_agenda():
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        conn = get_db()
+        c = conn.cursor()
+
+        query = '''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position
+                   FROM commitments cm
+                   JOIN clients cl ON cm.client_id = cl.id'''
+        params = []
+
+        if start_date and end_date:
+            query += ' WHERE DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
+            params.extend([start_date, end_date])
+
+        query += ' ORDER BY cm.due_date ASC, cm.created_at ASC'
+        c.execute(query, params)
+        items = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(items)
+    except Exception as e:
+        print(f'[ERROR] GET /api/agenda: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agenda/semana-atual-count', methods=['GET'])
+def get_week_commitments_count():
+    try:
+        today = datetime.now().date()
+        start_week = today - timedelta(days=today.weekday())
+        end_week = start_week + timedelta(days=6)
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT COUNT(*) as total FROM commitments
+                     WHERE DATE(due_date) >= ? AND DATE(due_date) <= ?''',
+                  (start_week.isoformat(), end_week.isoformat()))
+        total = c.fetchone()['total']
+        conn.close()
+
+        return jsonify({
+            'total': total,
+            'start_week': start_week.isoformat(),
+            'end_week': end_week.isoformat()
+        })
+    except Exception as e:
+        print(f'[ERROR] GET /api/agenda/semana-atual-count: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Rotas de exportacao

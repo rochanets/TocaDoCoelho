@@ -576,6 +576,132 @@
         }
 
 
+        .filters-bar {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            margin-bottom: 14px;
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(52, 211, 153, 0.22);
+            background: rgba(255, 255, 255, 0.78);
+            box-shadow: 0 4px 10px rgba(16, 185, 129, 0.08);
+            align-items: end;
+        }
+
+        .filters-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .filter-label {
+            font-size: 12px;
+            color: #059669;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+        }
+
+        .filter-select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid rgba(52, 211, 153, 0.25);
+            border-radius: 10px;
+            background: white;
+            color: #065f46;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: #10B981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+        }
+
+        .filter-clear-btn {
+            height: 42px;
+            border: none;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+            color: #065f46;
+            font-weight: 700;
+            padding: 0 14px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .filter-clear-btn:hover {
+            filter: brightness(0.97);
+        }
+
+        .summary-banner {
+            background: rgba(52, 211, 153, 0.12);
+            border: 1px solid rgba(52, 211, 153, 0.28);
+            border-radius: 12px;
+            padding: 10px 14px;
+            margin-bottom: 12px;
+            color: #065f46;
+            font-weight: 600;
+        }
+
+        .calendar-wrap {
+            background: rgba(255,255,255,0.82);
+            border: 1px solid rgba(52, 211, 153, 0.2);
+            border-radius: 16px;
+            padding: 16px;
+        }
+
+        .calendar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 6px;
+        }
+
+        .calendar-cell {
+            min-height: 72px;
+            border: 1px solid rgba(52, 211, 153, 0.15);
+            border-radius: 10px;
+            padding: 6px;
+            background: white;
+            font-size: 13px;
+        }
+
+        .calendar-cell.has-items {
+            border-color: rgba(16, 185, 129, 0.45);
+            background: rgba(16, 185, 129, 0.06);
+        }
+
+        .calendar-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #10B981;
+            display: inline-block;
+            margin-left: 5px;
+        }
+
+        .agenda-list {
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
         /* Photo Preview */
         .photo-preview {
             width: 100px;
@@ -701,21 +827,25 @@
         </div>
 
         <nav class="sidebar-nav">
-            <button class="nav-item active" onclick="switchTab('dashboard')">
+            <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
-            <button class="nav-item" onclick="switchTab('clientes')">
+            <button class="nav-item" onclick="switchTab(event, 'clientes')">
                 <i class="fas fa-users"></i>
                 <span>Gestão de Clientes</span>
             </button>
-            <button class="nav-item" onclick="switchTab('atividades')">
+            <button class="nav-item" onclick="switchTab(event, 'atividades')">
                 <i class="fas fa-chart-line"></i>
                 <span>Atividades</span>
             </button>
-            <button class="nav-item" onclick="switchTab('report')">
+            <button class="nav-item" onclick="switchTab(event, 'report')">
                 <i class="fas fa-file-csv"></i>
                 <span>Report</span>
+            </button>
+            <button class="nav-item" onclick="switchTab(event, 'agenda')">
+                <i class="fas fa-calendar-alt"></i>
+                <span>Agenda</span>
             </button>
         </nav>
 
@@ -781,6 +911,14 @@
             </div>
             <div id="reportContent"></div>
         </div>
+
+        <div id="agenda" class="tab-content">
+            <div class="page-header">
+                <h1>Agenda</h1>
+                <p>Compromissos e retornos futuros detectados nas atividades</p>
+            </div>
+            <div id="agendaContent"></div>
+        </div>
     </main>
 
     <!-- Client Modal -->
@@ -813,7 +951,8 @@
                 </div>
                 <div class="form-group">
                     <label>Foto</label>
-                    <input type="file" name="photo" accept="image/*" onchange="previewPhoto(event)">
+                    <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)">
+                    <small style="display:block; margin-top:6px; color:#059669;">Dica: você pode colar imagem com Ctrl+V aqui.</small>
                     <img id="photoPreview" class="photo-preview" style="display:none;">
                 </div>
                 <div class="modal-footer">
@@ -911,33 +1050,24 @@
         let activities = [];
 
         // Tab switching
-        function switchTab(tabName) {
-            // Hide all tabs
-            document.querySelectorAll('.tab-content').forEach(tab => {
-                tab.classList.remove('active');
-            });
+        function switchTab(ev, tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
 
-            // Deactivate all nav items
-            document.querySelectorAll('.nav-item').forEach(item => {
-                item.classList.remove('active');
-            });
-
-            // Show selected tab
             document.getElementById(tabName).classList.add('active');
 
-            // Activate nav item
-            event.target.closest('.nav-item').classList.add('active');
-
-            // Load content
-            if (tabName === 'dashboard') {
-                loadDashboard();
-            } else if (tabName === 'clientes') {
-                loadClients();
-            } else if (tabName === 'atividades') {
-                loadActivities();
-            } else if (tabName === 'report') {
-                loadReport();
+            if (ev && ev.target && ev.target.closest('.nav-item')) {
+                ev.target.closest('.nav-item').classList.add('active');
+            } else {
+                const btn = document.querySelector(`.nav-item[onclick*="'${tabName}'"]`);
+                if (btn) btn.classList.add('active');
             }
+
+            if (tabName === 'dashboard') loadDashboard();
+            else if (tabName === 'clientes') loadClients();
+            else if (tabName === 'atividades') loadActivities();
+            else if (tabName === 'report') loadReport();
+            else if (tabName === 'agenda') loadAgenda();
         }
 
         // Load Dashboard
@@ -945,6 +1075,67 @@
         let dashboardSortOrder = 'asc';
         let clientsSortField = 'name';
         let clientsSortOrder = 'asc';
+        let dashboardCompanyFilter = '';
+        let dashboardPositionFilter = '';
+        let clientsCompanyFilter = '';
+        let clientsPositionFilter = '';
+        let agendaCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+
+
+        function uniqueValues(items, key) {
+            return [...new Set(items.map(i => (i[key] || '').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+        }
+
+        function renderFilters(prefix, allClients, currentCompany, currentPosition) {
+            const companies = uniqueValues(allClients, 'company');
+            const positions = uniqueValues(allClients, 'position');
+
+            let html = '<div class="filters-bar">';
+            html += '<div class="filters-row">';
+            html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
+            html += `<div class="filter-group"><label class="filter-label">Cargo</label><select class="filter-select" onchange="set${prefix}Filter('position', this.value)"><option value="">Todos os cargos</option>${positions.map(p=>`<option value="${escapeHtml(p)}" ${p===currentPosition?'selected':''}>${escapeHtml(p)}</option>`).join('')}</select></div>`;
+            html += '</div>';
+            html += `<button class="filter-clear-btn" onclick="clear${prefix}Filters()"><i class="fas fa-broom"></i> Limpar filtros</button>`;
+            html += '</div>';
+            return html;
+        }
+
+
+        function clearDashboardFilters() {
+            dashboardCompanyFilter = '';
+            dashboardPositionFilter = '';
+            loadDashboard();
+        }
+
+        function setDashboardFilter(type, value) {
+            if (type === 'company') dashboardCompanyFilter = value;
+            if (type === 'position') dashboardPositionFilter = value;
+            loadDashboard();
+        }
+
+
+        function clearClientsFilters() {
+            clientsCompanyFilter = '';
+            clientsPositionFilter = '';
+            loadClients();
+        }
+
+        function setClientsFilter(type, value) {
+            if (type === 'company') clientsCompanyFilter = value;
+            if (type === 'position') clientsPositionFilter = value;
+            loadClients();
+        }
+
+        async function loadWeekSummary() {
+            try {
+                const response = await fetch(`${API_BASE}/agenda/semana-atual-count`);
+                const result = await response.json();
+                return result.total || 0;
+            } catch {
+                return 0;
+            }
+        }
 
         async function loadDashboard() {
             try {
@@ -954,12 +1145,20 @@
 
                 let html = '';
                 if (clients.length === 0) {
-                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(\'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 } else {
-                    // Ordenar clientes
-                    const sortedClients = sortClients(clients, dashboardSortField, dashboardSortOrder);
-                    
-                    html = '<div class="table-container"><table><thead><tr>';
+                    const weekCount = await loadWeekSummary();
+                    let filteredClients = clients.filter(client => {
+                        const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
+                        const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
+                        return byCompany && byPosition;
+                    });
+
+                    const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
+
+                    html += `<div class="summary-banner">Você tem <strong>${weekCount}</strong> compromisso(s) nesta semana.</div>`;
+                    html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
+                    html += '<div class="table-container"><table><thead><tr>';
                     html += '<th></th>';
                     html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
@@ -1006,10 +1205,16 @@
                 if (clients.length === 0) {
                     html = '<div class="empty-state"><div class="empty-state-icon">📋</div><h3>Nenhum cliente cadastrado</h3><p>Clique em "Novo Cliente" para começar.</p></div>';
                 } else {
-                    // Ordenar clientes
-                    const sortedClients = sortClients(clients, clientsSortField, clientsSortOrder);
-                    
-                    html = '<div class="table-container"><table><thead><tr>';
+                    let filteredClients = clients.filter(client => {
+                        const byCompany = !clientsCompanyFilter || (client.company || '') === clientsCompanyFilter;
+                        const byPosition = !clientsPositionFilter || (client.position || '') === clientsPositionFilter;
+                        return byCompany && byPosition;
+                    });
+
+                    const sortedClients = sortClients(filteredClients, clientsSortField, clientsSortOrder);
+
+                    html += renderFilters('Clients', clients, clientsCompanyFilter, clientsPositionFilter);
+                    html += '<div class="table-container"><table><thead><tr>';
                     html += '<th></th>';
                     html += '<th onclick="toggleClientsSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'company\')" style="cursor: pointer;">Empresa <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
@@ -1250,6 +1455,43 @@
             }
         }
 
+
+
+        function setPastedImageToInput(blob) {
+            const photoInput = document.getElementById('photoInput');
+            if (!photoInput || !blob) return;
+
+            const file = new File([blob], `foto_colada_${Date.now()}.png`, { type: blob.type || 'image/png' });
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            photoInput.files = dt.files;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('photoPreview').src = e.target.result;
+                document.getElementById('photoPreview').style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        document.addEventListener('paste', (event) => {
+            const modalOpen = document.getElementById('clientModal').classList.contains('active');
+            if (!modalOpen) return;
+
+            const items = event.clipboardData && event.clipboardData.items ? event.clipboardData.items : [];
+            for (const item of items) {
+                if (item.type && item.type.startsWith('image/')) {
+                    const blob = item.getAsFile();
+                    if (blob) {
+                        setPastedImageToInput(blob);
+                        showSuccess('Imagem colada com sucesso!');
+                        event.preventDefault();
+                        break;
+                    }
+                }
+            }
+        });
+
         // Save Client
         async function saveClient(event) {
             event.preventDefault();
@@ -1419,6 +1661,65 @@
             } catch (error) {
                 showError('Erro ao exportar atividades');
             }
+        }
+
+
+
+        function monthRange(dateObj) {
+            const start = new Date(dateObj.getFullYear(), dateObj.getMonth(), 1);
+            const end = new Date(dateObj.getFullYear(), dateObj.getMonth() + 1, 0);
+            return { start, end };
+        }
+
+        async function loadAgenda() {
+            const { start, end } = monthRange(agendaCurrentMonth);
+            const startDate = start.toISOString().slice(0,10);
+            const endDate = end.toISOString().slice(0,10);
+
+            try {
+                const response = await fetch(`${API_BASE}/agenda?start_date=${startDate}&end_date=${endDate}`);
+                const items = await response.json();
+
+                const mapByDay = {};
+                items.forEach(item => {
+                    mapByDay[item.due_date] = mapByDay[item.due_date] || [];
+                    mapByDay[item.due_date].push(item);
+                });
+
+                const monthLabel = agendaCurrentMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+                let html = '<div class="calendar-wrap">';
+                html += `<div class="calendar-header"><button class="btn btn-secondary btn-small" onclick="changeAgendaMonth(-1)">◀</button><h3 style="color:#047857; text-transform:capitalize;">${monthLabel}</h3><button class="btn btn-secondary btn-small" onclick="changeAgendaMonth(1)">▶</button></div>`;
+                html += '<div class="calendar-grid">';
+
+                ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'].forEach(d => html += `<div style="font-weight:700;color:#059669;text-align:center;">${d}</div>`);
+
+                const firstWeekday = (start.getDay() + 6) % 7;
+                for (let i=0;i<firstWeekday;i++) html += '<div></div>';
+
+                for (let d=1; d<=end.getDate(); d++) {
+                    const day = new Date(agendaCurrentMonth.getFullYear(), agendaCurrentMonth.getMonth(), d);
+                    const key = day.toISOString().slice(0,10);
+                    const count = (mapByDay[key] || []).length;
+                    html += `<div class="calendar-cell ${count ? 'has-items' : ''}"><strong>${d}</strong>${count ? `<span class="calendar-dot"></span><div style="font-size:11px;color:#047857;margin-top:4px;">${count} compromisso(s)</div>` : ''}</div>`;
+                }
+
+                html += '</div>';
+                html += '<div class="agenda-list">';
+                if (!items.length) html += '<div class="empty-state" style="padding:20px 8px;"><p>Nenhum compromisso neste mês.</p></div>';
+                items.forEach(item => {
+                    html += `<div class="history-item"><div class="history-meta">${formatDateBr(item.due_date)} • ${escapeHtml(item.client_name)} (${escapeHtml(item.client_company)})</div><div>${escapeHtml(item.title || item.notes || '-')}</div></div>`;
+                });
+                html += '</div></div>';
+
+                document.getElementById('agendaContent').innerHTML = html;
+            } catch (error) {
+                showError('Erro ao carregar agenda');
+            }
+        }
+
+        function changeAgendaMonth(delta) {
+            agendaCurrentMonth = new Date(agendaCurrentMonth.getFullYear(), agendaCurrentMonth.getMonth() + delta, 1);
+            loadAgenda();
         }
 
         // Get Status - Regra: < 7 dias = verde, 7-14 dias = amarelo, > 14 dias = vermelho
