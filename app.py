@@ -6,8 +6,11 @@ import sys
 import json
 import sqlite3
 import webbrowser
-from datetime import datetime
+import re
+import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
+from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -54,6 +57,19 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
     
+    # Tabela de compromissos (agenda)
+    c.execute('''CREATE TABLE IF NOT EXISTS commitments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL,
+        activity_id INTEGER,
+        title TEXT NOT NULL,
+        notes TEXT,
+        due_date TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+        FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
+    )''')
+
     # Tabela de atividades
     c.execute('''CREATE TABLE IF NOT EXISTS activities (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +117,141 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+
+
+def extract_future_commitment_dates(text):
+    if not text:
+        return []
+
+    now = datetime.now()
+    matches = []
+
+    # dd/mm ou dd/mm/aaaa
+    for m in re.finditer(r'\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b', text):
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year = int(m.group(3)) if m.group(3) else now.year
+        if year < 100:
+            year += 2000
+        try:
+            dt = datetime(year, month, day)
+            if dt.date() < now.date() and not m.group(3):
+                dt = datetime(year + 1, month, day)
+            if dt.date() >= now.date():
+                matches.append(dt.date().isoformat())
+        except ValueError:
+            pass
+
+    # em X dias
+    for m in re.finditer(r'\bem\s+(\d{1,3})\s+dias?\b', text.lower()):
+        days = int(m.group(1))
+        if days >= 0:
+            matches.append((now.date() + timedelta(days=days)).isoformat())
+
+    lower = text.lower()
+    if 'depois de amanhã' in lower or 'depois de amanha' in lower:
+        matches.append((now.date() + timedelta(days=2)).isoformat())
+    elif 'amanh' in lower:
+        matches.append((now.date() + timedelta(days=1)).isoformat())
+
+    seen = set()
+    ordered = []
+    for d in matches:
+        if d not in seen:
+            seen.add(d)
+            ordered.append(d)
+    return ordered
+
+
+def create_commitments_from_activity(cursor, client_id, activity_id, text):
+    dates = extract_future_commitment_dates(text)
+    if not dates:
+        return 0
+
+    safe_title = (text or '').strip().replace('\n', ' ')
+    if len(safe_title) > 120:
+        safe_title = safe_title[:117] + '...'
+
+    count = 0
+    for due_date in dates:
+        cursor.execute(
+            '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date)
+               VALUES (?, ?, ?, ?, ?)''',
+            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date)
+        )
+        count += 1
+    return count
+
+
+def _col_index(cell_ref):
+    letters = ''.join(ch for ch in cell_ref if ch.isalpha()).upper()
+    idx = 0
+    for ch in letters:
+        idx = (idx * 26) + (ord(ch) - 64)
+    return max(idx - 1, 0)
+
+
+def parse_xlsx_without_openpyxl(file_storage):
+    """Le arquivo XLSX usando apenas bibliotecas nativas (fallback)."""
+    import io
+
+    file_bytes = file_storage.read()
+    file_storage.seek(0)
+
+    ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+        # shared strings (quando as celulas usam indice de string)
+        shared_strings = []
+        if 'xl/sharedStrings.xml' in zf.namelist():
+            root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
+            for si in root.findall('x:si', ns):
+                parts = [t.text or '' for t in si.findall('.//x:t', ns)]
+                shared_strings.append(''.join(parts))
+
+        sheet_name = 'xl/worksheets/sheet1.xml'
+        if sheet_name not in zf.namelist():
+            # fallback para o primeiro worksheet encontrado
+            worksheet_files = [n for n in zf.namelist() if n.startswith('xl/worksheets/sheet') and n.endswith('.xml')]
+            if not worksheet_files:
+                raise ValueError('Planilha inválida: worksheet não encontrada')
+            sheet_name = sorted(worksheet_files)[0]
+
+        sheet_root = ET.fromstring(zf.read(sheet_name))
+        rows = []
+
+        for row in sheet_root.findall('.//x:sheetData/x:row', ns):
+            row_data = []
+            for cell in row.findall('x:c', ns):
+                cell_ref = cell.get('r', '')
+                col_idx = _col_index(cell_ref) if cell_ref else len(row_data)
+
+                while len(row_data) < col_idx:
+                    row_data.append('')
+
+                cell_type = cell.get('t')
+                value = ''
+
+                if cell_type == 's':
+                    v = cell.find('x:v', ns)
+                    if v is not None and (v.text or '').isdigit():
+                        s_idx = int(v.text)
+                        if 0 <= s_idx < len(shared_strings):
+                            value = shared_strings[s_idx]
+                elif cell_type == 'inlineStr':
+                    t = cell.find('.//x:t', ns)
+                    value = t.text if t is not None and t.text is not None else ''
+                else:
+                    v = cell.find('x:v', ns)
+                    value = v.text if v is not None and v.text is not None else ''
+
+                row_data.append(str(value).strip())
+
+            rows.append(row_data)
+
+    return rows
 
 # API - Clientes (rotas alternativas para compatibilidade)
 @app.route('/api/clientes', methods=['GET'])
@@ -306,6 +457,10 @@ def create_atividade():
                   (client_id, contact_type, information))
         conn.commit()
         activity_id = c.lastrowid
+
+        # Detectar compromissos futuros no texto da atividade e registrar na agenda
+        create_commitments_from_activity(c, client_id, activity_id, information)
+        conn.commit()
         
         # Atualizar last_activity_date do cliente
         c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
@@ -348,6 +503,10 @@ def create_activity():
                   (client_id, description))
         conn.commit()
         activity_id = c.lastrowid
+
+        # Detectar compromissos futuros no texto da atividade e registrar na agenda
+        create_commitments_from_activity(c, client_id, activity_id, description)
+        conn.commit()
         
         # Atualizar last_activity_date do cliente
         c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
@@ -410,6 +569,60 @@ def delete_activity(activity_id):
         return jsonify({'message': 'Atividade deletada'})
     except Exception as e:
         print(f'[ERROR] DELETE /api/activities/{activity_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/agenda', methods=['GET'])
+def get_agenda():
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        conn = get_db()
+        c = conn.cursor()
+
+        query = '''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position
+                   FROM commitments cm
+                   JOIN clients cl ON cm.client_id = cl.id'''
+        params = []
+
+        if start_date and end_date:
+            query += ' WHERE DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
+            params.extend([start_date, end_date])
+
+        query += ' ORDER BY cm.due_date ASC, cm.created_at ASC'
+        c.execute(query, params)
+        items = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(items)
+    except Exception as e:
+        print(f'[ERROR] GET /api/agenda: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agenda/semana-atual-count', methods=['GET'])
+def get_week_commitments_count():
+    try:
+        today = datetime.now().date()
+        start_week = today - timedelta(days=today.weekday())
+        end_week = start_week + timedelta(days=6)
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT COUNT(*) as total FROM commitments
+                     WHERE DATE(due_date) >= ? AND DATE(due_date) <= ?''',
+                  (start_week.isoformat(), end_week.isoformat()))
+        total = c.fetchone()['total']
+        conn.close()
+
+        return jsonify({
+            'total': total,
+            'start_week': start_week.isoformat(),
+            'end_week': end_week.isoformat()
+        })
+    except Exception as e:
+        print(f'[ERROR] GET /api/agenda/semana-atual-count: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Rotas de exportacao
@@ -516,7 +729,6 @@ def import_clients():
         import csv
         import io
         import tempfile
-        import chardet
         
         filename = file.filename.lower()
         rows = []
@@ -531,36 +743,40 @@ def import_clients():
             return jsonify({'error': f'Arquivo muito grande. Maximo: 5MB. Tamanho: {file_size / 1024 / 1024:.2f}MB'}), 400
         
         # Detectar tipo de arquivo
-        if filename.endswith('.xlsx') or filename.endswith('.xls'):
-            if not OPENPYXL_AVAILABLE:
-                return jsonify({'error': 'Instale openpyxl: pip install openpyxl'}), 400
-            
+        if filename.endswith('.xls') and not filename.endswith('.xlsx'):
+            return jsonify({'error': 'Formato .xls não suportado. Salve como .xlsx ou .csv.'}), 400
+
+        if filename.endswith('.xlsx'):
             try:
-                from openpyxl import load_workbook
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                    file.save(tmp.name)
-                    wb = load_workbook(tmp.name, data_only=True)
-                    ws = wb.active
-                    
-                    for idx, row in enumerate(ws.iter_rows(values_only=True)):
+                if OPENPYXL_AVAILABLE:
+                    from openpyxl import load_workbook
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+                        file.save(tmp.name)
+                        wb = load_workbook(tmp.name, data_only=True)
+                        ws = wb.active
+
+                        for idx, row in enumerate(ws.iter_rows(values_only=True)):
+                            if idx == 0:
+                                continue
+                            row_data = []
+                            for cell in row:
+                                if cell is None:
+                                    row_data.append('')
+                                else:
+                                    val = str(cell).strip()
+                                    if any(ord(c) > 127 and ord(c) < 160 for c in val):
+                                        val = val.encode('utf-8', errors='ignore').decode('utf-8')
+                                    row_data.append(val)
+                            rows.append(row_data)
+
+                        os.unlink(tmp.name)
+                else:
+                    parsed_rows = parse_xlsx_without_openpyxl(file)
+                    for idx, row in enumerate(parsed_rows):
                         if idx == 0:
                             continue
-                        # Converter valores para string e limpar
-                        row_data = []
-                        for cell in row:
-                            if cell is None:
-                                row_data.append('')
-                            else:
-                                # Converter para string e remover caracteres especiais
-                                val = str(cell).strip()
-                                # Verificar se contem caracteres invalidos
-                                if any(ord(c) > 127 and ord(c) < 160 for c in val):
-                                    val = val.encode('utf-8', errors='ignore').decode('utf-8')
-                                row_data.append(val)
-                        rows.append(row_data)
-                    
-                    os.unlink(tmp.name)
+                        rows.append(row)
             except Exception as e:
                 print(f'[ERROR] Excel parsing: {e}')
                 return jsonify({'error': f'Erro ao ler Excel: {str(e)}'}), 400
@@ -568,13 +784,22 @@ def import_clients():
             try:
                 # Ler arquivo e detectar encoding
                 file_content = file.stream.read()
-                detected = chardet.detect(file_content)
-                encoding = detected.get('encoding', 'utf-8') or 'utf-8'
-                
-                try:
-                    text = file_content.decode(encoding)
-                except:
-                    text = file_content.decode('utf-8', errors='ignore')
+
+                # Detectar encoding com chardet quando disponivel,
+                # mas manter fallback para nao quebrar importacao.
+                if CHARDET_AVAILABLE:
+                    detected = chardet.detect(file_content)
+                    encoding = detected.get('encoding', 'utf-8') or 'utf-8'
+                    try:
+                        text = file_content.decode(encoding)
+                    except:
+                        text = file_content.decode('utf-8', errors='ignore')
+                else:
+                    # fallback sem dependencia externa
+                    try:
+                        text = file_content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        text = file_content.decode('latin-1', errors='ignore')
                 
                 stream = io.StringIO(text, newline=None)
                 csv_data = csv.reader(stream)
