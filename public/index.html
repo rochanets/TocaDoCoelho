@@ -433,6 +433,149 @@
             border: 1px solid #fecaca;
         }
 
+        .table-link-btn {
+            background: none;
+            border: none;
+            color: #047857;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0;
+            text-align: left;
+        }
+
+        .table-link-btn:hover {
+            color: #059669;
+            text-decoration: underline;
+        }
+
+        .details-modal-content {
+            max-width: 960px;
+            width: 95%;
+        }
+
+        .profile-layout {
+            display: grid;
+            grid-template-columns: 180px 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(52, 211, 153, 0.2);
+        }
+
+        .profile-avatar-large {
+            width: 160px;
+            height: 160px;
+            border-radius: 18px;
+            background: linear-gradient(135deg, #34D399, #10B981);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 56px;
+            font-weight: 700;
+            object-fit: cover;
+            box-shadow: 0 10px 24px rgba(16, 185, 129, 0.25);
+        }
+
+        .profile-info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .profile-field {
+            background: rgba(52, 211, 153, 0.08);
+            border: 1px solid rgba(52, 211, 153, 0.2);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .profile-field-label {
+            font-size: 12px;
+            color: #059669;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            font-weight: 700;
+        }
+
+        .profile-field-value {
+            color: #1f2937;
+            font-weight: 600;
+            word-break: break-word;
+        }
+
+        .history-title {
+            color: #047857;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .history-item {
+            border: 1px solid rgba(52, 211, 153, 0.2);
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .history-meta {
+            font-size: 12px;
+            color: #059669;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+
+        .mini-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 14px;
+            margin-top: 10px;
+        }
+
+        .mini-card {
+            background: rgba(52, 211, 153, 0.08);
+            border: 1px solid rgba(52, 211, 153, 0.2);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .mini-avatar {
+            width: 70px;
+            height: 70px;
+            margin: 0 auto 8px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #34D399, #10B981);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 28px;
+            object-fit: cover;
+        }
+
+        .mini-card-name {
+            color: #065f46;
+            font-weight: 700;
+            font-size: 14px;
+            line-height: 1.3;
+        }
+
+        .mini-card-sub {
+            color: #6b7280;
+            font-size: 12px;
+            margin-top: 4px;
+            line-height: 1.3;
+        }
+
+
         /* Photo Preview */
         .photo-preview {
             width: 100px;
@@ -737,6 +880,29 @@
         </div>
     </div>
 
+    <!-- Client Profile Modal -->
+    <div id="profileModal" class="modal">
+        <div class="modal-content details-modal-content">
+            <div class="modal-header">
+                <h2>Ficha do Cliente</h2>
+                <button class="modal-close" onclick="closeProfileModal()">×</button>
+            </div>
+            <div id="profileModalBody"></div>
+        </div>
+    </div>
+
+    <!-- Group Modal (Cargo/Empresa) -->
+    <div id="groupModal" class="modal">
+        <div class="modal-content details-modal-content">
+            <div class="modal-header">
+                <h2 id="groupModalTitle">Relacionados</h2>
+                <button class="modal-close" onclick="closeGroupModal()">×</button>
+            </div>
+            <div id="groupModalBody"></div>
+        </div>
+    </div>
+
+
     <script>
         const API_BASE = '/api';
         let currentEditingClientId = null;
@@ -801,7 +967,7 @@
                     html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th>Status</th>';
+                    html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
@@ -811,9 +977,9 @@
                         const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
                         html += `<tr>
                             <td>${avatar}</td>
-                            <td>${client.company}</td>
-                            <td>${client.name}</td>
-                            <td>${client.position}</td>
+                            <td><button class="table-link-btn" onclick="openGroupModal('company', ${JSON.stringify(client.company)})">${client.company}</button></td>
+                            <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
+                            <td><button class="table-link-btn" onclick="openGroupModal('position', ${JSON.stringify(client.position)})">${client.position}</button></td>
                             <td>${client.email || '-'}</td>
                             <td>${client.phone || '-'}</td>
                             <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
@@ -1259,6 +1425,16 @@
         // Sort function
         function sortClients(clientsArray, field, order) {
             const sorted = [...clientsArray].sort((a, b) => {
+                if (field === 'status') {
+                    const statusRank = { green: 1, yellow: 2, red: 3 };
+                    const aStatus = statusRank[getStatus(a.last_activity_date)] || 99;
+                    const bStatus = statusRank[getStatus(b.last_activity_date)] || 99;
+
+                    if (aStatus < bStatus) return order === 'asc' ? -1 : 1;
+                    if (aStatus > bStatus) return order === 'asc' ? 1 : -1;
+                    return 0;
+                }
+
                 let aVal = a[field];
                 let bVal = b[field];
                 
@@ -1306,6 +1482,128 @@
             return 'red';
         }
 
+
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function formatDateBr(dateValue) {
+            if (!dateValue) return '-';
+            return new Date(dateValue).toLocaleDateString('pt-BR');
+        }
+
+        function renderAvatar(client, className = 'mini-avatar') {
+            if (client.photo_url) {
+                return `<img src="${client.photo_url}" class="${className}">`;
+            }
+            const initial = (client.name || '?').charAt(0).toUpperCase();
+            return `<div class="${className}">${initial}</div>`;
+        }
+
+        async function openProfileModal(clientId) {
+            try {
+                const client = clients.find(c => c.id === clientId);
+                if (!client) {
+                    showError('Cliente não encontrado');
+                    return;
+                }
+
+                const response = await fetch(`${API_BASE}/atividades`);
+                const allActivities = await response.json();
+                const clientActivities = allActivities
+                    .filter(activity => Number(activity.client_id) === Number(clientId))
+                    .sort((a, b) => new Date(b.activity_date || b.created_at) - new Date(a.activity_date || a.created_at));
+
+                const status = getStatus(client.last_activity_date);
+                const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
+
+                let historyHtml = '';
+                if (clientActivities.length === 0) {
+                    historyHtml = '<div class="empty-state" style="padding: 25px 10px;"><p>Nenhuma atividade registrada para este cliente.</p></div>';
+                } else {
+                    historyHtml = '<div class="history-list">';
+                    clientActivities.forEach(activity => {
+                        const dateRef = activity.activity_date || activity.created_at;
+                        historyHtml += `
+                            <div class="history-item">
+                                <div class="history-meta">${formatDateBr(dateRef)} • ${escapeHtml(activity.contact_type || 'Outro')}</div>
+                                <div>${escapeHtml(activity.information || activity.description || '-')}</div>
+                            </div>
+                        `;
+                    });
+                    historyHtml += '</div>';
+                }
+
+                const modalBody = `
+                    <div class="profile-layout">
+                        <div>${renderAvatar(client, 'profile-avatar-large')}</div>
+                        <div>
+                            <div class="profile-info-grid">
+                                <div class="profile-field"><div class="profile-field-label">Nome</div><div class="profile-field-value">${escapeHtml(client.name)}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Empresa</div><div class="profile-field-value">${escapeHtml(client.company)}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Cargo</div><div class="profile-field-value">${escapeHtml(client.position)}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Status</div><div class="profile-field-value">${statusText}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Email</div><div class="profile-field-value">${escapeHtml(client.email || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Telefone</div><div class="profile-field-value">${escapeHtml(client.phone || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Último contato</div><div class="profile-field-value">${formatDateBr(client.last_activity_date)}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Cadastro</div><div class="profile-field-value">${formatDateBr(client.created_at)}</div></div>
+                            </div>
+                        </div>
+                    </div>
+                    <h3 class="history-title">Histórico de atividades</h3>
+                    ${historyHtml}
+                `;
+
+                document.getElementById('profileModalBody').innerHTML = modalBody;
+                document.getElementById('profileModal').classList.add('active');
+            } catch (error) {
+                showError('Erro ao abrir ficha do cliente');
+            }
+        }
+
+        function closeProfileModal() {
+            document.getElementById('profileModal').classList.remove('active');
+        }
+
+        function openGroupModal(groupType, groupValue) {
+            const normalizedValue = String(groupValue || '').toLowerCase();
+            const filtered = clients.filter(client => String(client[groupType] || '').toLowerCase() === normalizedValue);
+
+            const titlePrefix = groupType === 'position' ? 'Clientes com o cargo' : 'Clientes da empresa';
+            document.getElementById('groupModalTitle').textContent = `${titlePrefix}: ${groupValue}`;
+
+            let html = '';
+            if (!filtered.length) {
+                html = '<div class="empty-state" style="padding: 25px 10px;"><p>Nenhum cliente encontrado.</p></div>';
+            } else {
+                html = '<div class="mini-card-grid">';
+                filtered.forEach(client => {
+                    const subText = groupType === 'position' ? (client.company || '-') : (client.position || '-');
+                    html += `
+                        <div class="mini-card">
+                            ${renderAvatar(client)}
+                            <div class="mini-card-name">${escapeHtml(client.name)}</div>
+                            <div class="mini-card-sub">${escapeHtml(subText)}</div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+
+            document.getElementById('groupModalBody').innerHTML = html;
+            document.getElementById('groupModal').classList.add('active');
+        }
+
+        function closeGroupModal() {
+            document.getElementById('groupModal').classList.remove('active');
+        }
+
         // Show Success
         function showSuccess(message) {
             const el = document.getElementById('successMsg');
@@ -1323,6 +1621,11 @@
         }
 
         // Initialize
+        window.addEventListener('click', (event) => {
+            if (event.target.id === 'profileModal') closeProfileModal();
+            if (event.target.id === 'groupModal') closeGroupModal();
+        });
+
         window.addEventListener('DOMContentLoaded', () => {
             loadDashboard();
         });

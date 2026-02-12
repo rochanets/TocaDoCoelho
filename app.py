@@ -6,8 +6,10 @@ import sys
 import json
 import sqlite3
 import webbrowser
+import zipfile
 from datetime import datetime
 from pathlib import Path
+from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -101,6 +103,75 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+def _col_index(cell_ref):
+    letters = ''.join(ch for ch in cell_ref if ch.isalpha()).upper()
+    idx = 0
+    for ch in letters:
+        idx = (idx * 26) + (ord(ch) - 64)
+    return max(idx - 1, 0)
+
+
+def parse_xlsx_without_openpyxl(file_storage):
+    """Le arquivo XLSX usando apenas bibliotecas nativas (fallback)."""
+    import io
+
+    file_bytes = file_storage.read()
+    file_storage.seek(0)
+
+    ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+        # shared strings (quando as celulas usam indice de string)
+        shared_strings = []
+        if 'xl/sharedStrings.xml' in zf.namelist():
+            root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
+            for si in root.findall('x:si', ns):
+                parts = [t.text or '' for t in si.findall('.//x:t', ns)]
+                shared_strings.append(''.join(parts))
+
+        sheet_name = 'xl/worksheets/sheet1.xml'
+        if sheet_name not in zf.namelist():
+            # fallback para o primeiro worksheet encontrado
+            worksheet_files = [n for n in zf.namelist() if n.startswith('xl/worksheets/sheet') and n.endswith('.xml')]
+            if not worksheet_files:
+                raise ValueError('Planilha inválida: worksheet não encontrada')
+            sheet_name = sorted(worksheet_files)[0]
+
+        sheet_root = ET.fromstring(zf.read(sheet_name))
+        rows = []
+
+        for row in sheet_root.findall('.//x:sheetData/x:row', ns):
+            row_data = []
+            for cell in row.findall('x:c', ns):
+                cell_ref = cell.get('r', '')
+                col_idx = _col_index(cell_ref) if cell_ref else len(row_data)
+
+                while len(row_data) < col_idx:
+                    row_data.append('')
+
+                cell_type = cell.get('t')
+                value = ''
+
+                if cell_type == 's':
+                    v = cell.find('x:v', ns)
+                    if v is not None and (v.text or '').isdigit():
+                        s_idx = int(v.text)
+                        if 0 <= s_idx < len(shared_strings):
+                            value = shared_strings[s_idx]
+                elif cell_type == 'inlineStr':
+                    t = cell.find('.//x:t', ns)
+                    value = t.text if t is not None and t.text is not None else ''
+                else:
+                    v = cell.find('x:v', ns)
+                    value = v.text if v is not None and v.text is not None else ''
+
+                row_data.append(str(value).strip())
+
+            rows.append(row_data)
+
+    return rows
 
 # API - Clientes (rotas alternativas para compatibilidade)
 @app.route('/api/clientes', methods=['GET'])
@@ -516,7 +587,6 @@ def import_clients():
         import csv
         import io
         import tempfile
-        import chardet
         
         filename = file.filename.lower()
         rows = []
@@ -531,36 +601,40 @@ def import_clients():
             return jsonify({'error': f'Arquivo muito grande. Maximo: 5MB. Tamanho: {file_size / 1024 / 1024:.2f}MB'}), 400
         
         # Detectar tipo de arquivo
-        if filename.endswith('.xlsx') or filename.endswith('.xls'):
-            if not OPENPYXL_AVAILABLE:
-                return jsonify({'error': 'Instale openpyxl: pip install openpyxl'}), 400
-            
+        if filename.endswith('.xls') and not filename.endswith('.xlsx'):
+            return jsonify({'error': 'Formato .xls não suportado. Salve como .xlsx ou .csv.'}), 400
+
+        if filename.endswith('.xlsx'):
             try:
-                from openpyxl import load_workbook
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                    file.save(tmp.name)
-                    wb = load_workbook(tmp.name, data_only=True)
-                    ws = wb.active
-                    
-                    for idx, row in enumerate(ws.iter_rows(values_only=True)):
+                if OPENPYXL_AVAILABLE:
+                    from openpyxl import load_workbook
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+                        file.save(tmp.name)
+                        wb = load_workbook(tmp.name, data_only=True)
+                        ws = wb.active
+
+                        for idx, row in enumerate(ws.iter_rows(values_only=True)):
+                            if idx == 0:
+                                continue
+                            row_data = []
+                            for cell in row:
+                                if cell is None:
+                                    row_data.append('')
+                                else:
+                                    val = str(cell).strip()
+                                    if any(ord(c) > 127 and ord(c) < 160 for c in val):
+                                        val = val.encode('utf-8', errors='ignore').decode('utf-8')
+                                    row_data.append(val)
+                            rows.append(row_data)
+
+                        os.unlink(tmp.name)
+                else:
+                    parsed_rows = parse_xlsx_without_openpyxl(file)
+                    for idx, row in enumerate(parsed_rows):
                         if idx == 0:
                             continue
-                        # Converter valores para string e limpar
-                        row_data = []
-                        for cell in row:
-                            if cell is None:
-                                row_data.append('')
-                            else:
-                                # Converter para string e remover caracteres especiais
-                                val = str(cell).strip()
-                                # Verificar se contem caracteres invalidos
-                                if any(ord(c) > 127 and ord(c) < 160 for c in val):
-                                    val = val.encode('utf-8', errors='ignore').decode('utf-8')
-                                row_data.append(val)
-                        rows.append(row_data)
-                    
-                    os.unlink(tmp.name)
+                        rows.append(row)
             except Exception as e:
                 print(f'[ERROR] Excel parsing: {e}')
                 return jsonify({'error': f'Erro ao ler Excel: {str(e)}'}), 400
@@ -568,13 +642,22 @@ def import_clients():
             try:
                 # Ler arquivo e detectar encoding
                 file_content = file.stream.read()
-                detected = chardet.detect(file_content)
-                encoding = detected.get('encoding', 'utf-8') or 'utf-8'
-                
-                try:
-                    text = file_content.decode(encoding)
-                except:
-                    text = file_content.decode('utf-8', errors='ignore')
+
+                # Detectar encoding com chardet quando disponivel,
+                # mas manter fallback para nao quebrar importacao.
+                if CHARDET_AVAILABLE:
+                    detected = chardet.detect(file_content)
+                    encoding = detected.get('encoding', 'utf-8') or 'utf-8'
+                    try:
+                        text = file_content.decode(encoding)
+                    except:
+                        text = file_content.decode('utf-8', errors='ignore')
+                else:
+                    # fallback sem dependencia externa
+                    try:
+                        text = file_content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        text = file_content.decode('latin-1', errors='ignore')
                 
                 stream = io.StringIO(text, newline=None)
                 csv_data = csv.reader(stream)
