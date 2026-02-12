@@ -516,7 +516,6 @@ def import_clients():
         import csv
         import io
         import tempfile
-        import chardet
         
         filename = file.filename.lower()
         rows = []
@@ -568,13 +567,22 @@ def import_clients():
             try:
                 # Ler arquivo e detectar encoding
                 file_content = file.stream.read()
-                detected = chardet.detect(file_content)
-                encoding = detected.get('encoding', 'utf-8') or 'utf-8'
-                
-                try:
-                    text = file_content.decode(encoding)
-                except:
-                    text = file_content.decode('utf-8', errors='ignore')
+
+                # Detectar encoding com chardet quando disponivel,
+                # mas manter fallback para nao quebrar importacao.
+                if CHARDET_AVAILABLE:
+                    detected = chardet.detect(file_content)
+                    encoding = detected.get('encoding', 'utf-8') or 'utf-8'
+                    try:
+                        text = file_content.decode(encoding)
+                    except:
+                        text = file_content.decode('utf-8', errors='ignore')
+                else:
+                    # fallback sem dependencia externa
+                    try:
+                        text = file_content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        text = file_content.decode('latin-1', errors='ignore')
                 
                 stream = io.StringIO(text, newline=None)
                 csv_data = csv.reader(stream)
