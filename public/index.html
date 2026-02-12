@@ -977,9 +977,9 @@
                         const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
                         html += `<tr>
                             <td>${avatar}</td>
-                            <td><button class="table-link-btn" onclick="openGroupModal('company', ${JSON.stringify(client.company)})">${client.company}</button></td>
+                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
-                            <td><button class="table-link-btn" onclick="openGroupModal('position', ${JSON.stringify(client.position)})">${client.position}</button></td>
+                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td>${client.email || '-'}</td>
                             <td>${client.phone || '-'}</td>
                             <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
@@ -1023,9 +1023,9 @@
                         const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
                         html += `<tr>
                             <td>${avatar}</td>
-                            <td>${client.name}</td>
-                            <td>${client.company}</td>
-                            <td>${client.position}</td>
+                            <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
+                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td>${client.email || '-'}</td>
                             <td>${client.phone || '-'}</td>
                             <td><div class="actions">
@@ -1569,6 +1569,11 @@
 
         function closeProfileModal() {
             document.getElementById('profileModal').classList.remove('active');
+        }
+
+        function openGroupModalFromEncoded(groupType, encodedValue) {
+            const decodedValue = decodeURIComponent(encodedValue || '');
+            openGroupModal(groupType, decodedValue);
         }
 
         function openGroupModal(groupType, groupValue) {
