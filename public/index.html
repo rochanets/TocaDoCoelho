@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Toca do Coelho - Gestão de Clientes</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body { 
+            font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
+            background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 50%, #f0fdf4 100%);
+            color: #1f2937; 
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 256px;
+            height: 100vh;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(12px);
+            border-right: 1px solid rgba(52, 211, 153, 0.2);
+            display: flex;
+            flex-direction: column;
+            z-index: 100;
+            box-shadow: 0 8px 32px rgba(52, 211, 153, 0.1);
+        }
+
+        .sidebar-logo {
+            padding: 24px;
+            border-bottom: 1px solid rgba(52, 211, 153, 0.2);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .sidebar-logo svg {
+            width: 48px;
+            height: 48px;
+            flex-shrink: 0;
+        }
+
+        .sidebar-logo-text h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #047857;
+            margin-bottom: 2px;
+        }
+
+        .sidebar-logo-text p {
+            font-size: 12px;
+            color: rgba(52, 211, 153, 0.7);
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: rgba(52, 211, 153, 0.8);
+            font-weight: 500;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            font-size: 15px;
+        }
+
+        .nav-item:hover {
+            background: rgba(52, 211, 153, 0.1);
+            color: #047857;
+        }
+
+        .nav-item.active {
+            background: rgba(52, 211, 153, 0.15);
+            color: #047857;
+            border: 1px solid rgba(52, 211, 153, 0.3);
+        }
+
+        .nav-item i {
+            width: 20px;
+            text-align: center;
+        }
+
+        .sidebar-footer {
+            padding: 16px;
+            border-top: 1px solid rgba(52, 211, 153, 0.2);
+            text-align: center;
+            font-size: 12px;
+            color: rgba(52, 211, 153, 0.6);
+        }
+
+        /* Main Content */
+        .main-content {
+            margin-left: 256px;
+            min-height: 100vh;
+            padding: 32px;
+        }
+
+        .page-header {
+            margin-bottom: 32px;
+        }
+
+        .page-header h1 {
+            font-size: 32px;
+            font-weight: 700;
+            color: #047857;
+            margin-bottom: 8px;
+        }
+
+        .page-header p {
+            font-size: 16px;
+            color: rgba(52, 211, 153, 0.7);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #34D399;
+            color: white;
+            box-shadow: 0 4px 12px rgba(52, 211, 153, 0.3);
+        }
+
+        .btn-primary:hover {
+            background: #10B981;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(52, 211, 153, 0.4);
+        }
+
+        .btn-secondary {
+            background: #e5e7eb;
+            color: #1f2937;
+        }
+
+        .btn-secondary:hover {
+            background: #d1d5db;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        /* Tabs */
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 24px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .nav-tabs button {
+            padding: 12px 20px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #6b7280;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .nav-tabs button.active {
+            color: #34D399;
+            border-bottom-color: #34D399;
+        }
+
+        .nav-tabs button:hover {
+            color: #1f2937;
+        }
+
+        /* Tab Content */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #1f2937;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #34D399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-header h2 {
+            font-size: 20px;
+            color: #047857;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #6b7280;
+        }
+
+        .modal-close:hover {
+            color: #1f2937;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+
+        /* Table */
+        .section-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .section-title h2 {
+            font-size: 20px;
+            color: #047857;
+        }
+
+        .table-container {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(4px);
+            border-radius: 16px;
+            border: 1px solid rgba(52, 211, 153, 0.2);
+            box-shadow: 0 4px 12px rgba(52, 211, 153, 0.08);
+            overflow: hidden;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: rgba(52, 211, 153, 0.05);
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid rgba(52, 211, 153, 0.2);
+            color: #047857;
+        }
+
+        td {
+            padding: 15px;
+            border-bottom: 1px solid rgba(52, 211, 153, 0.1);
+        }
+
+        tr:hover {
+            background: rgba(52, 211, 153, 0.05);
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Client Avatar */
+        .client-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #34D399;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 16px;
+            object-fit: cover;
+        }
+
+        .client-avatar.with-photo {
+            background: transparent;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6b7280;
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.7;
+        }
+
+        .empty-state h3 {
+            font-size: 20px;
+            color: #1f2937;
+            margin-bottom: 10px;
+        }
+
+        .empty-state p {
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+
+        /* Alerts */
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .alert-success {
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #bbf7d0;
+        }
+
+        .alert-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+
+        /* Photo Preview */
+        .photo-preview {
+            width: 100px;
+            height: 100px;
+            border-radius: 8px;
+            object-fit: cover;
+            margin-top: 10px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6b7280;
+        }
+
+        .spinner {
+            border: 4px solid #e5e7eb;
+            border-top: 4px solid #34D399;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Status Badge */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-green {
+            background: rgba(52, 211, 153, 0.2);
+            color: #047857;
+        }
+
+        .status-yellow {
+            background: rgba(251, 191, 36, 0.2);
+            color: #b45309;
+        }
+
+        .status-red {
+            background: rgba(239, 68, 68, 0.2);
+            color: #991b1b;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 200px;
+            }
+            .main-content {
+                margin-left: 200px;
+                padding: 16px;
+            }
+            .page-header h1 {
+                font-size: 24px;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .sidebar {
+                width: 100%;
+                height: auto;
+                border-right: none;
+                border-bottom: 1px solid rgba(52, 211, 153, 0.2);
+            }
+            .main-content {
+                margin-left: 0;
+                padding: 16px;
+            }
+            .sidebar-nav {
+                flex-direction: row;
+                overflow-x: auto;
+            }
+            .nav-item {
+                white-space: nowrap;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                <!-- Cabeça do coelho -->
+                <ellipse cx="50" cy="50" rx="35" ry="40" fill="#34D399"/>
+                <!-- Orelhas -->
+                <ellipse cx="30" cy="20" rx="10" ry="25" fill="#34D399"/>
+                <ellipse cx="70" cy="20" rx="10" ry="25" fill="#34D399"/>
+                <ellipse cx="30" cy="20" rx="6" ry="20" fill="#f0fdf4"/>
+                <ellipse cx="70" cy="20" rx="6" ry="20" fill="#f0fdf4"/>
+                <!-- Olhos -->
+                <circle cx="40" cy="45" r="4" fill="white"/>
+                <circle cx="60" cy="45" r="4" fill="white"/>
+                <circle cx="40" cy="45" r="2" fill="#1f2937"/>
+                <circle cx="60" cy="45" r="2" fill="#1f2937"/>
+                <!-- Nariz -->
+                <circle cx="50" cy="55" r="3" fill="white"/>
+                <!-- Boca -->
+                <path d="M 50 55 Q 45 60 40 58" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                <path d="M 50 55 Q 55 60 60 58" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                <!-- Dentes -->
+                <rect x="45" y="60" width="3" height="4" fill="white"/>
+                <rect x="52" y="60" width="3" height="4" fill="white"/>
+            </svg>
+            <div class="sidebar-logo-text">
+                <h1>Toca do Coelho</h1>
+                <p>Gestão de Clientes</p>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" onclick="switchTab('dashboard')">
+                <i class="fas fa-th-large"></i>
+                <span>Dashboard</span>
+            </button>
+            <button class="nav-item" onclick="switchTab('clientes')">
+                <i class="fas fa-users"></i>
+                <span>Gestão de Clientes</span>
+            </button>
+            <button class="nav-item" onclick="switchTab('atividades')">
+                <i class="fas fa-chart-line"></i>
+                <span>Atividades</span>
+            </button>
+            <button class="nav-item" onclick="switchTab('report')">
+                <i class="fas fa-file-csv"></i>
+                <span>Report</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-footer">
+            Versão 1.0.0
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="alert alert-success" id="successMsg"></div>
+        <div class="alert alert-error" id="errorMsg"></div>
+
+        <!-- Dashboard Tab -->
+        <div id="dashboard" class="tab-content active">
+            <div class="page-header">
+                <h1>Dashboard</h1>
+                <p>Visão geral dos seus contatos e status de relacionamento</p>
+            </div>
+            <div id="dashboardContent"></div>
+        </div>
+
+        <!-- Clientes Tab -->
+        <div id="clientes" class="tab-content">
+            <div class="page-header">
+                <h1>Gestão de Clientes</h1>
+                <p>Cadastre e gerencie seus clientes</p>
+            </div>
+            <div class="section-title">
+                <h2>Clientes Cadastrados</h2>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-primary" onclick="openClientModal()">
+                        <i class="fas fa-plus"></i> Novo Cliente
+                    </button>
+                    <button class="btn btn-secondary" onclick="openImportModal()">
+                        <i class="fas fa-upload"></i> Importar Excel
+                    </button>
+                </div>
+            </div>
+            <div id="clientsList"></div>
+        </div>
+
+        <!-- Atividades Tab -->
+        <div id="atividades" class="tab-content">
+            <div class="page-header">
+                <h1>Atividades</h1>
+                <p>Registre contatos e atividades com seus clientes</p>
+            </div>
+            <div class="section-title">
+                <h2>Registro de Atividades</h2>
+                <button class="btn btn-primary" onclick="openActivityModal()">
+                    <i class="fas fa-plus"></i> Nova Atividade
+                </button>
+            </div>
+            <div id="activitiesList"></div>
+        </div>
+
+        <!-- Report Tab -->
+        <div id="report" class="tab-content">
+            <div class="page-header">
+                <h1>Report & Exportar</h1>
+                <p>Exporte dados de clientes e atividades</p>
+            </div>
+            <div id="reportContent"></div>
+        </div>
+    </main>
+
+    <!-- Client Modal -->
+    <div id="clientModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="clientModalTitle">Novo Cliente</h2>
+                <button class="modal-close" onclick="closeClientModal()">×</button>
+            </div>
+            <form id="clientForm" onsubmit="saveClient(event)">
+                <div class="form-group">
+                    <label>Nome *</label>
+                    <input type="text" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label>Empresa *</label>
+                    <input type="text" name="company" required>
+                </div>
+                <div class="form-group">
+                    <label>Cargo *</label>
+                    <input type="text" name="position" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="email">
+                </div>
+                <div class="form-group">
+                    <label>Telefone</label>
+                    <input type="tel" name="phone">
+                </div>
+                <div class="form-group">
+                    <label>Foto</label>
+                    <input type="file" name="photo" accept="image/*" onchange="previewPhoto(event)">
+                    <img id="photoPreview" class="photo-preview" style="display:none;">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeClientModal()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Activity Modal -->
+    <div id="activityModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="activityModalTitle">Nova Atividade</h2>
+                <button class="modal-close" onclick="closeActivityModal()">×</button>
+            </div>
+            <form id="activityForm" onsubmit="saveActivity(event)">
+                <div class="form-group">
+                    <label>Cliente *</label>
+                    <select name="client_id" required id="clientSelect"></select>
+                </div>
+                <div class="form-group">
+                    <label>Tipo de Contato *</label>
+                    <select name="contact_type" required>
+                        <option value="">Selecione...</option>
+                        <option value="Telefone">Telefone</option>
+                        <option value="Email">Email</option>
+                        <option value="Reunião">Reunião</option>
+                        <option value="Outro">Outro</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Informações *</label>
+                    <textarea name="information" required rows="4"></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeActivityModal()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div id="importModal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2>Importar Clientes</h2>
+                <button class="modal-close" onclick="closeImportModal()">x</button>
+            </div>
+            <div style="padding: 20px;">
+                <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+                    <button class="btn btn-secondary" onclick="downloadTemplate()" style="flex: 1;">
+                        <i class="fas fa-download"></i> Download Template
+                    </button>
+                    <button class="btn btn-primary" onclick="document.getElementById('excelFile').click()" style="flex: 1;">
+                        <i class="fas fa-upload"></i> Upload Excel
+                    </button>
+                </div>
+                <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none;" onchange="handleExcelUpload(event)">
+                <div id="importStatus" style="margin-top: 15px; padding: 10px; border-radius: 8px; display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        let currentEditingClientId = null;
+        let currentEditingActivityId = null;
+        let clients = [];
+        let activities = [];
+
+        // Tab switching
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Deactivate all nav items
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+
+            // Activate nav item
+            event.target.closest('.nav-item').classList.add('active');
+
+            // Load content
+            if (tabName === 'dashboard') {
+                loadDashboard();
+            } else if (tabName === 'clientes') {
+                loadClients();
+            } else if (tabName === 'atividades') {
+                loadActivities();
+            } else if (tabName === 'report') {
+                loadReport();
+            }
+        }
+
+        // Load Dashboard
+        let dashboardSortField = 'name';
+        let dashboardSortOrder = 'asc';
+        let clientsSortField = 'name';
+        let clientsSortOrder = 'asc';
+
+        async function loadDashboard() {
+            try {
+                const response = await fetch(`${API_BASE}/clientes`);
+                const data = await response.json();
+                clients = data;
+
+                let html = '';
+                if (clients.length === 0) {
+                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(\'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                } else {
+                    // Ordenar clientes
+                    const sortedClients = sortClients(clients, dashboardSortField, dashboardSortOrder);
+                    
+                    html = '<div class="table-container"><table><thead><tr>';
+                    html += '<th></th>';
+                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th>Status</th>';
+                    html += '</tr></thead><tbody>';
+
+                    sortedClients.forEach(client => {
+                        const status = getStatus(client.last_activity_date);
+                        const statusClass = `status-${status}`;
+                        const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
+                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        html += `<tr>
+                            <td>${avatar}</td>
+                            <td>${client.company}</td>
+                            <td>${client.name}</td>
+                            <td>${client.position}</td>
+                            <td>${client.email || '-'}</td>
+                            <td>${client.phone || '-'}</td>
+                            <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
+                            <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table></div>';
+                }
+
+                document.getElementById('dashboardContent').innerHTML = html;
+            } catch (error) {
+                showError('Erro ao carregar dashboard');
+            }
+        }
+
+        // Load Clients
+        async function loadClients() {
+            try {
+                const response = await fetch(`${API_BASE}/clientes`);
+                const data = await response.json();
+                clients = data;
+
+                let html = '';
+                if (clients.length === 0) {
+                    html = '<div class="empty-state"><div class="empty-state-icon">📋</div><h3>Nenhum cliente cadastrado</h3><p>Clique em "Novo Cliente" para começar.</p></div>';
+                } else {
+                    // Ordenar clientes
+                    const sortedClients = sortClients(clients, clientsSortField, clientsSortOrder);
+                    
+                    html = '<div class="table-container"><table><thead><tr>';
+                    html += '<th></th>';
+                    html += '<th onclick="toggleClientsSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleClientsSort(\'company\')" style="cursor: pointer;">Empresa <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleClientsSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleClientsSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleClientsSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th>Ações</th>';
+                    html += '</tr></thead><tbody>';
+
+                    sortedClients.forEach(client => {
+                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        html += `<tr>
+                            <td>${avatar}</td>
+                            <td>${client.name}</td>
+                            <td>${client.company}</td>
+                            <td>${client.position}</td>
+                            <td>${client.email || '-'}</td>
+                            <td>${client.phone || '-'}</td>
+                            <td><div class="actions">
+                                <button class="btn btn-secondary btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
+                                <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id})"><i class="fas fa-trash"></i> Deletar</button>
+                            </div></td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table></div>';
+                }
+
+                document.getElementById('clientsList').innerHTML = html;
+            } catch (error) {
+                showError('Erro ao carregar clientes');
+            }
+        }
+
+        // Load Activities
+        async function loadActivities() {
+            try {
+                const response = await fetch(`${API_BASE}/atividades`);
+                const data = await response.json();
+                activities = data;
+
+                let html = '';
+                if (activities.length === 0) {
+                    html = '<div class="empty-state"><div class="empty-state-icon">📝</div><h3>Nenhuma atividade registrada</h3><p>Clique em "Nova Atividade" para começar.</p></div>';
+                } else {
+                    html = '<div class="table-container"><table><thead><tr>';
+                    html += '<th>Cliente</th><th>Tipo</th><th>Informações</th><th>Data</th><th>Ações</th>';
+                    html += '</tr></thead><tbody>';
+
+                    activities.forEach(activity => {
+                        const date = new Date(activity.created_at).toLocaleDateString('pt-BR');
+                        const contactType = activity.contact_type || 'Outro';
+                        const information = activity.information || '-';
+                        html += `<tr>
+                            <td>${activity.name}</td>
+                            <td>${contactType}</td>
+                            <td>${information}</td>
+                            <td>${date}</td>
+                            <td><div class="actions">
+                                <button class="btn btn-secondary btn-small" onclick="editActivity(${activity.id})"><i class="fas fa-edit"></i> Editar</button>
+                                <button class="btn btn-danger btn-small" onclick="deleteActivity(${activity.id})"><i class="fas fa-trash"></i> Deletar</button>
+                            </div></td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table></div>';
+                }
+
+                document.getElementById('activitiesList').innerHTML = html;
+            } catch (error) {
+                showError('Erro ao carregar atividades');
+            }
+        }
+
+        // Load Report
+        async function loadReport() {
+            try {
+                const response = await fetch(`${API_BASE}/clientes`);
+                const data = await response.json();
+                clients = data;
+
+                let html = '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
+                
+                // Export Clients
+                html += '<div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; border: 1px solid rgba(52,211,153,0.2);">';
+                html += '<h3 style="color: #047857; margin-bottom: 10px;">Exportar Base de Clientes</h3>';
+                html += '<p style="color: #6b7280; margin-bottom: 15px;">Exporte todos os dados cadastrais dos clientes em CSV</p>';
+                html += '<button class="btn btn-primary" onclick="exportClients()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>';
+                html += '</div>';
+
+                // Export Activities
+                html += '<div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; border: 1px solid rgba(52,211,153,0.2);">';
+                html += '<h3 style="color: #047857; margin-bottom: 10px;">Exportar Atividades</h3>';
+                html += '<p style="color: #6b7280; margin-bottom: 15px;">Exporte atividades com filtro de período</p>';
+                html += '<div class="form-group" style="margin-bottom: 10px;">';
+                html += '<label>Data Inicial</label>';
+                html += '<input type="date" id="startDate" style="border: 2px solid #e5e7eb; padding: 10px; border-radius: 8px; width: 100%;">';
+                html += '</div>';
+                html += '<div class="form-group">';
+                html += '<label>Data Final</label>';
+                html += '<input type="date" id="endDate" style="border: 2px solid #e5e7eb; padding: 10px; border-radius: 8px; width: 100%; margin-bottom: 15px;">';
+                html += '</div>';
+                html += '<button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>';
+                html += '</div>';
+
+                html += '</div>';
+
+                document.getElementById('reportContent').innerHTML = html;
+            } catch (error) {
+                showError('Erro ao carregar report');
+            }
+        }
+
+        // Open Client Modal
+        function openClientModal() {
+            currentEditingClientId = null;
+            document.getElementById('clientModalTitle').textContent = 'Novo Cliente';
+            document.getElementById('clientForm').reset();
+            document.getElementById('photoPreview').style.display = 'none';
+            document.getElementById('clientModal').classList.add('active');
+        }
+
+        // Close Client Modal
+        function closeClientModal() {
+            document.getElementById('clientModal').classList.remove('active');
+        }
+
+        // Open Activity Modal
+        async function openActivityModal() {
+            currentEditingActivityId = null;
+            document.getElementById('activityModalTitle').textContent = 'Nova Atividade';
+            await loadClientSelect();
+            document.getElementById('activityForm').reset();
+            document.getElementById('activityModal').classList.add('active');
+        }
+
+        // Close Activity Modal
+        function closeActivityModal() {
+            document.getElementById('activityModal').classList.remove('active');
+        }
+
+        // Open Import Modal
+        function openImportModal() {
+            document.getElementById('importModal').classList.add('active');
+        }
+
+        // Close Import Modal
+        function closeImportModal() {
+            document.getElementById('importModal').classList.remove('active');
+        }
+
+        // Download Excel Template
+        function downloadTemplate() {
+            const headers = ['Nome', 'Empresa', 'Cargo', 'Email', 'Telefone'];
+            const sampleData = [
+                ['João Silva', 'Tech Corp', 'Gerente', 'joao@techcorp.com', '11999999999'],
+                ['Maria Santos', 'Inovação Ltd', 'Diretora', 'maria@inovacao.com', '21988888888']
+            ];
+            
+            let csv = headers.join(',') + '\n';
+            sampleData.forEach(row => {
+                csv += row.join(',') + '\n';
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', 'template_clientes.csv');
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Handle Excel Upload
+        async function handleExcelUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const statusDiv = document.getElementById('importStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.className = 'alert alert-info';
+            statusDiv.textContent = 'Processando arquivo...';
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const response = await fetch(`${API_BASE}/importar-clientes`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.className = 'alert alert-success';
+                    statusDiv.textContent = `Sucesso! ${result.imported} clientes importados.`;
+                    setTimeout(() => {
+                        closeImportModal();
+                        loadClients();
+                        loadDashboard();
+                    }, 2000);
+                } else {
+                    statusDiv.className = 'alert alert-error';
+                    statusDiv.textContent = result.error || 'Erro ao importar arquivo';
+                }
+            } catch (error) {
+                statusDiv.className = 'alert alert-error';
+                statusDiv.textContent = 'Erro ao processar arquivo: ' + error.message;
+            }
+        }
+
+        // Load Client Select
+        async function loadClientSelect() {
+            try {
+                const response = await fetch(`${API_BASE}/clientes`);
+                const data = await response.json();
+                let html = '<option value="">Selecione um cliente...</option>';
+                data.forEach(client => {
+                    html += `<option value="${client.id}">${client.name} (${client.company})</option>`;
+                });
+                document.getElementById('clientSelect').innerHTML = html;
+            } catch (error) {
+                showError('Erro ao carregar clientes');
+            }
+        }
+
+        // Preview Photo
+        function previewPhoto(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    document.getElementById('photoPreview').src = e.target.result;
+                    document.getElementById('photoPreview').style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        // Save Client
+        async function saveClient(event) {
+            event.preventDefault();
+            const formData = new FormData(document.getElementById('clientForm'));
+            
+            try {
+                const url = currentEditingClientId 
+                    ? `${API_BASE}/clientes/${currentEditingClientId}`
+                    : `${API_BASE}/clientes`;
+                
+                const response = await fetch(url, {
+                    method: currentEditingClientId ? 'PUT' : 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    showSuccess(currentEditingClientId ? 'Cliente atualizado!' : 'Cliente cadastrado!');
+                    closeClientModal();
+                    loadClients();
+                    loadDashboard();
+                } else {
+                    showError('Erro ao salvar cliente');
+                }
+            } catch (error) {
+                showError('Erro ao salvar cliente: ' + error.message);
+            }
+        }
+
+        // Edit Client
+        async function editClient(id) {
+            const client = clients.find(c => c.id === id);
+            if (client) {
+                currentEditingClientId = id;
+                document.getElementById('clientModalTitle').textContent = 'Editar Cliente';
+                document.getElementById('clientForm').name.value = client.name;
+                document.getElementById('clientForm').company.value = client.company;
+                document.getElementById('clientForm').position.value = client.position;
+                document.getElementById('clientForm').email.value = client.email || '';
+                document.getElementById('clientForm').phone.value = client.phone || '';
+                document.getElementById('clientModal').classList.add('active');
+            }
+        }
+
+        // Delete Client
+        async function deleteClient(id) {
+            if (confirm('Tem certeza que deseja deletar este cliente?')) {
+                try {
+                    const response = await fetch(`${API_BASE}/clientes/${id}`, {
+                        method: 'DELETE'
+                    });
+
+                    if (response.ok) {
+                        showSuccess('Cliente deletado!');
+                        loadClients();
+                        loadDashboard();
+                    } else {
+                        showError('Erro ao deletar cliente');
+                    }
+                } catch (error) {
+                    showError('Erro ao deletar cliente');
+                }
+            }
+        }
+
+        // Save Activity
+        async function saveActivity(event) {
+            event.preventDefault();
+            const formData = new FormData(document.getElementById('activityForm'));
+
+            try {
+                const url = currentEditingActivityId 
+                    ? `${API_BASE}/atividades/${currentEditingActivityId}`
+                    : `${API_BASE}/atividades`;
+
+                const response = await fetch(url, {
+                    method: currentEditingActivityId ? 'PUT' : 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    showSuccess(currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!');
+                    closeActivityModal();
+                    loadActivities();
+                    loadDashboard();
+                } else {
+                    showError('Erro ao salvar atividade');
+                }
+            } catch (error) {
+                showError('Erro ao salvar atividade: ' + error.message);
+            }
+        }
+
+        // Edit Activity
+        async function editActivity(id) {
+            const activity = activities.find(a => a.id === id);
+            if (activity) {
+                currentEditingActivityId = id;
+                document.getElementById('activityModalTitle').textContent = 'Editar Atividade';
+                await loadClientSelect();
+                document.getElementById('clientSelect').value = activity.client_id;
+                document.getElementById('activityForm').contact_type.value = activity.contact_type || 'Outro';
+                document.getElementById('activityForm').information.value = activity.information || '';
+                document.getElementById('activityModal').classList.add('active');
+            }
+        }
+
+        // Delete Activity
+        async function deleteActivity(id) {
+            if (confirm('Tem certeza que deseja deletar esta atividade?')) {
+                try {
+                    const response = await fetch(`${API_BASE}/atividades/${id}`, {
+                        method: 'DELETE'
+                    });
+
+                    if (response.ok) {
+                        showSuccess('Atividade deletada!');
+                        loadActivities();
+                        loadDashboard();
+                    } else {
+                        showError('Erro ao deletar atividade');
+                    }
+                } catch (error) {
+                    showError('Erro ao deletar atividade');
+                }
+            }
+        }
+
+        // Export Clients
+        async function exportClients() {
+            try {
+                const response = await fetch(`${API_BASE}/export/clientes`);
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `clientes_${new Date().toISOString().split('T')[0]}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            } catch (error) {
+                showError('Erro ao exportar clientes');
+            }
+        }
+
+        // Export Activities
+        async function exportActivities() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            if (!startDate || !endDate) {
+                showError('Selecione as datas de início e fim');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/export/atividades?start_date=${startDate}&end_date=${endDate}`);
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `atividades_${startDate}_${endDate}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            } catch (error) {
+                showError('Erro ao exportar atividades');
+            }
+        }
+
+        // Get Status - Regra: < 7 dias = verde, 7-14 dias = amarelo, > 14 dias = vermelho
+        // Sort function
+        function sortClients(clientsArray, field, order) {
+            const sorted = [...clientsArray].sort((a, b) => {
+                let aVal = a[field];
+                let bVal = b[field];
+                
+                // Handle null/undefined
+                if (aVal === null || aVal === undefined) aVal = '';
+                if (bVal === null || bVal === undefined) bVal = '';
+                
+                // Convert to lowercase for string comparison
+                if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+                if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+                
+                if (aVal < bVal) return order === 'asc' ? -1 : 1;
+                if (aVal > bVal) return order === 'asc' ? 1 : -1;
+                return 0;
+            });
+            return sorted;
+        }
+
+        function toggleDashboardSort(field) {
+            if (dashboardSortField === field) {
+                dashboardSortOrder = dashboardSortOrder === 'asc' ? 'desc' : 'asc';
+            } else {
+                dashboardSortField = field;
+                dashboardSortOrder = 'asc';
+            }
+            loadDashboard();
+        }
+
+        function toggleClientsSort(field) {
+            if (clientsSortField === field) {
+                clientsSortOrder = clientsSortOrder === 'asc' ? 'desc' : 'asc';
+            } else {
+                clientsSortField = field;
+                clientsSortOrder = 'asc';
+            }
+            loadClients();
+        }
+
+        function getStatus(lastActivityDate) {
+            if (!lastActivityDate) return 'red';
+            const date = new Date(lastActivityDate);
+            const days = Math.floor((new Date() - date) / (1000 * 60 * 60 * 24));
+            if (days < 7) return 'green';
+            if (days < 14) return 'yellow';
+            return 'red';
+        }
+
+        // Show Success
+        function showSuccess(message) {
+            const el = document.getElementById('successMsg');
+            el.textContent = message;
+            el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 3000);
+        }
+
+        // Show Error
+        function showError(message) {
+            const el = document.getElementById('errorMsg');
+            el.textContent = message;
+            el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 3000);
+        }
+
+        // Initialize
+        window.addEventListener('DOMContentLoaded', () => {
+            loadDashboard();
+        });
+    </script>
+</body>
+</html>
