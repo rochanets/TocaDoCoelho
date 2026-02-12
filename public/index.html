@@ -1146,7 +1146,7 @@
 
                 let html = '';
                 if (clients.length === 0) {
-                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(\'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 } else {
                     const weekCount = await loadWeekSummary();
                     let filteredClients = clients.filter(client => {
