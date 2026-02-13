@@ -85,15 +85,16 @@
 
         .settings-grid {
             display: grid;
-            gap: 18px;
-            max-width: 680px;
+            gap: 14px;
+            grid-template-columns: repeat(2, minmax(260px, 1fr));
+            max-width: 920px;
         }
 
         .settings-card {
             background: rgba(255,255,255,0.9);
             border: 1px solid rgba(52, 211, 153, 0.25);
             border-radius: 14px;
-            padding: 14px;
+            padding: 12px;
         }
 
         .settings-card h3 {
@@ -839,6 +840,13 @@
         }
 
         /* Responsive */
+        @media (max-width: 980px) {
+            .settings-grid {
+                grid-template-columns: 1fr;
+                max-width: 100%;
+            }
+        }
+
         @media (max-width: 768px) {
             .sidebar {
                 width: 200px;
@@ -1015,7 +1023,7 @@
                         </div>
                     </form>
                     <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
-                        <h4 style="color:#065f46;">Regra B por Cargo</h4>
+                        <h4 style="color:#065f46; font-weight:400;">Regra B por Cargo</h4>
                         <button class="btn btn-secondary btn-small" onclick="openStatusRuleModal()"><i class="fas fa-plus"></i> Adicionar</button>
                     </div>
                     <div id="statusRulesList" class="rule-list"></div>
@@ -1134,6 +1142,7 @@
                         <option value="Telefone">Telefone</option>
                         <option value="Email">Email</option>
                         <option value="Reunião">Reunião</option>
+                        <option value="WhatsApp">WhatsApp</option>
                         <option value="Outro">Outro</option>
                     </select>
                 </div>
@@ -1250,11 +1259,11 @@
 
         function renderDashboardGreeting() {
             const box = document.getElementById('dashboardGreeting');
-            if (!box) return;
             const nickname = userProfile && userProfile.nickname ? userProfile.nickname : '';
             const message = nickname ? `Olá, ${escapeHtml(nickname)}` : 'Olá';
             const avatar = (userProfile && userProfile.photo_url) ? `<img src="${userProfile.photo_url}" class="greeting-avatar">` : '';
-            box.innerHTML = `${avatar}<span>${message}</span>`;
+
+            if (box) box.innerHTML = `${avatar}<span>${message}</span>`;
         }
 
         function renderSettings() {
