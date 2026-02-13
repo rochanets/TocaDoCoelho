@@ -6,8 +6,11 @@ import sys
 import json
 import sqlite3
 import webbrowser
-from datetime import datetime
+import re
+import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
+from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -53,7 +56,47 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    # Tabela de configuracoes gerais
+    c.execute('''CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Tabela de regras de status por cargo
+    c.execute('''CREATE TABLE IF NOT EXISTS status_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        position TEXT NOT NULL UNIQUE,
+        green_days INTEGER NOT NULL,
+        yellow_days INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Tabela de perfil do usuario
+    c.execute('''CREATE TABLE IF NOT EXISTS user_profile (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        full_name TEXT NOT NULL,
+        nickname TEXT NOT NULL,
+        position TEXT NOT NULL,
+        photo_url TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     
+    # Tabela de compromissos (agenda)
+    c.execute('''CREATE TABLE IF NOT EXISTS commitments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL,
+        activity_id INTEGER,
+        title TEXT NOT NULL,
+        notes TEXT,
+        due_date TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+        FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
+    )''')
+
     # Tabela de atividades
     c.execute('''CREATE TABLE IF NOT EXISTS activities (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +114,10 @@ def init_db():
     columns = [col[1] for col in c.fetchall()]
     if 'last_activity_date' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN last_activity_date TIMESTAMP')
+
+    # Configuracoes padrao da faixa de status
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_green_days', '7'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_yellow_days', '14'))
     
     conn.commit()
     
@@ -102,6 +149,141 @@ def dict_from_row(row):
         return None
     return dict(row)
 
+
+
+
+def extract_future_commitment_dates(text):
+    if not text:
+        return []
+
+    now = datetime.now()
+    matches = []
+
+    # dd/mm ou dd/mm/aaaa
+    for m in re.finditer(r'\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b', text):
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year = int(m.group(3)) if m.group(3) else now.year
+        if year < 100:
+            year += 2000
+        try:
+            dt = datetime(year, month, day)
+            if dt.date() < now.date() and not m.group(3):
+                dt = datetime(year + 1, month, day)
+            if dt.date() >= now.date():
+                matches.append(dt.date().isoformat())
+        except ValueError:
+            pass
+
+    # em X dias
+    for m in re.finditer(r'\bem\s+(\d{1,3})\s+dias?\b', text.lower()):
+        days = int(m.group(1))
+        if days >= 0:
+            matches.append((now.date() + timedelta(days=days)).isoformat())
+
+    lower = text.lower()
+    if 'depois de amanhã' in lower or 'depois de amanha' in lower:
+        matches.append((now.date() + timedelta(days=2)).isoformat())
+    elif 'amanh' in lower:
+        matches.append((now.date() + timedelta(days=1)).isoformat())
+
+    seen = set()
+    ordered = []
+    for d in matches:
+        if d not in seen:
+            seen.add(d)
+            ordered.append(d)
+    return ordered
+
+
+def create_commitments_from_activity(cursor, client_id, activity_id, text):
+    dates = extract_future_commitment_dates(text)
+    if not dates:
+        return 0
+
+    safe_title = (text or '').strip().replace('\n', ' ')
+    if len(safe_title) > 120:
+        safe_title = safe_title[:117] + '...'
+
+    count = 0
+    for due_date in dates:
+        cursor.execute(
+            '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date)
+               VALUES (?, ?, ?, ?, ?)''',
+            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date)
+        )
+        count += 1
+    return count
+
+
+def _col_index(cell_ref):
+    letters = ''.join(ch for ch in cell_ref if ch.isalpha()).upper()
+    idx = 0
+    for ch in letters:
+        idx = (idx * 26) + (ord(ch) - 64)
+    return max(idx - 1, 0)
+
+
+def parse_xlsx_without_openpyxl(file_storage):
+    """Le arquivo XLSX usando apenas bibliotecas nativas (fallback)."""
+    import io
+
+    file_bytes = file_storage.read()
+    file_storage.seek(0)
+
+    ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+        # shared strings (quando as celulas usam indice de string)
+        shared_strings = []
+        if 'xl/sharedStrings.xml' in zf.namelist():
+            root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
+            for si in root.findall('x:si', ns):
+                parts = [t.text or '' for t in si.findall('.//x:t', ns)]
+                shared_strings.append(''.join(parts))
+
+        sheet_name = 'xl/worksheets/sheet1.xml'
+        if sheet_name not in zf.namelist():
+            # fallback para o primeiro worksheet encontrado
+            worksheet_files = [n for n in zf.namelist() if n.startswith('xl/worksheets/sheet') and n.endswith('.xml')]
+            if not worksheet_files:
+                raise ValueError('Planilha inválida: worksheet não encontrada')
+            sheet_name = sorted(worksheet_files)[0]
+
+        sheet_root = ET.fromstring(zf.read(sheet_name))
+        rows = []
+
+        for row in sheet_root.findall('.//x:sheetData/x:row', ns):
+            row_data = []
+            for cell in row.findall('x:c', ns):
+                cell_ref = cell.get('r', '')
+                col_idx = _col_index(cell_ref) if cell_ref else len(row_data)
+
+                while len(row_data) < col_idx:
+                    row_data.append('')
+
+                cell_type = cell.get('t')
+                value = ''
+
+                if cell_type == 's':
+                    v = cell.find('x:v', ns)
+                    if v is not None and (v.text or '').isdigit():
+                        s_idx = int(v.text)
+                        if 0 <= s_idx < len(shared_strings):
+                            value = shared_strings[s_idx]
+                elif cell_type == 'inlineStr':
+                    t = cell.find('.//x:t', ns)
+                    value = t.text if t is not None and t.text is not None else ''
+                else:
+                    v = cell.find('x:v', ns)
+                    value = v.text if v is not None and v.text is not None else ''
+
+                row_data.append(str(value).strip())
+
+            rows.append(row_data)
+
+    return rows
+
 # API - Clientes (rotas alternativas para compatibilidade)
 @app.route('/api/clientes', methods=['GET'])
 def get_clientes():
@@ -118,6 +300,165 @@ def get_clients():
         return jsonify(clients)
     except Exception as e:
         print(f'[ERROR] GET /api/clients: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cargos', methods=['GET'])
+def get_positions():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != "" ORDER BY position')
+        positions = [row['position'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(positions)
+    except Exception as e:
+        print(f'[ERROR] GET /api/cargos: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status', methods=['GET'])
+def get_status_config():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days")')
+        settings = {row['key']: row['value'] for row in c.fetchall()}
+        c.execute('SELECT id, position, green_days, yellow_days FROM status_rules ORDER BY position')
+        rules = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+
+        return jsonify({
+            'universal': {
+                'green_days': int(settings.get('status_green_days', '7')),
+                'yellow_days': int(settings.get('status_yellow_days', '14'))
+            },
+            'rules': rules
+        })
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/status: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status/universal', methods=['PUT'])
+def update_universal_status_config():
+    try:
+        data = request.get_json() or {}
+        green_days = int(data.get('green_days', 7))
+        yellow_days = int(data.get('yellow_days', 14))
+
+        if green_days < 0 or yellow_days <= green_days:
+            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(green_days), 'status_green_days'))
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(yellow_days), 'status_yellow_days'))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Configuração universal atualizada'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/config/status/universal: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status/rules', methods=['POST'])
+def create_or_update_status_rule():
+    try:
+        data = request.get_json() or {}
+        position = (data.get('position') or '').strip()
+        green_days = int(data.get('green_days', 7))
+        yellow_days = int(data.get('yellow_days', 14))
+
+        if not position:
+            return jsonify({'error': 'Cargo é obrigatório'}), 400
+        if green_days < 0 or yellow_days <= green_days:
+            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''INSERT INTO status_rules (position, green_days, yellow_days, updated_at)
+                     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(position) DO UPDATE SET
+                        green_days = excluded.green_days,
+                        yellow_days = excluded.yellow_days,
+                        updated_at = CURRENT_TIMESTAMP''',
+                  (position, green_days, yellow_days))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Regra por cargo salva'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/config/status/rules: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status/rules/<int:rule_id>', methods=['DELETE'])
+def delete_status_rule(rule_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM status_rules WHERE id = ?', (rule_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Regra removida'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/config/status/rules/{rule_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/profile', methods=['GET'])
+def get_profile_config():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM user_profile WHERE id = 1')
+        profile = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(profile or {})
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/profile: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/profile', methods=['POST'])
+def save_profile_config():
+    try:
+        full_name = request.form.get('full_name', '').strip()
+        nickname = request.form.get('nickname', '').strip()
+        position = request.form.get('position', '').strip()
+
+        if not full_name or not nickname or not position:
+            return jsonify({'error': 'Nome completo, apelido e cargo são obrigatórios'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT photo_url FROM user_profile WHERE id = 1')
+        row = c.fetchone()
+        photo_url = row['photo_url'] if row else None
+
+        if 'photo' in request.files:
+            file = request.files['photo']
+            if file and file.filename:
+                filename = secure_filename(file.filename)
+                filepath = UPLOAD_DIR / filename
+                file.save(str(filepath))
+                photo_url = f'/uploads/{filename}'
+
+        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, photo_url, updated_at)
+                     VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(id) DO UPDATE SET
+                        full_name = excluded.full_name,
+                        nickname = excluded.nickname,
+                        position = excluded.position,
+                        photo_url = excluded.photo_url,
+                        updated_at = CURRENT_TIMESTAMP''',
+                  (full_name, nickname, position, photo_url))
+        conn.commit()
+        conn.close()
+
+        return jsonify({'message': 'Perfil salvo'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/config/profile: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/clients/<int:client_id>', methods=['GET'])
@@ -306,6 +647,10 @@ def create_atividade():
                   (client_id, contact_type, information))
         conn.commit()
         activity_id = c.lastrowid
+
+        # Detectar compromissos futuros no texto da atividade e registrar na agenda
+        create_commitments_from_activity(c, client_id, activity_id, information)
+        conn.commit()
         
         # Atualizar last_activity_date do cliente
         c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
@@ -348,6 +693,10 @@ def create_activity():
                   (client_id, description))
         conn.commit()
         activity_id = c.lastrowid
+
+        # Detectar compromissos futuros no texto da atividade e registrar na agenda
+        create_commitments_from_activity(c, client_id, activity_id, description)
+        conn.commit()
         
         # Atualizar last_activity_date do cliente
         c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
@@ -410,6 +759,60 @@ def delete_activity(activity_id):
         return jsonify({'message': 'Atividade deletada'})
     except Exception as e:
         print(f'[ERROR] DELETE /api/activities/{activity_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/agenda', methods=['GET'])
+def get_agenda():
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        conn = get_db()
+        c = conn.cursor()
+
+        query = '''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position
+                   FROM commitments cm
+                   JOIN clients cl ON cm.client_id = cl.id'''
+        params = []
+
+        if start_date and end_date:
+            query += ' WHERE DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
+            params.extend([start_date, end_date])
+
+        query += ' ORDER BY cm.due_date ASC, cm.created_at ASC'
+        c.execute(query, params)
+        items = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(items)
+    except Exception as e:
+        print(f'[ERROR] GET /api/agenda: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agenda/semana-atual-count', methods=['GET'])
+def get_week_commitments_count():
+    try:
+        today = datetime.now().date()
+        start_week = today - timedelta(days=today.weekday())
+        end_week = start_week + timedelta(days=6)
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT COUNT(*) as total FROM commitments
+                     WHERE DATE(due_date) >= ? AND DATE(due_date) <= ?''',
+                  (start_week.isoformat(), end_week.isoformat()))
+        total = c.fetchone()['total']
+        conn.close()
+
+        return jsonify({
+            'total': total,
+            'start_week': start_week.isoformat(),
+            'end_week': end_week.isoformat()
+        })
+    except Exception as e:
+        print(f'[ERROR] GET /api/agenda/semana-atual-count: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Rotas de exportacao
@@ -516,7 +919,6 @@ def import_clients():
         import csv
         import io
         import tempfile
-        import chardet
         
         filename = file.filename.lower()
         rows = []
@@ -531,36 +933,40 @@ def import_clients():
             return jsonify({'error': f'Arquivo muito grande. Maximo: 5MB. Tamanho: {file_size / 1024 / 1024:.2f}MB'}), 400
         
         # Detectar tipo de arquivo
-        if filename.endswith('.xlsx') or filename.endswith('.xls'):
-            if not OPENPYXL_AVAILABLE:
-                return jsonify({'error': 'Instale openpyxl: pip install openpyxl'}), 400
-            
+        if filename.endswith('.xls') and not filename.endswith('.xlsx'):
+            return jsonify({'error': 'Formato .xls não suportado. Salve como .xlsx ou .csv.'}), 400
+
+        if filename.endswith('.xlsx'):
             try:
-                from openpyxl import load_workbook
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                    file.save(tmp.name)
-                    wb = load_workbook(tmp.name, data_only=True)
-                    ws = wb.active
-                    
-                    for idx, row in enumerate(ws.iter_rows(values_only=True)):
+                if OPENPYXL_AVAILABLE:
+                    from openpyxl import load_workbook
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+                        file.save(tmp.name)
+                        wb = load_workbook(tmp.name, data_only=True)
+                        ws = wb.active
+
+                        for idx, row in enumerate(ws.iter_rows(values_only=True)):
+                            if idx == 0:
+                                continue
+                            row_data = []
+                            for cell in row:
+                                if cell is None:
+                                    row_data.append('')
+                                else:
+                                    val = str(cell).strip()
+                                    if any(ord(c) > 127 and ord(c) < 160 for c in val):
+                                        val = val.encode('utf-8', errors='ignore').decode('utf-8')
+                                    row_data.append(val)
+                            rows.append(row_data)
+
+                        os.unlink(tmp.name)
+                else:
+                    parsed_rows = parse_xlsx_without_openpyxl(file)
+                    for idx, row in enumerate(parsed_rows):
                         if idx == 0:
                             continue
-                        # Converter valores para string e limpar
-                        row_data = []
-                        for cell in row:
-                            if cell is None:
-                                row_data.append('')
-                            else:
-                                # Converter para string e remover caracteres especiais
-                                val = str(cell).strip()
-                                # Verificar se contem caracteres invalidos
-                                if any(ord(c) > 127 and ord(c) < 160 for c in val):
-                                    val = val.encode('utf-8', errors='ignore').decode('utf-8')
-                                row_data.append(val)
-                        rows.append(row_data)
-                    
-                    os.unlink(tmp.name)
+                        rows.append(row)
             except Exception as e:
                 print(f'[ERROR] Excel parsing: {e}')
                 return jsonify({'error': f'Erro ao ler Excel: {str(e)}'}), 400
@@ -568,13 +974,22 @@ def import_clients():
             try:
                 # Ler arquivo e detectar encoding
                 file_content = file.stream.read()
-                detected = chardet.detect(file_content)
-                encoding = detected.get('encoding', 'utf-8') or 'utf-8'
-                
-                try:
-                    text = file_content.decode(encoding)
-                except:
-                    text = file_content.decode('utf-8', errors='ignore')
+
+                # Detectar encoding com chardet quando disponivel,
+                # mas manter fallback para nao quebrar importacao.
+                if CHARDET_AVAILABLE:
+                    detected = chardet.detect(file_content)
+                    encoding = detected.get('encoding', 'utf-8') or 'utf-8'
+                    try:
+                        text = file_content.decode(encoding)
+                    except:
+                        text = file_content.decode('utf-8', errors='ignore')
+                else:
+                    # fallback sem dependencia externa
+                    try:
+                        text = file_content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        text = file_content.decode('latin-1', errors='ignore')
                 
                 stream = io.StringIO(text, newline=None)
                 csv_data = csv.reader(stream)
