@@ -414,9 +414,30 @@ def get_profile_config():
         c.execute('SELECT * FROM user_profile WHERE id = 1')
         profile = dict_from_row(c.fetchone())
         conn.close()
+
+        if profile and profile.get('photo_url'):
+            photo_url = str(profile.get('photo_url') or '').strip()
+            if photo_url and not (photo_url.startswith('/uploads/') or photo_url.startswith('http://') or photo_url.startswith('https://') or photo_url.startswith('data:')):
+                photo_name = os.path.basename(photo_url.replace('\\', '/'))
+                profile['photo_url'] = f'/uploads/{photo_name}' if photo_name else photo_url
+
         return jsonify(profile or {})
     except Exception as e:
         print(f'[ERROR] GET /api/config/profile: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/profile', methods=['DELETE'])
+def delete_profile_config():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM user_profile WHERE id = 1')
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Perfil removido'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/config/profile: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -443,6 +464,9 @@ def save_profile_config():
                 filepath = UPLOAD_DIR / filename
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
+
+        if not photo_url:
+            return jsonify({'error': 'Foto é obrigatória'}), 400
 
         c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, photo_url, updated_at)
                      VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
