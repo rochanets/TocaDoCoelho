@@ -56,6 +56,33 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    # Tabela de configuracoes gerais
+    c.execute('''CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Tabela de regras de status por cargo
+    c.execute('''CREATE TABLE IF NOT EXISTS status_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        position TEXT NOT NULL UNIQUE,
+        green_days INTEGER NOT NULL,
+        yellow_days INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Tabela de perfil do usuario
+    c.execute('''CREATE TABLE IF NOT EXISTS user_profile (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        full_name TEXT NOT NULL,
+        nickname TEXT NOT NULL,
+        position TEXT NOT NULL,
+        photo_url TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     
     # Tabela de compromissos (agenda)
     c.execute('''CREATE TABLE IF NOT EXISTS commitments (
@@ -87,6 +114,10 @@ def init_db():
     columns = [col[1] for col in c.fetchall()]
     if 'last_activity_date' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN last_activity_date TIMESTAMP')
+
+    # Configuracoes padrao da faixa de status
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_green_days', '7'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_yellow_days', '14'))
     
     conn.commit()
     
@@ -271,6 +302,165 @@ def get_clients():
         print(f'[ERROR] GET /api/clients: {e}')
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/cargos', methods=['GET'])
+def get_positions():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != "" ORDER BY position')
+        positions = [row['position'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(positions)
+    except Exception as e:
+        print(f'[ERROR] GET /api/cargos: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status', methods=['GET'])
+def get_status_config():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days")')
+        settings = {row['key']: row['value'] for row in c.fetchall()}
+        c.execute('SELECT id, position, green_days, yellow_days FROM status_rules ORDER BY position')
+        rules = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+
+        return jsonify({
+            'universal': {
+                'green_days': int(settings.get('status_green_days', '7')),
+                'yellow_days': int(settings.get('status_yellow_days', '14'))
+            },
+            'rules': rules
+        })
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/status: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status/universal', methods=['PUT'])
+def update_universal_status_config():
+    try:
+        data = request.get_json() or {}
+        green_days = int(data.get('green_days', 7))
+        yellow_days = int(data.get('yellow_days', 14))
+
+        if green_days < 0 or yellow_days <= green_days:
+            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(green_days), 'status_green_days'))
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(yellow_days), 'status_yellow_days'))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Configuração universal atualizada'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/config/status/universal: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status/rules', methods=['POST'])
+def create_or_update_status_rule():
+    try:
+        data = request.get_json() or {}
+        position = (data.get('position') or '').strip()
+        green_days = int(data.get('green_days', 7))
+        yellow_days = int(data.get('yellow_days', 14))
+
+        if not position:
+            return jsonify({'error': 'Cargo é obrigatório'}), 400
+        if green_days < 0 or yellow_days <= green_days:
+            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''INSERT INTO status_rules (position, green_days, yellow_days, updated_at)
+                     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(position) DO UPDATE SET
+                        green_days = excluded.green_days,
+                        yellow_days = excluded.yellow_days,
+                        updated_at = CURRENT_TIMESTAMP''',
+                  (position, green_days, yellow_days))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Regra por cargo salva'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/config/status/rules: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/status/rules/<int:rule_id>', methods=['DELETE'])
+def delete_status_rule(rule_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM status_rules WHERE id = ?', (rule_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Regra removida'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/config/status/rules/{rule_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/profile', methods=['GET'])
+def get_profile_config():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM user_profile WHERE id = 1')
+        profile = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(profile or {})
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/profile: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/profile', methods=['POST'])
+def save_profile_config():
+    try:
+        full_name = request.form.get('full_name', '').strip()
+        nickname = request.form.get('nickname', '').strip()
+        position = request.form.get('position', '').strip()
+
+        if not full_name or not nickname or not position:
+            return jsonify({'error': 'Nome completo, apelido e cargo são obrigatórios'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT photo_url FROM user_profile WHERE id = 1')
+        row = c.fetchone()
+        photo_url = row['photo_url'] if row else None
+
+        if 'photo' in request.files:
+            file = request.files['photo']
+            if file and file.filename:
+                filename = secure_filename(file.filename)
+                filepath = UPLOAD_DIR / filename
+                file.save(str(filepath))
+                photo_url = f'/uploads/{filename}'
+
+        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, photo_url, updated_at)
+                     VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(id) DO UPDATE SET
+                        full_name = excluded.full_name,
+                        nickname = excluded.nickname,
+                        position = excluded.position,
+                        photo_url = excluded.photo_url,
+                        updated_at = CURRENT_TIMESTAMP''',
+                  (full_name, nickname, position, photo_url))
+        conn.commit()
+        conn.close()
+
+        return jsonify({'message': 'Perfil salvo'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/config/profile: {e}')
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/clients/<int:client_id>', methods=['GET'])
 def get_client(client_id):
     try:
@@ -348,6 +538,7 @@ def update_client(client_id):
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = request.form.get('phone', '').strip()
+        remove_photo = request.form.get('remove_photo', '0') == '1'
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -362,7 +553,7 @@ def update_client(client_id):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         
-        photo_url = client['photo_url']
+        photo_url = None if remove_photo else client['photo_url']
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
