@@ -538,6 +538,7 @@ def update_client(client_id):
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = request.form.get('phone', '').strip()
+        remove_photo = request.form.get('remove_photo', '0') == '1'
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -552,7 +553,7 @@ def update_client(client_id):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         
-        photo_url = client['photo_url']
+        photo_url = None if remove_photo else client['photo_url']
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
