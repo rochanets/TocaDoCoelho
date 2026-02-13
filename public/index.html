@@ -72,10 +72,72 @@
             margin-top: auto;
         }
 
+        .th-last-contact {
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
         .config-shell {
             width: 50%;
             min-width: 420px;
             max-width: 720px;
+        }
+
+        .settings-grid {
+            display: grid;
+            gap: 18px;
+            max-width: 560px;
+        }
+
+        .settings-card {
+            background: rgba(255,255,255,0.9);
+            border: 1px solid rgba(52, 211, 153, 0.25);
+            border-radius: 14px;
+            padding: 12px;
+        }
+
+        .settings-card h3 {
+            color: #047857;
+            margin-bottom: 12px;
+        }
+
+        .status-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+        }
+
+        .status-label i {
+            font-size: 11px;
+        }
+
+        .status-label.green i { color: #16a34a; }
+        .status-label.yellow i { color: #eab308; }
+
+        .rule-list {
+            display: grid;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .rule-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: #f9fffc;
+            border: 1px solid rgba(52, 211, 153, 0.2);
+        }
+
+        .greeting-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 1px solid rgba(52, 211, 153, 0.25);
         }
 
         .nav-item {
@@ -848,6 +910,10 @@
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
             </button>
+            <button class="nav-item nav-item-settings" onclick="switchTab(event, 'configuracoes')">
+                <i class="fas fa-cog"></i>
+                <span>Configurações</span>
+            </button>
         </nav>
 
         <div class="sidebar-footer">
@@ -865,9 +931,9 @@
             <div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
                 <div>
                     <h1>Dashboard</h1>
-                    <p>Visão geral dos seus contatos e status de relacionamento</p>
+                    <p id="dashboardWelcomeText">Olá</p>
                 </div>
-                <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:flex; align-items:center; gap:10px;"></div>
+                <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:none; align-items:center; gap:10px;"></div>
             </div>
             <div id="dashboardContent"></div>
         </div>
@@ -923,7 +989,82 @@
             </div>
             <div id="agendaContent"></div>
         </div>
+
+        <div id="configuracoes" class="tab-content">
+            <div class="page-header">
+                <h1>Configurações</h1>
+                <p>Parametrizações do sistema e cadastro do usuário</p>
+            </div>
+            <div class="settings-grid">
+                <section class="settings-card">
+                    <h3>Faixa de Status</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Regra A (universal) será aplicada quando não houver regra específica por cargo (Regra B).</p>
+                    <form id="universalStatusForm" onsubmit="saveUniversalStatus(event)">
+                        <div style="display:grid; grid-template-columns: repeat(2,minmax(160px,1fr)); gap:12px;">
+                            <div class="form-group" style="margin:0;">
+                                <label class="status-label green"><i class="fas fa-circle"></i> Em Dia</label>
+                                <input type="number" id="universalGreen" min="0" required>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label class="status-label yellow"><i class="fas fa-circle"></i> Atenção</label>
+                                <input type="number" id="universalYellow" min="1" required>
+                            </div>
+                        </div>
+                        <div style="margin-top:12px;">
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar regra A</button>
+                        </div>
+                    </form>
+                    <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+                        <h4 style="color:#065f46; font-weight:400;">Regra B por Cargo</h4>
+                        <button class="btn btn-secondary btn-small" onclick="openStatusRuleModal()"><i class="fas fa-plus"></i> Adicionar</button>
+                    </div>
+                    <div id="statusRulesList" class="rule-list"></div>
+                </section>
+
+                <section class="settings-card">
+                    <h3>Cadastro do Usuário</h3>
+                    <form id="userProfileForm" onsubmit="saveUserProfile(event)">
+                        <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
+                        <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
+                        <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
+                        <div class="form-group">
+                            <label>Foto *</label>
+                            <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
+                            <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
+                        </div>
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
+                    </form>
+                </section>
+            </div>
+        </div>
     </main>
+
+    <div id="statusRuleModal" class="modal">
+        <div class="modal-content" style="max-width:460px;">
+            <div class="modal-header">
+                <h2>Nova regra por cargo</h2>
+                <button class="modal-close" onclick="closeStatusRuleModal()">×</button>
+            </div>
+            <form onsubmit="saveStatusRule(event)">
+                <div class="form-group">
+                    <label>Cargo *</label>
+                    <select id="rulePosition" required></select>
+                </div>
+                <div class="form-group">
+                    <label>Dias para Em dia</label>
+                    <input type="number" id="ruleGreen" min="0" required>
+                </div>
+                <div class="form-group">
+                    <label>Dias para Atenção</label>
+                    <input type="number" id="ruleYellow" min="1" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeStatusRuleModal()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Client Modal -->
     <div id="clientModal" class="modal">
@@ -1083,6 +1224,137 @@
             else if (tabName === 'atividades') loadActivities();
             else if (tabName === 'report') loadReport();
             else if (tabName === 'agenda') loadAgenda();
+            else if (tabName === 'configuracoes') loadSettings();
+        }
+
+        async function loadSettings() {
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions()]);
+            renderSettings();
+        }
+
+        async function loadStatusConfig() {
+            const response = await fetch(`${API_BASE}/config/status`);
+            if (response.ok) statusConfig = await response.json();
+        }
+
+        async function loadUserProfile() {
+            const response = await fetch(`${API_BASE}/config/profile`);
+            if (response.ok) userProfile = await response.json();
+            renderDashboardGreeting();
+        }
+
+        async function loadPositions() {
+            const response = await fetch(`${API_BASE}/cargos`);
+            if (response.ok) cachedPositions = await response.json();
+        }
+
+        function renderDashboardGreeting() {
+            const box = document.getElementById('dashboardGreeting');
+            const subtitle = document.getElementById('dashboardWelcomeText');
+            const nickname = userProfile && userProfile.nickname ? userProfile.nickname : '';
+            const message = nickname ? `Olá, ${escapeHtml(nickname)}` : 'Olá';
+            const avatar = (userProfile && userProfile.photo_url) ? `<img src="${userProfile.photo_url}" class="greeting-avatar">` : '';
+
+            if (box) box.innerHTML = `${avatar}<span>${message}</span>`;
+            if (subtitle) { subtitle.style.display = "inline-flex"; subtitle.style.alignItems = "center"; subtitle.style.gap = "8px"; subtitle.innerHTML = `${avatar}<span>${message}</span>`; }
+        }
+
+        function renderSettings() {
+            document.getElementById('universalGreen').value = Number(statusConfig.universal.green_days || 7);
+            document.getElementById('universalYellow').value = Number(statusConfig.universal.yellow_days || 14);
+
+            const rulesHtml = (statusConfig.rules || []).length
+                ? statusConfig.rules.map(rule => `<div class="rule-item"><div><strong>${escapeHtml(rule.position)}</strong><div style="font-size:12px;color:#6b7280;">Em dia: ${rule.green_days}d • Atenção: ${rule.yellow_days}d</div></div><button class="btn btn-danger btn-small" onclick="deleteStatusRule(${rule.id})"><i class="fas fa-trash"></i></button></div>`).join('')
+                : '<div style="color:#6b7280;">Nenhuma regra específica cadastrada.</div>';
+            document.getElementById('statusRulesList').innerHTML = rulesHtml;
+
+            const form = document.getElementById('userProfileForm');
+            form.full_name.value = userProfile?.full_name || '';
+            form.nickname.value = userProfile?.nickname || '';
+            form.position.value = userProfile?.position || '';
+            const preview = document.getElementById('profilePhotoPreview');
+            if (userProfile?.photo_url) {
+                preview.src = userProfile.photo_url;
+                preview.style.display = 'block';
+            } else {
+                preview.style.display = 'none';
+                preview.removeAttribute('src');
+            }
+        }
+
+        async function saveUniversalStatus(event) {
+            event.preventDefault();
+            const green_days = Number(document.getElementById('universalGreen').value);
+            const yellow_days = Number(document.getElementById('universalYellow').value);
+            const response = await fetch(`${API_BASE}/config/status/universal`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ green_days, yellow_days })
+            });
+            if (response.ok) {
+                showSuccess('Regra universal atualizada!');
+                await loadStatusConfig();
+                renderSettings();
+                loadDashboard();
+            } else showError('Erro ao salvar regra universal');
+        }
+
+        function openStatusRuleModal() {
+            const options = ['<option value="">Selecione...</option>', ...cachedPositions.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`)].join('');
+            document.getElementById('rulePosition').innerHTML = options;
+            document.getElementById('ruleGreen').value = Number(statusConfig.universal.green_days || 7);
+            document.getElementById('ruleYellow').value = Number(statusConfig.universal.yellow_days || 14);
+            document.getElementById('statusRuleModal').classList.add('active');
+        }
+
+        function closeStatusRuleModal() {
+            document.getElementById('statusRuleModal').classList.remove('active');
+        }
+
+        async function saveStatusRule(event) {
+            event.preventDefault();
+            const payload = {
+                position: document.getElementById('rulePosition').value,
+                green_days: Number(document.getElementById('ruleGreen').value),
+                yellow_days: Number(document.getElementById('ruleYellow').value)
+            };
+            const response = await fetch(`${API_BASE}/config/status/rules`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            if (response.ok) {
+                closeStatusRuleModal();
+                showSuccess('Regra por cargo salva!');
+                await loadStatusConfig();
+                renderSettings();
+                loadDashboard();
+            } else showError('Erro ao salvar regra por cargo');
+        }
+
+        async function deleteStatusRule(ruleId) {
+            const response = await fetch(`${API_BASE}/config/status/rules/${ruleId}`, { method: 'DELETE' });
+            if (response.ok) {
+                showSuccess('Regra removida');
+                await loadStatusConfig();
+                renderSettings();
+                loadDashboard();
+            } else showError('Erro ao remover regra');
+        }
+
+        async function saveUserProfile(event) {
+            event.preventDefault();
+            const formData = new FormData(document.getElementById('userProfileForm'));
+            if (!formData.get('photo')?.name && !userProfile?.photo_url) {
+                showError('Foto é obrigatória no cadastro do usuário');
+                return;
+            }
+            const response = await fetch(`${API_BASE}/config/profile`, { method: 'POST', body: formData });
+            if (response.ok) {
+                showSuccess('Cadastro do usuário salvo!');
+                await loadUserProfile();
+                renderSettings();
+            } else {
+                const payload = await response.json().catch(() => ({}));
+                showError(payload.error || 'Erro ao salvar usuário');
+            }
         }
 
         // Load Dashboard
@@ -1181,7 +1453,7 @@
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '</tr></thead><tbody>';
 
@@ -1506,7 +1778,7 @@
         }
 
         // Load Client Select
-        async function loadClientSelect() {
+        async function loadClientSelect(selectedCompany = '') {
             try {
                 const response = await fetch(`${API_BASE}/clientes`);
                 const data = await response.json();
@@ -1520,7 +1792,8 @@
                 });
 
                 document.getElementById('companySelect').innerHTML = companyHtml;
-                selectedCompanyForActivity = '';
+                selectedCompanyForActivity = selectedCompany || '';
+                if (selectedCompany) document.getElementById('companySelect').value = selectedCompany;
                 filterClientsByCompany();
             } catch (error) {
                 showError('Erro ao carregar clientes');
@@ -1554,6 +1827,18 @@
                 };
                 reader.readAsDataURL(file);
             }
+        }
+
+        function previewProfilePhoto(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const preview = document.getElementById('profilePhotoPreview');
+                preview.src = e.target.result;
+                preview.style.display = 'block';
+            };
+            reader.readAsDataURL(file);
         }
 
 
@@ -1704,11 +1989,7 @@
             if (activity) {
                 currentEditingActivityId = id;
                 document.getElementById('activityModalTitle').textContent = 'Editar Atividade';
-                await loadClientSelect();
-                if (activity.company) {
-                    document.getElementById('companySelect').value = activity.company;
-                    filterClientsByCompany();
-                }
+                await loadClientSelect(activity.company || '');
                 document.getElementById('clientSelect').value = activity.client_id;
                 document.getElementById('activityForm').contact_type.value = activity.contact_type || 'Outro';
                 document.getElementById('activityForm').information.value = activity.information || '';
@@ -2052,9 +2333,11 @@
         window.addEventListener('click', (event) => {
             if (event.target.id === 'profileModal') closeProfileModal();
             if (event.target.id === 'groupModal') closeGroupModal();
+            if (event.target.id === 'statusRuleModal') closeStatusRuleModal();
         });
 
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions()]);
             loadDashboard();
         });
     </script>
