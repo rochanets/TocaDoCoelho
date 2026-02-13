@@ -1431,6 +1431,15 @@
             }
         }
 
+        function renderDashboardGreeting() {
+            const greetingEl = document.getElementById('dashboardGreeting');
+            if (!greetingEl) return;
+
+            const hour = new Date().getHours();
+            const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+            greetingEl.innerHTML = `${greeting}! Acompanhe seus clientes e mantenha os contatos em dia.`;
+        }
+
         async function loadDashboard() {
             try {
                 const response = await fetch(`${API_BASE}/clientes`);
