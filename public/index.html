@@ -85,8 +85,9 @@
 
         .settings-grid {
             display: grid;
-            gap: 18px;
-            max-width: 560px;
+            gap: 14px;
+            grid-template-columns: repeat(2, minmax(260px, 1fr));
+            max-width: 920px;
         }
 
         .settings-card {
@@ -839,6 +840,13 @@
         }
 
         /* Responsive */
+        @media (max-width: 980px) {
+            .settings-grid {
+                grid-template-columns: 1fr;
+                max-width: 100%;
+            }
+        }
+
         @media (max-width: 768px) {
             .sidebar {
                 width: 200px;
@@ -931,9 +939,9 @@
             <div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
                 <div>
                     <h1>Dashboard</h1>
-                    <p id="dashboardWelcomeText">Olá</p>
+                    <p>Visão geral dos seus contatos e status de relacionamento</p>
                 </div>
-                <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:none; align-items:center; gap:10px;"></div>
+                <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:flex; align-items:center; gap:10px;"></div>
             </div>
             <div id="dashboardContent"></div>
         </div>
@@ -1134,6 +1142,7 @@
                         <option value="Telefone">Telefone</option>
                         <option value="Email">Email</option>
                         <option value="Reunião">Reunião</option>
+                        <option value="WhatsApp">WhatsApp</option>
                         <option value="Outro">Outro</option>
                     </select>
                 </div>
@@ -1250,13 +1259,11 @@
 
         function renderDashboardGreeting() {
             const box = document.getElementById('dashboardGreeting');
-            const subtitle = document.getElementById('dashboardWelcomeText');
             const nickname = userProfile && userProfile.nickname ? userProfile.nickname : '';
             const message = nickname ? `Olá, ${escapeHtml(nickname)}` : 'Olá';
             const avatar = (userProfile && userProfile.photo_url) ? `<img src="${userProfile.photo_url}" class="greeting-avatar">` : '';
 
             if (box) box.innerHTML = `${avatar}<span>${message}</span>`;
-            if (subtitle) { subtitle.style.display = "inline-flex"; subtitle.style.alignItems = "center"; subtitle.style.gap = "8px"; subtitle.innerHTML = `${avatar}<span>${message}</span>`; }
         }
 
         function renderSettings() {
