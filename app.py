@@ -37,6 +37,35 @@ DB_PATH = DATA_DIR / 'toca-do-coelho.db'
 UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+IMAGE_REPO_DIR = PROJECT_ROOT / 'public' / 'images'
+COELHO_B64_PATH = IMAGE_REPO_DIR / 'coelho.b64'
+COELHO_PNG_PATH = IMAGE_REPO_DIR / 'coelho.png'
+
+
+def ensure_coelho_png_from_b64():
+    # Gera public/images/coelho.png a partir de coelho.b64 para evitar diffs binários em PR.
+    try:
+        if COELHO_PNG_PATH.exists():
+            return
+        if not COELHO_B64_PATH.exists():
+            print('[WARN] coelho.b64 não encontrado; PNG não foi gerado')
+            return
+
+        IMAGE_REPO_DIR.mkdir(parents=True, exist_ok=True)
+        payload = COELHO_B64_PATH.read_text(encoding='utf-8').strip()
+        if not payload:
+            print('[WARN] coelho.b64 está vazio; PNG não foi gerado')
+            return
+
+        COELHO_PNG_PATH.write_bytes(base64.b64decode(payload))
+        print(f'[Assets] coelho.png gerado em: {COELHO_PNG_PATH}')
+    except Exception as e:
+        print(f'[WARN] Falha ao gerar coelho.png a partir de coelho.b64: {e}')
+
+
+ensure_coelho_png_from_b64()
+
 print(f'[Database] Caminho: {DB_PATH}')
 
 # Inicializar banco de dados
