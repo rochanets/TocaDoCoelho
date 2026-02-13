@@ -444,6 +444,9 @@ def save_profile_config():
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
 
+        if not photo_url:
+            return jsonify({'error': 'Foto é obrigatória'}), 400
+
         c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, photo_url, updated_at)
                      VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                      ON CONFLICT(id) DO UPDATE SET
