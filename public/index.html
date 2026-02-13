@@ -719,8 +719,6 @@
             gap: 8px;
         }
 
-
-
         /* Photo Preview */
         .photo-preview {
             width: 100px;
@@ -2262,6 +2260,7 @@
         window.addEventListener('DOMContentLoaded', async () => {
             await Promise.all([loadStatusConfig(), loadProfileConfig(), loadPositionsForRules()]);
             renderDashboardGreeting();
+        window.addEventListener('DOMContentLoaded', () => {
             loadDashboard();
         });
     </script>
