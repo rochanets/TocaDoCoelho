@@ -7,7 +7,6 @@ import json
 import sqlite3
 import webbrowser
 import re
-import base64
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
