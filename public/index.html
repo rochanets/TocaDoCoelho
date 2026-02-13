@@ -848,6 +848,10 @@
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
             </button>
+            <button class="nav-item nav-item-settings" onclick="switchTab(event, 'configuracoes')">
+                <i class="fas fa-cog"></i>
+                <span>Configurações</span>
+            </button>
         </nav>
 
         <div class="sidebar-footer">
@@ -922,6 +926,14 @@
                 <p>Compromissos e retornos futuros detectados nas atividades</p>
             </div>
             <div id="agendaContent"></div>
+        </div>
+
+        <div id="configuracoes" class="tab-content">
+            <div class="page-header">
+                <h1>Configurações</h1>
+                <p>Parametrize regras de status e cadastro do usuário</p>
+            </div>
+            <div id="configContent"></div>
         </div>
     </main>
 
@@ -1053,6 +1065,34 @@
     </div>
 
 
+    <div id="statusRuleModal" class="modal">
+        <div class="modal-content" style="max-width: 560px;">
+            <div class="modal-header">
+                <h2>Nova Regra por Cargo</h2>
+                <button class="modal-close" onclick="closeStatusRuleModal()">×</button>
+            </div>
+            <form id="statusRuleForm" onsubmit="saveStatusRule(event)">
+                <div class="form-group">
+                    <label>Cargo *</label>
+                    <select id="statusRulePosition" required></select>
+                </div>
+                <div class="form-group">
+                    <label>Faixa Verde (dias) *</label>
+                    <input type="number" id="statusRuleGreen" min="0" required>
+                </div>
+                <div class="form-group">
+                    <label>Faixa Amarela até (dias) *</label>
+                    <input type="number" id="statusRuleYellow" min="1" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeStatusRuleModal()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar Regra</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
     <script>
         const API_BASE = '/api';
         let currentEditingClientId = null;
@@ -1083,6 +1123,7 @@
             else if (tabName === 'atividades') loadActivities();
             else if (tabName === 'report') loadReport();
             else if (tabName === 'agenda') loadAgenda();
+            else if (tabName === 'configuracoes') loadConfiguracoes();
         }
 
         // Load Dashboard
@@ -1161,7 +1202,7 @@
 
                 let html = '';
                 if (clients.length === 0) {
-                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                    html = `<div class="empty-state"><img src="/images/coelho.svg" class="empty-bunny-img" alt="Coelho"><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, 'clientes')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>`;
                 } else {
                     const weekCount = await loadWeekSummary();
                     let filteredClients = clients.filter(client => {
@@ -1189,7 +1230,7 @@
                         const status = getStatus(client.last_activity_date, client.position);
                         const statusClass = `status-${status}`;
                         const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
-                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${(client.name || '?').charAt(0).toUpperCase()}</div>`;
                         html += `<tr>
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
@@ -1242,7 +1283,7 @@
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
-                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${(client.name || '?').charAt(0).toUpperCase()}</div>`;
                         html += `<tr>
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
@@ -1571,6 +1612,10 @@
             reader.onload = (e) => {
                 document.getElementById('photoPreview').src = e.target.result;
                 document.getElementById('photoPreview').style.display = 'block';
+                    const removePhotoFlag = document.getElementById('removePhotoFlag');
+                    const removePhotoHelp = document.getElementById('removePhotoHelp');
+                    if (removePhotoFlag) removePhotoFlag.value = '0';
+                    if (removePhotoHelp) removePhotoHelp.style.display = 'none';
             };
             reader.readAsDataURL(file);
         }
@@ -1846,8 +1891,8 @@
             const sorted = [...clientsArray].sort((a, b) => {
                 if (field === 'status') {
                     const statusRank = { green: 1, yellow: 2, red: 3 };
-                    const aStatus = statusRank[getStatus(a.last_activity_date)] || 99;
-                    const bStatus = statusRank[getStatus(b.last_activity_date)] || 99;
+                    const aStatus = statusRank[getStatus(a.last_activity_date, a.position)] || 99;
+                    const bStatus = statusRank[getStatus(b.last_activity_date, b.position)] || 99;
 
                     if (aStatus < bStatus) return order === 'asc' ? -1 : 1;
                     if (aStatus > bStatus) return order === 'asc' ? 1 : -1;
@@ -1943,7 +1988,7 @@
                     .filter(activity => Number(activity.client_id) === Number(clientId))
                     .sort((a, b) => new Date(b.activity_date || b.created_at) - new Date(a.activity_date || a.created_at));
 
-                const status = getStatus(client.last_activity_date);
+                const status = getStatus(client.last_activity_date, client.position);
                 const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
 
                 let historyHtml = '';
@@ -2032,6 +2077,164 @@
             document.getElementById('groupModal').classList.remove('active');
         }
 
+
+
+        async function loadStatusConfig() {
+            const response = await fetch(`${API_BASE}/config/status`);
+            const data = await response.json();
+            statusConfig = data;
+            return data;
+        }
+
+        async function loadProfileConfig() {
+            const response = await fetch(`${API_BASE}/config/profile`);
+            userProfile = await response.json();
+            return userProfile;
+        }
+
+        async function loadPositionsForRules() {
+            const response = await fetch(`${API_BASE}/cargos`);
+            cachedPositions = await response.json();
+            return cachedPositions;
+        }
+
+        function renderDashboardGreeting() {
+            const container = document.getElementById('dashboardGreeting');
+            if (!container) return;
+
+            const nickname = userProfile && userProfile.nickname ? userProfile.nickname : '';
+            const greeting = nickname ? `Olá, ${escapeHtml(nickname)}` : 'Olá';
+            const avatar = userProfile && userProfile.photo_url ? `<img src="${userProfile.photo_url}" class="client-avatar with-photo">` : '';
+            container.innerHTML = `${avatar}<span>${greeting}</span>`;
+        }
+
+        async function loadConfiguracoes() {
+            try {
+                await Promise.all([loadStatusConfig(), loadProfileConfig(), loadPositionsForRules()]);
+                renderDashboardGreeting();
+
+                const universal = statusConfig.universal || { green_days: 7, yellow_days: 14 };
+                let html = '<div class="config-shell">';
+
+                html += '<div class="table-container" style="padding:16px; margin-bottom:16px;">';
+                html += '<h3 style="color:#047857; margin-bottom:12px;">1) Faixa de Status</h3>';
+                html += '<p style="margin-bottom:10px; color:#6b7280;">Regra A (Universal): usada quando não existe regra específica por cargo.</p>';
+                html += '<div class="filters-row" style="margin-bottom:10px;">';
+                html += `<div class="filter-group"><label class="filter-label">🟢 Verde até (dias)</label><input id="cfgGreen" type="number" min="0" value="${universal.green_days}" class="filter-select"></div>`;
+                html += `<div class="filter-group"><label class="filter-label">🟡 Amarelo até (dias)</label><input id="cfgYellow" type="number" min="1" value="${universal.yellow_days}" class="filter-select"></div>`;
+                html += '</div>';
+                html += '<button class="btn btn-primary btn-small" onclick="saveUniversalStatusConfig()"><i class="fas fa-save"></i> Salvar regra universal</button>';
+                html += '<hr style="margin:16px 0; border:none; border-top:1px solid rgba(52,211,153,0.2);">';
+                html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><span style="color:#047857;">Regra B (por cargo)</span><button class="btn btn-secondary btn-small" onclick="openStatusRuleModal()"><i class="fas fa-plus"></i> Adicionar</button></div>';
+                if ((statusConfig.rules || []).length === 0) {
+                    html += '<p style="color:#6b7280;">Nenhuma regra por cargo cadastrada.</p>';
+                } else {
+                    html += '<div class="history-list">';
+                    statusConfig.rules.forEach(rule => {
+                        html += `<div class="history-item"><div class="history-meta">Cargo: ${escapeHtml(rule.position)}</div><div>Verde: <strong>${rule.green_days}</strong> dia(s) | Amarelo: <strong>${rule.yellow_days}</strong> dia(s)</div><div style="margin-top:8px;"><button class="btn btn-danger btn-small" onclick="deleteStatusRule(${rule.id})">Excluir</button></div></div>`;
+                    });
+                    html += '</div>';
+                }
+                html += '</div>';
+
+                html += '<div class="table-container" style="padding:16px;">';
+                html += '<h3 style="color:#047857; margin-bottom:12px;">2) Conhecendo Você</h3>';
+                html += '<form id="profileConfigForm" onsubmit="saveProfileConfig(event)">';
+                html += `<div class="form-group"><label>Nome Completo *</label><input name="full_name" required value="${escapeHtml((userProfile && userProfile.full_name) || '')}"></div>`;
+                html += `<div class="form-group"><label>Apelido *</label><input name="nickname" required value="${escapeHtml((userProfile && userProfile.nickname) || '')}"></div>`;
+                html += `<div class="form-group"><label>Cargo *</label><input name="position" required value="${escapeHtml((userProfile && userProfile.position) || '')}"></div>`;
+                html += '<div class="form-group"><label>Foto *</label><input type="file" name="photo" accept="image/*"></div>';
+                if (userProfile && userProfile.photo_url) {
+                    html += `<img src="${userProfile.photo_url}" class="client-avatar with-photo" style="width:70px;height:70px;">`;
+                }
+                html += '<div class="modal-footer" style="margin-top:8px;"><button class="btn btn-primary" type="submit">Salvar perfil</button></div>';
+                html += '</form></div>';
+
+                html += '</div>';
+                document.getElementById('configContent').innerHTML = html;
+            } catch (error) {
+                showError('Erro ao carregar configurações');
+            }
+        }
+
+        async function saveUniversalStatusConfig() {
+            const green_days = Number(document.getElementById('cfgGreen').value || 0);
+            const yellow_days = Number(document.getElementById('cfgYellow').value || 0);
+            const response = await fetch(`${API_BASE}/config/status/universal`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ green_days, yellow_days })
+            });
+            const result = await response.json();
+            if (!response.ok) return showError(result.error || 'Erro ao salvar regra universal');
+            showSuccess('Regra universal salva!');
+            await loadStatusConfig();
+            loadDashboard();
+            loadConfiguracoes();
+        }
+
+        async function openStatusRuleModal() {
+            await loadPositionsForRules();
+            const select = document.getElementById('statusRulePosition');
+            let html = '<option value="">Selecione...</option>';
+            cachedPositions.forEach(pos => {
+                html += `<option value="${escapeHtml(pos)}">${escapeHtml(pos)}</option>`;
+            });
+            select.innerHTML = html;
+            document.getElementById('statusRuleGreen').value = statusConfig.universal.green_days || 7;
+            document.getElementById('statusRuleYellow').value = statusConfig.universal.yellow_days || 14;
+            document.getElementById('statusRuleModal').classList.add('active');
+        }
+
+        function closeStatusRuleModal() {
+            document.getElementById('statusRuleModal').classList.remove('active');
+        }
+
+        async function saveStatusRule(event) {
+            event.preventDefault();
+            const payload = {
+                position: document.getElementById('statusRulePosition').value,
+                green_days: Number(document.getElementById('statusRuleGreen').value || 0),
+                yellow_days: Number(document.getElementById('statusRuleYellow').value || 0)
+            };
+            const response = await fetch(`${API_BASE}/config/status/rules`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (!response.ok) return showError(result.error || 'Erro ao salvar regra');
+            closeStatusRuleModal();
+            showSuccess('Regra por cargo salva!');
+            await loadStatusConfig();
+            loadDashboard();
+            loadConfiguracoes();
+        }
+
+        async function deleteStatusRule(id) {
+            const response = await fetch(`${API_BASE}/config/status/rules/${id}`, { method: 'DELETE' });
+            if (!response.ok) return showError('Erro ao excluir regra');
+            showSuccess('Regra removida!');
+            await loadStatusConfig();
+            loadDashboard();
+            loadConfiguracoes();
+        }
+
+        async function saveProfileConfig(event) {
+            event.preventDefault();
+            const formData = new FormData(document.getElementById('profileConfigForm'));
+            const response = await fetch(`${API_BASE}/config/profile`, {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+            if (!response.ok) return showError(result.error || 'Erro ao salvar perfil');
+            showSuccess('Perfil salvo!');
+            await loadProfileConfig();
+            renderDashboardGreeting();
+            loadConfiguracoes();
+        }
+
         // Show Success
         function showSuccess(message) {
             const el = document.getElementById('successMsg');
@@ -2054,6 +2257,9 @@
             if (event.target.id === 'groupModal') closeGroupModal();
         });
 
+        window.addEventListener('DOMContentLoaded', async () => {
+            await Promise.all([loadStatusConfig(), loadProfileConfig(), loadPositionsForRules()]);
+            renderDashboardGreeting();
         window.addEventListener('DOMContentLoaded', () => {
             loadDashboard();
         });
