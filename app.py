@@ -181,6 +181,20 @@ def init_db():
         UNIQUE(card_id, client_id)
     )''')
     
+    # Tabela de sugestões diárias
+    c.execute('''CREATE TABLE IF NOT EXISTS daily_suggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        suggestion_type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        target_id INTEGER,
+        target_data TEXT,
+        completed INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP
+    )''')
+    
     # Inserir cards pré-definidos se não existirem
     predefined_cards = [
         ('ERP', '', 1),
@@ -1453,6 +1467,165 @@ def restore_database():
         
     except Exception as e:
         print(f'[ERROR] POST /api/restore/database: {e}')
+        return jsonify({'error': str(e)}), 500
+
+# Rotas de sugestões diárias
+@app.route('/api/suggestions/today', methods=['GET'])
+def get_today_suggestions():
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Verificar se já existem sugestões para hoje
+        c.execute('SELECT * FROM daily_suggestions WHERE date = ? ORDER BY completed ASC, id ASC', (today,))
+        existing = [dict_from_row(row) for row in c.fetchall()]
+        
+        if existing:
+            conn.close()
+            return jsonify(existing)
+        
+        # Gerar novas sugestões
+        suggestions = []
+        
+        # 1. Clientes com status vermelho (atrasados)
+        c.execute('''
+            SELECT c.id, c.name, c.company, c.last_activity_date
+            FROM clients c
+            WHERE c.last_activity_date IS NOT NULL
+            ORDER BY c.last_activity_date ASC
+        ''')
+        overdue_clients = c.fetchall()
+        
+        for client in overdue_clients:
+            client_id, name, company, last_date = client
+            if last_date:
+                days_diff = (datetime.now() - datetime.fromisoformat(last_date)).days
+                if days_diff > 14:  # Status vermelho
+                    suggestions.append({
+                        'type': 'contact_overdue',
+                        'title': f'Contatar {name} ({company})',
+                        'description': f'Cliente sem contato há {days_diff} dias',
+                        'target_id': client_id,
+                        'target_data': json.dumps({'client_id': client_id, 'days': days_diff})
+                    })
+        
+        # 2. Cargos faltantes em clientes
+        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND position != ""')
+        all_positions = [row[0] for row in c.fetchall()]
+        
+        c.execute('SELECT id, name, company FROM clients')
+        all_clients = c.fetchall()
+        
+        for client_id, client_name, client_company in all_clients:
+            c.execute('SELECT position FROM clients WHERE company = ?', (client_company,))
+            existing_positions = [row[0] for row in c.fetchall()]
+            
+            missing_positions = [pos for pos in all_positions if pos not in existing_positions]
+            
+            if missing_positions:
+                # Sugerir o primeiro cargo faltante
+                position = missing_positions[0]
+                suggestions.append({
+                    'type': 'missing_position',
+                    'title': f'Cadastrar {position} na {client_company}',
+                    'description': f'Cargo {position} não cadastrado para esta empresa',
+                    'target_id': client_id,
+                    'target_data': json.dumps({'company': client_company, 'position': position})
+                })
+        
+        # 3. Mapear itens de cards vazios
+        c.execute('SELECT id, title FROM environment_cards')
+        cards = c.fetchall()
+        
+        c.execute('SELECT id, name, company FROM clients')
+        clients = c.fetchall()
+        
+        for card_id, card_title in cards:
+            for client_id, client_name, client_company in clients:
+                c.execute('SELECT response FROM environment_responses WHERE card_id = ? AND client_id = ?', 
+                          (card_id, client_id))
+                response = c.fetchone()
+                
+                if not response or not response[0]:
+                    suggestions.append({
+                        'type': 'map_environment',
+                        'title': f'Mapear {card_title} da {client_company}',
+                        'description': f'Informação ainda não mapeada',
+                        'target_id': card_id,
+                        'target_data': json.dumps({'card_id': card_id, 'client_id': client_id, 'company': client_company})
+                    })
+        
+        # 4. Cadastros incompletos (sem foto ou campos vazios)
+        c.execute('''
+            SELECT id, name, company, email, phone, photo_url
+            FROM clients
+        ''')
+        clients = c.fetchall()
+        
+        for client_id, name, company, email, phone, photo in clients:
+            missing_fields = []
+            if not email: missing_fields.append('e-mail')
+            if not phone: missing_fields.append('telefone')
+            if not photo: missing_fields.append('foto')
+            
+            if missing_fields:
+                suggestions.append({
+                    'type': 'incomplete_profile',
+                    'title': f'Completar cadastro de {name} ({company})',
+                    'description': f'Faltam: {', '.join(missing_fields)}',
+                    'target_id': client_id,
+                    'target_data': json.dumps({'client_id': client_id, 'missing': missing_fields})
+                })
+        
+        # Selecionar aleatoriamente até 5 sugestões
+        import random
+        
+        # Priorizar: overdue > missing_position > map_environment > incomplete_profile
+        priority_order = ['contact_overdue', 'missing_position', 'map_environment', 'incomplete_profile']
+        sorted_suggestions = sorted(suggestions, key=lambda x: priority_order.index(x['type']))
+        
+        selected = sorted_suggestions[:5]
+        
+        # Inserir no banco
+        for sug in selected:
+            c.execute('''
+                INSERT INTO daily_suggestions (date, suggestion_type, title, description, target_id, target_data)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (today, sug['type'], sug['title'], sug['description'], sug['target_id'], sug['target_data']))
+        
+        conn.commit()
+        
+        # Buscar as sugestões inseridas
+        c.execute('SELECT * FROM daily_suggestions WHERE date = ? ORDER BY id ASC', (today,))
+        result = [dict_from_row(row) for row in c.fetchall()]
+        
+        conn.close()
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f'[ERROR] GET /api/suggestions/today: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/suggestions/<int:suggestion_id>/complete', methods=['POST'])
+def complete_suggestion(suggestion_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        c.execute('''
+            UPDATE daily_suggestions 
+            SET completed = 1, completed_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        ''', (suggestion_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': 'Sugestão marcada como concluída'})
+        
+    except Exception as e:
+        print(f'[ERROR] POST /api/suggestions/{suggestion_id}/complete: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Servir arquivos estaticos
