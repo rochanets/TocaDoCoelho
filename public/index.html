@@ -1006,6 +1006,10 @@
                 <i class="fas fa-users"></i>
                 <span>Gestão de Clientes</span>
             </button>
+            <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
+                <i class="fas fa-map-marked-alt"></i>
+                <span>Mapeamento de Ambiente</span>
+            </button>
             <button class="nav-item" onclick="switchTab(event, 'atividades')">
                 <i class="fas fa-chart-line"></i>
                 <span>Atividades</span>
@@ -1017,10 +1021,6 @@
             <button class="nav-item" onclick="switchTab(event, 'agenda')">
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
-            </button>
-            <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
-                <i class="fas fa-map-marked-alt"></i>
-                <span>Mapeamento de Ambiente</span>
             </button>
             <button class="nav-item nav-item-settings" onclick="switchTab(event, 'configuracoes')">
                 <i class="fas fa-cog"></i>
@@ -1621,7 +1621,7 @@
                             <td>${client.phone || '-'}</td>
                             <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
                             <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
-                            <td style="text-align: center;"><button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button></td>
+                            <td style="text-align: center;"><button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button></td>
                         </tr>`;
                     });
                     html += '</tbody></table></div>';
@@ -1880,21 +1880,36 @@
             if (clientSelect) {
                 clientSelect.disabled = false;
             }
+            
+            // Reabilitar o select de empresa caso tenha sido bloqueado
+            const companySelect = document.getElementById('companySelect');
+            if (companySelect) {
+                companySelect.disabled = false;
+            }
+            
             document.getElementById('activityModal').classList.remove('active');
         }
 
         // Open Quick Activity Modal (from Dashboard)
-        async function openQuickActivityModal(clientId, clientName) {
+        async function openQuickActivityModal(clientId, clientName, clientCompany) {
             currentEditingActivityId = null;
             document.getElementById('activityModalTitle').textContent = `Nova Atividade - ${clientName}`;
             document.getElementById('activityForm').reset();
-            await loadClientSelect();
+            
+            // Carregar clientes e pré-selecionar empresa
+            await loadClientSelect(clientCompany);
             
             // Pré-selecionar o cliente
             const clientSelect = document.getElementById('activityClientId');
             if (clientSelect) {
                 clientSelect.value = clientId;
                 clientSelect.disabled = true; // Bloquear alteração do cliente
+            }
+            
+            // Bloquear também a empresa
+            const companySelect = document.getElementById('companySelect');
+            if (companySelect) {
+                companySelect.disabled = true;
             }
             
             document.getElementById('activityModal').classList.add('active');
@@ -2417,8 +2432,15 @@
 
                 let html = `<div class="modal active" id="mappingCardModal" onclick="if(event.target === this) closeMappingCardModal()">`;
                 html += '<div class="modal-content" style="max-width: 800px;">';
-                html += `<h2 style="color: #047857; margin-bottom: 10px;">${escapeHtml(card.title)}</h2>`;
-                html += `<p style="color: #6b7280; margin-bottom: 20px;">${escapeHtml(card.description || 'Sem descrição')}</p>`;
+                
+                // Cabeçalho com botão de editar
+                html += '<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px;">';
+                html += '<div style="flex: 1;">';
+                html += `<input type="text" id="cardTitleEdit" value="${escapeHtml(card.title)}" style="width: 100%; font-size: 24px; font-weight: 700; color: #047857; border: 2px solid transparent; border-radius: 6px; padding: 4px 8px; margin-bottom: 10px;" onfocus="this.style.borderColor='#34D399'" onblur="this.style.borderColor='transparent'">`;
+                html += `<textarea id="cardDescriptionEdit" style="width: 100%; color: #6b7280; border: 2px solid transparent; border-radius: 6px; padding: 4px 8px; resize: vertical; min-height: 50px;" onfocus="this.style.borderColor='#34D399'" onblur="this.style.borderColor='transparent'">${escapeHtml(card.description || '')}</textarea>`;
+                html += '</div>';
+                html += `<button class="btn btn-small btn-primary" onclick="saveCardEdit(${card.id})" style="margin-left: 10px;"><i class="fas fa-save"></i> Salvar Card</button>`;
+                html += '</div>';
 
                 if (responses.length === 0) {
                     html += '<div class="empty-state"><p>Nenhum cliente cadastrado</p></div>';
@@ -2426,7 +2448,7 @@
                     html += '<div style="max-height: 500px; overflow-y: auto;">';
                     responses.forEach(r => {
                         html += '<div style="border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: rgba(255,255,255,0.9);">';
-                        html += `<div style="font-weight: 600; color: #047857; margin-bottom: 6px;">${escapeHtml(r.company)} - ${escapeHtml(r.name)}</div>`;
+                        html += `<div style="font-weight: 600; color: #047857; margin-bottom: 6px;">${escapeHtml(r.company)}</div>`;
                         html += `<textarea class="mapping-response-input" data-card-id="${card.id}" data-client-id="${r.id}" maxlength="400" placeholder="Digite a resposta (máx. 400 caracteres)" style="width: 100%; min-height: 60px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; resize: vertical;">${escapeHtml(r.response || '')}</textarea>`;
                         html += `<div style="text-align: right; margin-top: 6px;"><button class="btn btn-small btn-primary" onclick="saveMappingResponse(${card.id}, ${r.id})">Salvar</button></div>`;
                         html += '</div>';
@@ -2472,6 +2494,43 @@
                 }
             } catch (error) {
                 showError('Erro ao salvar resposta');
+            }
+        }
+
+        async function saveCardEdit(cardId) {
+            const titleInput = document.getElementById('cardTitleEdit');
+            const descriptionInput = document.getElementById('cardDescriptionEdit');
+            
+            if (!titleInput || !descriptionInput) return;
+            
+            const newTitle = titleInput.value.trim();
+            const newDescription = descriptionInput.value.trim();
+            
+            if (!newTitle) {
+                showError('Título do card não pode estar vazio');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/environment/cards/${cardId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: newTitle,
+                        description: newDescription
+                    })
+                });
+
+                if (response.ok) {
+                    showSuccess('Card atualizado com sucesso!');
+                    closeMappingCardModal();
+                    await loadMapeamento();
+                } else {
+                    const error = await response.json();
+                    showError(error.error || 'Erro ao atualizar card');
+                }
+            } catch (error) {
+                showError('Erro ao atualizar card');
             }
         }
 
