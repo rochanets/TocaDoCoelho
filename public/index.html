@@ -1067,7 +1067,7 @@
                 <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
                     <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:flex; align-items:center; gap:10px;"></div>
                     <div id="suggestionsIcon" style="display:none; cursor:pointer;" onclick="openSuggestionsModal()" title="Sugestões do Dia">
-                        <img src="/coelho-sugestoes-v2.png" alt="Sugestões" style="width: 40px; height: 40px; object-fit: contain; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                        <img src="/coelho-sugestoes.png" alt="Sugestões" style="width: 40px; height: 40px; object-fit: contain; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
                     </div>
                 </div>
             </div>
@@ -2169,8 +2169,8 @@
                     const result = await response.json();
                     showSuccess(currentEditingClientId ? 'Cliente atualizado!' : 'Cliente cadastrado!');
                     
-                    // Verificar se foi uma sugestão de cargo faltante
-                    if (window.currentSuggestion && window.currentSuggestion.type === 'missing_position') {
+                    // Verificar se foi uma sugestão de cargo faltante (apenas ao criar novo cliente)
+                    if (!currentEditingClientId && window.currentSuggestion && window.currentSuggestion.type === 'missing_position') {
                         const company = formData.get('company');
                         const position = formData.get('position');
                         if (company === window.currentSuggestion.data.company && position === window.currentSuggestion.data.position) {
@@ -2179,10 +2179,10 @@
                         }
                     }
                     
-                    // Verificar se foi uma sugestão de completar cadastro
-                    if (window.currentSuggestion && window.currentSuggestion.type === 'incomplete_profile') {
-                        const clientId = currentEditingClientId || result.id;
-                        if (clientId == window.currentSuggestion.data.client_id) {
+                    // Verificar se foi uma sugestão de completar cadastro (apenas ao editar)
+                    if (currentEditingClientId && window.currentSuggestion && window.currentSuggestion.type === 'incomplete_profile') {
+                        const clientId = parseInt(currentEditingClientId);
+                        if (clientId === window.currentSuggestion.data.client_id) {
                             // Verificar se todos os campos foram preenchidos
                             const email = formData.get('email');
                             const phone = formData.get('phone');
@@ -2279,10 +2279,10 @@
                 if (response.ok) {
                     showSuccess(currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!');
                     
-                    // Verificar se foi uma sugestão de contato atrasado
-                    if (window.currentSuggestion && window.currentSuggestion.type === 'contact_overdue') {
-                        const clientId = formData.get('client_id');
-                        if (clientId == window.currentSuggestion.data.client_id) {
+                    // Verificar se foi uma sugestão de contato atrasado (apenas ao criar nova atividade)
+                    if (!currentEditingActivityId && window.currentSuggestion && window.currentSuggestion.type === 'contact_overdue') {
+                        const clientId = parseInt(formData.get('client_id'));
+                        if (clientId === window.currentSuggestion.data.client_id) {
                             await markSuggestionComplete(window.currentSuggestion.id);
                             window.currentSuggestion = null;
                         }
@@ -2651,7 +2651,7 @@
                     
                     // Verificar se foi uma sugestão de mapear ambiente
                     if (window.currentSuggestion && window.currentSuggestion.type === 'map_environment') {
-                        if (cardId == window.currentSuggestion.data.card_id && clientId == window.currentSuggestion.data.client_id) {
+                        if (parseInt(cardId) === window.currentSuggestion.data.card_id && parseInt(clientId) === window.currentSuggestion.data.client_id) {
                             await markSuggestionComplete(window.currentSuggestion.id);
                             window.currentSuggestion = null;
                         }

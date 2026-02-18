@@ -1600,20 +1600,23 @@ def get_today_suggestions():
         selected = []
         priority_order = ['contact_overdue', 'missing_position', 'map_environment', 'incomplete_profile']
         
+        # Embaralhar a ordem de prioridade para variar
+        random.shuffle(priority_order)
+        
         # Primeira rodada: pegar 1 de cada tipo (se disponível)
         for sug_type in priority_order:
             if by_type[sug_type] and len(selected) < 5:
                 selected.append(by_type[sug_type].pop(0))
         
         # Segunda rodada: pegar mais 1 de cada tipo (máximo 2 por tipo)
+        # Embaralhar novamente para variar a ordem
+        random.shuffle(priority_order)
         for sug_type in priority_order:
             if by_type[sug_type] and len(selected) < 5:
                 selected.append(by_type[sug_type].pop(0))
         
-        # Se ainda falta, completar com o que sobrou
-        for sug_type in priority_order:
-            while by_type[sug_type] and len(selected) < 5:
-                selected.append(by_type[sug_type].pop(0))
+        # Embaralhar a lista final para evitar padrões
+        random.shuffle(selected)
         
         # Inserir no banco
         for sug in selected:
