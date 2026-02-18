@@ -552,6 +552,19 @@ def save_profile_config():
         print(f'[ERROR] POST /api/config/profile: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/config/profile', methods=['DELETE'])
+def delete_profile_config():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM user_profile WHERE id = 1')
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Usuário excluído com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/config/profile: {e}')
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/clients/<int:client_id>', methods=['GET'])
 def get_client(client_id):
     try:
@@ -1301,13 +1314,22 @@ def get_card_all_responses(card_id):
             return jsonify({'error': 'Card não encontrado'}), 404
         
         # Buscar todos os clientes com suas respostas para este card
+        # Agrupar por empresa (pegar apenas a primeira ocorrência de cada empresa)
         c.execute('''SELECT cl.id, cl.name, cl.company, 
                             COALESCE(er.response, '') as response
                      FROM clients cl
                      LEFT JOIN environment_responses er ON er.client_id = cl.id AND er.card_id = ?
                      ORDER BY cl.company, cl.name''', (card_id,))
         
-        clients_responses = [dict_from_row(row) for row in c.fetchall()]
+        all_clients = [dict_from_row(row) for row in c.fetchall()]
+        
+        # Filtrar para pegar apenas uma empresa por vez (primeira ocorrência)
+        seen_companies = set()
+        clients_responses = []
+        for client in all_clients:
+            if client['company'] and client['company'] not in seen_companies:
+                seen_companies.add(client['company'])
+                clients_responses.append(client)
         conn.close()
         
         return jsonify({

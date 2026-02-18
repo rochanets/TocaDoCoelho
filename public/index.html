@@ -1029,7 +1029,7 @@
         </nav>
 
         <div class="sidebar-footer">
-            Versão 1.0.0
+            Versão 2.0.0
         </div>
     </aside>
 
@@ -1158,7 +1158,10 @@
                             <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
                             <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
                         </div>
-                        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
+                            <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
+                        </div>
                     </form>
                 </section>
             </div>
@@ -1402,6 +1405,12 @@
                 preview.style.display = 'none';
                 preview.removeAttribute('src');
             }
+            
+            // Mostrar botão de excluir apenas se usuário existe
+            const deleteBtn = document.getElementById('deleteUserBtn');
+            if (deleteBtn) {
+                deleteBtn.style.display = userProfile ? 'inline-block' : 'none';
+            }
         }
 
         async function saveUniversalStatus(event) {
@@ -1476,6 +1485,30 @@
             } else {
                 const payload = await response.json().catch(() => ({}));
                 showError(payload.error || 'Erro ao salvar usuário');
+            }
+        }
+
+        async function deleteUserProfile() {
+            if (!confirm('Tem certeza que deseja excluir o usuário cadastrado? Esta ação não pode ser desfeita.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/config/profile`, { method: 'DELETE' });
+                if (response.ok) {
+                    showSuccess('Usuário excluído com sucesso!');
+                    await loadUserProfile();
+                    renderSettings();
+                    // Atualizar dashboard para remover saudação personalizada
+                    if (typeof renderDashboardGreeting === 'function') {
+                        await renderDashboardGreeting();
+                    }
+                } else {
+                    const payload = await response.json().catch(() => ({}));
+                    showError(payload.error || 'Erro ao excluir usuário');
+                }
+            } catch (error) {
+                showError('Erro ao excluir usuário');
             }
         }
 
@@ -1876,7 +1909,7 @@
         // Close Activity Modal
         function closeActivityModal() {
             // Reabilitar o select de cliente caso tenha sido bloqueado
-            const clientSelect = document.getElementById('activityClientId');
+            const clientSelect = document.getElementById('clientSelect');
             if (clientSelect) {
                 clientSelect.disabled = false;
             }
@@ -1900,7 +1933,7 @@
             await loadClientSelect(clientCompany);
             
             // Pré-selecionar o cliente
-            const clientSelect = document.getElementById('activityClientId');
+            const clientSelect = document.getElementById('clientSelect');
             if (clientSelect) {
                 clientSelect.value = clientId;
                 clientSelect.disabled = true; // Bloquear alteração do cliente
@@ -2359,13 +2392,28 @@
                 const clientsResponse = await fetch(`${API_BASE}/clientes`);
                 const clientsList = await clientsResponse.json();
 
-                // Preencher dropdown de clientes
+                // Preencher dropdown de clientes (apenas empresas únicas)
                 const filterSelect = document.getElementById('mappingClientFilter');
                 filterSelect.innerHTML = '<option value="">Selecione um cliente</option>';
+                
+                // Agrupar por empresa (pegar apenas a primeira ocorrência de cada empresa)
+                const companiesMap = new Map();
                 clientsList.forEach(client => {
+                    if (client.company && !companiesMap.has(client.company)) {
+                        companiesMap.set(client.company, client.id);
+                    }
+                });
+                
+                // Ordenar empresas alfabeticamente
+                const sortedCompanies = Array.from(companiesMap.entries()).sort((a, b) => 
+                    a[0].localeCompare(b[0], 'pt-BR')
+                );
+                
+                // Adicionar opções ao dropdown
+                sortedCompanies.forEach(([company, clientId]) => {
                     const option = document.createElement('option');
-                    option.value = client.id;
-                    option.textContent = `${client.company} - ${client.name}`;
+                    option.value = clientId;
+                    option.textContent = company;
                     filterSelect.appendChild(option);
                 });
 
