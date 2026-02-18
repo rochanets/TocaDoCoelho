@@ -2384,6 +2384,10 @@
 
         async function loadMapeamento() {
             try {
+                // Salvar seleção atual antes de recarregar
+                const filterSelect = document.getElementById('mappingClientFilter');
+                const previousSelection = filterSelect ? filterSelect.value : '';
+                
                 // Carregar cards
                 const cardsResponse = await fetch(`${API_BASE}/environment/cards`);
                 mappingCards = await cardsResponse.json();
@@ -2393,7 +2397,6 @@
                 const clientsList = await clientsResponse.json();
 
                 // Preencher dropdown de clientes (apenas empresas únicas)
-                const filterSelect = document.getElementById('mappingClientFilter');
                 filterSelect.innerHTML = '<option value="">Selecione um cliente</option>';
                 
                 // Agrupar por empresa (pegar apenas a primeira ocorrência de cada empresa)
@@ -2416,6 +2419,11 @@
                     option.textContent = company;
                     filterSelect.appendChild(option);
                 });
+
+                // Restaurar seleção anterior
+                if (previousSelection) {
+                    filterSelect.value = previousSelection;
+                }
 
                 // Obter cliente selecionado
                 mappingSelectedClient = filterSelect.value ? parseInt(filterSelect.value) : null;
@@ -2493,11 +2501,35 @@
                 if (responses.length === 0) {
                     html += '<div class="empty-state"><p>Nenhum cliente cadastrado</p></div>';
                 } else {
+                    // Ordenar: preenchidos primeiro (com fundo verde), depois alfabética
+                    const sortedResponses = responses.sort((a, b) => {
+                        const aFilled = (a.response || '').trim().length > 0;
+                        const bFilled = (b.response || '').trim().length > 0;
+                        
+                        // Preenchidos primeiro
+                        if (aFilled && !bFilled) return -1;
+                        if (!aFilled && bFilled) return 1;
+                        
+                        // Dentro do mesmo grupo, ordem alfabética
+                        return a.company.localeCompare(b.company, 'pt-BR');
+                    });
+                    
                     html += '<div style="max-height: 500px; overflow-y: auto;">';
-                    responses.forEach(r => {
-                        html += '<div style="border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: rgba(255,255,255,0.9);">';
+                    sortedResponses.forEach((r, index) => {
+                        const textareaId = `textarea-${card.id}-${r.id}`;
+                        const counterId = `counter-${card.id}-${r.id}`;
+                        const currentLength = (r.response || '').length;
+                        const isFilled = currentLength > 0;
+                        
+                        // Fundo verde água (#D1FAE5) para preenchidos, branco para vazios
+                        const bgColor = isFilled ? 'rgba(209, 250, 229, 0.6)' : 'rgba(255,255,255,0.9)';
+                        
+                        html += `<div style="border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: ${bgColor};">`;
                         html += `<div style="font-weight: 600; color: #047857; margin-bottom: 6px;">${escapeHtml(r.company)}</div>`;
-                        html += `<textarea class="mapping-response-input" data-card-id="${card.id}" data-client-id="${r.id}" maxlength="400" placeholder="Digite a resposta (máx. 400 caracteres)" style="width: 100%; min-height: 60px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; resize: vertical;">${escapeHtml(r.response || '')}</textarea>`;
+                        html += '<div style="position: relative;">';
+                        html += `<textarea id="${textareaId}" class="mapping-response-input" data-card-id="${card.id}" data-client-id="${r.id}" maxlength="400" oninput="updateCharCounter('${textareaId}', '${counterId}')" style="width: 100%; min-height: 60px; padding: 8px; padding-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 6px; resize: vertical;">${escapeHtml(r.response || '')}</textarea>`;
+                        html += `<div id="${counterId}" style="position: absolute; bottom: 6px; right: 10px; font-size: 11px; color: #9ca3af;">${currentLength}/400</div>`;
+                        html += '</div>';
                         html += `<div style="text-align: right; margin-top: 6px;"><button class="btn btn-small btn-primary" onclick="saveMappingResponse(${card.id}, ${r.id})">Salvar</button></div>`;
                         html += '</div>';
                     });
@@ -2510,6 +2542,14 @@
                 document.body.insertAdjacentHTML('beforeend', html);
             } catch (error) {
                 showError('Erro ao carregar detalhes do card');
+            }
+        }
+
+        function updateCharCounter(textareaId, counterId) {
+            const textarea = document.getElementById(textareaId);
+            const counter = document.getElementById(counterId);
+            if (textarea && counter) {
+                counter.textContent = `${textarea.value.length}/400`;
             }
         }
 
