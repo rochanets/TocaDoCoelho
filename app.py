@@ -1216,6 +1216,33 @@ def get_environment_cards():
         print(f'[ERROR] GET /api/environment/cards: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/environment/cards', methods=['POST'])
+def create_environment_card():
+    try:
+        title = request.json.get('title', '').strip()
+        description = request.json.get('description', '').strip()
+        
+        if not title:
+            return jsonify({'error': 'Título é obrigatório'}), 400
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Obter a próxima posição de exibição
+        c.execute('SELECT MAX(display_order) FROM environment_cards')
+        max_order = c.fetchone()[0] or 0
+        
+        c.execute('INSERT INTO environment_cards (title, description, display_order) VALUES (?, ?, ?)',
+                  (title, description, max_order + 1))
+        conn.commit()
+        card_id = c.lastrowid
+        conn.close()
+        
+        return jsonify({'message': 'Card criado com sucesso', 'id': card_id}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/environment/cards: {e}')
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/environment/cards/<int:card_id>', methods=['PUT'])
 def update_environment_card(card_id):
     try:
@@ -1235,6 +1262,26 @@ def update_environment_card(card_id):
         return jsonify({'message': 'Card atualizado com sucesso'})
     except Exception as e:
         print(f'[ERROR] PUT /api/environment/cards/{card_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/environment/cards/<int:card_id>', methods=['DELETE'])
+def delete_environment_card(card_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Deletar todas as respostas associadas ao card
+        c.execute('DELETE FROM environment_responses WHERE card_id = ?', (card_id,))
+        
+        # Deletar o card
+        c.execute('DELETE FROM environment_cards WHERE id = ?', (card_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': 'Card deletado com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/environment/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/responses', methods=['GET'])

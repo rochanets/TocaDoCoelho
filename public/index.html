@@ -754,6 +754,25 @@
             color: #10B981;
         }
 
+        .mapping-card-delete-btn {
+            position: absolute;
+            top: 12px;
+            right: 44px;
+            background: transparent;
+            border: none;
+            color: #EF4444;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .mapping-card-delete-btn:hover {
+            background: rgba(239, 68, 68, 0.1);
+            color: #DC2626;
+        }
+
         .mapping-response-inline {
             margin-top: 12px;
             padding: 10px;
@@ -1106,6 +1125,7 @@
             <div class="page-header">
                 <h1>Mapeamento de Ambiente</h1>
                 <p>Gerencie informações estratégicas sobre o ambiente de cada cliente</p>
+                <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
             </div>
             <div style="margin-bottom: 20px;">
                 <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Filtrar por Cliente:</label>
@@ -2203,6 +2223,12 @@
         async function saveActivity(event) {
             event.preventDefault();
             const formData = new FormData(document.getElementById('activityForm'));
+            
+            // Campos disabled não são enviados no FormData, então precisamos adicionar manualmente
+            const clientSelect = document.getElementById('clientSelect');
+            if (clientSelect && clientSelect.disabled) {
+                formData.set('client_id', clientSelect.value);
+            }
 
             try {
                 const url = currentEditingActivityId 
@@ -2442,6 +2468,7 @@
             for (const card of mappingCards) {
                 html += `<div class="mapping-card" onclick="openMappingCardModal(${card.id})">`;
                 html += `<button class="mapping-card-edit-btn" onclick="event.stopPropagation(); editMappingCard(${card.id})" title="Editar Card"><i class="fas fa-edit"></i></button>`;
+                html += `<button class="mapping-card-delete-btn" onclick="event.stopPropagation(); deleteMappingCard(${card.id})" title="Deletar Card"><i class="fas fa-trash"></i></button>`;
                 html += `<div class="mapping-card-title">${escapeHtml(card.title)}</div>`;
                 html += `<div class="mapping-card-description">${escapeHtml(card.description || 'Sem descrição')}</div>`;
 
@@ -2575,7 +2602,12 @@
 
                 if (response.ok) {
                     showSuccess('Resposta salva com sucesso!');
+                    // Fechar modal atual
+                    closeMappingCardModal();
+                    // Recarregar mapeamento para atualizar os cards
                     await loadMapeamento();
+                    // Reabrir o modal para mostrar a atualização (verde + ordenado)
+                    await openMappingCardModal(cardId);
                 } else {
                     const error = await response.json();
                     showError(error.error || 'Erro ao salvar resposta');
@@ -2619,6 +2651,94 @@
                 }
             } catch (error) {
                 showError('Erro ao atualizar card');
+            }
+        }
+
+        function openCreateCardModal() {
+            const html = `
+                <div class="modal active" id="createCardModal" onclick="if(event.target === this) closeCreateCardModal()">
+                    <div class="modal-content" style="max-width: 500px;">
+                        <div class="modal-header">
+                            <h2>Novo Card</h2>
+                            <button class="modal-close" onclick="closeCreateCardModal()">×</button>
+                        </div>
+                        <div class="form-group">
+                            <label>Título *</label>
+                            <input type="text" id="newCardTitle" required style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px;">
+                        </div>
+                        <div class="form-group">
+                            <label>Descrição</label>
+                            <textarea id="newCardDescription" rows="4" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px;"></textarea>
+                        </div>
+                        <div style="text-align: right; margin-top: 20px;">
+                            <button class="btn btn-secondary" onclick="closeCreateCardModal()" style="margin-right: 10px;">Cancelar</button>
+                            <button class="btn btn-primary" onclick="createCard()">Criar Card</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeCreateCardModal() {
+            const modal = document.getElementById('createCardModal');
+            if (modal) modal.remove();
+        }
+
+        async function createCard() {
+            const titleInput = document.getElementById('newCardTitle');
+            const descriptionInput = document.getElementById('newCardDescription');
+            
+            const title = titleInput.value.trim();
+            const description = descriptionInput.value.trim();
+            
+            if (!title) {
+                showError('Título do card é obrigatório');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/environment/cards`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, description })
+                });
+
+                if (response.ok) {
+                    showSuccess('Card criado com sucesso!');
+                    closeCreateCardModal();
+                    await loadMapeamento();
+                } else {
+                    const error = await response.json();
+                    showError(error.error || 'Erro ao criar card');
+                }
+            } catch (error) {
+                showError('Erro ao criar card');
+            }
+        }
+
+        async function deleteMappingCard(cardId) {
+            const card = mappingCards.find(c => c.id === cardId);
+            if (!card) return;
+            
+            if (!confirm(`Tem certeza que deseja deletar o card "${card.title}"?\n\nAtenção: Todas as respostas associadas a este card serão perdidas!`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/environment/cards/${cardId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    showSuccess('Card deletado com sucesso!');
+                    await loadMapeamento();
+                } else {
+                    const error = await response.json();
+                    showError(error.error || 'Erro ao deletar card');
+                }
+            } catch (error) {
+                showError('Erro ao deletar card');
             }
         }
 
