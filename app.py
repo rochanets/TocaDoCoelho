@@ -1578,14 +1578,42 @@ def get_today_suggestions():
                     'target_data': json.dumps({'client_id': client_id, 'missing': missing_fields})
                 })
         
-        # Selecionar aleatoriamente até 5 sugestões
+        # Selecionar até 5 sugestões com diversidade
         import random
         
-        # Priorizar: overdue > missing_position > map_environment > incomplete_profile
-        priority_order = ['contact_overdue', 'missing_position', 'map_environment', 'incomplete_profile']
-        sorted_suggestions = sorted(suggestions, key=lambda x: priority_order.index(x['type']))
+        # Agrupar por tipo
+        by_type = {
+            'contact_overdue': [],
+            'missing_position': [],
+            'map_environment': [],
+            'incomplete_profile': []
+        }
         
-        selected = sorted_suggestions[:5]
+        for sug in suggestions:
+            by_type[sug['type']].append(sug)
+        
+        # Embaralhar cada grupo
+        for key in by_type:
+            random.shuffle(by_type[key])
+        
+        # Selecionar com diversidade: máximo 2 de cada tipo
+        selected = []
+        priority_order = ['contact_overdue', 'missing_position', 'map_environment', 'incomplete_profile']
+        
+        # Primeira rodada: pegar 1 de cada tipo (se disponível)
+        for sug_type in priority_order:
+            if by_type[sug_type] and len(selected) < 5:
+                selected.append(by_type[sug_type].pop(0))
+        
+        # Segunda rodada: pegar mais 1 de cada tipo (máximo 2 por tipo)
+        for sug_type in priority_order:
+            if by_type[sug_type] and len(selected) < 5:
+                selected.append(by_type[sug_type].pop(0))
+        
+        # Se ainda falta, completar com o que sobrou
+        for sug_type in priority_order:
+            while by_type[sug_type] and len(selected) < 5:
+                selected.append(by_type[sug_type].pop(0))
         
         # Inserir no banco
         for sug in selected:
