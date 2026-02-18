@@ -31,11 +31,36 @@ app = Flask(__name__, static_folder='public', static_url_path='')
 CORS(app)
 
 # Diretorio de dados
-DATA_DIR = Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho' if sys.platform == 'win32' else Path.home() / '.toca-do-coelho'
+if sys.platform == 'win32':
+    DATA_DIR = Path('C:/toca-do-coelho')
+    OLD_DATA_DIR = Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho'
+else:
+    DATA_DIR = Path.home() / '.toca-do-coelho'
+    OLD_DATA_DIR = None
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / 'toca-do-coelho.db'
 UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Migração automática do banco de dados antigo
+if sys.platform == 'win32' and OLD_DATA_DIR and OLD_DATA_DIR.exists():
+    old_db = OLD_DATA_DIR / 'toca-do-coelho.db'
+    if old_db.exists() and not DB_PATH.exists():
+        print(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
+        import shutil
+        shutil.copy2(str(old_db), str(DB_PATH))
+        # Migrar também a pasta de uploads
+        old_uploads = OLD_DATA_DIR / 'uploads'
+        if old_uploads.exists():
+            for item in old_uploads.iterdir():
+                dest = UPLOAD_DIR / item.name
+                if not dest.exists():
+                    if item.is_file():
+                        shutil.copy2(str(item), str(dest))
+                    elif item.is_dir():
+                        shutil.copytree(str(item), str(dest))
+        print(f'[Database] Migração concluída com sucesso!')
 
 print(f'[Database] Caminho: {DB_PATH}')
 
@@ -108,6 +133,44 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
     )''')
+    
+    # Tabela de cards de mapeamento de ambiente
+    c.execute('''CREATE TABLE IF NOT EXISTS environment_cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        display_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    # Tabela de respostas de mapeamento por cliente
+    c.execute('''CREATE TABLE IF NOT EXISTS environment_responses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_id INTEGER NOT NULL,
+        client_id INTEGER NOT NULL,
+        response TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(card_id) REFERENCES environment_cards(id) ON DELETE CASCADE,
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+        UNIQUE(card_id, client_id)
+    )''')
+    
+    # Inserir cards pré-definidos se não existirem
+    predefined_cards = [
+        ('ERP', '', 1),
+        ('Cloud', '', 2),
+        ('Principal Concorrente', '', 3),
+        ('Gestão de Ativos/HAAS', '', 4),
+        ('Cyber/Observability', '', 5),
+        ('DWS', '', 6)
+    ]
+    
+    for title, description, order in predefined_cards:
+        c.execute('SELECT id FROM environment_cards WHERE title = ?', (title,))
+        if not c.fetchone():
+            c.execute('INSERT INTO environment_cards (title, description, display_order) VALUES (?, ?, ?)', 
+                      (title, description, order))
     
     # Adicionar coluna last_activity_date à tabela clients se não existir
     c.execute("PRAGMA table_info(clients)")
@@ -1099,6 +1162,203 @@ def import_clients():
     
     except Exception as e:
         print(f'[ERROR] POST /api/importar-clientes: {e}')
+        return jsonify({'error': str(e)}), 500
+
+# Rotas de mapeamento de ambiente
+@app.route('/api/environment/cards', methods=['GET'])
+def get_environment_cards():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM environment_cards ORDER BY display_order, id')
+        cards = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(cards)
+    except Exception as e:
+        print(f'[ERROR] GET /api/environment/cards: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/environment/cards/<int:card_id>', methods=['PUT'])
+def update_environment_card(card_id):
+    try:
+        title = request.json.get('title', '').strip()
+        description = request.json.get('description', '').strip()
+        
+        if not title:
+            return jsonify({'error': 'Título é obrigatório'}), 400
+        
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE environment_cards SET title = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                  (title, description, card_id))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': 'Card atualizado com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/environment/cards/{card_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/environment/responses', methods=['GET'])
+def get_environment_responses():
+    try:
+        client_id = request.args.get('client_id')
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        if client_id:
+            # Buscar respostas de um cliente específico
+            c.execute('''SELECT er.*, ec.title as card_title 
+                        FROM environment_responses er
+                        JOIN environment_cards ec ON er.card_id = ec.id
+                        WHERE er.client_id = ?
+                        ORDER BY ec.display_order, ec.id''', (client_id,))
+        else:
+            # Buscar todas as respostas
+            c.execute('''SELECT er.*, ec.title as card_title, cl.name as client_name, cl.company as client_company
+                        FROM environment_responses er
+                        JOIN environment_cards ec ON er.card_id = ec.id
+                        JOIN clients cl ON er.client_id = cl.id
+                        ORDER BY ec.display_order, ec.id, cl.company, cl.name''')
+        
+        responses = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(responses)
+    except Exception as e:
+        print(f'[ERROR] GET /api/environment/responses: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/environment/responses', methods=['POST'])
+def save_environment_response():
+    try:
+        card_id = request.json.get('card_id')
+        client_id = request.json.get('client_id')
+        response_text = request.json.get('response', '').strip()
+        
+        if not card_id or not client_id:
+            return jsonify({'error': 'Card e cliente são obrigatórios'}), 400
+        
+        # Limitar a 400 caracteres
+        if len(response_text) > 400:
+            return jsonify({'error': 'Resposta deve ter no máximo 400 caracteres'}), 400
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Inserir ou atualizar resposta
+        c.execute('''INSERT INTO environment_responses (card_id, client_id, response, updated_at)
+                     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(card_id, client_id) DO UPDATE SET
+                        response = excluded.response,
+                        updated_at = CURRENT_TIMESTAMP''',
+                  (card_id, client_id, response_text))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': 'Resposta salva com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/environment/responses: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/environment/card/<int:card_id>/all-responses', methods=['GET'])
+def get_card_all_responses(card_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Buscar card
+        c.execute('SELECT * FROM environment_cards WHERE id = ?', (card_id,))
+        card = dict_from_row(c.fetchone())
+        
+        if not card:
+            return jsonify({'error': 'Card não encontrado'}), 404
+        
+        # Buscar todos os clientes com suas respostas para este card
+        c.execute('''SELECT cl.id, cl.name, cl.company, 
+                            COALESCE(er.response, '') as response
+                     FROM clients cl
+                     LEFT JOIN environment_responses er ON er.client_id = cl.id AND er.card_id = ?
+                     ORDER BY cl.company, cl.name''', (card_id,))
+        
+        clients_responses = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        
+        return jsonify({
+            'card': card,
+            'responses': clients_responses
+        })
+    except Exception as e:
+        print(f'[ERROR] GET /api/environment/card/{card_id}/all-responses: {e}')
+        return jsonify({'error': str(e)}), 500
+
+# Rotas de backup e restore do banco de dados
+@app.route('/api/backup/database', methods=['GET'])
+def backup_database():
+    try:
+        from flask import send_file
+        import tempfile
+        import shutil
+        
+        # Criar cópia temporária do banco
+        temp_dir = tempfile.mkdtemp()
+        temp_db = Path(temp_dir) / 'toca-do-coelho-backup.db'
+        shutil.copy2(str(DB_PATH), str(temp_db))
+        
+        return send_file(
+            str(temp_db),
+            as_attachment=True,
+            download_name=f'toca-do-coelho-backup-{datetime.now().strftime("%Y%m%d-%H%M%S")}.db',
+            mimetype='application/x-sqlite3'
+        )
+    except Exception as e:
+        print(f'[ERROR] GET /api/backup/database: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/restore/database', methods=['POST'])
+def restore_database():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'Arquivo inválido'}), 400
+        
+        # Criar backup do banco atual antes de restaurar
+        backup_dir = DATA_DIR / 'backups'
+        backup_dir.mkdir(exist_ok=True)
+        backup_path = backup_dir / f'pre-restore-{datetime.now().strftime("%Y%m%d-%H%M%S")}.db'
+        
+        import shutil
+        shutil.copy2(str(DB_PATH), str(backup_path))
+        print(f'[Database] Backup de segurança criado em {backup_path}')
+        
+        # Salvar arquivo temporário
+        temp_path = DATA_DIR / 'temp_restore.db'
+        file.save(str(temp_path))
+        
+        # Validar se é um banco SQLite válido
+        try:
+            test_conn = sqlite3.connect(str(temp_path))
+            test_conn.execute('SELECT name FROM sqlite_master WHERE type="table"')
+            test_conn.close()
+        except Exception as e:
+            temp_path.unlink()
+            return jsonify({'error': 'Arquivo não é um banco de dados SQLite válido'}), 400
+        
+        # Substituir banco atual
+        shutil.move(str(temp_path), str(DB_PATH))
+        print(f'[Database] Banco de dados restaurado com sucesso')
+        
+        return jsonify({
+            'message': 'Banco de dados restaurado com sucesso! Recarregue a página.',
+            'backup_location': str(backup_path)
+        }), 200
+        
+    except Exception as e:
+        print(f'[ERROR] POST /api/restore/database: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Servir arquivos estaticos

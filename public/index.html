@@ -254,6 +254,30 @@
             font-size: 12px;
         }
 
+        .btn-icon-action {
+            background: transparent;
+            border: none;
+            color: #34D399;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 8px;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-icon-action:hover {
+            background: rgba(52, 211, 153, 0.1);
+            color: #10B981;
+            transform: scale(1.1);
+        }
+
+        .btn-icon-action:active {
+            transform: scale(0.95);
+        }
+
         /* Tabs */
         .nav-tabs {
             display: flex;
@@ -675,6 +699,82 @@
             gap: 10px;
         }
 
+        /* Mapeamento de Ambiente */
+        .mapping-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        .mapping-card {
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid rgba(52, 211, 153, 0.25);
+            border-radius: 14px;
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .mapping-card:hover {
+            border-color: #34D399;
+            box-shadow: 0 6px 20px rgba(52, 211, 153, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .mapping-card-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #047857;
+            margin-bottom: 8px;
+        }
+
+        .mapping-card-description {
+            font-size: 13px;
+            color: #6b7280;
+            line-height: 1.4;
+        }
+
+        .mapping-card-edit-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: transparent;
+            border: none;
+            color: #34D399;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .mapping-card-edit-btn:hover {
+            background: rgba(52, 211, 153, 0.1);
+            color: #10B981;
+        }
+
+        .mapping-response-inline {
+            margin-top: 12px;
+            padding: 10px;
+            background: rgba(52, 211, 153, 0.05);
+            border-radius: 8px;
+            border: 1px solid rgba(52, 211, 153, 0.15);
+        }
+
+        .mapping-response-text {
+            font-size: 13px;
+            color: #1f2937;
+            line-height: 1.5;
+            font-style: italic;
+        }
+
+        .mapping-response-empty {
+            font-size: 13px;
+            color: #9ca3af;
+            font-style: italic;
+        }
+
         .filter-group {
             display: flex;
             flex-direction: column;
@@ -911,12 +1011,16 @@
                 <span>Atividades</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'report')">
-                <i class="fas fa-file-csv"></i>
-                <span>Report</span>
+                <i class="fas fa-database"></i>
+                <span>Report & Backup</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'agenda')">
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
+            </button>
+            <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
+                <i class="fas fa-map-marked-alt"></i>
+                <span>Mapeamento de Ambiente</span>
             </button>
             <button class="nav-item nav-item-settings" onclick="switchTab(event, 'configuracoes')">
                 <i class="fas fa-cog"></i>
@@ -984,8 +1088,8 @@
         <!-- Report Tab -->
         <div id="report" class="tab-content">
             <div class="page-header">
-                <h1>Report & Exportar</h1>
-                <p>Exporte dados de clientes e atividades</p>
+                <h1>Report & Backup</h1>
+                <p>Exporte dados de clientes, atividades e faça backup do banco de dados</p>
             </div>
             <div id="reportContent"></div>
         </div>
@@ -996,6 +1100,20 @@
                 <p>Compromissos e retornos futuros detectados nas atividades</p>
             </div>
             <div id="agendaContent"></div>
+        </div>
+
+        <div id="mapeamento" class="tab-content">
+            <div class="page-header">
+                <h1>Mapeamento de Ambiente</h1>
+                <p>Gerencie informações estratégicas sobre o ambiente de cada cliente</p>
+            </div>
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Filtrar por Cliente:</label>
+                <select id="mappingClientFilter" onchange="loadMapeamento()" style="width: 100%; max-width: 400px; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
+                    <option value="">Selecione um cliente</option>
+                </select>
+            </div>
+            <div id="mapeamentoContent"></div>
         </div>
 
         <div id="configuracoes" class="tab-content">
@@ -1044,6 +1162,11 @@
                     </form>
                 </section>
             </div>
+        </div>
+
+        <!-- Assinatura -->
+        <div style="position: fixed; bottom: 16px; right: 16px; font-size: 12px; color: rgba(4, 120, 87, 0.6); font-weight: 500; z-index: 50;">
+            by: HFR Netto
         </div>
     </main>
 
@@ -1233,6 +1356,7 @@
             else if (tabName === 'atividades') loadActivities();
             else if (tabName === 'report') loadReport();
             else if (tabName === 'agenda') loadAgenda();
+            else if (tabName === 'mapeamento') loadMapeamento();
             else if (tabName === 'configuracoes') loadSettings();
         }
 
@@ -1249,21 +1373,12 @@
         async function loadUserProfile() {
             const response = await fetch(`${API_BASE}/config/profile`);
             if (response.ok) userProfile = await response.json();
-            renderDashboardGreeting();
+            await renderDashboardGreeting();
         }
 
         async function loadPositions() {
             const response = await fetch(`${API_BASE}/cargos`);
             if (response.ok) cachedPositions = await response.json();
-        }
-
-        function renderDashboardGreeting() {
-            const box = document.getElementById('dashboardGreeting');
-            const nickname = userProfile && userProfile.nickname ? userProfile.nickname : '';
-            const message = nickname ? `Olá, ${escapeHtml(nickname)}` : 'Olá';
-            const avatar = (userProfile && userProfile.photo_url) ? `<img src="${userProfile.photo_url}" class="greeting-avatar">` : '';
-
-            if (box) box.innerHTML = `${avatar}<span>${message}</span>`;
         }
 
         function renderSettings() {
@@ -1431,13 +1546,31 @@
             }
         }
 
-        function renderDashboardGreeting() {
+        async function renderDashboardGreeting() {
             const greetingEl = document.getElementById('dashboardGreeting');
             if (!greetingEl) return;
 
-            const hour = new Date().getHours();
-            const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
-            greetingEl.innerHTML = `${greeting}! Acompanhe seus clientes e mantenha os contatos em dia.`;
+            try {
+                // Buscar perfil do usuário
+                const response = await fetch(`${API_BASE}/config/profile`);
+                const profile = await response.json();
+                
+                if (profile && profile.nickname && profile.photo_url) {
+                    // Usuário cadastrado - mostrar foto e apelido
+                    const photoHtml = `<img src="${profile.photo_url}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; margin-right: 12px; border: 2px solid #34d399;">`;
+                    greetingEl.innerHTML = `<div style="display: flex; align-items: center;">${photoHtml}<span style="font-size: 18px; font-weight: 600; color: #047857;">Olá ${profile.nickname}!</span></div>`;
+                } else {
+                    // Nenhum usuário cadastrado - mensagem padrão
+                    const hour = new Date().getHours();
+                    const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+                    greetingEl.innerHTML = `${greeting}! Acompanhe seus clientes e mantenha os contatos em dia.`;
+                }
+            } catch (error) {
+                // Em caso de erro, mostrar mensagem padrão
+                const hour = new Date().getHours();
+                const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+                greetingEl.innerHTML = `${greeting}! Acompanhe seus clientes e mantenha os contatos em dia.`;
+            }
         }
 
         async function loadDashboard() {
@@ -1445,7 +1578,7 @@
                 const response = await fetch(`${API_BASE}/clientes`);
                 const data = await response.json();
                 clients = data;
-                renderDashboardGreeting();
+                await renderDashboardGreeting();
 
                 let html = '';
                 if (clients.length === 0) {
@@ -1471,6 +1604,7 @@
                     html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th style="width: 60px; text-align: center;">Ação</th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
@@ -1487,6 +1621,7 @@
                             <td>${client.phone || '-'}</td>
                             <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
                             <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
+                            <td style="text-align: center;"><button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button></td>
                         </tr>`;
                     });
                     html += '</tbody></table></div>';
@@ -1504,7 +1639,7 @@
                 const response = await fetch(`${API_BASE}/clientes`);
                 const data = await response.json();
                 clients = data;
-                renderDashboardGreeting();
+                await renderDashboardGreeting();
 
                 let html = '';
                 if (clients.length === 0) {
@@ -1625,6 +1760,29 @@
 
                 html += '</div>';
 
+                // Seção de Backup do Banco de Dados
+                html += '<div style="margin-top: 20px; background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; border: 1px solid rgba(52,211,153,0.2);">';
+                html += '<h3 style="color: #047857; margin-bottom: 10px;"><i class="fas fa-database"></i> Backup do Banco de Dados</h3>';
+                html += '<p style="color: #6b7280; margin-bottom: 15px;">Faça backup completo ou restaure o banco de dados</p>';
+                html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">';
+                
+                // Exportar Banco
+                html += '<div>';
+                html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Exportar Banco</h4>';
+                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Baixe uma cópia completa do banco de dados</p>';
+                html += '<button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>';
+                html += '</div>';
+                
+                // Importar Banco
+                html += '<div>';
+                html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Importar Banco</h4>';
+                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Restaure um backup anterior (cria backup automático antes)</p>';
+                html += '<input type="file" id="restoreDbInput" accept=".db" style="display: none;" onchange="restoreDatabase(event)">';
+                html += '<button class="btn btn-secondary" onclick="document.getElementById(\'restoreDbInput\').click()"><i class="fas fa-upload"></i> Importar Banco</button>';
+                html += '</div>';
+                
+                html += '</div></div>';
+
                 document.getElementById('reportContent').innerHTML = html;
             } catch (error) {
                 showError('Erro ao carregar report');
@@ -1717,7 +1875,29 @@
 
         // Close Activity Modal
         function closeActivityModal() {
+            // Reabilitar o select de cliente caso tenha sido bloqueado
+            const clientSelect = document.getElementById('activityClientId');
+            if (clientSelect) {
+                clientSelect.disabled = false;
+            }
             document.getElementById('activityModal').classList.remove('active');
+        }
+
+        // Open Quick Activity Modal (from Dashboard)
+        async function openQuickActivityModal(clientId, clientName) {
+            currentEditingActivityId = null;
+            document.getElementById('activityModalTitle').textContent = `Nova Atividade - ${clientName}`;
+            document.getElementById('activityForm').reset();
+            await loadClientSelect();
+            
+            // Pré-selecionar o cliente
+            const clientSelect = document.getElementById('activityClientId');
+            if (clientSelect) {
+                clientSelect.value = clientId;
+                clientSelect.disabled = true; // Bloquear alteração do cliente
+            }
+            
+            document.getElementById('activityModal').classList.add('active');
         }
 
         // Open Import Modal
@@ -2078,13 +2258,256 @@
             }
         }
 
+        // Backup Database
+        async function backupDatabase() {
+            try {
+                const response = await fetch(`${API_BASE}/backup/database`);
+                if (!response.ok) throw new Error('Erro ao fazer backup');
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                a.download = `toca-do-coelho-backup-${timestamp}.db`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                showSuccess('Backup do banco de dados realizado com sucesso!');
+            } catch (error) {
+                showError('Erro ao fazer backup do banco de dados');
+            }
+        }
 
+        // Restore Database
+        async function restoreDatabase(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            if (!file.name.endsWith('.db')) {
+                showError('Por favor, selecione um arquivo .db válido');
+                return;
+            }
+            
+            if (!confirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?')) {
+                event.target.value = '';
+                return;
+            }
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const response = await fetch(`${API_BASE}/restore/database`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.error || 'Erro ao restaurar banco');
+                }
+                
+                showSuccess(result.message);
+                
+                // Recarregar a página após 2 segundos
+                setTimeout(() => {
+                    window.location.reload();
+                }, 2000);
+                
+            } catch (error) {
+                showError(error.message || 'Erro ao restaurar banco de dados');
+            } finally {
+                event.target.value = '';
+            }
+        }
 
         function monthRange(dateObj) {
             const start = new Date(dateObj.getFullYear(), dateObj.getMonth(), 1);
             const end = new Date(dateObj.getFullYear(), dateObj.getMonth() + 1, 0);
             return { start, end };
         }
+
+        // Mapeamento de Ambiente
+        let mappingCards = [];
+        let mappingSelectedClient = null;
+
+        async function loadMapeamento() {
+            try {
+                // Carregar cards
+                const cardsResponse = await fetch(`${API_BASE}/environment/cards`);
+                mappingCards = await cardsResponse.json();
+
+                // Carregar clientes para o dropdown
+                const clientsResponse = await fetch(`${API_BASE}/clientes`);
+                const clientsList = await clientsResponse.json();
+
+                // Preencher dropdown de clientes
+                const filterSelect = document.getElementById('mappingClientFilter');
+                filterSelect.innerHTML = '<option value="">Selecione um cliente</option>';
+                clientsList.forEach(client => {
+                    const option = document.createElement('option');
+                    option.value = client.id;
+                    option.textContent = `${client.company} - ${client.name}`;
+                    filterSelect.appendChild(option);
+                });
+
+                // Obter cliente selecionado
+                mappingSelectedClient = filterSelect.value ? parseInt(filterSelect.value) : null;
+
+                // Renderizar cards
+                await renderMappingCards();
+            } catch (error) {
+                showError('Erro ao carregar mapeamento de ambiente');
+            }
+        }
+
+        async function renderMappingCards() {
+            const content = document.getElementById('mapeamentoContent');
+            let html = '<div class="mapping-cards-grid">';
+
+            for (const card of mappingCards) {
+                html += `<div class="mapping-card" onclick="openMappingCardModal(${card.id})">`;
+                html += `<button class="mapping-card-edit-btn" onclick="event.stopPropagation(); editMappingCard(${card.id})" title="Editar Card"><i class="fas fa-edit"></i></button>`;
+                html += `<div class="mapping-card-title">${escapeHtml(card.title)}</div>`;
+                html += `<div class="mapping-card-description">${escapeHtml(card.description || 'Sem descrição')}</div>`;
+
+                // Se um cliente está selecionado, mostrar a resposta inline
+                if (mappingSelectedClient) {
+                    const response = await getMappingResponse(card.id, mappingSelectedClient);
+                    html += '<div class="mapping-response-inline">';
+                    if (response && response.response) {
+                        html += `<div class="mapping-response-text">${escapeHtml(response.response)}</div>`;
+                    } else {
+                        html += '<div class="mapping-response-empty">Nenhuma resposta cadastrada</div>';
+                    }
+                    html += '</div>';
+                }
+
+                html += '</div>';
+            }
+
+            html += '</div>';
+            content.innerHTML = html;
+        }
+
+        async function getMappingResponse(cardId, clientId) {
+            try {
+                const response = await fetch(`${API_BASE}/environment/responses?client_id=${clientId}`);
+                const responses = await response.json();
+                return responses.find(r => r.card_id === cardId);
+            } catch (error) {
+                return null;
+            }
+        }
+
+        async function openMappingCardModal(cardId) {
+            // Se um cliente está selecionado, não abrir o modal (resposta já visível inline)
+            if (mappingSelectedClient) return;
+
+            // Abrir modal com todas as respostas
+            try {
+                const response = await fetch(`${API_BASE}/environment/card/${cardId}/all-responses`);
+                const data = await response.json();
+
+                const card = data.card;
+                const responses = data.responses;
+
+                let html = `<div class="modal active" id="mappingCardModal" onclick="if(event.target === this) closeMappingCardModal()">`;
+                html += '<div class="modal-content" style="max-width: 800px;">';
+                html += `<h2 style="color: #047857; margin-bottom: 10px;">${escapeHtml(card.title)}</h2>`;
+                html += `<p style="color: #6b7280; margin-bottom: 20px;">${escapeHtml(card.description || 'Sem descrição')}</p>`;
+
+                if (responses.length === 0) {
+                    html += '<div class="empty-state"><p>Nenhum cliente cadastrado</p></div>';
+                } else {
+                    html += '<div style="max-height: 500px; overflow-y: auto;">';
+                    responses.forEach(r => {
+                        html += '<div style="border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: rgba(255,255,255,0.9);">';
+                        html += `<div style="font-weight: 600; color: #047857; margin-bottom: 6px;">${escapeHtml(r.company)} - ${escapeHtml(r.name)}</div>`;
+                        html += `<textarea class="mapping-response-input" data-card-id="${card.id}" data-client-id="${r.id}" maxlength="400" placeholder="Digite a resposta (máx. 400 caracteres)" style="width: 100%; min-height: 60px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; resize: vertical;">${escapeHtml(r.response || '')}</textarea>`;
+                        html += `<div style="text-align: right; margin-top: 6px;"><button class="btn btn-small btn-primary" onclick="saveMappingResponse(${card.id}, ${r.id})">Salvar</button></div>`;
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                }
+
+                html += '<div style="margin-top: 20px; text-align: right;"><button class="btn btn-secondary" onclick="closeMappingCardModal()">Fechar</button></div>';
+                html += '</div></div>';
+
+                document.body.insertAdjacentHTML('beforeend', html);
+            } catch (error) {
+                showError('Erro ao carregar detalhes do card');
+            }
+        }
+
+        function closeMappingCardModal() {
+            const modal = document.getElementById('mappingCardModal');
+            if (modal) modal.remove();
+        }
+
+        async function saveMappingResponse(cardId, clientId) {
+            try {
+                const textarea = document.querySelector(`textarea[data-card-id="${cardId}"][data-client-id="${clientId}"]`);
+                const responseText = textarea.value.trim();
+
+                const response = await fetch(`${API_BASE}/environment/responses`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        card_id: cardId,
+                        client_id: clientId,
+                        response: responseText
+                    })
+                });
+
+                if (response.ok) {
+                    showSuccess('Resposta salva com sucesso!');
+                    await loadMapeamento();
+                } else {
+                    const error = await response.json();
+                    showError(error.error || 'Erro ao salvar resposta');
+                }
+            } catch (error) {
+                showError('Erro ao salvar resposta');
+            }
+        }
+
+        async function editMappingCard(cardId) {
+            const card = mappingCards.find(c => c.id === cardId);
+            if (!card) return;
+
+            const newTitle = prompt('Título do Card:', card.title);
+            if (newTitle === null) return;
+
+            const newDescription = prompt('Descrição do Card:', card.description || '');
+            if (newDescription === null) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/environment/cards/${cardId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: newTitle.trim(),
+                        description: newDescription.trim()
+                    })
+                });
+
+                if (response.ok) {
+                    showSuccess('Card atualizado com sucesso!');
+                    await loadMapeamento();
+                } else {
+                    const error = await response.json();
+                    showError(error.error || 'Erro ao atualizar card');
+                }
+            } catch (error) {
+                showError('Erro ao atualizar card');
+            }
+        }
+
+        let agendaMapByDay = {};
 
         async function loadAgenda() {
             const { start, end } = monthRange(agendaCurrentMonth);
@@ -2095,10 +2518,10 @@
                 const response = await fetch(`${API_BASE}/agenda?start_date=${startDate}&end_date=${endDate}`);
                 const items = await response.json();
 
-                const mapByDay = {};
+                agendaMapByDay = {};
                 items.forEach(item => {
-                    mapByDay[item.due_date] = mapByDay[item.due_date] || [];
-                    mapByDay[item.due_date].push(item);
+                    agendaMapByDay[item.due_date] = agendaMapByDay[item.due_date] || [];
+                    agendaMapByDay[item.due_date].push(item);
                 });
 
                 const monthLabel = agendaCurrentMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
@@ -2114,8 +2537,9 @@
                 for (let d=1; d<=end.getDate(); d++) {
                     const day = new Date(agendaCurrentMonth.getFullYear(), agendaCurrentMonth.getMonth(), d);
                     const key = day.toISOString().slice(0,10);
-                    const count = (mapByDay[key] || []).length;
-                    html += `<div class="calendar-cell ${count ? 'has-items' : ''}"><strong>${d}</strong>${count ? `<span class="calendar-dot"></span><div style="font-size:11px;color:#047857;margin-top:4px;">${count} compromisso(s)</div>` : ''}</div>`;
+                    const count = (agendaMapByDay[key] || []).length;
+                    const clickHandler = count ? `onclick="openDayActivitiesModal('${key}')" style="cursor: pointer;"` : '';
+                    html += `<div class="calendar-cell ${count ? 'has-items' : ''}" ${clickHandler}><strong>${d}</strong>${count ? `<span class="calendar-dot"></span><div style="font-size:11px;color:#047857;margin-top:4px;">${count} compromisso(s)</div>` : ''}</div>`;
                 }
 
                 html += '</div>';
@@ -2135,6 +2559,45 @@
         function changeAgendaMonth(delta) {
             agendaCurrentMonth = new Date(agendaCurrentMonth.getFullYear(), agendaCurrentMonth.getMonth() + delta, 1);
             loadAgenda();
+        }
+
+        function openDayActivitiesModal(dateKey) {
+            const activities = agendaMapByDay[dateKey] || [];
+            if (activities.length === 0) return;
+
+            const dateFormatted = new Date(dateKey + 'T00:00:00').toLocaleDateString('pt-BR', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+
+            let html = `<div class="modal active" id="dayActivitiesModal" onclick="if(event.target === this) closeDayActivitiesModal()">`;
+            html += '<div class="modal-content" style="max-width: 600px;">';
+            html += `<h2 style="color: #047857; margin-bottom: 10px; text-transform: capitalize;">Atividades de ${dateFormatted}</h2>`;
+            html += `<p style="color: #6b7280; margin-bottom: 20px;">${activities.length} compromisso(s) programado(s)</p>`;
+
+            html += '<div style="max-height: 400px; overflow-y: auto;">';
+            activities.forEach(activity => {
+                html += '<div class="history-item" style="margin-bottom: 12px;">';
+                html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})</div>`;
+                html += `<div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${escapeHtml(activity.title || '-')}</div>`;
+                if (activity.notes) {
+                    html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.notes)}</div>`;
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+
+            html += '<div style="margin-top: 20px; text-align: right;"><button class="btn btn-secondary" onclick="closeDayActivitiesModal()">Fechar</button></div>';
+            html += '</div></div>';
+
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeDayActivitiesModal() {
+            const modal = document.getElementById('dayActivitiesModal');
+            if (modal) modal.remove();
         }
 
         // Get Status - Regra: < 7 dias = verde, 7-14 dias = amarelo, > 14 dias = vermelho
