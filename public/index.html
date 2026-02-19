@@ -1009,7 +1009,7 @@
     <!-- Sidebar -->
     <aside class="sidebar">
         <div class="sidebar-logo">
-            <img src="/images/coelho.svg" alt="Coelho Toca do Coelho">
+            <img src="/logo-coelho.png" alt="Coelho Toca do Coelho" style="width: 120px; height: 120px; object-fit: contain;">
             <div class="sidebar-logo-text">
                 <h1>Toca do Coelho</h1>
                 <p>Gestão de Clientes</p>
@@ -1064,7 +1064,12 @@
                     <h1>Dashboard</h1>
                     <p>Visão geral dos seus contatos e status de relacionamento</p>
                 </div>
-                <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:flex; align-items:center; gap:10px;"></div>
+                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+                    <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:flex; align-items:center; gap:10px;"></div>
+                    <div id="suggestionsIcon" style="display:none; cursor:pointer;" onclick="openSuggestionsModal()" title="Sugestões do Dia">
+                        <img src="/coelho-sugestoes.png" alt="Sugestões" style="width: 40px; height: 40px; object-fit: contain; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                    </div>
+                </div>
             </div>
             <div id="dashboardContent"></div>
         </div>
@@ -1681,6 +1686,9 @@
                 }
 
                 document.getElementById('dashboardContent').innerHTML = html;
+                
+                // Carregar sugestões do dia
+                await loadDailySuggestions();
             } catch (error) {
                 showError('Erro ao carregar dashboard');
             }
@@ -2158,7 +2166,35 @@
                 });
 
                 if (response.ok) {
+                    const result = await response.json();
                     showSuccess(currentEditingClientId ? 'Cliente atualizado!' : 'Cliente cadastrado!');
+                    
+                    // Verificar se foi uma sugestão de cargo faltante (apenas ao criar novo cliente)
+                    if (!currentEditingClientId && window.currentSuggestion && window.currentSuggestion.type === 'missing_position') {
+                        const company = formData.get('company');
+                        const position = formData.get('position');
+                        if (company === window.currentSuggestion.data.company && position === window.currentSuggestion.data.position) {
+                            await markSuggestionComplete(window.currentSuggestion.id);
+                            window.currentSuggestion = null;
+                        }
+                    }
+                    
+                    // Verificar se foi uma sugestão de completar cadastro (apenas ao editar)
+                    if (currentEditingClientId && window.currentSuggestion && window.currentSuggestion.type === 'incomplete_profile') {
+                        const clientId = parseInt(currentEditingClientId);
+                        if (clientId === window.currentSuggestion.data.client_id) {
+                            // Verificar se todos os campos foram preenchidos
+                            const email = formData.get('email');
+                            const phone = formData.get('phone');
+                            const photo = formData.get('photo');
+                            
+                            if (email && phone && (photo || result.photo_url)) {
+                                await markSuggestionComplete(window.currentSuggestion.id);
+                                window.currentSuggestion = null;
+                            }
+                        }
+                    }
+                    
                     closeClientModal();
                     loadClients();
                     loadDashboard();
@@ -2242,6 +2278,16 @@
 
                 if (response.ok) {
                     showSuccess(currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!');
+                    
+                    // Verificar se foi uma sugestão de contato atrasado (apenas ao criar nova atividade)
+                    if (!currentEditingActivityId && window.currentSuggestion && window.currentSuggestion.type === 'contact_overdue') {
+                        const clientId = parseInt(formData.get('client_id'));
+                        if (clientId === window.currentSuggestion.data.client_id) {
+                            await markSuggestionComplete(window.currentSuggestion.id);
+                            window.currentSuggestion = null;
+                        }
+                    }
+                    
                     closeActivityModal();
                     loadActivities();
                     loadDashboard();
@@ -2602,6 +2648,15 @@
 
                 if (response.ok) {
                     showSuccess('Resposta salva com sucesso!');
+                    
+                    // Verificar se foi uma sugestão de mapear ambiente
+                    if (window.currentSuggestion && window.currentSuggestion.type === 'map_environment') {
+                        if (parseInt(cardId) === window.currentSuggestion.data.card_id && parseInt(clientId) === window.currentSuggestion.data.client_id) {
+                            await markSuggestionComplete(window.currentSuggestion.id);
+                            window.currentSuggestion = null;
+                        }
+                    }
+                    
                     // Fechar modal atual
                     closeMappingCardModal();
                     // Recarregar mapeamento para atualizar os cards
@@ -2846,12 +2901,19 @@
 
             html += '<div style="max-height: 400px; overflow-y: auto;">';
             activities.forEach(activity => {
-                html += '<div class="history-item" style="margin-bottom: 12px;">';
+                html += '<div class="history-item" style="margin-bottom: 12px; display: flex; align-items: start; gap: 12px;">';
+                
+                // Foto do cliente
+                const photoSrc = activity.client_photo ? `/uploads/${activity.client_photo}` : '/images/avatar-default.png';
+                html += `<img src="${photoSrc}" alt="${escapeHtml(activity.client_name)}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid #34D399;" onerror="this.src='/images/avatar-default.png'">`;
+                
+                // Informações da atividade
+                html += '<div style="flex: 1;">';
                 html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})</div>`;
-                html += `<div style="font-weight: 600; color: #1f2937; margin-top: 4px;">${escapeHtml(activity.title || '-')}</div>`;
                 if (activity.notes) {
                     html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.notes)}</div>`;
                 }
+                html += '</div>';
                 html += '</div>';
             });
             html += '</div>';
@@ -2865,6 +2927,138 @@
         function closeDayActivitiesModal() {
             const modal = document.getElementById('dayActivitiesModal');
             if (modal) modal.remove();
+        }
+
+        // Funções de Sugestões Diárias
+        let dailySuggestions = [];
+
+        async function loadDailySuggestions() {
+            try {
+                const response = await fetch(`${API_BASE}/suggestions/today`);
+                dailySuggestions = await response.json();
+                
+                // Verificar se há sugestões pendentes
+                const hasPending = dailySuggestions.some(s => !s.completed);
+                
+                // Mostrar ou ocultar ícone
+                const icon = document.getElementById('suggestionsIcon');
+                if (icon) {
+                    icon.style.display = hasPending ? 'block' : 'none';
+                }
+            } catch (error) {
+                console.error('Erro ao carregar sugestões:', error);
+            }
+        }
+
+        function openSuggestionsModal() {
+            if (dailySuggestions.length === 0) return;
+            
+            let html = `<div class="modal active" id="suggestionsModal" onclick="if(event.target === this) closeSuggestionsModal()">`;
+            html += '<div class="modal-content" style="max-width: 700px;">';
+            html += '<h2 style="color: #047857; margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">';
+            html += '<img src="/coelho-sugestoes.png" alt="Sugestões" style="width: 40px; height: 40px; object-fit: contain;">';
+            html += 'Sugestões do Dia</h2>';
+            html += '<p style="color: #6b7280; margin-bottom: 20px;">Aqui estão algumas ações sugeridas para você hoje:</p>';
+            
+            html += '<div style="max-height: 500px; overflow-y: auto;">';
+            dailySuggestions.forEach((suggestion, index) => {
+                const isCompleted = suggestion.completed === 1;
+                const bgColor = isCompleted ? '#f0fdf4' : '#ffffff';
+                const borderColor = isCompleted ? '#34D399' : '#e5e7eb';
+                
+                html += `<div class="suggestion-item" style="position: relative; background: ${bgColor}; border: 2px solid ${borderColor}; border-radius: 12px; padding: 16px; margin-bottom: 12px; cursor: ${isCompleted ? 'default' : 'pointer'};" ${!isCompleted ? `onclick="executeSuggestion(${suggestion.id}, '${suggestion.suggestion_type}', ${JSON.stringify(suggestion.target_data).replace(/"/g, '&quot;')})"` : ''}>`;
+                
+                // Checkmark verde se concluído
+                if (isCompleted) {
+                    html += '<div style="position: absolute; top: -10px; right: -10px; background: #34D399; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(52, 211, 153, 0.4);">';
+                    html += '<i class="fas fa-check" style="color: white; font-size: 20px;"></i>';
+                    html += '</div>';
+                }
+                
+                html += `<div style="font-weight: 600; color: #1f2937; margin-bottom: 6px;">${escapeHtml(suggestion.title)}</div>`;
+                html += `<div style="color: #6b7280; font-size: 14px;">${escapeHtml(suggestion.description)}</div>`;
+                
+                if (!isCompleted) {
+                    html += '<div style="margin-top: 10px; font-size: 12px; color: #047857;"><i class="fas fa-hand-pointer"></i> Clique para executar</div>';
+                }
+                
+                html += '</div>';
+            });
+            html += '</div>';
+            
+            html += '<div style="margin-top: 20px; text-align: right;"><button class="btn btn-secondary" onclick="closeSuggestionsModal()">Fechar</button></div>';
+            html += '</div></div>';
+            
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeSuggestionsModal() {
+            const modal = document.getElementById('suggestionsModal');
+            if (modal) modal.remove();
+        }
+
+        async function executeSuggestion(suggestionId, type, targetDataStr) {
+            closeSuggestionsModal();
+            
+            const targetData = JSON.parse(targetDataStr);
+            
+            // Armazenar informação da sugestão para validação posterior
+            window.currentSuggestion = {
+                id: suggestionId,
+                type: type,
+                data: targetData
+            };
+            
+            switch(type) {
+                case 'contact_overdue':
+                    // Abrir modal de atividade para o cliente
+                    const client = clients.find(c => c.id === targetData.client_id);
+                    if (client) {
+                        openQuickActivityModal(client.id, client.name, client.company);
+                    }
+                    break;
+                    
+                case 'missing_position':
+                    // Abrir modal de novo cliente com empresa e cargo pré-preenchidos
+                    openClientModal();
+                    setTimeout(() => {
+                        document.getElementById('clientCompany').value = targetData.company;
+                        document.getElementById('clientPosition').value = targetData.position;
+                    }, 100);
+                    break;
+                    
+                case 'map_environment':
+                    // Abrir mapeamento de ambiente e depois o card específico
+                    switchTab(null, 'mapeamento');
+                    setTimeout(async () => {
+                        await loadMapeamento();
+                        setTimeout(() => {
+                            openMappingCardModal(targetData.card_id);
+                        }, 500);
+                    }, 300);
+                    break;
+                    
+                case 'incomplete_profile':
+                    // Abrir modal de edição do cliente
+                    editClient(targetData.client_id);
+                    break;
+            }
+            
+            // NÃO marcar como concluída automaticamente
+            // A validação será feita após a ação ser realmente executada
+        }
+
+        async function markSuggestionComplete(suggestionId) {
+            try {
+                await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
+                    method: 'POST'
+                });
+                
+                // Recarregar sugestões
+                await loadDailySuggestions();
+            } catch (error) {
+                console.error('Erro ao marcar sugestão como concluída:', error);
+            }
         }
 
         // Get Status - Regra: < 7 dias = verde, 7-14 dias = amarelo, > 14 dias = vermelho
