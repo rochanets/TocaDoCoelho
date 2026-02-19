@@ -3050,9 +3050,15 @@
 
         async function markSuggestionComplete(suggestionId) {
             try {
-                await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
+                const response = await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
                     method: 'POST'
                 });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    showError(error.error || 'A sugestão ainda não foi concluída.');
+                    return;
+                }
                 
                 // Recarregar sugestões
                 await loadDailySuggestions();
