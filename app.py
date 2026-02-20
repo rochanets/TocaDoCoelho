@@ -1578,6 +1578,16 @@ def get_today_suggestions():
                     'target_data': json.dumps({'client_id': client_id, 'missing': missing_fields})
                 })
         
+        # Remover sugestões duplicadas (mesmo tipo + mesmo alvo)
+        unique_suggestions = []
+        seen_keys = set()
+        for sug in suggestions:
+            dedupe_key = (sug['type'], sug['target_data'])
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            unique_suggestions.append(sug)
+
         # Selecionar até 5 sugestões com diversidade
         import random
         
@@ -1589,7 +1599,7 @@ def get_today_suggestions():
             'incomplete_profile': []
         }
         
-        for sug in suggestions:
+        for sug in unique_suggestions:
             by_type[sug['type']].append(sug)
         
         # Embaralhar cada grupo
@@ -1643,7 +1653,58 @@ def complete_suggestion(suggestion_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        
+
+        c.execute('SELECT * FROM daily_suggestions WHERE id = ?', (suggestion_id,))
+        suggestion = c.fetchone()
+        if not suggestion:
+            conn.close()
+            return jsonify({'error': 'Sugestão não encontrada'}), 404
+
+        suggestion_dict = dict_from_row(suggestion)
+        target_data = json.loads(suggestion_dict['target_data']) if suggestion_dict.get('target_data') else {}
+
+        is_completed = False
+
+        if suggestion_dict['suggestion_type'] == 'contact_overdue':
+            client_id = target_data.get('client_id')
+            if client_id:
+                c.execute('SELECT id FROM activities WHERE client_id = ? AND date(created_at) = date("now", "localtime")', (client_id,))
+                is_completed = c.fetchone() is not None
+
+        elif suggestion_dict['suggestion_type'] == 'missing_position':
+            company = target_data.get('company')
+            position = target_data.get('position')
+            if company and position:
+                c.execute('''
+                    SELECT id FROM clients
+                    WHERE company = ? AND position = ?
+                ''', (company, position))
+                is_completed = c.fetchone() is not None
+
+        elif suggestion_dict['suggestion_type'] == 'map_environment':
+            card_id = target_data.get('card_id')
+            client_id = target_data.get('client_id')
+            if card_id and client_id:
+                c.execute('''
+                    SELECT response FROM environment_responses
+                    WHERE card_id = ? AND client_id = ?
+                ''', (card_id, client_id))
+                response = c.fetchone()
+                is_completed = bool(response and response[0] and response[0].strip())
+
+        elif suggestion_dict['suggestion_type'] == 'incomplete_profile':
+            client_id = target_data.get('client_id')
+            if client_id:
+                c.execute('SELECT email, phone, photo_url FROM clients WHERE id = ?', (client_id,))
+                client = c.fetchone()
+                if client:
+                    email, phone, photo_url = client
+                    is_completed = bool(email and phone and photo_url)
+
+        if not is_completed:
+            conn.close()
+            return jsonify({'error': 'A sugestão ainda não foi concluída'}), 400
+
         c.execute('''
             UPDATE daily_suggestions 
             SET completed = 1, completed_at = CURRENT_TIMESTAMP 
