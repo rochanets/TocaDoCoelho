@@ -1448,6 +1448,7 @@
         let statusConfig = { universal: { green_days: 7, yellow_days: 14 }, rules: [] };
         let userProfile = null;
         let cachedPositions = [];
+        let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
 
         // Tab switching
@@ -3486,6 +3487,56 @@
             document.getElementById('profileModal').classList.remove('active');
         }
 
+        function getCompanyImportanceRank(position) {
+            const p = String(position || '').trim().toLowerCase();
+            if (p === 'ceo') return 1;
+            if (p.startsWith('c') && p.length <= 4) return 2;
+            if (p.includes('diretor') || p.includes('superintendente')) return 3;
+            if (p.includes('gerente')) return 4;
+            return 5;
+        }
+
+        function sortGroupClients(groupType, list) {
+            const arr = [...list];
+            if (groupType === 'company') {
+                arr.sort((a, b) => {
+                    const rankDiff = getCompanyImportanceRank(a.position) - getCompanyImportanceRank(b.position);
+                    if (rankDiff !== 0) return rankDiff;
+                    return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
+                });
+                return arr;
+            }
+            arr.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'));
+            return arr;
+        }
+
+        async function exportCurrentGroupToXlsx() {
+            if (!currentGroupModalContext) return;
+            try {
+                const params = new URLSearchParams({
+                    group_type: currentGroupModalContext.groupType,
+                    group_value: currentGroupModalContext.groupValue
+                });
+                const response = await fetch(`${API_BASE}/export/group-xlsx?${params.toString()}`);
+                if (!response.ok) {
+                    const payload = await response.json().catch(() => ({}));
+                    showError(payload.error || 'Erro ao exportar grupo');
+                    return;
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `grupo-${currentGroupModalContext.groupType}-${currentGroupModalContext.groupValue}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (error) {
+                showError('Erro ao exportar grupo');
+            }
+        }
+
         function openGroupModalFromEncoded(groupType, encodedValue) {
             const decodedValue = decodeURIComponent(encodedValue || '');
             openGroupModal(groupType, decodedValue);
@@ -3494,16 +3545,17 @@
         function openGroupModal(groupType, groupValue) {
             const normalizedValue = String(groupValue || '').toLowerCase();
             const filtered = clients.filter(client => String(client[groupType] || '').toLowerCase() === normalizedValue);
+            const sortedGroup = sortGroupClients(groupType, filtered);
 
             const titlePrefix = groupType === 'position' ? 'Clientes com o cargo' : 'Clientes da empresa';
             document.getElementById('groupModalTitle').textContent = `${titlePrefix}: ${groupValue}`;
 
             let html = '';
-            if (!filtered.length) {
+            if (!sortedGroup.length) {
                 html = '<div class="empty-state" style="padding: 25px 10px;"><p>Nenhum cliente encontrado.</p></div>';
             } else {
                 html = '<div class="mini-card-grid">';
-                filtered.forEach(client => {
+                sortedGroup.forEach(client => {
                     const subText = groupType === 'position' ? (client.company || '-') : (client.position || '-');
                     html += `
                         <div class="mini-card">
@@ -3514,13 +3566,16 @@
                     `;
                 });
                 html += '</div>';
+                html += '<div style="display:flex; justify-content:flex-end; margin-top:12px;"><button class="btn btn-secondary btn-small" title="Exportar grupo" onclick="exportCurrentGroupToXlsx()"><i class="fas fa-file-export"></i></button></div>';
             }
 
+            currentGroupModalContext = { groupType, groupValue };
             document.getElementById('groupModalBody').innerHTML = html;
             document.getElementById('groupModal').classList.add('active');
         }
 
         function closeGroupModal() {
+            currentGroupModalContext = null;
             document.getElementById('groupModal').classList.remove('active');
         }
 

@@ -1213,6 +1213,80 @@ def update_target_bulk():
         return jsonify({'error': str(e)}), 500
 
 
+
+@app.route('/api/export/group-xlsx', methods=['GET'])
+def export_group_xlsx():
+    try:
+        group_type = (request.args.get('group_type') or '').strip().lower()
+        group_value = (request.args.get('group_value') or '').strip()
+
+        if group_type not in ('company', 'position') or not group_value:
+            return jsonify({'error': 'Parâmetros inválidos'}), 400
+
+        if not OPENPYXL_AVAILABLE:
+            return jsonify({'error': 'Exportação XLSX requer openpyxl instalado'}), 500
+
+        conn = get_db()
+        c = conn.cursor()
+
+        if group_type == 'company':
+            c.execute('''
+                SELECT name, position, email, phone
+                FROM clients
+                WHERE LOWER(company) = LOWER(?)
+                ORDER BY
+                    CASE
+                        WHEN LOWER(TRIM(position)) = 'ceo' THEN 1
+                        WHEN LOWER(TRIM(position)) LIKE 'c%' AND LENGTH(TRIM(position)) <= 4 THEN 2
+                        WHEN LOWER(position) LIKE '%diretor%' OR LOWER(position) LIKE '%superintendente%' THEN 3
+                        WHEN LOWER(position) LIKE '%gerente%' THEN 4
+                        ELSE 5
+                    END,
+                    LOWER(name)
+            ''', (group_value,))
+        else:
+            c.execute('''
+                SELECT name, position, email, phone
+                FROM clients
+                WHERE LOWER(position) = LOWER(?)
+                ORDER BY LOWER(name)
+            ''', (group_value,))
+
+        rows = c.fetchall()
+        conn.close()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Grupo'
+        ws.append(['Nome', 'Cargo', 'Email', 'Telefone'])
+
+        for row in rows:
+            ws.append([
+                row['name'] or '',
+                row['position'] or '',
+                row['email'] or '',
+                row['phone'] or ''
+            ])
+
+        from io import BytesIO
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        from flask import send_file
+        safe_group = secure_filename(group_value) or 'grupo'
+        file_name = f'grupo-{group_type}-{safe_group}.xlsx'
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=file_name,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        print(f'[ERROR] GET /api/export/group-xlsx: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 # Rotas de exportacao
 @app.route('/api/export/clientes', methods=['GET'])
 def export_clientes():
