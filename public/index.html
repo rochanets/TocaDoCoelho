@@ -73,8 +73,17 @@
         }
 
         .th-last-contact {
-            font-size: 13px;
+            font-size: 12px;
             white-space: nowrap;
+        }
+
+        .last-contact-text {
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .clients-email-col {
+            font-size: 12px;
         }
 
         .config-shell {
@@ -276,6 +285,56 @@
 
         .btn-icon-action:active {
             transform: scale(0.95);
+        }
+
+        .action-buttons {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-auto-mapping {
+            background: linear-gradient(135deg, #ecfeff 0%, #dbeafe 55%, #e0f2fe 100%);
+            color: #0f766e;
+            border: 1px solid #bae6fd;
+            box-shadow: 0 0 14px rgba(147, 197, 253, 0.5), inset 0 0 10px rgba(255, 255, 255, 0.7);
+        }
+
+        .btn-auto-mapping:hover {
+            background: linear-gradient(135deg, #cffafe 0%, #bfdbfe 60%, #bae6fd 100%);
+            color: #0e7490;
+            transform: translateY(-1px);
+        }
+
+        .sad-bunny-image {
+            width: 180px;
+            max-width: 65%;
+            display: block;
+            margin: 14px auto 10px;
+            object-fit: contain;
+        }
+
+        .ai-star-icon {
+            display: inline-block;
+            font-size: 15px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #9333ea 0%, #60a5fa 55%, #22d3ee 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-right: 6px;
+            filter: drop-shadow(0 0 4px rgba(147, 51, 234, 0.35));
+        }
+
+        .small-col-text {
+            font-size: 12px;
+        }
+
+        .target-check {
+            width: 18px;
+            height: 18px;
+            accent-color: #10b981;
+            cursor: pointer;
         }
 
         /* Tabs */
@@ -695,8 +754,8 @@
 
         .filters-row {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
         }
 
         /* Mapeamento de Ambiente */
@@ -810,7 +869,7 @@
 
         .filter-select {
             width: 100%;
-            padding: 10px 12px;
+            padding: 8px 10px;
             border: 2px solid rgba(52, 211, 153, 0.25);
             border-radius: 10px;
             background: white;
@@ -1086,6 +1145,9 @@
                     <button class="btn btn-primary" onclick="openClientModal()">
                         <i class="fas fa-plus"></i> Novo Cliente
                     </button>
+                    <button class="btn btn-secondary" onclick="openTargetAccountModal()">
+                        <i class="fas fa-bullseye"></i> Target Account
+                    </button>
                     <button class="btn btn-secondary" onclick="openImportModal()">
                         <i class="fas fa-upload"></i> Importar Excel
                     </button>
@@ -1121,7 +1183,7 @@
         <div id="agenda" class="tab-content">
             <div class="page-header">
                 <h1>Agenda</h1>
-                <p>Compromissos e retornos futuros detectados nas atividades</p>
+                <button class="btn btn-primary" onclick="openNewAgendaModal()"><i class="fas fa-plus"></i> Nova Agenda</button>
             </div>
             <div id="agendaContent"></div>
         </div>
@@ -1129,8 +1191,11 @@
         <div id="mapeamento" class="tab-content">
             <div class="page-header">
                 <h1>Mapeamento de Ambiente</h1>
-                <p>Gerencie informações estratégicas sobre o ambiente de cada cliente</p>
-                <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
+                
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
+                    <button class="btn btn-auto-mapping" onclick="openAutoMappingModal()"><span class="ai-star-icon">✦</span> AutoMapping</button>
+                </div>
             </div>
             <div style="margin-bottom: 20px;">
                 <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Filtrar por Cliente:</label>
@@ -1170,6 +1235,14 @@
                         <button class="btn btn-secondary btn-small" onclick="openStatusRuleModal()"><i class="fas fa-plus"></i> Adicionar</button>
                     </div>
                     <div id="statusRulesList" class="rule-list"></div>
+                    <div style="margin-top:14px; border-top:1px solid rgba(52,211,153,0.2); padding-top:12px;">
+                        <h4 style="color:#065f46; font-weight:400; margin-bottom:8px;">Regra C por Target</h4>
+                        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                            <div class="form-group" style="margin:0;"><label>Dias Em dia</label><input type="number" id="targetGreen" min="0" style="width:110px;"></div>
+                            <div class="form-group" style="margin:0;"><label>Dias Atenção</label><input type="number" id="targetYellow" min="1" style="width:110px;"></div>
+                            <button class="btn btn-secondary btn-small" onclick="saveTargetStatus()"><i class="fas fa-save"></i> Salvar Regra C</button>
+                        </div>
+                    </div>
                 </section>
 
                 <section class="settings-card">
@@ -1178,6 +1251,8 @@
                         <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
                         <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
                         <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
+                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
+                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
                         <div class="form-group">
                             <label>Foto *</label>
                             <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
@@ -1239,11 +1314,20 @@
                 </div>
                 <div class="form-group">
                     <label>Empresa *</label>
-                    <input type="text" name="company" required>
+                    <select id="clientCompanySelect" onchange="toggleOtherField('company')" required></select>
+                    <input type="text" id="clientCompanyOther" placeholder="Digite a empresa" style="display:none; margin-top:8px;">
                 </div>
                 <div class="form-group">
                     <label>Cargo *</label>
-                    <input type="text" name="position" required>
+                    <select id="clientPositionSelect" onchange="toggleOtherField('position')" required></select>
+                    <input type="text" id="clientPositionOther" placeholder="Digite o cargo" style="display:none; margin-top:8px;">
+                </div>
+                <div class="form-group">
+                    <label>Cliente TARGET</label>
+                    <select id="clientIsTarget" name="is_target">
+                        <option value="0">Não</option>
+                        <option value="1">Sim</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>Email</label>
@@ -1270,6 +1354,20 @@
         </div>
     </div>
 
+
+    <div id="targetAccountModal" class="modal">
+        <div class="modal-content" style="max-width:520px;">
+            <div class="modal-header"><h2>Target Account</h2><button class="modal-close" onclick="closeTargetAccountModal()">×</button></div>
+            <div class="form-group"><label>Empresa</label><select id="targetCompanySelect"></select></div>
+            <div class="form-group"><label>Cargo</label><select id="targetPositionSelect"></select></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeTargetAccountModal()">Cancelar</button>
+                <button type="button" class="btn btn-primary" onclick="applyTargetAccountBulk()">Aplicar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="newAgendaModal" class="modal"></div>
     <!-- Activity Modal -->
     <div id="activityModal" class="modal">
         <div class="modal-content">
@@ -1363,6 +1461,7 @@
         let statusConfig = { universal: { green_days: 7, yellow_days: 14 }, rules: [] };
         let userProfile = null;
         let cachedPositions = [];
+        let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
 
         // Tab switching
@@ -1422,6 +1521,8 @@
             form.full_name.value = userProfile?.full_name || '';
             form.nickname.value = userProfile?.nickname || '';
             form.position.value = userProfile?.position || '';
+            form.email.value = userProfile?.email || '';
+            form.phone.value = formatPhone(userProfile?.phone || '');
             const preview = document.getElementById('profilePhotoPreview');
             if (userProfile?.photo_url) {
                 preview.src = userProfile.photo_url;
@@ -1514,7 +1615,7 @@
         }
 
         async function deleteUserProfile() {
-            if (!confirm('Tem certeza que deseja excluir o usuário cadastrado? Esta ação não pode ser desfeita.')) {
+            if (!await uiConfirm('Tem certeza que deseja excluir o usuário cadastrado? Esta ação não pode ser desfeita.')) {
                 return;
             }
             
@@ -1538,12 +1639,13 @@
         }
 
         // Load Dashboard
-        let dashboardSortField = 'name';
-        let dashboardSortOrder = 'asc';
+        let dashboardSortField = 'status';
+        let dashboardSortOrder = 'desc';
         let clientsSortField = 'name';
         let clientsSortOrder = 'asc';
         let dashboardCompanyFilter = '';
         let dashboardPositionFilter = '';
+        let dashboardTargetFilter = '';
         let clientsCompanyFilter = '';
         let clientsPositionFilter = '';
         let agendaCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -1562,6 +1664,9 @@
             html += '<div class="filters-row">';
             html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
             html += `<div class="filter-group"><label class="filter-label">Cargo</label><select class="filter-select" onchange="set${prefix}Filter('position', this.value)"><option value="">Todos os cargos</option>${positions.map(p=>`<option value="${escapeHtml(p)}" ${p===currentPosition?'selected':''}>${escapeHtml(p)}</option>`).join('')}</select></div>`;
+            if (prefix === 'Dashboard') {
+                html += `<div class="filter-group"><label class="filter-label">Target</label><select class="filter-select" onchange="setDashboardFilter('target', this.value)"><option value="">Todos</option><option value="target" ${dashboardTargetFilter==='target'?'selected':''}>Target</option><option value="nao_target" ${dashboardTargetFilter==='nao_target'?'selected':''}>Não Target</option></select></div>`;
+            }
             html += '</div>';
             html += `<button class="filter-clear-btn" onclick="clear${prefix}Filters()"><i class="fas fa-broom"></i> Limpar filtros</button>`;
             html += '</div>';
@@ -1572,12 +1677,14 @@
         function clearDashboardFilters() {
             dashboardCompanyFilter = '';
             dashboardPositionFilter = '';
+            dashboardTargetFilter = '';
             loadDashboard();
         }
 
         function setDashboardFilter(type, value) {
             if (type === 'company') dashboardCompanyFilter = value;
             if (type === 'position') dashboardPositionFilter = value;
+            if (type === 'target') dashboardTargetFilter = value;
             loadDashboard();
         }
 
@@ -1646,7 +1753,8 @@
                     let filteredClients = clients.filter(client => {
                         const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
                         const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
-                        return byCompany && byPosition;
+                        const byTarget = !dashboardTargetFilter || (dashboardTargetFilter === 'target' ? Number(client.is_target) === 1 : Number(client.is_target) !== 1);
+                        return byCompany && byPosition && byTarget;
                     });
 
                     const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
@@ -1654,32 +1762,40 @@
                     html += `<div class="summary-banner">Você tem <strong>${weekCount}</strong> compromisso(s) nesta semana.</div>`;
                     html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
                     html += '<div class="table-container"><table><thead><tr>';
+                    html += '<th style="width:78px; text-align:center;">TARGET</th>';
                     html += '<th></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; width: 200px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; width: 170px;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th style="width: 60px; text-align: center;">Ação</th>';
+                    html += '<th style="width: 150px; text-align: center;">Ação</th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
-                        const status = getStatus(client.last_activity_date, client.position);
+                        const status = getStatus(client.last_activity_date, client.position, client.is_target);
                         const statusClass = `status-${status}`;
                         const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
                         const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
                         html += `<tr>
+                            <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
-                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
-                            <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
+                            <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
-                            <td>${client.email || '-'}</td>
-                            <td>${client.phone || '-'}</td>
-                            <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
+                            <td class="small-col-text">${client.email || '-'}</td>
+                            <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
+                            <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
                             <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
-                            <td style="text-align: center;"><button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button></td>
+                            <td style="text-align: center;">
+                                <div class="action-buttons">
+                                    <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
+                                    <button class="btn-icon-action" onclick="openWhatsAppMessageModal(${client.id})" title="Enviar mensagem no WhatsApp"><i class="fab fa-whatsapp"></i></button>
+                                    <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>
+                                </div>
+                            </td>
                         </tr>`;
                     });
                     html += '</tbody></table></div>';
@@ -1716,11 +1832,12 @@
 
                     html += renderFilters('Clients', clients, clientsCompanyFilter, clientsPositionFilter);
                     html += '<div class="table-container"><table><thead><tr>';
+                    html += '<th style="width:78px; text-align:center;">TARGET</th>';
                     html += '<th></th>';
                     html += '<th onclick="toggleClientsSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'company\')" style="cursor: pointer;">Empresa <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleClientsSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th class="clients-email-col" onclick="toggleClientsSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th>Ações</th>';
                     html += '</tr></thead><tbody>';
@@ -1728,12 +1845,13 @@
                     sortedClients.forEach(client => {
                         const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
                         html += `<tr>
+                            <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
-                            <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
-                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
+                            <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
-                            <td>${client.email || '-'}</td>
-                            <td>${client.phone || '-'}</td>
+                            <td class="clients-email-col">${client.email || '-'}</td>
+                            <td class="small-col-text">${formatPhone(client.phone) || '-'}</td>
                             <td><div class="actions">
                                 <button class="btn btn-secondary btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
                                 <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id})"><i class="fas fa-trash"></i> Deletar</button>
@@ -1761,7 +1879,7 @@
                     html = '<div class="empty-state"><div class="empty-state-icon">📝</div><h3>Nenhuma atividade registrada</h3><p>Clique em "Nova Atividade" para começar.</p></div>';
                 } else {
                     html = '<div class="table-container"><table><thead><tr>';
-                    html += '<th>Cliente</th><th>Tipo</th><th>Informações</th><th>Data</th><th>Ações</th>';
+                    html += '<th class="small-col-text">Cliente</th><th class="small-col-text">Tipo</th><th class="small-col-text">Informações</th><th class="small-col-text">Data</th><th>Ações</th>';
                     html += '</tr></thead><tbody>';
 
                     activities.forEach(activity => {
@@ -1769,10 +1887,10 @@
                         const contactType = activity.contact_type || 'Outro';
                         const information = activity.information || '-';
                         html += `<tr>
-                            <td>${activity.name}</td>
-                            <td>${contactType}</td>
-                            <td>${information}</td>
-                            <td>${date}</td>
+                            <td class='small-col-text'>${activity.name}</td>
+                            <td class='small-col-text'>${contactType}</td>
+                            <td class='small-col-text'>${information}</td>
+                            <td class='small-col-text'>${date}</td>
                             <td><div class="actions">
                                 <button class="btn btn-secondary btn-small" onclick="editActivity(${activity.id})"><i class="fas fa-edit"></i> Editar</button>
                                 <button class="btn btn-danger btn-small" onclick="deleteActivity(${activity.id})"><i class="fas fa-trash"></i> Deletar</button>
@@ -2236,7 +2354,7 @@
 
         // Delete Client
         async function deleteClient(id) {
-            if (confirm('Tem certeza que deseja deletar este cliente?')) {
+            if (await uiConfirm('Tem certeza que deseja deletar este cliente?')) {
                 try {
                     const response = await fetch(`${API_BASE}/clientes/${id}`, {
                         method: 'DELETE'
@@ -2315,7 +2433,7 @@
 
         // Delete Activity
         async function deleteActivity(id) {
-            if (confirm('Tem certeza que deseja deletar esta atividade?')) {
+            if (await uiConfirm('Tem certeza que deseja deletar esta atividade?')) {
                 try {
                     const response = await fetch(`${API_BASE}/atividades/${id}`, {
                         method: 'DELETE'
@@ -2410,7 +2528,7 @@
                 return;
             }
             
-            if (!confirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?')) {
+            if (!await uiConfirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?', 'Atenção')) {
                 event.target.value = '';
                 return;
             }
@@ -2776,7 +2894,7 @@
             const card = mappingCards.find(c => c.id === cardId);
             if (!card) return;
             
-            if (!confirm(`Tem certeza que deseja deletar o card "${card.title}"?\n\nAtenção: Todas as respostas associadas a este card serão perdidas!`)) {
+            if (!await uiConfirm(`Tem certeza que deseja deletar o card "${card.title}"?\n\nAtenção: Todas as respostas associadas a este card serão perdidas!`)) {
                 return;
             }
             
@@ -2801,10 +2919,10 @@
             const card = mappingCards.find(c => c.id === cardId);
             if (!card) return;
 
-            const newTitle = prompt('Título do Card:', card.title);
+            const newTitle = await uiPrompt('Título do Card:', card.title, 'Editar card');
             if (newTitle === null) return;
 
-            const newDescription = prompt('Descrição do Card:', card.description || '');
+            const newDescription = await uiPrompt('Descrição do Card:', card.description || '', 'Editar card');
             if (newDescription === null) return;
 
             try {
@@ -2868,7 +2986,7 @@
                 html += '<div class="agenda-list">';
                 if (!items.length) html += '<div class="empty-state" style="padding:20px 8px;"><p>Nenhum compromisso neste mês.</p></div>';
                 items.forEach(item => {
-                    html += `<div class="history-item"><div class="history-meta">${formatDateBr(item.due_date)} • ${escapeHtml(item.client_name)} (${escapeHtml(item.client_company)})</div><div>${escapeHtml(item.title || item.notes || '-')}</div></div>`;
+                    html += `<div class="history-item"><div class="history-meta">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name)} (${escapeHtml(item.client_company)})</div><div>${escapeHtml(item.title || item.notes || '-')}</div></div>`;
                 });
                 html += '</div></div>';
 
@@ -2904,15 +3022,14 @@
                 html += '<div class="history-item" style="margin-bottom: 12px; display: flex; align-items: start; gap: 12px;">';
                 
                 // Foto do cliente
-                const photoSrc = activity.client_photo ? `/uploads/${activity.client_photo}` : '/images/avatar-default.png';
-                html += `<img src="${photoSrc}" alt="${escapeHtml(activity.client_name)}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid #34D399;" onerror="this.src='/images/avatar-default.png'">`;
+                const photoSrc = activity.client_photo || '/logo-coelho.png';
+                html += `<img src="${photoSrc}" alt="${escapeHtml(activity.client_name)}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid #34D399;" onerror="this.src='/logo-coelho.png'">`;
                 
                 // Informações da atividade
                 html += '<div style="flex: 1;">';
                 html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})</div>`;
-                if (activity.notes) {
-                    html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.notes)}</div>`;
-                }
+                html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.title || activity.notes || '-')}</div>`;
+                html += `<div style="margin-top: 8px;"><button class="btn btn-danger btn-small" onclick="deleteAgendaItem(${activity.id})"><i class="fas fa-trash"></i> Excluir evento</button></div>`;
                 html += '</div>';
                 html += '</div>';
             });
@@ -2927,6 +3044,173 @@
         function closeDayActivitiesModal() {
             const modal = document.getElementById('dayActivitiesModal');
             if (modal) modal.remove();
+        }
+
+
+        async function deleteAgendaItem(commitmentId) {
+            if (!await uiConfirm('Deseja realmente excluir este evento da agenda?')) return;
+            const response = await fetch(`${API_BASE}/agenda/${commitmentId}`, { method: 'DELETE' });
+            if (!response.ok) {
+                showError('Erro ao excluir evento da agenda');
+                return;
+            }
+            showSuccess('Evento da agenda excluído!');
+            closeDayActivitiesModal();
+            await loadAgenda();
+        }
+
+        function normalizePhoneForWhatsapp(phone) {
+            if (!phone) return '';
+            let digits = String(phone).replace(/\D/g, '');
+            if (!digits) return '';
+            if (digits.startsWith('00')) digits = digits.slice(2);
+            if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) {
+                digits = `55${digits}`;
+            }
+            return digits;
+        }
+
+        function openMissingContactModal() {
+            let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
+            html += '<div class="modal-content" style="max-width: 460px; text-align: center;">';
+            html += '<h2 style="margin-bottom: 8px;">Ops!</h2>';
+            html += '<img src="/logo-coelho.png" alt="Coelho triste" class="sad-bunny-image">';
+            html += '<p style="color: #4b5563; font-size: 16px; margin: 10px 0 18px;">Você não cadastrou esse tipo de contato ainda</p>';
+            html += '<button class="btn btn-secondary" onclick="closeMissingContactModal()">Fechar</button>';
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeMissingContactModal() {
+            const modal = document.getElementById('missingContactModal');
+            if (modal) modal.remove();
+        }
+
+        function openWhatsAppMessageModal(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.phone) {
+                openMissingContactModal();
+                return;
+            }
+
+            let html = `<div class="modal active" id="whatsAppModal" onclick="if(event.target === this) closeWhatsAppModal()">`;
+            html += '<div class="modal-content" style="max-width: 520px;">';
+            html += `<h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name)}</h2>`;
+            html += '<p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem e nós abriremos o WhatsApp Web com o texto pronto para envio.</p>';
+            html += '<div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="5" placeholder="Digite a mensagem para o cliente..."></textarea></div>';
+            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div>`;
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeWhatsAppModal() {
+            const modal = document.getElementById('whatsAppModal');
+            if (modal) modal.remove();
+        }
+
+        function openWhatsAppWeb(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.phone) {
+                closeWhatsAppModal();
+                openMissingContactModal();
+                return;
+            }
+
+            const message = document.getElementById('whatsMessageText')?.value?.trim() || '';
+            const phone = normalizePhoneForWhatsapp(client.phone);
+
+            if (!phone) {
+                closeWhatsAppModal();
+                openMissingContactModal();
+                return;
+            }
+
+            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+            window.open(url, '_blank');
+            closeWhatsAppModal();
+        }
+
+        function openEmailDraftModal(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.email) {
+                openMissingContactModal();
+                return;
+            }
+
+            let html = `<div class="modal active" id="emailDraftModal" onclick="if(event.target === this) closeEmailDraftModal()">`;
+            html += '<div class="modal-content" style="max-width: 520px;">';
+            html += `<h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail - ${escapeHtml(client.name)}</h2>`;
+            html += '<p style="color:#6b7280; margin-bottom: 16px;">Digite o conteúdo do e-mail. Ao confirmar, será aberto um novo e-mail no Outlook/local para revisão antes do envio.</p>';
+            html += '<div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text" placeholder="Assunto do e-mail"></div>';
+            html += '<div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="6" placeholder="Escreva o corpo do e-mail..."></textarea></div>';
+            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div>`;
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeEmailDraftModal() {
+            const modal = document.getElementById('emailDraftModal');
+            if (modal) modal.remove();
+        }
+
+        function openOutlookDraft(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.email) {
+                closeEmailDraftModal();
+                openMissingContactModal();
+                return;
+            }
+
+            const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
+            const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
+            const mailto = `mailto:${encodeURIComponent(client.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            window.location.href = mailto;
+            closeEmailDraftModal();
+        }
+
+        function openAutoMappingModal() {
+            const html = `
+                <div class="modal active" id="autoMappingModal" onclick="if(event.target === this) closeAutoMappingModal()">
+                    <div class="modal-content" style="max-width: 620px;">
+                        <h2 style="color:#0f766e; margin-bottom: 10px;"><span class="ai-star-icon">✦</span>AutoMapping</h2>
+                        <p style="color:#4b5563; margin-bottom: 16px; line-height: 1.5;">Bem vindo ao AutoMapping. Aqui nós faremos o possível para trazer informações do ambiente dos seus clientes. Por favor, digite abaixo o nome do cliente (empresa), a área de negócio e o país de origem do cliente.</p>
+                        <div class="form-group">
+                            <label>Cliente</label>
+                            <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)">
+                        </div>
+                        <div class="form-group">
+                            <label>Área de Negócio</label>
+                            <input id="autoMappingBusinessArea" type="text" placeholder="Área de negócio">
+                        </div>
+                        <div class="form-group">
+                            <label>País</label>
+                            <input id="autoMappingCountry" type="text" placeholder="País de origem">
+                        </div>
+                        <div style="display:flex; justify-content:flex-start; margin-top: 12px;">
+                            <button class="btn btn-primary" onclick="submitAutoMappingForm()">Enviar</button>
+                        </div>
+                    </div>
+                </div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeAutoMappingModal() {
+            const modal = document.getElementById('autoMappingModal');
+            if (modal) modal.remove();
+        }
+
+        function submitAutoMappingForm() {
+            const clientName = document.getElementById('autoMappingClient')?.value?.trim();
+            const businessArea = document.getElementById('autoMappingBusinessArea')?.value?.trim();
+            const country = document.getElementById('autoMappingCountry')?.value?.trim();
+
+            if (!clientName || !businessArea || !country) {
+                showError('Preencha Cliente, Área de Negócio e País para continuar.');
+                return;
+            }
+
+            closeAutoMappingModal();
+            showSuccess('Dados recebidos! Em breve integraremos ao Auto Mapping inteligente.');
         }
 
         // Funções de Sugestões Diárias
@@ -3050,9 +3334,15 @@
 
         async function markSuggestionComplete(suggestionId) {
             try {
-                await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
+                const response = await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
                     method: 'POST'
                 });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    showError(error.error || 'A sugestão ainda não foi concluída.');
+                    return;
+                }
                 
                 // Recarregar sugestões
                 await loadDailySuggestions();
@@ -3164,7 +3454,7 @@
                     .filter(activity => Number(activity.client_id) === Number(clientId))
                     .sort((a, b) => new Date(b.activity_date || b.created_at) - new Date(a.activity_date || a.created_at));
 
-                const status = getStatus(client.last_activity_date);
+                const status = getStatus(client.last_activity_date, client.position, client.is_target);
                 const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
 
                 let historyHtml = '';
@@ -3185,6 +3475,9 @@
                 }
 
                 const modalBody = `
+                    <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+                        <button class="btn btn-secondary btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
+                    </div>
                     <div class="profile-layout">
                         <div>${renderAvatar(client, 'profile-avatar-large')}</div>
                         <div>
@@ -3215,6 +3508,61 @@
             document.getElementById('profileModal').classList.remove('active');
         }
 
+        async function openEditFromProfile(clientId) {
+            closeProfileModal();
+            await editClient(clientId);
+        }
+
+        function getCompanyImportanceRank(position) {
+            const p = String(position || '').trim().toLowerCase();
+            if (p === 'ceo') return 1;
+            if (p.startsWith('c') && p.length <= 4) return 2;
+            if (p.includes('diretor') || p.includes('superintendente')) return 3;
+            if (p.includes('gerente')) return 4;
+            return 5;
+        }
+
+        function sortGroupClients(groupType, list) {
+            const arr = [...list];
+            if (groupType === 'company') {
+                arr.sort((a, b) => {
+                    const rankDiff = getCompanyImportanceRank(a.position) - getCompanyImportanceRank(b.position);
+                    if (rankDiff !== 0) return rankDiff;
+                    return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
+                });
+                return arr;
+            }
+            arr.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'));
+            return arr;
+        }
+
+        async function exportCurrentGroupToXlsx() {
+            if (!currentGroupModalContext) return;
+            try {
+                const params = new URLSearchParams({
+                    group_type: currentGroupModalContext.groupType,
+                    group_value: currentGroupModalContext.groupValue
+                });
+                const response = await fetch(`${API_BASE}/export/group-xlsx?${params.toString()}`);
+                if (!response.ok) {
+                    const payload = await response.json().catch(() => ({}));
+                    showError(payload.error || 'Erro ao exportar grupo');
+                    return;
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `grupo-${currentGroupModalContext.groupType}-${currentGroupModalContext.groupValue}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (error) {
+                showError('Erro ao exportar grupo');
+            }
+        }
+
         function openGroupModalFromEncoded(groupType, encodedValue) {
             const decodedValue = decodeURIComponent(encodedValue || '');
             openGroupModal(groupType, decodedValue);
@@ -3223,19 +3571,20 @@
         function openGroupModal(groupType, groupValue) {
             const normalizedValue = String(groupValue || '').toLowerCase();
             const filtered = clients.filter(client => String(client[groupType] || '').toLowerCase() === normalizedValue);
+            const sortedGroup = sortGroupClients(groupType, filtered);
 
             const titlePrefix = groupType === 'position' ? 'Clientes com o cargo' : 'Clientes da empresa';
             document.getElementById('groupModalTitle').textContent = `${titlePrefix}: ${groupValue}`;
 
             let html = '';
-            if (!filtered.length) {
+            if (!sortedGroup.length) {
                 html = '<div class="empty-state" style="padding: 25px 10px;"><p>Nenhum cliente encontrado.</p></div>';
             } else {
                 html = '<div class="mini-card-grid">';
-                filtered.forEach(client => {
+                sortedGroup.forEach(client => {
                     const subText = groupType === 'position' ? (client.company || '-') : (client.position || '-');
                     html += `
-                        <div class="mini-card">
+                        <div class="mini-card" style="cursor:pointer;" onclick="closeGroupModal(); openProfileModal(${client.id})">
                             ${renderAvatar(client)}
                             <div class="mini-card-name">${escapeHtml(client.name)}</div>
                             <div class="mini-card-sub">${escapeHtml(subText)}</div>
@@ -3243,13 +3592,16 @@
                     `;
                 });
                 html += '</div>';
+                html += '<div style="display:flex; justify-content:flex-end; margin-top:12px;"><button class="btn btn-secondary btn-small" title="Exportar grupo" onclick="exportCurrentGroupToXlsx()"><i class="fas fa-file-export"></i></button></div>';
             }
 
+            currentGroupModalContext = { groupType, groupValue };
             document.getElementById('groupModalBody').innerHTML = html;
             document.getElementById('groupModal').classList.add('active');
         }
 
         function closeGroupModal() {
+            currentGroupModalContext = null;
             document.getElementById('groupModal').classList.remove('active');
         }
 
@@ -3267,6 +3619,362 @@
             el.textContent = message;
             el.classList.add('show');
             setTimeout(() => el.classList.remove('show'), 3000);
+        }
+
+        function closeSystemDialog(result = null) {
+            const modal = document.getElementById('systemDialogModal');
+            if (window._systemDialogResolve) {
+                window._systemDialogResolve(result);
+                window._systemDialogResolve = null;
+            }
+            if (modal) modal.remove();
+        }
+
+        function openSystemDialog({ title = 'Aviso', message = '', showCancel = false, inputDefault = null }) {
+            return new Promise(resolve => {
+                window._systemDialogResolve = resolve;
+                const inputHtml = inputDefault !== null
+                    ? `<input id="systemDialogInput" type="text" value="${escapeHtml(inputDefault)}" style="width:100%; margin-top:8px;">`
+                    : '';
+                const html = `
+                    <div class="modal active" id="systemDialogModal" onclick="if(event.target===this) closeSystemDialog(${inputDefault !== null ? 'null' : 'false'})">
+                        <div class="modal-content" style="max-width:520px; border:1px solid #fdba74; box-shadow:0 16px 34px rgba(249,115,22,0.22);">
+                            <h2 style="color:#9a3412; margin-bottom:8px;">${escapeHtml(title)}</h2>
+                            <p style="color:#7c2d12; line-height:1.5; white-space:pre-line;">${escapeHtml(message)}</p>
+                            ${inputHtml}
+                            <div class="modal-footer" style="justify-content:flex-end; margin-top:14px;">
+                                ${showCancel ? '<button class="btn btn-secondary" style="background:#fed7aa; color:#7c2d12;" onclick="closeSystemDialog(false)">Cancelar</button>' : ''}
+                                <button class="btn btn-primary" style="background:#fb923c;" onclick="closeSystemDialog(${inputDefault !== null ? "document.getElementById('systemDialogInput').value" : 'true'})">OK</button>
+                            </div>
+                        </div>
+                    </div>`;
+                const existing = document.getElementById('systemDialogModal');
+                if (existing) existing.remove();
+                document.body.insertAdjacentHTML('beforeend', html);
+                if (inputDefault !== null) {
+                    const input = document.getElementById('systemDialogInput');
+                    if (input) { input.focus(); input.select(); }
+                }
+            });
+        }
+
+        async function uiConfirm(message, title = 'Confirmação') {
+            return await openSystemDialog({ title, message, showCancel: true });
+        }
+
+        async function uiPrompt(message, defaultValue = '', title = 'Preenchimento') {
+            return await openSystemDialog({ title, message, showCancel: true, inputDefault: defaultValue });
+        }
+
+
+        function formatPhone(phone) {
+            if (!phone) return '';
+            const digits = String(phone).replace(/\D/g, '');
+            if (digits.length < 10) return phone;
+            const d = digits.length > 11 ? digits.slice(-11) : (digits.length === 10 ? `${digits.slice(0,2)}9${digits.slice(2)}` : digits);
+            return `${d.slice(0,2)} ${d.slice(2,7)}.${d.slice(7,11)}`;
+        }
+
+        async function loadCompanyAndPositionOptions() {
+            const [companiesRes, positionsRes] = await Promise.all([
+                fetch(`${API_BASE}/empresas`),
+                fetch(`${API_BASE}/cargos`)
+            ]);
+            const companies = companiesRes.ok ? await companiesRes.json() : [];
+            const positions = positionsRes.ok ? await positionsRes.json() : [];
+            const companySel = document.getElementById('clientCompanySelect');
+            const positionSel = document.getElementById('clientPositionSelect');
+            if (companySel) companySel.innerHTML = '<option value="">Selecione</option>' + companies.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('') + '<option value="__other__">Outros (digitar)</option>';
+            if (positionSel) positionSel.innerHTML = '<option value="">Selecione</option>' + positions.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('') + '<option value="__other__">Outros (digitar)</option>';
+        }
+
+        function toggleOtherField(type) {
+            const sel = document.getElementById(type === 'company' ? 'clientCompanySelect' : 'clientPositionSelect');
+            const other = document.getElementById(type === 'company' ? 'clientCompanyOther' : 'clientPositionOther');
+            if (!sel || !other) return;
+            const isOther = sel.value === '__other__';
+            other.style.display = isOther ? 'block' : 'none';
+            other.required = isOther;
+        }
+
+        function getClientFieldValue(type) {
+            const sel = document.getElementById(type === 'company' ? 'clientCompanySelect' : 'clientPositionSelect');
+            const other = document.getElementById(type === 'company' ? 'clientCompanyOther' : 'clientPositionOther');
+            return sel && sel.value === '__other__' ? (other?.value || '').trim() : (sel?.value || '').trim();
+        }
+
+        async function openClientModal() {
+            currentEditingClientId = null;
+            document.getElementById('clientModalTitle').textContent = 'Novo Cliente';
+            document.getElementById('clientForm').reset();
+            resetClientPhotoField();
+            await loadCompanyAndPositionOptions();
+            toggleOtherField('company');
+            toggleOtherField('position');
+            document.getElementById('clientModal').classList.add('active');
+        }
+
+        async function editClient(id) {
+            const client = clients.find(c => c.id === id);
+            if (!client) return;
+            currentEditingClientId = id;
+            document.getElementById('clientModalTitle').textContent = 'Editar Cliente';
+            await loadCompanyAndPositionOptions();
+            document.getElementById('clientForm').name.value = client.name;
+            document.getElementById('clientForm').email.value = client.email || '';
+            document.getElementById('clientForm').phone.value = formatPhone(client.phone || '');
+            document.getElementById('clientIsTarget').value = Number(client.is_target) === 1 ? '1' : '0';
+            const cSel = document.getElementById('clientCompanySelect');
+            const pSel = document.getElementById('clientPositionSelect');
+            if ([...cSel.options].some(o => o.value === client.company)) cSel.value = client.company; else { cSel.value='__other__'; document.getElementById('clientCompanyOther').value = client.company || ''; }
+            if ([...pSel.options].some(o => o.value === client.position)) pSel.value = client.position; else { pSel.value='__other__'; document.getElementById('clientPositionOther').value = client.position || ''; }
+            toggleOtherField('company');
+            toggleOtherField('position');
+            resetClientPhotoField();
+            if (client.photo_url) {
+                const preview = document.getElementById('photoPreview');
+                const removePhotoBtn = document.getElementById('removePhotoBtn');
+                preview.src = client.photo_url; preview.style.display = 'block';
+                if (removePhotoBtn) { removePhotoBtn.style.display='inline-flex'; removePhotoBtn.dataset.currentPhotoUrl = client.photo_url; }
+            }
+            document.getElementById('clientModal').classList.add('active');
+        }
+
+        async function saveClient(event) {
+            event.preventDefault();
+            const formData = new FormData(document.getElementById('clientForm'));
+            const company = getClientFieldValue('company');
+            const position = getClientFieldValue('position');
+            formData.set('company', company);
+            formData.set('position', position);
+            formData.set('phone', formatPhone(formData.get('phone')));
+            formData.set('is_target', document.getElementById('clientIsTarget').value === '1' ? '1' : '0');
+
+            try {
+                const url = currentEditingClientId ? `${API_BASE}/clientes/${currentEditingClientId}` : `${API_BASE}/clientes`;
+                const response = await fetch(url, { method: currentEditingClientId ? 'PUT' : 'POST', body: formData });
+                if (!response.ok) throw new Error('Erro ao salvar cliente');
+                showSuccess(currentEditingClientId ? 'Cliente atualizado!' : 'Cliente cadastrado!');
+                closeClientModal();
+                await Promise.all([loadClients(), loadDashboard(), loadPositions()]);
+            } catch (error) {
+                showError('Erro ao salvar cliente: ' + error.message);
+            }
+        }
+
+        async function toggleClientTarget(clientId, checked) {
+            try {
+                await fetch(`${API_BASE}/clients/${clientId}/target`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_target: !!checked })
+                });
+                await Promise.all([loadClients(), loadDashboard()]);
+            } catch (e) {
+                showError('Erro ao atualizar target');
+            }
+        }
+
+        async function openTargetAccountModal() {
+            const companies = [...new Set(clients.map(c => c.company).filter(Boolean))].sort();
+            const positions = [...new Set(clients.map(c => c.position).filter(Boolean))].sort();
+            document.getElementById('targetCompanySelect').innerHTML = '<option value="">Selecione uma empresa</option>' + companies.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+            document.getElementById('targetPositionSelect').innerHTML = '<option value="">Selecione um cargo</option>' + positions.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+            document.getElementById('targetAccountModal').classList.add('active');
+        }
+
+        function closeTargetAccountModal() {
+            document.getElementById('targetAccountModal').classList.remove('active');
+        }
+
+        async function applyTargetAccountBulk() {
+            const company = document.getElementById('targetCompanySelect').value;
+            const position = document.getElementById('targetPositionSelect').value;
+            if (!company && !position) {
+                showError('Selecione empresa ou cargo.');
+                return;
+            }
+            const response = await fetch(`${API_BASE}/clients/target-bulk`, {
+                method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ company, position })
+            });
+            if (response.ok) {
+                closeTargetAccountModal();
+                showSuccess('Target aplicado em massa!');
+                await Promise.all([loadClients(), loadDashboard()]);
+            } else showError('Erro ao aplicar target em massa');
+        }
+
+        async function saveTargetStatus() {
+            const green_days = Number(document.getElementById('targetGreen').value);
+            const yellow_days = Number(document.getElementById('targetYellow').value);
+            const response = await fetch(`${API_BASE}/config/status/target`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ green_days, yellow_days })});
+            if (response.ok) { showSuccess('Regra C por Target salva!'); await loadStatusConfig(); }
+            else showError('Erro ao salvar regra C');
+        }
+
+        const _renderSettingsOriginal = renderSettings;
+        renderSettings = function() {
+            _renderSettingsOriginal();
+            if (statusConfig?.target) {
+                const tg = document.getElementById('targetGreen');
+                const ty = document.getElementById('targetYellow');
+                if (tg) tg.value = Number(statusConfig.target.green_days || 5);
+                if (ty) ty.value = Number(statusConfig.target.yellow_days || 10);
+            }
+        }
+
+        const _getStatusOriginal = getStatus;
+        getStatus = function(lastActivityDate, position, isTarget = 0) {
+            if (Number(isTarget) === 1 && statusConfig?.target) {
+                const greenDays = Number(statusConfig.target.green_days || 5);
+                const yellowDays = Number(statusConfig.target.yellow_days || 10);
+                if (!lastActivityDate) return 'red';
+                const date = new Date(lastActivityDate);
+                const days = Math.floor((new Date() - date) / (1000 * 60 * 60 * 24));
+                if (days < greenDays) return 'green';
+                if (days < yellowDays) return 'yellow';
+                return 'red';
+            }
+            return _getStatusOriginal(lastActivityDate, position);
+        }
+
+        function shouldAskOutlookCalendar() {
+            return localStorage.getItem('skipOutlookCalendarPrompt') !== '1';
+        }
+
+        function markSkipOutlookPrompt(skip) {
+            if (skip) localStorage.setItem('skipOutlookCalendarPrompt', '1');
+        }
+
+        async function openOutlookCalendarForCommitment(item) {
+            let dueTime = item.due_time;
+            if (!dueTime) {
+                dueTime = await uiPrompt('Informe o horário do evento (HH:MM):', '09:00', 'Horário do evento');
+                if (!dueTime) return;
+                await fetch(`${API_BASE}/agenda/${item.id}/time`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ due_time: dueTime })});
+                item.due_time = dueTime;
+                await loadAgenda();
+            }
+
+            const emailFromClientsCache = clients.find(c => Number(c.id) === Number(item.client_id))?.email || '';
+            let attendee = item.client_email || emailFromClientsCache || '';
+            if (!attendee) {
+                const goSelf = await uiConfirm('Este cliente não possui e-mail cadastrado. Deseja criar o evento no Outlook usando seu próprio e-mail?');
+                if (!goSelf) return;
+                attendee = userProfile?.email || '';
+                if (!attendee) {
+                    showError('Para criar agenda direto no Outlook é necessário e-mail do cliente ou do usuário cadastrado.');
+                    return;
+                }
+            }
+
+            const [hh, mm] = dueTime.split(':');
+            const start = new Date(`${item.due_date}T${hh.padStart(2,'0')}:${(mm||'00').padStart(2,'0')}:00`);
+            const end = new Date(start.getTime() + 60 * 60 * 1000);
+            const fmt = d => d.toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+            const subject = encodeURIComponent(item.title || `Compromisso ${item.client_name || ''}`);
+            const body = encodeURIComponent(item.notes || 'Evento criado pelo Toca do Coelho');
+            const to = encodeURIComponent(attendee);
+
+            const desktopUrl = `outlook://calendar/compose?subject=${subject}&body=${body}&startdt=${fmt(start)}&enddt=${fmt(end)}&to=${to}`;
+            const webUrl = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${subject}&body=${body}&startdt=${fmt(start)}&enddt=${fmt(end)}&to=${to}`;
+
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = desktopUrl;
+            document.body.appendChild(iframe);
+            setTimeout(() => {
+                try { iframe.remove(); } catch {}
+                window.open(webUrl, '_blank');
+            }, 1200);
+        }
+
+        async function askOutlookForCommitments(items) {
+            if (!items || !items.length || !shouldAskOutlookCalendar()) return;
+            let html = `<div class="modal active" id="outlookPromptModal" onclick="if(event.target===this) closeOutlookPromptModal()"><div class="modal-content" style="max-width:540px;">`;
+            html += '<h2 style="margin-bottom:10px;">Adicionar ao calendário do Outlook?</h2>';
+            html += '<p style="color:#6b7280; margin-bottom:12px;">Deseja criar este evento no Outlook para revisão antes de salvar?</p>';
+            html += '<label style="display:flex; gap:8px; align-items:center; margin-bottom:16px;"><input type="checkbox" id="skipOutlookAsk"> Não perguntar novamente</label>';
+            html += '<div class="modal-footer"><button class="btn btn-secondary" onclick="closeOutlookPromptModal()">Não</button><button class="btn btn-primary" onclick="confirmOutlookPrompt()">Sim</button></div>';
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+            window._pendingOutlookCommitments = items;
+        }
+
+        function closeOutlookPromptModal() { const m=document.getElementById('outlookPromptModal'); if(m) m.remove(); }
+        async function confirmOutlookPrompt() {
+            const skip = document.getElementById('skipOutlookAsk')?.checked;
+            markSkipOutlookPrompt(skip);
+            closeOutlookPromptModal();
+            const items = window._pendingOutlookCommitments || [];
+            if (items.length) await openOutlookCalendarForCommitment(items[0]);
+            window._pendingOutlookCommitments = null;
+        }
+
+        async function openNewAgendaModal() {
+            const companies = [...new Set(clients.map(c => c.company).filter(Boolean))].sort();
+            const html = `
+            <div class="modal active" id="newAgendaModalInner" onclick="if(event.target===this) closeNewAgendaModal()">
+                <div class="modal-content" style="max-width:560px;">
+                    <h2 style="color:#047857; margin-bottom:12px;">Nova Agenda</h2>
+                    <div class="form-group"><label>Empresa</label><select id="newAgendaCompany" onchange="fillNewAgendaClients()"><option value="">Selecione</option>${companies.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select></div>
+                    <div class="form-group"><label>Cliente</label><select id="newAgendaClient"></select></div>
+                    <div class="form-group"><label>Data</label><input type="date" id="newAgendaDate"></div>
+                    <div class="form-group"><label>Horário</label><input type="time" id="newAgendaTime"></div>
+                    <div class="form-group"><label>Descrição</label><textarea id="newAgendaNotes" rows="3" placeholder="Descrição do compromisso"></textarea></div>
+                    <div class="modal-footer" style="justify-content:flex-start;"><button class="btn btn-primary" onclick="saveNewAgenda()">Salvar</button></div>
+                </div>
+            </div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+            fillNewAgendaClients();
+        }
+
+        function closeNewAgendaModal() { const m=document.getElementById('newAgendaModalInner'); if(m) m.remove(); }
+        function fillNewAgendaClients() {
+            const company = document.getElementById('newAgendaCompany')?.value || '';
+            const filtered = clients.filter(c => !company || c.company === company);
+            const sel = document.getElementById('newAgendaClient');
+            if (!sel) return;
+            sel.innerHTML = '<option value="">Selecione</option>' + filtered.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+        }
+
+        async function saveNewAgenda() {
+            const client_id = Number(document.getElementById('newAgendaClient').value || 0);
+            const due_date = document.getElementById('newAgendaDate').value;
+            const due_time = document.getElementById('newAgendaTime').value;
+            const notes = document.getElementById('newAgendaNotes').value;
+            if (!client_id || !due_date) { showError('Preencha cliente e data.'); return; }
+            const response = await fetch(`${API_BASE}/agenda`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ client_id, due_date, due_time, title: notes || 'Nova agenda', notes })
+            });
+            const payload = await response.json();
+            if (!response.ok) { showError(payload.error || 'Erro ao salvar agenda'); return; }
+            closeNewAgendaModal();
+            showSuccess('Agenda criada com sucesso!');
+            await loadAgenda();
+            await askOutlookForCommitments([payload.item]);
+        }
+
+        const _saveActivityOriginal = saveActivity;
+        saveActivity = async function(event) {
+            event.preventDefault();
+            const formData = new FormData(document.getElementById('activityForm'));
+            const clientSelect = document.getElementById('clientSelect');
+            if (clientSelect && clientSelect.disabled) formData.set('client_id', clientSelect.value);
+            try {
+                const url = currentEditingActivityId ? `${API_BASE}/atividades/${currentEditingActivityId}` : `${API_BASE}/atividades`;
+                const response = await fetch(url, { method: currentEditingActivityId ? 'PUT' : 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) { showError(payload.error || 'Erro ao salvar atividade'); return; }
+                showSuccess(currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!');
+                closeActivityModal();
+                await Promise.all([loadActivities(), loadDashboard(), loadAgenda()]);
+                if (!currentEditingActivityId && payload.commitments_created?.length) {
+                    await askOutlookForCommitments(payload.commitments_created);
+                }
+            } catch (error) {
+                showError('Erro ao salvar atividade: ' + error.message);
+            }
         }
 
         // Initialize
