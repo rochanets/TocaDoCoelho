@@ -292,9 +292,14 @@ def extract_time_from_text(text):
     if not text:
         return None
     lower = text.lower()
-    m = re.search(r'\b([01]?\d|2[0-3])[:h]([0-5]\d)\b', lower)
-    if m:
-        return f"{int(m.group(1)):02d}:{int(m.group(2)):02d}"
+    patterns = [
+        r'\b([01]?\d|2[0-3])\s*[:h]\s*([0-5]\d)\b',
+        r'\b([01]?\d|2[0-3])\s*h\s*([0-5]\d)\b',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, lower)
+        if m:
+            return f"{int(m.group(1)):02d}:{int(m.group(2)):02d}"
     m = re.search(r'\b([01]?\d|2[0-3])\s*h\b', lower)
     if m:
         return f"{int(m.group(1)):02d}:00"
@@ -307,33 +312,52 @@ def extract_future_commitment_dates(text):
 
     now = datetime.now()
     matches = []
+    month_map = {
+        'janeiro': 1, 'jan': 1,
+        'fevereiro': 2, 'fev': 2,
+        'marco': 3, 'março': 3, 'mar': 3,
+        'abril': 4, 'abr': 4,
+        'maio': 5, 'mai': 5,
+        'junho': 6, 'jun': 6,
+        'julho': 7, 'jul': 7,
+        'agosto': 8, 'ago': 8,
+        'setembro': 9, 'set': 9,
+        'outubro': 10, 'out': 10,
+        'novembro': 11, 'nov': 11,
+        'dezembro': 12, 'dez': 12,
+    }
 
-    # dd/mm ou dd/mm/aaaa
-    for m in re.finditer(r'\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b', text):
-        day = int(m.group(1))
-        month = int(m.group(2))
-        year = int(m.group(3)) if m.group(3) else now.year
-        if year < 100:
-            year += 2000
+    def add_date(day, month, year=None):
+        y = year or now.year
+        if y < 100:
+            y += 2000
         try:
-            dt = datetime(year, month, day)
-            if dt.date() < now.date() and not m.group(3):
-                dt = datetime(year + 1, month, day)
+            dt = datetime(y, month, day)
+            if dt.date() < now.date() and year is None:
+                dt = datetime(y + 1, month, day)
             if dt.date() >= now.date():
                 matches.append(dt.date().isoformat())
         except ValueError:
             pass
 
-    # em X dias
-    for m in re.finditer(r'\bem\s+(\d{1,3})\s+dias?\b', text.lower()):
+    for m in re.finditer(r'\b(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-](\d{2,4}))?\b', text):
+        add_date(int(m.group(1)), int(m.group(2)), int(m.group(3)) if m.group(3) else None)
+
+    lowered = text.lower()
+    for m in re.finditer(r'\b(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(\d{2,4}))?\b', lowered):
+        day = int(m.group(1))
+        month = month_map.get((m.group(2) or '').strip())
+        if month:
+            add_date(day, month, int(m.group(3)) if m.group(3) else None)
+
+    for m in re.finditer(r'\bem\s+(\d{1,3})\s+dias?\b', lowered):
         days = int(m.group(1))
         if days >= 0:
             matches.append((now.date() + timedelta(days=days)).isoformat())
 
-    lower = text.lower()
-    if 'depois de amanhã' in lower or 'depois de amanha' in lower:
+    if 'depois de amanhã' in lowered or 'depois de amanha' in lowered:
         matches.append((now.date() + timedelta(days=2)).isoformat())
-    elif 'amanh' in lower:
+    elif 'amanh' in lowered:
         matches.append((now.date() + timedelta(days=1)).isoformat())
 
     seen = set()
