@@ -1770,7 +1770,7 @@
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
-                            <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
+                            <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
@@ -1834,7 +1834,7 @@
                         html += `<tr>
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
-                            <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
+                            <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td>${client.email || '-'}</td>
@@ -3166,6 +3166,10 @@
                             <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)">
                         </div>
                         <div class="form-group">
+                            <label>Área de Negócio</label>
+                            <input id="autoMappingBusinessArea" type="text" placeholder="Área de negócio">
+                        </div>
+                        <div class="form-group">
                             <label>País</label>
                             <input id="autoMappingCountry" type="text" placeholder="País de origem">
                         </div>
@@ -3184,10 +3188,11 @@
 
         function submitAutoMappingForm() {
             const clientName = document.getElementById('autoMappingClient')?.value?.trim();
+            const businessArea = document.getElementById('autoMappingBusinessArea')?.value?.trim();
             const country = document.getElementById('autoMappingCountry')?.value?.trim();
 
-            if (!clientName || !country) {
-                showError('Preencha Cliente e País para continuar.');
+            if (!clientName || !businessArea || !country) {
+                showError('Preencha Cliente, Área de Negócio e País para continuar.');
                 return;
             }
 
@@ -3457,6 +3462,9 @@
                 }
 
                 const modalBody = `
+                    <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+                        <button class="btn btn-secondary btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
+                    </div>
                     <div class="profile-layout">
                         <div>${renderAvatar(client, 'profile-avatar-large')}</div>
                         <div>
@@ -3485,6 +3493,11 @@
 
         function closeProfileModal() {
             document.getElementById('profileModal').classList.remove('active');
+        }
+
+        async function openEditFromProfile(clientId) {
+            closeProfileModal();
+            await editClient(clientId);
         }
 
         function getCompanyImportanceRank(position) {
@@ -3558,7 +3571,7 @@
                 sortedGroup.forEach(client => {
                     const subText = groupType === 'position' ? (client.company || '-') : (client.position || '-');
                     html += `
-                        <div class="mini-card">
+                        <div class="mini-card" style="cursor:pointer;" onclick="closeGroupModal(); openProfileModal(${client.id})">
                             ${renderAvatar(client)}
                             <div class="mini-card-name">${escapeHtml(client.name)}</div>
                             <div class="mini-card-sub">${escapeHtml(subText)}</div>
@@ -3784,23 +3797,37 @@
                 await loadAgenda();
             }
 
-            let attendee = item.client_email || '';
+            const emailFromClientsCache = clients.find(c => Number(c.id) === Number(item.client_id))?.email || '';
+            let attendee = item.client_email || emailFromClientsCache || '';
             if (!attendee) {
                 const goSelf = confirm('Este cliente não possui e-mail cadastrado. Deseja criar o evento no Outlook usando seu próprio e-mail?');
                 if (!goSelf) return;
                 attendee = userProfile?.email || '';
                 if (!attendee) {
-                    showError('Para criar agenda direto no Outlook local é necessário e-mail do cliente ou do usuário cadastrado.');
+                    showError('Para criar agenda direto no Outlook é necessário e-mail do cliente ou do usuário cadastrado.');
                     return;
                 }
             }
 
-            const a = document.createElement('a');
-            a.href = `${API_BASE}/agenda/${item.id}/ics?attendee=${encodeURIComponent(attendee)}`;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            const [hh, mm] = dueTime.split(':');
+            const start = new Date(`${item.due_date}T${hh.padStart(2,'0')}:${(mm||'00').padStart(2,'0')}:00`);
+            const end = new Date(start.getTime() + 60 * 60 * 1000);
+            const fmt = d => d.toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+            const subject = encodeURIComponent(item.title || `Compromisso ${item.client_name || ''}`);
+            const body = encodeURIComponent(item.notes || 'Evento criado pelo Toca do Coelho');
+            const to = encodeURIComponent(attendee);
+
+            const desktopUrl = `outlook://calendar/compose?subject=${subject}&body=${body}&startdt=${fmt(start)}&enddt=${fmt(end)}&to=${to}`;
+            const webUrl = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${subject}&body=${body}&startdt=${fmt(start)}&enddt=${fmt(end)}&to=${to}`;
+
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = desktopUrl;
+            document.body.appendChild(iframe);
+            setTimeout(() => {
+                try { iframe.remove(); } catch {}
+                window.open(webUrl, '_blank');
+            }, 1200);
         }
 
         async function askOutlookForCommitments(items) {

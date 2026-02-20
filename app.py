@@ -373,6 +373,20 @@ def create_commitments_from_activity(cursor, client_id, activity_id, text):
     return created
 
 
+def enrich_commitments_with_client_data(cursor, commitments, client_id):
+    if not commitments:
+        return commitments
+    cursor.execute('SELECT name, company, position, email, photo_url FROM clients WHERE id = ?', (client_id,))
+    client = dict_from_row(cursor.fetchone()) or {}
+    for item in commitments:
+        item['client_name'] = client.get('name')
+        item['client_company'] = client.get('company')
+        item['client_position'] = client.get('position')
+        item['client_email'] = client.get('email')
+        item['client_photo'] = client.get('photo_url')
+    return commitments
+
+
 def _col_index(cell_ref):
     letters = ''.join(ch for ch in cell_ref if ch.isalpha()).upper()
     idx = 0
@@ -871,6 +885,7 @@ def create_atividade():
 
         # Detectar compromissos futuros no texto da atividade e registrar na agenda
         created_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
+        created_commitments = enrich_commitments_with_client_data(c, created_commitments, client_id)
         conn.commit()
         
         # Atualizar last_activity_date do cliente
@@ -917,6 +932,7 @@ def create_activity():
 
         # Detectar compromissos futuros no texto da atividade e registrar na agenda
         created_commitments = create_commitments_from_activity(c, client_id, activity_id, description)
+        created_commitments = enrich_commitments_with_client_data(c, created_commitments, client_id)
         conn.commit()
         
         # Atualizar last_activity_date do cliente
