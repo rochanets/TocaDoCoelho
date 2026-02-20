@@ -103,6 +103,7 @@ def init_db():
         email TEXT,
         phone TEXT,
         photo_url TEXT,
+        is_target INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
@@ -142,6 +143,8 @@ def init_db():
         title TEXT NOT NULL,
         notes TEXT,
         due_date TEXT NOT NULL,
+        due_time TEXT,
+        source_type TEXT DEFAULT 'activity',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
         FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
@@ -216,10 +219,21 @@ def init_db():
     columns = [col[1] for col in c.fetchall()]
     if 'last_activity_date' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN last_activity_date TIMESTAMP')
+    if 'is_target' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN is_target INTEGER DEFAULT 0')
+
+    c.execute("PRAGMA table_info(commitments)")
+    commitment_columns = [col[1] for col in c.fetchall()]
+    if 'due_time' not in commitment_columns:
+        c.execute('ALTER TABLE commitments ADD COLUMN due_time TEXT')
+    if 'source_type' not in commitment_columns:
+        c.execute('ALTER TABLE commitments ADD COLUMN source_type TEXT DEFAULT "activity"')
 
     # Configuracoes padrao da faixa de status
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_green_days', '7'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_yellow_days', '14'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('target_green_days', '5'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('target_yellow_days', '10'))
     
     conn.commit()
     
@@ -252,6 +266,32 @@ def dict_from_row(row):
     return dict(row)
 
 
+def normalize_phone(phone):
+    if not phone:
+        return None
+    digits = re.sub(r'\D', '', str(phone))
+    if not digits:
+        return None
+    if len(digits) > 11:
+        digits = digits[-11:]
+    if len(digits) < 10:
+        return digits
+    if len(digits) == 10:
+        digits = digits[:2] + '9' + digits[2:]
+    return f"{digits[:2]} {digits[2:7]}.{digits[7:11]}"
+
+
+def extract_time_from_text(text):
+    if not text:
+        return None
+    lower = text.lower()
+    m = re.search(r'\b([01]?\d|2[0-3])[:h]([0-5]\d)\b', lower)
+    if m:
+        return f"{int(m.group(1)):02d}:{int(m.group(2)):02d}"
+    m = re.search(r'\b([01]?\d|2[0-3])\s*h\b', lower)
+    if m:
+        return f"{int(m.group(1)):02d}:00"
+    return None
 
 
 def extract_future_commitment_dates(text):
@@ -301,21 +341,29 @@ def extract_future_commitment_dates(text):
 def create_commitments_from_activity(cursor, client_id, activity_id, text):
     dates = extract_future_commitment_dates(text)
     if not dates:
-        return 0
+        return []
 
     safe_title = (text or '').strip().replace('\n', ' ')
     if len(safe_title) > 120:
         safe_title = safe_title[:117] + '...'
 
-    count = 0
+    parsed_time = extract_time_from_text(text)
+    created = []
     for due_date in dates:
         cursor.execute(
-            '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date)
-               VALUES (?, ?, ?, ?, ?)''',
-            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date)
+            '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity')
         )
-        count += 1
-    return count
+        created.append({
+            'id': cursor.lastrowid,
+            'client_id': client_id,
+            'due_date': due_date,
+            'due_time': parsed_time,
+            'title': safe_title or 'Retorno com cliente',
+            'notes': text
+        })
+    return created
 
 
 def _col_index(cell_ref):
@@ -419,12 +467,26 @@ def get_positions():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/empresas', methods=['GET'])
+def get_companies():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != "" ORDER BY company')
+        companies = [row['company'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(companies)
+    except Exception as e:
+        print(f'[ERROR] GET /api/empresas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/config/status', methods=['GET'])
 def get_status_config():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days")')
+        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days", "target_green_days", "target_yellow_days")')
         settings = {row['key']: row['value'] for row in c.fetchall()}
         c.execute('SELECT id, position, green_days, yellow_days FROM status_rules ORDER BY position')
         rules = [dict_from_row(row) for row in c.fetchall()]
@@ -435,7 +497,11 @@ def get_status_config():
                 'green_days': int(settings.get('status_green_days', '7')),
                 'yellow_days': int(settings.get('status_yellow_days', '14'))
             },
-            'rules': rules
+            'rules': rules,
+            'target': {
+                'green_days': int(settings.get('target_green_days', '5')),
+                'yellow_days': int(settings.get('target_yellow_days', '10'))
+            }
         })
     except Exception as e:
         print(f'[ERROR] GET /api/config/status: {e}')
@@ -463,6 +529,29 @@ def update_universal_status_config():
         print(f'[ERROR] PUT /api/config/status/universal: {e}')
         return jsonify({'error': str(e)}), 500
 
+
+
+
+@app.route('/api/config/status/target', methods=['PUT'])
+def update_target_status_config():
+    try:
+        data = request.get_json() or {}
+        green_days = int(data.get('green_days', 5))
+        yellow_days = int(data.get('yellow_days', 10))
+
+        if green_days < 0 or yellow_days <= green_days:
+            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(green_days), 'target_green_days'))
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(yellow_days), 'target_yellow_days'))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Configuração Target atualizada'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/config/status/target: {e}')
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/status/rules', methods=['POST'])
 def create_or_update_status_rule():
@@ -611,7 +700,8 @@ def create_client():
         company = request.form.get('company', '').strip()
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
-        phone = request.form.get('phone', '').strip()
+        phone = normalize_phone(request.form.get('phone', '').strip())
+        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -627,9 +717,9 @@ def create_client():
         
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, email, phone, photo_url)
-                     VALUES (?, ?, ?, ?, ?, ?)''',
-                  (name, company, position, email or None, phone or None, photo_url))
+        c.execute('''INSERT INTO clients (name, company, position, email, phone, photo_url, is_target)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                  (name, company, position, email or None, phone or None, photo_url, is_target))
         conn.commit()
         client_id = c.lastrowid
         conn.close()
@@ -655,8 +745,9 @@ def update_client(client_id):
         company = request.form.get('company', '').strip()
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
-        phone = request.form.get('phone', '').strip()
+        phone = normalize_phone(request.form.get('phone', '').strip())
         remove_photo = request.form.get('remove_photo', '0') == '1'
+        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -680,9 +771,9 @@ def update_client(client_id):
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
         
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, email = ?, phone = ?, photo_url = ?, updated_at = CURRENT_TIMESTAMP
+        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (name, company, position, email or None, phone or None, photo_url, client_id))
+                  (name, company, position, email or None, phone or None, photo_url, is_target, client_id))
         conn.commit()
         conn.close()
         
@@ -768,7 +859,7 @@ def create_atividade():
         activity_id = c.lastrowid
 
         # Detectar compromissos futuros no texto da atividade e registrar na agenda
-        create_commitments_from_activity(c, client_id, activity_id, information)
+        created_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
         conn.commit()
         
         # Atualizar last_activity_date do cliente
@@ -778,7 +869,7 @@ def create_atividade():
         conn.close()
         
         print(f'[DEBUG] Atividade criada com ID: {activity_id}')
-        return jsonify({'id': activity_id, 'message': 'Atividade registrada'}), 201
+        return jsonify({'id': activity_id, 'message': 'Atividade registrada', 'commitments_created': created_commitments}), 201
     except Exception as e:
         print(f'[ERROR] POST /api/atividades: {e}')
         import traceback
@@ -814,7 +905,7 @@ def create_activity():
         activity_id = c.lastrowid
 
         # Detectar compromissos futuros no texto da atividade e registrar na agenda
-        create_commitments_from_activity(c, client_id, activity_id, description)
+        created_commitments = create_commitments_from_activity(c, client_id, activity_id, description)
         conn.commit()
         
         # Atualizar last_activity_date do cliente
@@ -824,7 +915,7 @@ def create_activity():
         conn.close()
         
         print(f'[DEBUG] Atividade criada com ID: {activity_id}')
-        return jsonify({'id': activity_id, 'message': 'Atividade registrada'}), 201
+        return jsonify({'id': activity_id, 'message': 'Atividade registrada', 'commitments_created': created_commitments}), 201
     except Exception as e:
         print(f'[ERROR] POST /api/activities: {e}')
         import traceback
@@ -910,6 +1001,63 @@ def get_agenda():
         return jsonify({'error': str(e)}), 500
 
 
+
+
+@app.route('/api/agenda', methods=['POST'])
+def create_agenda_item():
+    try:
+        data = request.get_json() or {}
+        client_id = data.get('client_id')
+        due_date = (data.get('due_date') or '').strip()
+        due_time = (data.get('due_time') or '').strip() or None
+        title = (data.get('title') or '').strip()
+        notes = (data.get('notes') or '').strip()
+
+        if not client_id or not due_date:
+            return jsonify({'error': 'Cliente e data são obrigatórios'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Cliente não encontrado'}), 404
+
+        c.execute('''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type)
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                  (client_id, title or 'Agenda manual', notes or title or 'Agenda manual', due_date, due_time, 'manual'))
+        commitment_id = c.lastrowid
+        conn.commit()
+
+        c.execute('''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position
+                     FROM commitments cm JOIN clients cl ON cm.client_id = cl.id WHERE cm.id = ?''', (commitment_id,))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify({'message': 'Compromisso criado', 'item': item}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/agenda: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agenda/<int:commitment_id>/time', methods=['PUT'])
+def update_agenda_time(commitment_id):
+    try:
+        data = request.get_json() or {}
+        due_time = (data.get('due_time') or '').strip()
+        if not due_time:
+            return jsonify({'error': 'Horário obrigatório'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE commitments SET due_time = ? WHERE id = ?', (due_time, commitment_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Horário atualizado'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/agenda/{commitment_id}/time: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/agenda/semana-atual-count', methods=['GET'])
 def get_week_commitments_count():
     try:
@@ -933,6 +1081,55 @@ def get_week_commitments_count():
     except Exception as e:
         print(f'[ERROR] GET /api/agenda/semana-atual-count: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/clients/<int:client_id>/target', methods=['PUT'])
+def update_client_target(client_id):
+    try:
+        data = request.get_json() or {}
+        is_target = 1 if data.get('is_target') else 0
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE clients SET is_target = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (is_target, client_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Target atualizado'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/clients/{client_id}/target: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/clients/target-bulk', methods=['POST'])
+def update_target_bulk():
+    try:
+        data = request.get_json() or {}
+        company = (data.get('company') or '').strip()
+        position = (data.get('position') or '').strip()
+
+        if not company and not position:
+            return jsonify({'error': 'Informe empresa ou cargo'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        where = []
+        params = []
+        if company:
+            where.append('company = ?')
+            params.append(company)
+        if position:
+            where.append('position = ?')
+            params.append(position)
+
+        c.execute(f"UPDATE clients SET is_target = 1, updated_at = CURRENT_TIMESTAMP WHERE {' AND '.join(where)}", params)
+        affected = c.rowcount
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Target em massa aplicado', 'affected': affected})
+    except Exception as e:
+        print(f'[ERROR] POST /api/clients/target-bulk: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 # Rotas de exportacao
 @app.route('/api/export/clientes', methods=['GET'])
@@ -1578,6 +1775,16 @@ def get_today_suggestions():
                     'target_data': json.dumps({'client_id': client_id, 'missing': missing_fields})
                 })
         
+        # Remover sugestões duplicadas (mesmo tipo + mesmo alvo)
+        unique_suggestions = []
+        seen_keys = set()
+        for sug in suggestions:
+            dedupe_key = (sug['type'], sug['target_data'])
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            unique_suggestions.append(sug)
+
         # Selecionar até 5 sugestões com diversidade
         import random
         
@@ -1589,7 +1796,7 @@ def get_today_suggestions():
             'incomplete_profile': []
         }
         
-        for sug in suggestions:
+        for sug in unique_suggestions:
             by_type[sug['type']].append(sug)
         
         # Embaralhar cada grupo
@@ -1643,7 +1850,58 @@ def complete_suggestion(suggestion_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        
+
+        c.execute('SELECT * FROM daily_suggestions WHERE id = ?', (suggestion_id,))
+        suggestion = c.fetchone()
+        if not suggestion:
+            conn.close()
+            return jsonify({'error': 'Sugestão não encontrada'}), 404
+
+        suggestion_dict = dict_from_row(suggestion)
+        target_data = json.loads(suggestion_dict['target_data']) if suggestion_dict.get('target_data') else {}
+
+        is_completed = False
+
+        if suggestion_dict['suggestion_type'] == 'contact_overdue':
+            client_id = target_data.get('client_id')
+            if client_id:
+                c.execute('SELECT id FROM activities WHERE client_id = ? AND date(created_at) = date("now", "localtime")', (client_id,))
+                is_completed = c.fetchone() is not None
+
+        elif suggestion_dict['suggestion_type'] == 'missing_position':
+            company = target_data.get('company')
+            position = target_data.get('position')
+            if company and position:
+                c.execute('''
+                    SELECT id FROM clients
+                    WHERE company = ? AND position = ?
+                ''', (company, position))
+                is_completed = c.fetchone() is not None
+
+        elif suggestion_dict['suggestion_type'] == 'map_environment':
+            card_id = target_data.get('card_id')
+            client_id = target_data.get('client_id')
+            if card_id and client_id:
+                c.execute('''
+                    SELECT response FROM environment_responses
+                    WHERE card_id = ? AND client_id = ?
+                ''', (card_id, client_id))
+                response = c.fetchone()
+                is_completed = bool(response and response[0] and response[0].strip())
+
+        elif suggestion_dict['suggestion_type'] == 'incomplete_profile':
+            client_id = target_data.get('client_id')
+            if client_id:
+                c.execute('SELECT email, phone, photo_url FROM clients WHERE id = ?', (client_id,))
+                client = c.fetchone()
+                if client:
+                    email, phone, photo_url = client
+                    is_completed = bool(email and phone and photo_url)
+
+        if not is_completed:
+            conn.close()
+            return jsonify({'error': 'A sugestão ainda não foi concluída'}), 400
+
         c.execute('''
             UPDATE daily_suggestions 
             SET completed = 1, completed_at = CURRENT_TIMESTAMP 
