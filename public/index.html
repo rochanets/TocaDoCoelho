@@ -73,8 +73,17 @@
         }
 
         .th-last-contact {
-            font-size: 11px;
+            font-size: 12px;
             white-space: nowrap;
+        }
+
+        .last-contact-text {
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .clients-email-col {
+            font-size: 12px;
         }
 
         .config-shell {
@@ -1314,7 +1323,11 @@
                     <input type="text" id="clientPositionOther" placeholder="Digite o cargo" style="display:none; margin-top:8px;">
                 </div>
                 <div class="form-group">
-                    <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="clientIsTarget" name="is_target" value="1"> <span>Cliente TARGET</span></label>
+                    <label>Cliente TARGET</label>
+                    <select id="clientIsTarget" name="is_target">
+                        <option value="0">Não</option>
+                        <option value="1">Sim</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>Email</label>
@@ -1602,7 +1615,7 @@
         }
 
         async function deleteUserProfile() {
-            if (!confirm('Tem certeza que deseja excluir o usuário cadastrado? Esta ação não pode ser desfeita.')) {
+            if (!await uiConfirm('Tem certeza que deseja excluir o usuário cadastrado? Esta ação não pode ser desfeita.')) {
                 return;
             }
             
@@ -1751,7 +1764,7 @@
                     html += '<div class="table-container"><table><thead><tr>';
                     html += '<th style="width:78px; text-align:center;">TARGET</th>';
                     html += '<th></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; width: 200px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
@@ -1769,12 +1782,12 @@
                         html += `<tr>
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
-                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
-                            <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
+                            <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
                             <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
                             <td style="text-align: center;">
                                 <div class="action-buttons">
@@ -1824,7 +1837,7 @@
                     html += '<th onclick="toggleClientsSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'company\')" style="cursor: pointer;">Empresa <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleClientsSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th class="clients-email-col" onclick="toggleClientsSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th>Ações</th>';
                     html += '</tr></thead><tbody>';
@@ -1835,9 +1848,9 @@
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
-                            <td>${client.email || '-'}</td>
+                            <td class="clients-email-col">${client.email || '-'}</td>
                             <td class="small-col-text">${formatPhone(client.phone) || '-'}</td>
                             <td><div class="actions">
                                 <button class="btn btn-secondary btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
@@ -2341,7 +2354,7 @@
 
         // Delete Client
         async function deleteClient(id) {
-            if (confirm('Tem certeza que deseja deletar este cliente?')) {
+            if (await uiConfirm('Tem certeza que deseja deletar este cliente?')) {
                 try {
                     const response = await fetch(`${API_BASE}/clientes/${id}`, {
                         method: 'DELETE'
@@ -2420,7 +2433,7 @@
 
         // Delete Activity
         async function deleteActivity(id) {
-            if (confirm('Tem certeza que deseja deletar esta atividade?')) {
+            if (await uiConfirm('Tem certeza que deseja deletar esta atividade?')) {
                 try {
                     const response = await fetch(`${API_BASE}/atividades/${id}`, {
                         method: 'DELETE'
@@ -2515,7 +2528,7 @@
                 return;
             }
             
-            if (!confirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?')) {
+            if (!await uiConfirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?', 'Atenção')) {
                 event.target.value = '';
                 return;
             }
@@ -2881,7 +2894,7 @@
             const card = mappingCards.find(c => c.id === cardId);
             if (!card) return;
             
-            if (!confirm(`Tem certeza que deseja deletar o card "${card.title}"?\n\nAtenção: Todas as respostas associadas a este card serão perdidas!`)) {
+            if (!await uiConfirm(`Tem certeza que deseja deletar o card "${card.title}"?\n\nAtenção: Todas as respostas associadas a este card serão perdidas!`)) {
                 return;
             }
             
@@ -2906,10 +2919,10 @@
             const card = mappingCards.find(c => c.id === cardId);
             if (!card) return;
 
-            const newTitle = prompt('Título do Card:', card.title);
+            const newTitle = await uiPrompt('Título do Card:', card.title, 'Editar card');
             if (newTitle === null) return;
 
-            const newDescription = prompt('Descrição do Card:', card.description || '');
+            const newDescription = await uiPrompt('Descrição do Card:', card.description || '', 'Editar card');
             if (newDescription === null) return;
 
             try {
@@ -3035,7 +3048,7 @@
 
 
         async function deleteAgendaItem(commitmentId) {
-            if (!confirm('Deseja realmente excluir este evento da agenda?')) return;
+            if (!await uiConfirm('Deseja realmente excluir este evento da agenda?')) return;
             const response = await fetch(`${API_BASE}/agenda/${commitmentId}`, { method: 'DELETE' });
             if (!response.ok) {
                 showError('Erro ao excluir evento da agenda');
@@ -3160,7 +3173,7 @@
                 <div class="modal active" id="autoMappingModal" onclick="if(event.target === this) closeAutoMappingModal()">
                     <div class="modal-content" style="max-width: 620px;">
                         <h2 style="color:#0f766e; margin-bottom: 10px;"><span class="ai-star-icon">✦</span>AutoMapping</h2>
-                        <p style="color:#4b5563; margin-bottom: 16px; line-height: 1.5;">Bem vindo ao auto mapping de clientes. Aqui nós faremos o possível para trazer informações do ambiente dos seus clientes. Por favor, digite abaixo o nome do cliente (empresa) e o país de origem.</p>
+                        <p style="color:#4b5563; margin-bottom: 16px; line-height: 1.5;">Bem vindo ao AutoMapping. Aqui nós faremos o possível para trazer informações do ambiente dos seus clientes. Por favor, digite abaixo o nome do cliente (empresa), a área de negócio e o país de origem do cliente.</p>
                         <div class="form-group">
                             <label>Cliente</label>
                             <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)">
@@ -3608,6 +3621,51 @@
             setTimeout(() => el.classList.remove('show'), 3000);
         }
 
+        function closeSystemDialog(result = null) {
+            const modal = document.getElementById('systemDialogModal');
+            if (window._systemDialogResolve) {
+                window._systemDialogResolve(result);
+                window._systemDialogResolve = null;
+            }
+            if (modal) modal.remove();
+        }
+
+        function openSystemDialog({ title = 'Aviso', message = '', showCancel = false, inputDefault = null }) {
+            return new Promise(resolve => {
+                window._systemDialogResolve = resolve;
+                const inputHtml = inputDefault !== null
+                    ? `<input id="systemDialogInput" type="text" value="${escapeHtml(inputDefault)}" style="width:100%; margin-top:8px;">`
+                    : '';
+                const html = `
+                    <div class="modal active" id="systemDialogModal" onclick="if(event.target===this) closeSystemDialog(${inputDefault !== null ? 'null' : 'false'})">
+                        <div class="modal-content" style="max-width:520px; border:1px solid #fdba74; box-shadow:0 16px 34px rgba(249,115,22,0.22);">
+                            <h2 style="color:#9a3412; margin-bottom:8px;">${escapeHtml(title)}</h2>
+                            <p style="color:#7c2d12; line-height:1.5; white-space:pre-line;">${escapeHtml(message)}</p>
+                            ${inputHtml}
+                            <div class="modal-footer" style="justify-content:flex-end; margin-top:14px;">
+                                ${showCancel ? '<button class="btn btn-secondary" style="background:#fed7aa; color:#7c2d12;" onclick="closeSystemDialog(false)">Cancelar</button>' : ''}
+                                <button class="btn btn-primary" style="background:#fb923c;" onclick="closeSystemDialog(${inputDefault !== null ? "document.getElementById('systemDialogInput').value" : 'true'})">OK</button>
+                            </div>
+                        </div>
+                    </div>`;
+                const existing = document.getElementById('systemDialogModal');
+                if (existing) existing.remove();
+                document.body.insertAdjacentHTML('beforeend', html);
+                if (inputDefault !== null) {
+                    const input = document.getElementById('systemDialogInput');
+                    if (input) { input.focus(); input.select(); }
+                }
+            });
+        }
+
+        async function uiConfirm(message, title = 'Confirmação') {
+            return await openSystemDialog({ title, message, showCancel: true });
+        }
+
+        async function uiPrompt(message, defaultValue = '', title = 'Preenchimento') {
+            return await openSystemDialog({ title, message, showCancel: true, inputDefault: defaultValue });
+        }
+
 
         function formatPhone(phone) {
             if (!phone) return '';
@@ -3665,7 +3723,7 @@
             document.getElementById('clientForm').name.value = client.name;
             document.getElementById('clientForm').email.value = client.email || '';
             document.getElementById('clientForm').phone.value = formatPhone(client.phone || '');
-            document.getElementById('clientIsTarget').checked = Number(client.is_target) === 1;
+            document.getElementById('clientIsTarget').value = Number(client.is_target) === 1 ? '1' : '0';
             const cSel = document.getElementById('clientCompanySelect');
             const pSel = document.getElementById('clientPositionSelect');
             if ([...cSel.options].some(o => o.value === client.company)) cSel.value = client.company; else { cSel.value='__other__'; document.getElementById('clientCompanyOther').value = client.company || ''; }
@@ -3690,7 +3748,7 @@
             formData.set('company', company);
             formData.set('position', position);
             formData.set('phone', formatPhone(formData.get('phone')));
-            formData.set('is_target', document.getElementById('clientIsTarget').checked ? '1' : '0');
+            formData.set('is_target', document.getElementById('clientIsTarget').value === '1' ? '1' : '0');
 
             try {
                 const url = currentEditingClientId ? `${API_BASE}/clientes/${currentEditingClientId}` : `${API_BASE}/clientes`;
@@ -3790,7 +3848,7 @@
         async function openOutlookCalendarForCommitment(item) {
             let dueTime = item.due_time;
             if (!dueTime) {
-                dueTime = prompt('Informe o horário do evento (HH:MM):', '09:00');
+                dueTime = await uiPrompt('Informe o horário do evento (HH:MM):', '09:00', 'Horário do evento');
                 if (!dueTime) return;
                 await fetch(`${API_BASE}/agenda/${item.id}/time`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ due_time: dueTime })});
                 item.due_time = dueTime;
@@ -3800,7 +3858,7 @@
             const emailFromClientsCache = clients.find(c => Number(c.id) === Number(item.client_id))?.email || '';
             let attendee = item.client_email || emailFromClientsCache || '';
             if (!attendee) {
-                const goSelf = confirm('Este cliente não possui e-mail cadastrado. Deseja criar o evento no Outlook usando seu próprio e-mail?');
+                const goSelf = await uiConfirm('Este cliente não possui e-mail cadastrado. Deseja criar o evento no Outlook usando seu próprio e-mail?');
                 if (!goSelf) return;
                 attendee = userProfile?.email || '';
                 if (!attendee) {
