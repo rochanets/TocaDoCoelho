@@ -9,12 +9,17 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --sidebar-width: clamp(210px, 18vw, 256px);
+        }
         
         body { 
             font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
             background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 50%, #f0fdf4 100%);
             color: #1f2937; 
             min-height: 100vh;
+            overflow-x: hidden;
         }
 
         /* Sidebar */
@@ -22,7 +27,7 @@
             position: fixed;
             left: 0;
             top: 0;
-            width: 256px;
+            width: var(--sidebar-width);
             height: 100vh;
             background: rgba(255, 255, 255, 0.8);
             backdrop-filter: blur(12px);
@@ -116,6 +121,7 @@
             align-items: center;
             gap: 8px;
             font-weight: 600;
+            white-space: nowrap;
         }
 
         .status-label i {
@@ -193,9 +199,11 @@
 
         /* Main Content */
         .main-content {
-            margin-left: 256px;
+            margin-left: var(--sidebar-width);
             min-height: 100vh;
+            width: calc(100vw - var(--sidebar-width));
             padding: 32px;
+            overflow-x: auto;
         }
 
         .page-header {
@@ -257,6 +265,18 @@
         .btn-danger:hover {
             background: #dc2626;
         }
+
+        .btn-edit-accent {
+            background: #fed7aa;
+            color: #9a3412;
+            border: 1px solid #fdba74;
+        }
+
+        .btn-edit-accent:hover {
+            background: #fdba74;
+            color: #7c2d12;
+        }
+
 
         .btn-small {
             padding: 6px 12px;
@@ -693,6 +713,7 @@
             color: #059669;
             margin-bottom: 6px;
             font-weight: 600;
+            white-space: nowrap;
         }
 
         .mini-card-grid {
@@ -908,6 +929,7 @@
             margin-bottom: 12px;
             color: #065f46;
             font-weight: 600;
+            white-space: nowrap;
         }
 
         .calendar-wrap {
@@ -1000,6 +1022,7 @@
             border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
+            white-space: nowrap;
         }
 
         .status-green {
@@ -1031,6 +1054,7 @@
             }
             .main-content {
                 margin-left: 200px;
+                width: calc(100vw - 200px);
                 padding: 16px;
             }
             .page-header h1 {
@@ -1047,6 +1071,7 @@
             }
             .main-content {
                 margin-left: 0;
+                width: 100vw;
                 padding: 16px;
             }
             .sidebar-nav {
@@ -1761,17 +1786,17 @@
 
                     html += `<div class="summary-banner">Você tem <strong>${weekCount}</strong> compromisso(s) nesta semana.</div>`;
                     html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
-                    html += '<div class="table-container"><table><thead><tr>';
+                    html += '<div class="table-container"><table class="dashboard-table"><thead><tr>';
                     html += '<th style="width:78px; text-align:center;">TARGET</th>';
                     html += '<th></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; width: 200px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; width: 150px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; width: 170px;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th style="width: 150px; text-align: center;">Ação</th>';
+                    html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; width: 130px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; width: 170px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; width: 150px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; width: 120px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; width: 120px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th style="width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
@@ -1782,13 +1807,13 @@
                         html += `<tr>
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
-                            <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td style="min-width:150px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
-                            <td class="small-col-text">${client.email || '-'}</td>
+                            <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
+                            <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
                             <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
-                            <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
+                            <td style="white-space: nowrap;"><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
                             <td style="text-align: center;">
                                 <div class="action-buttons">
                                     <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
@@ -1853,7 +1878,7 @@
                             <td class="clients-email-col">${client.email || '-'}</td>
                             <td class="small-col-text">${formatPhone(client.phone) || '-'}</td>
                             <td><div class="actions">
-                                <button class="btn btn-secondary btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
+                                <button class="btn btn-edit-accent btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
                                 <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id})"><i class="fas fa-trash"></i> Deletar</button>
                             </div></td>
                         </tr>`;
@@ -3476,7 +3501,7 @@
 
                 const modalBody = `
                     <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
-                        <button class="btn btn-secondary btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
+                        <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
                     <div class="profile-layout">
                         <div>${renderAvatar(client, 'profile-avatar-large')}</div>
@@ -3868,15 +3893,17 @@
             }
 
             const [hh, mm] = dueTime.split(':');
-            const start = new Date(`${item.due_date}T${hh.padStart(2,'0')}:${(mm||'00').padStart(2,'0')}:00`);
+            const startLocal = `${item.due_date}T${hh.padStart(2,'0')}:${(mm||'00').padStart(2,'0')}:00`;
+            const start = new Date(startLocal);
             const end = new Date(start.getTime() + 60 * 60 * 1000);
-            const fmt = d => d.toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+            const pad = n => String(n).padStart(2,'0');
+            const fmtLocal = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
             const subject = encodeURIComponent(item.title || `Compromisso ${item.client_name || ''}`);
             const body = encodeURIComponent(item.notes || 'Evento criado pelo Toca do Coelho');
             const to = encodeURIComponent(attendee);
 
-            const desktopUrl = `outlook://calendar/compose?subject=${subject}&body=${body}&startdt=${fmt(start)}&enddt=${fmt(end)}&to=${to}`;
-            const webUrl = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${subject}&body=${body}&startdt=${fmt(start)}&enddt=${fmt(end)}&to=${to}`;
+            const desktopUrl = `outlook://calendar/compose?subject=${subject}&body=${body}&startdt=${encodeURIComponent(fmtLocal(start))}&enddt=${encodeURIComponent(fmtLocal(end))}&to=${to}`;
+            const webUrl = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${subject}&body=${body}&startdt=${encodeURIComponent(fmtLocal(start))}&enddt=${encodeURIComponent(fmtLocal(end))}&to=${to}`;
 
             const iframe = document.createElement('iframe');
             iframe.style.display = 'none';
