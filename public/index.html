@@ -19,7 +19,7 @@
             background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 50%, #f0fdf4 100%);
             color: #1f2937; 
             min-height: 100vh;
-            overflow-x: hidden;
+            overflow-x: auto;
         }
 
         /* Sidebar */
@@ -202,12 +202,52 @@
             margin-left: var(--sidebar-width);
             min-height: 100vh;
             width: calc(100vw - var(--sidebar-width));
+            min-width: 0;
             padding: 32px;
             overflow-x: auto;
+            box-sizing: border-box;
+        }
+
+        /* Dashboard específico: wrapper para scroll lateral quando necessário */
+        .dashboard-scroll-wrapper {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* Barra de rolagem discreta para o wrapper do dashboard */
+        .dashboard-scroll-wrapper::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .dashboard-scroll-wrapper::-webkit-scrollbar-track {
+            background: rgba(52, 211, 153, 0.05);
+            border-radius: 3px;
+        }
+
+        .dashboard-scroll-wrapper::-webkit-scrollbar-thumb {
+            background: rgba(52, 211, 153, 0.35);
+            border-radius: 3px;
+        }
+
+        .dashboard-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+            background: rgba(52, 211, 153, 0.6);
+        }
+
+        /* Tabela do dashboard com largura mínima para garantir leitura em 90% de zoom */
+        .dashboard-table {
+            min-width: 900px;
+            width: 100%;
         }
 
         .page-header {
             margin-bottom: 32px;
+        }
+
+        /* Page header do dashboard com flex-wrap para zoom alto */
+        #dashboard .page-header {
+            flex-wrap: wrap;
+            gap: 12px;
         }
 
         .page-header h1 {
@@ -512,7 +552,8 @@
             border-radius: 16px;
             border: 1px solid rgba(52, 211, 153, 0.2);
             box-shadow: 0 4px 12px rgba(52, 211, 153, 0.08);
-            overflow: hidden;
+            overflow-x: auto;
+            overflow-y: visible;
         }
 
         table {
@@ -761,8 +802,8 @@
         }
 
         .filters-bar {
-            display: grid;
-            grid-template-columns: 1fr auto;
+            display: flex;
+            flex-wrap: wrap;
             gap: 12px;
             margin-bottom: 14px;
             padding: 12px;
@@ -770,13 +811,20 @@
             border: 1px solid rgba(52, 211, 153, 0.22);
             background: rgba(255, 255, 255, 0.78);
             box-shadow: 0 4px 10px rgba(16, 185, 129, 0.08);
-            align-items: end;
+            align-items: flex-end;
         }
 
         .filters-row {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            display: flex;
+            flex-wrap: wrap;
             gap: 8px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .filters-row .filter-group {
+            flex: 1;
+            min-width: 140px;
         }
 
         /* Mapeamento de Ambiente */
@@ -915,6 +963,8 @@
             padding: 0 14px;
             cursor: pointer;
             white-space: nowrap;
+            align-self: flex-end;
+            flex-shrink: 0;
         }
 
         .filter-clear-btn:hover {
@@ -929,7 +979,9 @@
             margin-bottom: 12px;
             color: #065f46;
             font-weight: 600;
-            white-space: nowrap;
+            white-space: normal;
+            flex-shrink: 1;
+            min-width: 0;
         }
 
         .calendar-wrap {
@@ -1046,6 +1098,9 @@
                 grid-template-columns: 1fr;
                 max-width: 100%;
             }
+            .filters-row .filter-group {
+                min-width: 120px;
+            }
         }
 
         @media (max-width: 768px) {
@@ -1059,6 +1114,13 @@
             }
             .page-header h1 {
                 font-size: 24px;
+            }
+            .dashboard-scroll-wrapper {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .dashboard-table {
+                min-width: 800px;
             }
         }
 
@@ -1143,7 +1205,7 @@
 
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
-            <div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
+            <div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
                 <div>
                     <h1>Dashboard</h1>
                     <p>Visão geral dos seus contatos e status de relacionamento</p>
@@ -1786,17 +1848,17 @@
 
                     html += `<div class="summary-banner">Você tem <strong>${weekCount}</strong> compromisso(s) nesta semana.</div>`;
                     html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
-                    html += '<div class="table-container"><table class="dashboard-table"><thead><tr>';
-                    html += '<th style="width:78px; text-align:center;">TARGET</th>';
-                    html += '<th></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; width: 150px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; width: 130px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; width: 170px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; width: 150px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; width: 120px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; width: 120px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th style="width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
+                    html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
+                    html += '<th style="min-width:78px; text-align:center;">TARGET</th>';
+                    html += '<th style="min-width:50px;"></th>';
+                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 150px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 130px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; min-width: 100px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
@@ -1823,7 +1885,7 @@
                             </td>
                         </tr>`;
                     });
-                    html += '</tbody></table></div>';
+                    html += '</tbody></table></div></div>';
                 }
 
                 document.getElementById('dashboardContent').innerHTML = html;
