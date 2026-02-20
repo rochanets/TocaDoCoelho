@@ -73,7 +73,7 @@
         }
 
         .th-last-contact {
-            font-size: 13px;
+            font-size: 11px;
             white-space: nowrap;
         }
 
@@ -745,8 +745,8 @@
 
         .filters-row {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
         }
 
         /* Mapeamento de Ambiente */
@@ -860,7 +860,7 @@
 
         .filter-select {
             width: 100%;
-            padding: 10px 12px;
+            padding: 8px 10px;
             border: 2px solid rgba(52, 211, 153, 0.25);
             border-radius: 10px;
             background: white;
@@ -1174,7 +1174,6 @@
         <div id="agenda" class="tab-content">
             <div class="page-header">
                 <h1>Agenda</h1>
-                <p>Compromissos e retornos futuros detectados nas atividades</p>
                 <button class="btn btn-primary" onclick="openNewAgendaModal()"><i class="fas fa-plus"></i> Nova Agenda</button>
             </div>
             <div id="agendaContent"></div>
@@ -1243,6 +1242,8 @@
                         <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
                         <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
                         <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
+                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
+                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
                         <div class="form-group">
                             <label>Foto *</label>
                             <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
@@ -1313,7 +1314,7 @@
                     <input type="text" id="clientPositionOther" placeholder="Digite o cargo" style="display:none; margin-top:8px;">
                 </div>
                 <div class="form-group">
-                    <label><input type="checkbox" id="clientIsTarget" name="is_target" value="1"> Cliente TARGET</label>
+                    <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="clientIsTarget" name="is_target" value="1"> <span>Cliente TARGET</span></label>
                 </div>
                 <div class="form-group">
                     <label>Email</label>
@@ -1506,6 +1507,8 @@
             form.full_name.value = userProfile?.full_name || '';
             form.nickname.value = userProfile?.nickname || '';
             form.position.value = userProfile?.position || '';
+            form.email.value = userProfile?.email || '';
+            form.phone.value = formatPhone(userProfile?.phone || '');
             const preview = document.getElementById('profilePhotoPreview');
             if (userProfile?.photo_url) {
                 preview.src = userProfile.photo_url;
@@ -1751,7 +1754,7 @@
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; width: 170px;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th style="width: 150px; text-align: center;">Ação</th>';
@@ -1769,7 +1772,7 @@
                             <td><button class="table-link-btn" onclick="openProfileModal(${client.id})">${client.name}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text">${client.email || '-'}</td>
-                            <td class="small-col-text">${formatPhone(client.phone) || '-'}</td>
+                            <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
                             <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
                             <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
                             <td style="text-align: center;">
@@ -3005,15 +3008,14 @@
                 html += '<div class="history-item" style="margin-bottom: 12px; display: flex; align-items: start; gap: 12px;">';
                 
                 // Foto do cliente
-                const photoSrc = activity.client_photo ? `/uploads/${activity.client_photo}` : '/images/avatar-default.png';
-                html += `<img src="${photoSrc}" alt="${escapeHtml(activity.client_name)}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid #34D399;" onerror="this.src='/images/avatar-default.png'">`;
+                const photoSrc = activity.client_photo || '/logo-coelho.png';
+                html += `<img src="${photoSrc}" alt="${escapeHtml(activity.client_name)}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid #34D399;" onerror="this.src='/logo-coelho.png'">`;
                 
                 // Informações da atividade
                 html += '<div style="flex: 1;">';
                 html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})</div>`;
-                if (activity.notes) {
-                    html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.notes)}</div>`;
-                }
+                html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.title || activity.notes || '-')}</div>`;
+                html += `<div style="margin-top: 8px;"><button class="btn btn-danger btn-small" onclick="deleteAgendaItem(${activity.id})"><i class="fas fa-trash"></i> Excluir evento</button></div>`;
                 html += '</div>';
                 html += '</div>';
             });
@@ -3028,6 +3030,19 @@
         function closeDayActivitiesModal() {
             const modal = document.getElementById('dayActivitiesModal');
             if (modal) modal.remove();
+        }
+
+
+        async function deleteAgendaItem(commitmentId) {
+            if (!confirm('Deseja realmente excluir este evento da agenda?')) return;
+            const response = await fetch(`${API_BASE}/agenda/${commitmentId}`, { method: 'DELETE' });
+            if (!response.ok) {
+                showError('Erro ao excluir evento da agenda');
+                return;
+            }
+            showSuccess('Evento da agenda excluído!');
+            closeDayActivitiesModal();
+            await loadAgenda();
         }
 
         function normalizePhoneForWhatsapp(phone) {
@@ -3713,14 +3728,24 @@
                 item.due_time = dueTime;
                 await loadAgenda();
             }
-            const [hh, mm] = dueTime.split(':');
-            const start = new Date(`${item.due_date}T${hh.padStart(2,'0')}:${(mm||'00').padStart(2,'0')}:00`);
-            const end = new Date(start.getTime() + 60*60*1000);
-            const fmt = d => d.toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
-            const subject = encodeURIComponent(item.title || `Compromisso ${item.client_name || ''}`);
-            const body = encodeURIComponent(item.notes || 'Evento criado pelo Toca do Coelho');
-            const url = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${subject}&body=${body}&startdt=${fmt(start)}&enddt=${fmt(end)}`;
-            window.open(url, '_blank');
+
+            let attendee = item.client_email || '';
+            if (!attendee) {
+                const goSelf = confirm('Este cliente não possui e-mail cadastrado. Deseja criar o evento no Outlook usando seu próprio e-mail?');
+                if (!goSelf) return;
+                attendee = userProfile?.email || '';
+                if (!attendee) {
+                    showError('Para criar agenda direto no Outlook local é necessário e-mail do cliente ou do usuário cadastrado.');
+                    return;
+                }
+            }
+
+            const a = document.createElement('a');
+            a.href = `${API_BASE}/agenda/${item.id}/ics?attendee=${encodeURIComponent(attendee)}`;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         }
 
         async function askOutlookForCommitments(items) {

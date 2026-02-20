@@ -239,6 +239,13 @@ def init_db():
     
     # Migração: adicionar colunas se não existirem
     try:
+        c.execute("PRAGMA table_info(user_profile)")
+        profile_cols = [col[1] for col in c.fetchall()]
+        if 'email' not in profile_cols:
+            c.execute('ALTER TABLE user_profile ADD COLUMN email TEXT')
+        if 'phone' not in profile_cols:
+            c.execute('ALTER TABLE user_profile ADD COLUMN phone TEXT')
+
         c.execute("PRAGMA table_info(activities)")
         columns = [col[1] for col in c.fetchall()]
         if 'contact_type' not in columns:
@@ -617,9 +624,11 @@ def save_profile_config():
         full_name = request.form.get('full_name', '').strip()
         nickname = request.form.get('nickname', '').strip()
         position = request.form.get('position', '').strip()
+        email = request.form.get('email', '').strip()
+        phone = normalize_phone(request.form.get('phone', '').strip())
 
-        if not full_name or not nickname or not position:
-            return jsonify({'error': 'Nome completo, apelido e cargo são obrigatórios'}), 400
+        if not full_name or not nickname or not position or not email or not phone:
+            return jsonify({'error': 'Nome completo, apelido, cargo, email e telefone são obrigatórios'}), 400
 
         conn = get_db()
         c = conn.cursor()
@@ -638,15 +647,17 @@ def save_profile_config():
         if not photo_url:
             return jsonify({'error': 'Foto é obrigatória'}), 400
 
-        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, photo_url, updated_at)
-                     VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, email, phone, photo_url, updated_at)
+                     VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                      ON CONFLICT(id) DO UPDATE SET
                         full_name = excluded.full_name,
                         nickname = excluded.nickname,
                         position = excluded.position,
+                        email = excluded.email,
+                        phone = excluded.phone,
                         photo_url = excluded.photo_url,
                         updated_at = CURRENT_TIMESTAMP''',
-                  (full_name, nickname, position, photo_url))
+                  (full_name, nickname, position, email, phone, photo_url))
         conn.commit()
         conn.close()
 
@@ -982,7 +993,7 @@ def get_agenda():
         conn = get_db()
         c = conn.cursor()
 
-        query = '''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position
+        query = '''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
                    FROM commitments cm
                    JOIN clients cl ON cm.client_id = cl.id'''
         params = []
@@ -1029,7 +1040,7 @@ def create_agenda_item():
         commitment_id = c.lastrowid
         conn.commit()
 
-        c.execute('''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position
+        c.execute('''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
                      FROM commitments cm JOIN clients cl ON cm.client_id = cl.id WHERE cm.id = ?''', (commitment_id,))
         item = dict_from_row(c.fetchone())
         conn.close()
@@ -1055,6 +1066,77 @@ def update_agenda_time(commitment_id):
         return jsonify({'message': 'Horário atualizado'})
     except Exception as e:
         print(f'[ERROR] PUT /api/agenda/{commitment_id}/time: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+
+
+@app.route('/api/agenda/<int:commitment_id>', methods=['DELETE'])
+def delete_agenda_item(commitment_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM commitments WHERE id = ?', (commitment_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Compromisso removido'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/agenda/{commitment_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agenda/<int:commitment_id>/ics', methods=['GET'])
+def download_agenda_ics(commitment_id):
+    try:
+        attendee = (request.args.get('attendee') or '').strip()
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.email as client_email FROM commitments cm JOIN clients cl ON cm.client_id = cl.id WHERE cm.id = ?', (commitment_id,))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+
+        if not item:
+            return jsonify({'error': 'Compromisso não encontrado'}), 404
+
+        due_date = item.get('due_date')
+        due_time = item.get('due_time') or '09:00'
+        dtstart = datetime.fromisoformat(f"{due_date}T{due_time}:00")
+        dtend = dtstart + timedelta(hours=1)
+
+        uid = f"toca-{commitment_id}@local"
+        stamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+        start = dtstart.strftime('%Y%m%dT%H%M%S')
+        end = dtend.strftime('%Y%m%dT%H%M%S')
+        summary = (item.get('title') or 'Compromisso').replace('\n', ' ')
+        description = (item.get('notes') or '').replace('\n', '\\n')
+
+        attendee_lines = ''
+        if attendee:
+            attendee_lines = f"ATTENDEE;CN={attendee}:mailto:{attendee}\r\n"
+
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Toca do Coelho//Agenda//PT-BR\r\n"
+            "BEGIN:VEVENT\r\n"
+            f"UID:{uid}\r\n"
+            f"DTSTAMP:{stamp}\r\n"
+            f"DTSTART:{start}\r\n"
+            f"DTEND:{end}\r\n"
+            f"SUMMARY:{summary}\r\n"
+            f"DESCRIPTION:{description}\r\n"
+            f"LOCATION:{item.get('client_company') or ''}\r\n"
+            f"{attendee_lines}"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+
+        from flask import Response
+        response = Response(ics, mimetype='text/calendar')
+        response.headers['Content-Disposition'] = f'attachment; filename=agenda-{commitment_id}.ics'
+        return response
+    except Exception as e:
+        print(f'[ERROR] GET /api/agenda/{commitment_id}/ics: {e}')
         return jsonify({'error': str(e)}), 500
 
 
