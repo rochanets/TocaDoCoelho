@@ -278,6 +278,34 @@
             transform: scale(0.95);
         }
 
+        .action-buttons {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-auto-mapping {
+            background: linear-gradient(135deg, #ecfeff 0%, #dbeafe 55%, #e0f2fe 100%);
+            color: #0f766e;
+            border: 1px solid #bae6fd;
+            box-shadow: 0 0 14px rgba(147, 197, 253, 0.5), inset 0 0 10px rgba(255, 255, 255, 0.7);
+        }
+
+        .btn-auto-mapping:hover {
+            background: linear-gradient(135deg, #cffafe 0%, #bfdbfe 60%, #bae6fd 100%);
+            color: #0e7490;
+            transform: translateY(-1px);
+        }
+
+        .sad-bunny-image {
+            width: 180px;
+            max-width: 65%;
+            display: block;
+            margin: 14px auto 10px;
+            object-fit: contain;
+        }
+
         /* Tabs */
         .nav-tabs {
             display: flex;
@@ -1130,7 +1158,10 @@
             <div class="page-header">
                 <h1>Mapeamento de Ambiente</h1>
                 <p>Gerencie informações estratégicas sobre o ambiente de cada cliente</p>
-                <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
+                    <button class="btn btn-auto-mapping" onclick="openAutoMappingModal()"><i class="fas fa-star"></i> Auto Mapping</button>
+                </div>
             </div>
             <div style="margin-bottom: 20px;">
                 <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Filtrar por Cliente:</label>
@@ -1662,7 +1693,7 @@
                     html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th style="width: 60px; text-align: center;">Ação</th>';
+                    html += '<th style="width: 150px; text-align: center;">Ação</th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
@@ -1679,7 +1710,13 @@
                             <td>${client.phone || '-'}</td>
                             <td>${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
                             <td><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
-                            <td style="text-align: center;"><button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button></td>
+                            <td style="text-align: center;">
+                                <div class="action-buttons">
+                                    <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
+                                    <button class="btn-icon-action" onclick="openWhatsAppMessageModal(${client.id})" title="Enviar mensagem no WhatsApp"><i class="fab fa-whatsapp"></i></button>
+                                    <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>
+                                </div>
+                            </td>
                         </tr>`;
                     });
                     html += '</tbody></table></div>';
@@ -2929,6 +2966,155 @@
             if (modal) modal.remove();
         }
 
+        function normalizePhoneForWhatsapp(phone) {
+            if (!phone) return '';
+            let digits = String(phone).replace(/\D/g, '');
+            if (!digits) return '';
+            if (digits.startsWith('00')) digits = digits.slice(2);
+            if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) {
+                digits = `55${digits}`;
+            }
+            return digits;
+        }
+
+        function openMissingContactModal() {
+            let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
+            html += '<div class="modal-content" style="max-width: 460px; text-align: center;">';
+            html += '<h2 style="margin-bottom: 8px;">Ops!</h2>';
+            html += '<img src="/logo-coelho.png" alt="Coelho triste" class="sad-bunny-image">';
+            html += '<p style="color: #4b5563; font-size: 16px; margin: 10px 0 18px;">Você não cadastrou esse tipo de contato ainda</p>';
+            html += '<button class="btn btn-secondary" onclick="closeMissingContactModal()">Fechar</button>';
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeMissingContactModal() {
+            const modal = document.getElementById('missingContactModal');
+            if (modal) modal.remove();
+        }
+
+        function openWhatsAppMessageModal(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.phone) {
+                openMissingContactModal();
+                return;
+            }
+
+            let html = `<div class="modal active" id="whatsAppModal" onclick="if(event.target === this) closeWhatsAppModal()">`;
+            html += '<div class="modal-content" style="max-width: 520px;">';
+            html += `<h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name)}</h2>`;
+            html += '<p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem e nós abriremos o WhatsApp Web com o texto pronto para envio.</p>';
+            html += '<div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="5" placeholder="Digite a mensagem para o cliente..."></textarea></div>';
+            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div>`;
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeWhatsAppModal() {
+            const modal = document.getElementById('whatsAppModal');
+            if (modal) modal.remove();
+        }
+
+        function openWhatsAppWeb(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.phone) {
+                closeWhatsAppModal();
+                openMissingContactModal();
+                return;
+            }
+
+            const message = document.getElementById('whatsMessageText')?.value?.trim() || '';
+            const phone = normalizePhoneForWhatsapp(client.phone);
+
+            if (!phone) {
+                closeWhatsAppModal();
+                openMissingContactModal();
+                return;
+            }
+
+            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+            window.open(url, '_blank');
+            closeWhatsAppModal();
+        }
+
+        function openEmailDraftModal(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.email) {
+                openMissingContactModal();
+                return;
+            }
+
+            let html = `<div class="modal active" id="emailDraftModal" onclick="if(event.target === this) closeEmailDraftModal()">`;
+            html += '<div class="modal-content" style="max-width: 520px;">';
+            html += `<h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail - ${escapeHtml(client.name)}</h2>`;
+            html += '<p style="color:#6b7280; margin-bottom: 16px;">Digite o conteúdo do e-mail. Ao confirmar, será aberto um novo e-mail no Outlook/local para revisão antes do envio.</p>';
+            html += '<div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text" placeholder="Assunto do e-mail"></div>';
+            html += '<div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="6" placeholder="Escreva o corpo do e-mail..."></textarea></div>';
+            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div>`;
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeEmailDraftModal() {
+            const modal = document.getElementById('emailDraftModal');
+            if (modal) modal.remove();
+        }
+
+        function openOutlookDraft(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.email) {
+                closeEmailDraftModal();
+                openMissingContactModal();
+                return;
+            }
+
+            const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
+            const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
+            const mailto = `mailto:${encodeURIComponent(client.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            window.location.href = mailto;
+            closeEmailDraftModal();
+        }
+
+        function openAutoMappingModal() {
+            const html = `
+                <div class="modal active" id="autoMappingModal" onclick="if(event.target === this) closeAutoMappingModal()">
+                    <div class="modal-content" style="max-width: 620px;">
+                        <h2 style="color:#0f766e; margin-bottom: 10px;"><i class="fas fa-star" style="margin-right:8px;"></i>Auto Mapping</h2>
+                        <p style="color:#4b5563; margin-bottom: 16px; line-height: 1.5;">Bem vindo ao auto mapping de clientes. Aqui nós faremos o possível para trazer informações do ambiente dos seus clientes. Por favor, digite abaixo o nome do cliente (empresa) e o país de origem.</p>
+                        <div class="form-group">
+                            <label>Cliente</label>
+                            <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)">
+                        </div>
+                        <div class="form-group">
+                            <label>País</label>
+                            <input id="autoMappingCountry" type="text" placeholder="País de origem">
+                        </div>
+                        <div style="display:flex; justify-content:flex-start; margin-top: 12px;">
+                            <button class="btn btn-primary" onclick="submitAutoMappingForm()">Enviar</button>
+                        </div>
+                    </div>
+                </div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeAutoMappingModal() {
+            const modal = document.getElementById('autoMappingModal');
+            if (modal) modal.remove();
+        }
+
+        function submitAutoMappingForm() {
+            const clientName = document.getElementById('autoMappingClient')?.value?.trim();
+            const country = document.getElementById('autoMappingCountry')?.value?.trim();
+
+            if (!clientName || !country) {
+                showError('Preencha Cliente e País para continuar.');
+                return;
+            }
+
+            closeAutoMappingModal();
+            showSuccess('Dados recebidos! Em breve integraremos ao Auto Mapping inteligente.');
+        }
+
         // Funções de Sugestões Diárias
         let dailySuggestions = [];
 
@@ -3050,9 +3236,15 @@
 
         async function markSuggestionComplete(suggestionId) {
             try {
-                await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
+                const response = await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
                     method: 'POST'
                 });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    showError(error.error || 'A sugestão ainda não foi concluída.');
+                    return;
+                }
                 
                 // Recarregar sugestões
                 await loadDailySuggestions();
