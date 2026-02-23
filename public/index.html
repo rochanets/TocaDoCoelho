@@ -164,7 +164,7 @@
             border-radius: 12px;
             cursor: pointer;
             transition: all 0.2s;
-            color: rgba(52, 211, 153, 0.8);
+            color: rgba(5, 150, 105, 0.95);
             font-weight: 500;
             border: none;
             background: none;
@@ -1149,6 +1149,39 @@
                 min-width: 0;
             }
         }
+    
+
+        .voice-fab {
+            position: fixed;
+            right: 22px;
+            bottom: 22px;
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            border: none;
+            background: #0f766e;
+            color: #fff;
+            box-shadow: 0 10px 24px rgba(15,118,110,0.35);
+            cursor: pointer;
+            z-index: 120;
+        }
+        .voice-fab.recording { background: #dc2626; }
+        .snowflake-badge {
+            position: absolute;
+            right: -4px;
+            bottom: -4px;
+            font-size: 13px;
+            color: #0ea5e9;
+            text-shadow: 0 0 4px rgba(125,211,252,0.95);
+        }
+        .org-table-wrap { overflow-x: auto; padding-bottom: 10px; }
+        .org-table { min-width: 900px; width:100%; border-collapse: collapse; }
+        .org-table th,.org-table td { border:1px solid #d1fae5; padding:10px; vertical-align: top; }
+        .occupant { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+        .occupant img,.occupant .mini-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; }
+        .iata-center { display:flex; align-items:center; justify-content:center; min-height:46vh; }
+        .iata-input-row { display:flex; gap:8px; margin-top:14px; }
+
     </style>
 </head>
 <body>
@@ -1163,6 +1196,10 @@
         </div>
 
         <nav class="sidebar-nav">
+            <button class="nav-item" onclick="switchTab(event, 'iata')">
+                <i class="fas fa-robot"></i>
+                <span>IAta</span>
+            </button>
             <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
@@ -1174,6 +1211,10 @@
             <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
                 <i class="fas fa-map-marked-alt"></i>
                 <span>Mapeamento de Ambiente</span>
+            </button>
+            <button class="nav-item" onclick="switchTab(event, 'mapeamento-organizacional')">
+                <i class="fas fa-sitemap"></i>
+                <span>Mapeamento Organizacional</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'atividades')">
                 <i class="fas fa-chart-line"></i>
@@ -1202,6 +1243,21 @@
     <main class="main-content">
         <div class="alert alert-success" id="successMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
+
+        <div id="iata" class="tab-content">
+            <div class="page-header">
+                <h1>IAta</h1>
+                <p>Módulo inteligente para apoio de mensagens e atas.</p>
+            </div>
+            <div class="iata-center">
+                <img src="/logo-coelho.png" alt="IAta" style="max-width:260px; width:100%; opacity:0.95;">
+            </div>
+            <div class="iata-input-row">
+                <input type="text" id="iataText" placeholder="Digite aqui..." style="flex:1;">
+                <button class="btn btn-secondary" onclick="startVoiceTranscription('iataText')"><i class="fas fa-microphone"></i></button>
+                <input type="file" id="iataAttachment" accept=".txt,text/plain" onchange="validateIataAttachment(event)">
+            </div>
+        </div>
 
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
@@ -1293,6 +1349,14 @@
             <div id="mapeamentoContent"></div>
         </div>
 
+        <div id="mapeamento-organizacional" class="tab-content">
+            <div class="page-header">
+                <h1>Mapeamento Organizacional</h1>
+                <p>Visualize clientes por empresa e cargos com acesso rápido à ficha.</p>
+            </div>
+            <div id="organizationalContent"></div>
+        </div>
+
         <div id="configuracoes" class="tab-content">
             <div class="page-header">
                 <h1>Configurações</h1>
@@ -1330,6 +1394,22 @@
                             <button class="btn btn-secondary btn-small" onclick="saveTargetStatus()"><i class="fas fa-save"></i> Salvar Regra C</button>
                         </div>
                     </div>
+                                    <div style="margin-top:14px; border-top:1px solid rgba(52,211,153,0.2); padding-top:12px;">
+                        <h4 style="color:#065f46; font-weight:400; margin-bottom:8px;">Regra D Contato Frio</h4>
+                        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                            <div class="form-group" style="margin:0;"><label>Dias Em dia</label><input type="number" id="coldGreen" min="0" style="width:110px;"></div>
+                            <div class="form-group" style="margin:0;"><label>Dias Atenção</label><input type="number" id="coldYellow" min="1" style="width:110px;"></div>
+                            <button class="btn btn-secondary btn-small" onclick="saveColdStatus()"><i class="fas fa-save"></i> Salvar Regra D</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="settings-card">
+                    <h3>Agrupamento de Cargos</h3>
+                    <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
+                    <div class="form-group"><label>Cargos (separados por vírgula)</label><input type="text" id="groupingPositions" placeholder="Diretor, Head, Gerente Executivo"></div>
+                    <button class="btn btn-secondary btn-small" onclick="savePositionGrouping()"><i class="fas fa-plus"></i> Criar agrupamento</button>
+                    <div id="positionGroupingList" style="margin-top:12px;"></div>
                 </section>
 
                 <section class="settings-card">
@@ -1379,7 +1459,7 @@
                     <label>Dias para Atenção</label>
                     <input type="number" id="ruleYellow" min="1" required>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" style="grid-column:1/-1;">
                     <button type="button" class="btn btn-secondary" onclick="closeStatusRuleModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
@@ -1394,7 +1474,7 @@
                 <h2 id="clientModalTitle">Novo Cliente</h2>
                 <button class="modal-close" onclick="closeClientModal()">×</button>
             </div>
-            <form id="clientForm" onsubmit="saveClient(event)">
+            <form id="clientForm" onsubmit="saveClient(event)" style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px;">
                 <div class="form-group">
                     <label>Nome *</label>
                     <input type="text" name="name" required>
@@ -1408,6 +1488,14 @@
                     <label>Cargo *</label>
                     <select id="clientPositionSelect" onchange="toggleOtherField('position')" required></select>
                     <input type="text" id="clientPositionOther" placeholder="Digite o cargo" style="display:none; margin-top:8px;">
+                </div>
+                <div class="form-group">
+                    <label>Área de Atuação (opcional)</label>
+                    <input type="text" name="area_of_activity">
+                </div>
+                <div class="form-group">
+                    <label>Contato Frio?</label>
+                    <select id="clientColdContact" name="is_cold_contact"><option value="0">Não</option><option value="1">Sim</option></select>
                 </div>
                 <div class="form-group">
                     <label>Cliente TARGET</label>
@@ -1433,7 +1521,7 @@
                     <button type="button" id="removePhotoBtn" class="btn btn-danger btn-small" style="display:none; margin-top:10px;" onclick="toggleRemovePhoto()"><i class="fas fa-trash"></i> Excluir foto atual</button>
                     <small id="removePhotoHelp" style="display:none; margin-top:6px; color:#b91c1c;">A foto atual será removida ao salvar.</small>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" style="grid-column:1/-1;">
                     <button type="button" class="btn btn-secondary" onclick="closeClientModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
@@ -1447,7 +1535,7 @@
             <div class="modal-header"><h2>Target Account</h2><button class="modal-close" onclick="closeTargetAccountModal()">×</button></div>
             <div class="form-group"><label>Empresa</label><select id="targetCompanySelect"></select></div>
             <div class="form-group"><label>Cargo</label><select id="targetPositionSelect"></select></div>
-            <div class="modal-footer">
+            <div class="modal-footer" style="grid-column:1/-1;">
                 <button type="button" class="btn btn-secondary" onclick="closeTargetAccountModal()">Cancelar</button>
                 <button type="button" class="btn btn-primary" onclick="applyTargetAccountBulk()">Aplicar</button>
             </div>
@@ -1486,7 +1574,7 @@
                     <label>Informações *</label>
                     <textarea name="information" required rows="4"></textarea>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" style="grid-column:1/-1;">
                     <button type="button" class="btn btn-secondary" onclick="closeActivityModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
@@ -1539,6 +1627,8 @@
     </div>
 
 
+    <button id="globalVoiceFab" class="voice-fab" onclick="startVoiceTranscription()" title="Capturar voz"><i class="fas fa-microphone"></i></button>
+
     <script>
         const API_BASE = '/api';
         let currentEditingClientId = null;
@@ -1550,6 +1640,7 @@
         let cachedPositions = [];
         let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
+        let positionGroupings = [];
 
         // Tab switching
         function switchTab(ev, tabName) {
@@ -1566,16 +1657,18 @@
             }
 
             if (tabName === 'dashboard') loadDashboard();
+            else if (tabName === 'iata') { /* tela estática */ }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') loadActivities();
             else if (tabName === 'report') loadReport();
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'mapeamento') loadMapeamento();
+            else if (tabName === 'mapeamento-organizacional') loadOrganizationalMapping();
             else if (tabName === 'configuracoes') loadSettings();
         }
 
         async function loadSettings() {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings()]);
             renderSettings();
         }
 
@@ -1851,8 +1944,8 @@
                     html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
                     html += '<th style="min-width:78px; text-align:center;">TARGET</th>';
                     html += '<th style="min-width:50px;"></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 150px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 130px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
@@ -1862,15 +1955,16 @@
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
-                        const status = getStatus(client.last_activity_date, client.position, client.is_target);
+                        const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
                         const statusClass = `status-${status}`;
                         const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
-                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
                         html += `<tr>
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
-                            <td style="min-width:150px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
+                            <td style="min-width:150px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
@@ -1925,12 +2019,14 @@
                     html += '<th onclick="toggleClientsSort(\'company\')" style="cursor: pointer;">Empresa <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="clients-email-col" onclick="toggleClientsSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th>Área de Atuação</th>';
                     html += '<th onclick="toggleClientsSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th>Ações</th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
-                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
                         html += `<tr>
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
@@ -1938,6 +2034,7 @@
                             <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="clients-email-col">${client.email || '-'}</td>
+                            <td class="small-col-text">${client.area_of_activity || '-'}</td>
                             <td class="small-col-text">${formatPhone(client.phone) || '-'}</td>
                             <td><div class="actions">
                                 <button class="btn btn-edit-accent btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
@@ -3215,6 +3312,7 @@
             const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
             window.open(url, '_blank');
             closeWhatsAppModal();
+            askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
 
         function openEmailDraftModal(clientId) {
@@ -3250,8 +3348,10 @@
 
             const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
             const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
-            const mailto = `mailto:${encodeURIComponent(client.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-            window.location.href = mailto;
+            const htmlBody = `<div style="font-family:Aptos; font-size:11pt;">${body.replace(/\n/g,'<br>')}</div>`;
+            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(htmlBody)}`;
+            window.open(outlookUrl, '_blank');
+            askRegisterActivityFromCommunication(clientId, 'Email', body);
             closeEmailDraftModal();
         }
 
@@ -3444,8 +3544,11 @@
             const sorted = [...clientsArray].sort((a, b) => {
                 if (field === 'status') {
                     const statusRank = { green: 1, yellow: 2, red: 3 };
-                    const aStatus = statusRank[getStatus(a.last_activity_date)] || 99;
-                    const bStatus = statusRank[getStatus(b.last_activity_date)] || 99;
+                    const aStatusName = getStatus(a.last_activity_date, a.position, a.is_target, a.is_cold_contact);
+                    const bStatusName = getStatus(b.last_activity_date, b.position, b.is_target, b.is_cold_contact);
+                    const aStatus = statusRank[aStatusName] || 99;
+                    const bStatus = statusRank[bStatusName] || 99;
+                    if (aStatusName === bStatusName && Number(a.is_cold_contact) !== Number(b.is_cold_contact)) return Number(a.is_cold_contact) - Number(b.is_cold_contact);
 
                     if (aStatus < bStatus) return order === 'asc' ? -1 : 1;
                     if (aStatus > bStatus) return order === 'asc' ? 1 : -1;
@@ -3541,7 +3644,7 @@
                     .filter(activity => Number(activity.client_id) === Number(clientId))
                     .sort((a, b) => new Date(b.activity_date || b.created_at) - new Date(a.activity_date || a.created_at));
 
-                const status = getStatus(client.last_activity_date, client.position, client.is_target);
+                const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
                 const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
 
                 let historyHtml = '';
@@ -3574,6 +3677,8 @@
                                 <div class="profile-field"><div class="profile-field-label">Cargo</div><div class="profile-field-value">${escapeHtml(client.position)}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Status</div><div class="profile-field-value">${statusText}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Email</div><div class="profile-field-value">${escapeHtml(client.email || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Área de Atuação</div><div class="profile-field-value">${escapeHtml(client.area_of_activity || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Contato Frio</div><div class="profile-field-value">${Number(client.is_cold_contact)===1?'Sim':'Não'}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Telefone</div><div class="profile-field-value">${escapeHtml(client.phone || '-')}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Último contato</div><div class="profile-field-value">${formatDateBr(client.last_activity_date)}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Cadastro</div><div class="profile-field-value">${formatDateBr(client.created_at)}</div></div>
@@ -3657,7 +3762,11 @@
 
         function openGroupModal(groupType, groupValue) {
             const normalizedValue = String(groupValue || '').toLowerCase();
-            const filtered = clients.filter(client => String(client[groupType] || '').toLowerCase() === normalizedValue);
+            let filtered = clients.filter(client => String(client[groupType] || '').toLowerCase() === normalizedValue);
+            if (groupType === 'position') {
+                const expanded = getGroupedPositions(groupValue).map(p => String(p || '').toLowerCase());
+                filtered = clients.filter(client => expanded.includes(String(client.position || '').toLowerCase()));
+            }
             const sortedGroup = sortGroupClients(groupType, filtered);
 
             const titlePrefix = groupType === 'position' ? 'Clientes com o cargo' : 'Clientes da empresa';
@@ -3811,6 +3920,8 @@
             document.getElementById('clientForm').email.value = client.email || '';
             document.getElementById('clientForm').phone.value = formatPhone(client.phone || '');
             document.getElementById('clientIsTarget').value = Number(client.is_target) === 1 ? '1' : '0';
+            document.getElementById('clientColdContact').value = Number(client.is_cold_contact) === 1 ? '1' : '0';
+            document.getElementById('clientForm').area_of_activity.value = client.area_of_activity || '';
             const cSel = document.getElementById('clientCompanySelect');
             const pSel = document.getElementById('clientPositionSelect');
             if ([...cSel.options].some(o => o.value === client.company)) cSel.value = client.company; else { cSel.value='__other__'; document.getElementById('clientCompanyOther').value = client.company || ''; }
@@ -3838,6 +3949,24 @@
             formData.set('is_target', document.getElementById('clientIsTarget').value === '1' ? '1' : '0');
 
             try {
+                if (!currentEditingClientId) {
+                    const duplicateRes = await fetch(`${API_BASE}/clients/check-duplicate`, {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ name: formData.get('name'), email: formData.get('email'), phone: formData.get('phone') })
+                    });
+                    const duplicatePayload = await duplicateRes.json();
+                    if (duplicatePayload.matches?.length) {
+                        const possible = duplicatePayload.matches[0];
+                        const shouldProceed = await uiConfirm(`Já existe um possível cadastro igual:
+${possible.name} | ${possible.company} | ${possible.position}
+Email: ${possible.email || '-'}
+Telefone: ${possible.phone || '-'}
+
+Deseja continuar e criar mesmo assim?`, 'Possível duplicidade');
+                        if (!shouldProceed) return;
+                        formData.set('force_create', '1');
+                    }
+                }
                 const url = currentEditingClientId ? `${API_BASE}/clientes/${currentEditingClientId}` : `${API_BASE}/clientes`;
                 const response = await fetch(url, { method: currentEditingClientId ? 'PUT' : 'POST', body: formData });
                 if (!response.ok) throw new Error('Erro ao salvar cliente');
@@ -3890,6 +4019,113 @@
             } else showError('Erro ao aplicar target em massa');
         }
 
+
+        async function saveColdStatus() {
+            const green_days = Number(document.getElementById('coldGreen').value);
+            const yellow_days = Number(document.getElementById('coldYellow').value);
+            const response = await fetch(`${API_BASE}/config/status/cold`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ green_days, yellow_days })});
+            if (response.ok) { showSuccess('Regra D por contato frio salva!'); await loadStatusConfig(); }
+            else showError('Erro ao salvar regra D');
+        }
+
+        async function loadPositionGroupings() {
+            const response = await fetch(`${API_BASE}/config/position-groupings`);
+            if (response.ok) positionGroupings = await response.json();
+            renderPositionGroupingList();
+        }
+
+        function renderPositionGroupingList() {
+            const el = document.getElementById('positionGroupingList');
+            if (!el) return;
+            if (!positionGroupings.length) { el.innerHTML = '<div style="color:#6b7280;">Nenhum agrupamento cadastrado.</div>'; return; }
+            el.innerHTML = positionGroupings.map(g => `<div class="rule-item"><div><strong>${escapeHtml(g.name)}</strong><div style="font-size:12px;color:#6b7280;">${escapeHtml((g.positions||[]).join(', '))}</div></div><button class="btn btn-danger btn-small" onclick="deletePositionGrouping(${g.id})"><i class="fas fa-trash"></i></button></div>`).join('');
+        }
+
+        async function savePositionGrouping() {
+            const name = document.getElementById('groupingName').value.trim();
+            const positions = document.getElementById('groupingPositions').value.split(',').map(v => v.trim()).filter(Boolean);
+            if (!name || positions.length < 2) { showError('Informe um nome e ao menos 2 cargos.'); return; }
+            const response = await fetch(`${API_BASE}/config/position-groupings`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, positions }) });
+            const payload = await response.json();
+            if (!response.ok) { showError(payload.error || 'Erro ao criar agrupamento'); return; }
+            document.getElementById('groupingName').value=''; document.getElementById('groupingPositions').value='';
+            await loadPositionGroupings();
+            showSuccess('Agrupamento criado!');
+        }
+
+        async function deletePositionGrouping(id) {
+            const response = await fetch(`${API_BASE}/config/position-groupings/${id}`, {method:'DELETE'});
+            if (response.ok) { await loadPositionGroupings(); showSuccess('Agrupamento removido!'); }
+        }
+
+        function getGroupedPositions(position) {
+            const normalized = String(position || '').toLowerCase();
+            const group = positionGroupings.find(g => (g.positions || []).some(p => String(p).toLowerCase() === normalized));
+            return group ? group.positions : [position];
+        }
+
+        async function askRegisterActivityFromCommunication(clientId, contactType, information) {
+            const ok = await uiConfirm(`Deseja registrar essa interação de ${contactType} como atividade no cliente?`);
+            if (!ok) return;
+            const formData = new FormData();
+            formData.set('client_id', clientId);
+            formData.set('contact_type', contactType);
+            formData.set('information', information || `${contactType} enviado.`);
+            const response = await fetch(`${API_BASE}/atividades`, { method:'POST', body: formData });
+            if (response.ok) { showSuccess('Atividade registrada com sucesso!'); await Promise.all([loadActivities(), loadDashboard()]); }
+        }
+
+        function validateIataAttachment(event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            const okType = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
+            if (!okType) { event.target.value=''; showError('No IAta, apenas anexo de texto (.txt).'); }
+        }
+
+        function startVoiceTranscription(targetInputId = null) {
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SR) { showError('Reconhecimento de voz não suportado neste navegador.'); return; }
+            const recognition = new SR();
+            recognition.lang = 'pt-BR';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+            const fab = document.getElementById('globalVoiceFab');
+            if (fab) fab.classList.add('recording');
+            recognition.onresult = (event) => {
+                const text = event.results?.[0]?.[0]?.transcript || '';
+                if (targetInputId) {
+                    const input = document.getElementById(targetInputId);
+                    if (input) input.value = `${input.value ? input.value + ' ' : ''}${text}`.trim();
+                } else {
+                    const info = document.querySelector('#activityForm textarea[name="information"]');
+                    if (info) info.value = `${info.value ? info.value + ' ' : ''}${text}`.trim();
+                    else showSuccess(`Transcrição: ${text}`);
+                }
+            };
+            recognition.onend = () => { if (fab) fab.classList.remove('recording'); };
+            recognition.onerror = () => { if (fab) fab.classList.remove('recording'); };
+            recognition.start();
+        }
+
+        async function loadOrganizationalMapping() {
+            const response = await fetch(`${API_BASE}/clientes`);
+            const data = response.ok ? await response.json() : [];
+            const companies = [...new Set(data.map(c => c.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+            const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+            let html = '<div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
+            companies.forEach(company => {
+                html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
+                positions.forEach(position => {
+                    const people = data.filter(c => c.company===company && c.position===position);
+                    const cell = people.length ? people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('') : '-';
+                    html += `<td>${cell}</td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+            document.getElementById('organizationalContent').innerHTML = html;
+        }
+
         async function saveTargetStatus() {
             const green_days = Number(document.getElementById('targetGreen').value);
             const yellow_days = Number(document.getElementById('targetYellow').value);
@@ -3907,10 +4143,26 @@
                 if (tg) tg.value = Number(statusConfig.target.green_days || 5);
                 if (ty) ty.value = Number(statusConfig.target.yellow_days || 10);
             }
+            if (statusConfig?.cold) {
+                const cg = document.getElementById('coldGreen');
+                const cy = document.getElementById('coldYellow');
+                if (cg) cg.value = Number(statusConfig.cold.green_days || 45);
+                if (cy) cy.value = Number(statusConfig.cold.yellow_days || 60);
+            }
         }
 
         const _getStatusOriginal = getStatus;
-        getStatus = function(lastActivityDate, position, isTarget = 0) {
+        getStatus = function(lastActivityDate, position, isTarget = 0, isColdContact = 0) {
+            if (Number(isColdContact) === 1 && statusConfig?.cold) {
+                const greenDays = Number(statusConfig.cold.green_days || 45);
+                const yellowDays = Number(statusConfig.cold.yellow_days || 60);
+                if (!lastActivityDate) return 'red';
+                const date = new Date(lastActivityDate);
+                const days = Math.floor((new Date() - date) / (1000 * 60 * 60 * 24));
+                if (days < greenDays) return 'green';
+                if (days < yellowDays) return 'yellow';
+                return 'red';
+            }
             if (Number(isTarget) === 1 && statusConfig?.target) {
                 const greenDays = Number(statusConfig.target.green_days || 5);
                 const yellowDays = Number(statusConfig.target.yellow_days || 10);
@@ -3983,7 +4235,7 @@
             html += '<h2 style="margin-bottom:10px;">Adicionar ao calendário do Outlook?</h2>';
             html += '<p style="color:#6b7280; margin-bottom:12px;">Deseja criar este evento no Outlook para revisão antes de salvar?</p>';
             html += '<label style="display:flex; gap:8px; align-items:center; margin-bottom:16px;"><input type="checkbox" id="skipOutlookAsk"> Não perguntar novamente</label>';
-            html += '<div class="modal-footer"><button class="btn btn-secondary" onclick="closeOutlookPromptModal()">Não</button><button class="btn btn-primary" onclick="confirmOutlookPrompt()">Sim</button></div>';
+            html += '<div class="modal-footer" style="grid-column:1/-1;"><button class="btn btn-secondary" onclick="closeOutlookPromptModal()">Não</button><button class="btn btn-primary" onclick="confirmOutlookPrompt()">Sim</button></div>';
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
             window._pendingOutlookCommitments = items;
@@ -4074,7 +4326,7 @@
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings()]);
             loadDashboard();
         });
     </script>
