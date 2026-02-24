@@ -1195,6 +1195,10 @@
         .org-table thead th:first-child { z-index:4; }
         .occupant { display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:8px; }
         .occupant img,.occupant .mini-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; }
+        #mapeamento-organizacional { background:#ffffff; }
+        #mapeamento-organizacional .page-header { background:#ffffff; }
+        .org-add-btn { border:none; background:transparent; color:#065f46; font-size:30px; line-height:1; cursor:pointer; padding:2px 8px; font-weight:700; }
+        .org-add-btn:hover { color:#047857; transform: scale(1.08); }
         .iata-center { display:flex; align-items:center; justify-content:center; min-height:46vh; }
         .iata-input-row { display:flex; gap:8px; margin-top:14px; align-items:flex-end; }
         #iata { background:#fff; }
@@ -3961,12 +3965,24 @@
             return sel && sel.value === '__other__' ? (other?.value || '').trim() : (sel?.value || '').trim();
         }
 
-        async function openClientModal() {
+        async function openClientModal(prefill = null) {
             currentEditingClientId = null;
             document.getElementById('clientModalTitle').textContent = 'Novo Cliente';
             document.getElementById('clientForm').reset();
             resetClientPhotoField();
             await loadCompanyAndPositionOptions();
+            if (prefill && (prefill.company || prefill.position)) {
+                const cSel = document.getElementById('clientCompanySelect');
+                const pSel = document.getElementById('clientPositionSelect');
+                if (prefill.company) {
+                    if ([...cSel.options].some(o => o.value === prefill.company)) cSel.value = prefill.company;
+                    else { cSel.value='__other__'; document.getElementById('clientCompanyOther').value = prefill.company; }
+                }
+                if (prefill.position) {
+                    if ([...pSel.options].some(o => o.value === prefill.position)) pSel.value = prefill.position;
+                    else { pSel.value='__other__'; document.getElementById('clientPositionOther').value = prefill.position; }
+                }
+            }
             toggleOtherField('company');
             toggleOtherField('position');
             document.getElementById('clientModal').classList.add('active');
@@ -4241,6 +4257,10 @@
             });
         }
 
+        async function openOrgQuickCreateClient(company, position) {
+            await openClientModal({ company, position });
+        }
+
         async function loadOrganizationalMapping() {
             const response = await fetch(`${API_BASE}/clientes`);
             const data = response.ok ? await response.json() : [];
@@ -4251,7 +4271,7 @@
                 html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
                 positions.forEach(position => {
                     const people = data.filter(c => c.company===company && c.position===position);
-                    const cell = people.length ? people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('') : '-';
+                    const cell = people.length ? people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('') : `<button class="org-add-btn" title="Adicionar contato neste cargo" onclick="openOrgQuickCreateClient(${JSON.stringify(company)}, ${JSON.stringify(position)})">+</button>`;
                     html += `<td>${cell}</td>`;
                 });
                 html += '</tr>';
