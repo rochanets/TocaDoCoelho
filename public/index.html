@@ -208,6 +208,8 @@
             box-sizing: border-box;
         }
 
+        .main-content.iata-mode { background:#ffffff; }
+
         /* Dashboard específico: wrapper para scroll lateral quando necessário */
         .dashboard-scroll-wrapper {
             width: 100%;
@@ -1160,8 +1162,8 @@
             text-shadow: 0 0 6px rgba(125,211,252,0.98);
             z-index: 2;
         }
-        .profile-avatar-wrap { position: relative; display: inline-flex; width: fit-content; }
-        .profile-avatar-wrap .snowflake-badge { right: 4px; bottom: 4px; font-size: 24px; background: transparent; pointer-events:none; }
+        .profile-avatar-wrap { position: relative; display: inline-block; width: fit-content; }
+        .profile-avatar-wrap .snowflake-badge { position:absolute; right:8px; bottom:8px; z-index:5; background:transparent; pointer-events:none; transform: scale(3); transform-origin: bottom right; font-size: 8px; line-height:1; }
         .voice-btn {
             border: 1px solid rgba(52, 211, 153, 0.4);
             background: #ecfeff;
@@ -1203,6 +1205,14 @@
         .iata-file-input { display:none; }
         .iata-file-btn { width:42px; height:42px; border-radius:10px; border:1px solid rgba(52,211,153,.35); background:#ecfdf5; color:#047857; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
         .iata-file-btn.has-file { background:#10b981; color:#fff; border-color:#059669; }
+
+        #iata,
+        #iata .page-header,
+        #iata .iata-center,
+        #iata .iata-input-row {
+            background: #ffffff !important;
+        }
+
         .activity-compact .form-group { margin-bottom: 10px; }
         .activity-compact .form-group label { font-size: 13px; margin-bottom:4px; }
         .activity-compact .form-group input,
@@ -1694,6 +1704,9 @@
             document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
 
             document.getElementById(tabName).classList.add('active');
+
+            const mainContent = document.querySelector('.main-content');
+            if (mainContent) mainContent.classList.toggle('iata-mode', tabName === 'iata');
 
             if (ev && ev.target && ev.target.closest('.nav-item')) {
                 ev.target.closest('.nav-item').classList.add('active');
