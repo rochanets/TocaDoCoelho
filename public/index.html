@@ -164,7 +164,7 @@
             border-radius: 12px;
             cursor: pointer;
             transition: all 0.2s;
-            color: rgba(52, 211, 153, 0.8);
+            color: rgba(5, 150, 105, 0.95);
             font-weight: 500;
             border: none;
             background: none;
@@ -207,6 +207,8 @@
             overflow-x: auto;
             box-sizing: border-box;
         }
+
+        .main-content.iata-mode { background:#ffffff; }
 
         /* Dashboard específico: wrapper para scroll lateral quando necessário */
         .dashboard-scroll-wrapper {
@@ -1149,6 +1151,78 @@
                 min-width: 0;
             }
         }
+    
+
+        .snowflake-badge {
+            position: absolute;
+            right: -6px;
+            bottom: -6px;
+            font-size: 18px;
+            color: #0ea5e9;
+            text-shadow: 0 0 6px rgba(125,211,252,0.98);
+            z-index: 2;
+        }
+        .profile-avatar-wrap { position: relative; display: inline-block; width: fit-content; }
+        .profile-avatar-wrap .snowflake-badge { position:absolute; right:8px; bottom:8px; z-index:5; background:transparent; pointer-events:none; transform: scale(3); transform-origin: bottom right; font-size: 8px; line-height:1; }
+        .voice-btn {
+            border: 1px solid rgba(52, 211, 153, 0.4);
+            background: #ecfeff;
+            color: #0f766e;
+            border-radius: 10px;
+            min-width: 40px;
+            height: 40px;
+            cursor: pointer;
+        }
+        .voice-btn.active {
+            background: #0ea5e9;
+            color: #fff;
+            border-color: #0284c7;
+            box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.18);
+        }
+        .voice-anim { display:none; gap:2px; align-items:flex-end; justify-content:center; height:16px; }
+        .voice-btn.active .voice-anim { display:inline-flex; }
+        .voice-btn.active .voice-icon { display:none; }
+        .voice-anim span { width:3px; background:#fff; border-radius:2px; animation: voiceBars 0.9s infinite ease-in-out; }
+        .voice-anim span:nth-child(1){height:8px; animation-delay:0s;}
+        .voice-anim span:nth-child(2){height:14px; animation-delay:.15s;}
+        .voice-anim span:nth-child(3){height:10px; animation-delay:.3s;}
+        @keyframes voiceBars { 0%,100%{transform:scaleY(.65);} 50%{transform:scaleY(1.25);} }
+        .org-table-wrap { overflow-x: auto; overflow-y:auto; padding-bottom: 10px; max-height: 62vh; }
+        .org-table { min-width: 900px; width:100%; border-collapse: separate; border-spacing:0; }
+        .org-table th,.org-table td { border:1px solid #d1fae5; padding:10px; vertical-align: top; background:#fff; }
+        .org-table thead th { position: sticky; top:0; z-index:3; background:#ecfdf5; }
+        .org-table th:first-child, .org-table td:first-child { position: sticky; left:0; z-index:2; background:#f0fdf4; min-width:220px; }
+        .org-table thead th:first-child { z-index:4; }
+        .occupant { display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:8px; }
+        .occupant img,.occupant .mini-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; }
+        #mapeamento-organizacional { background:#ffffff; }
+        #mapeamento-organizacional .page-header { background:#ffffff; }
+        .org-add-btn { border:none; background:transparent; color:#065f46; font-size:30px; line-height:1; cursor:pointer; padding:2px 8px; font-weight:700; }
+        .org-add-btn:hover { color:#047857; transform: scale(1.08); }
+        .iata-center { display:flex; align-items:center; justify-content:center; min-height:46vh; }
+        .iata-input-row { display:flex; gap:8px; margin-top:14px; align-items:flex-end; }
+        #iata { background:#fff; }
+        .iata-textarea { min-height: 108px; resize: vertical; background:#f0fdf4; border-radius:26px !important; padding:14px 18px !important; }
+        .iata-textarea::placeholder { color:#6b7280; padding-left:6px; }
+        .iata-fallback-media { max-width:360px; width:100%; border-radius:14px; box-shadow:0 8px 28px rgba(15,118,110,.18); animation: iataFloat 2.6s ease-in-out infinite; }
+        @keyframes iataFloat { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-6px);} }
+        .iata-file-input { display:none; }
+        .iata-file-btn { width:42px; height:42px; border-radius:10px; border:1px solid rgba(52,211,153,.35); background:#ecfdf5; color:#047857; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+        .iata-file-btn.has-file { background:#10b981; color:#fff; border-color:#059669; }
+
+        #iata,
+        #iata .page-header,
+        #iata .iata-center,
+        #iata .iata-input-row {
+            background: #ffffff !important;
+        }
+
+        .activity-compact .form-group { margin-bottom: 10px; }
+        .activity-compact .form-group label { font-size: 13px; margin-bottom:4px; }
+        .activity-compact .form-group input,
+        .activity-compact .form-group textarea,
+        .activity-compact .form-group select { padding:8px; font-size:13px; }
+
     </style>
 </head>
 <body>
@@ -1163,6 +1237,10 @@
         </div>
 
         <nav class="sidebar-nav">
+            <button class="nav-item" onclick="switchTab(event, 'iata')">
+                <i class="fas fa-robot"></i>
+                <span>iAta</span>
+            </button>
             <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
@@ -1174,6 +1252,10 @@
             <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
                 <i class="fas fa-map-marked-alt"></i>
                 <span>Mapeamento de Ambiente</span>
+            </button>
+            <button class="nav-item" onclick="switchTab(event, 'mapeamento-organizacional')">
+                <i class="fas fa-sitemap"></i>
+                <span>Mapeamento Organizacional</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'atividades')">
                 <i class="fas fa-chart-line"></i>
@@ -1202,6 +1284,34 @@
     <main class="main-content">
         <div class="alert alert-success" id="successMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
+
+        <div id="iata" class="tab-content">
+            <div class="page-header">
+                <h1>iAta</h1>
+                <p>Módulo inteligente para apoio de mensagens e atas.</p>
+            </div>
+            <div class="iata-center">
+                <video
+                  autoplay
+                  loop
+                  muted
+                  playsinline
+                  preload="auto"
+                  style="width: 100%; height: auto; display: block; border-radius: 12px;"
+                >
+                  <source src="/animations/TocaVideo.mp4" type="video/mp4" />
+                </video>
+            </div>
+            <div class="iata-input-row">
+                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui, grave uma mensagem ou anexe um arquivo" style="flex:1;"></textarea>
+                <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
+                    <i class="fas fa-microphone voice-icon"></i>
+                    <span class="voice-anim"><span></span><span></span><span></span></span>
+                </button>
+                <input type="file" id="iataAttachment" class="iata-file-input" accept=".txt,text/plain" multiple onchange="validateIataAttachment(event)">
+                <label for="iataAttachment" id="iataAttachmentLabel" class="iata-file-btn" title="Anexar texto"><i class="fas fa-paperclip"></i></label>
+            </div>
+        </div>
 
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
@@ -1293,6 +1403,14 @@
             <div id="mapeamentoContent"></div>
         </div>
 
+        <div id="mapeamento-organizacional" class="tab-content">
+            <div class="page-header">
+                <h1>Mapeamento Organizacional</h1>
+                <p>Visualize clientes por empresa e cargos com acesso rápido à ficha.</p>
+            </div>
+            <div id="organizationalContent"></div>
+        </div>
+
         <div id="configuracoes" class="tab-content">
             <div class="page-header">
                 <h1>Configurações</h1>
@@ -1330,6 +1448,22 @@
                             <button class="btn btn-secondary btn-small" onclick="saveTargetStatus()"><i class="fas fa-save"></i> Salvar Regra C</button>
                         </div>
                     </div>
+                                    <div style="margin-top:14px; border-top:1px solid rgba(52,211,153,0.2); padding-top:12px;">
+                        <h4 style="color:#065f46; font-weight:400; margin-bottom:8px;">Regra D Contato Frio</h4>
+                        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                            <div class="form-group" style="margin:0;"><label>Dias Em dia</label><input type="number" id="coldGreen" min="0" style="width:110px;"></div>
+                            <div class="form-group" style="margin:0;"><label>Dias Atenção</label><input type="number" id="coldYellow" min="1" style="width:110px;"></div>
+                            <button class="btn btn-secondary btn-small" onclick="saveColdStatus()"><i class="fas fa-save"></i> Salvar Regra D</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="settings-card">
+                    <h3>Agrupamento de Cargos</h3>
+                    <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
+                    <div class="form-group"><label>Cargos (separados por vírgula)</label><input type="text" id="groupingPositions" placeholder="Diretor, Head, Gerente Executivo"></div>
+                    <button class="btn btn-secondary btn-small" onclick="savePositionGrouping()"><i class="fas fa-plus"></i> Criar agrupamento</button>
+                    <div id="positionGroupingList" style="margin-top:12px;"></div>
                 </section>
 
                 <section class="settings-card">
@@ -1379,7 +1513,7 @@
                     <label>Dias para Atenção</label>
                     <input type="number" id="ruleYellow" min="1" required>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" style="grid-column:1/-1;">
                     <button type="button" class="btn btn-secondary" onclick="closeStatusRuleModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
@@ -1389,12 +1523,12 @@
 
     <!-- Client Modal -->
     <div id="clientModal" class="modal">
-        <div class="modal-content">
+        <div class="modal-content" style="max-width:550px;">
             <div class="modal-header">
                 <h2 id="clientModalTitle">Novo Cliente</h2>
                 <button class="modal-close" onclick="closeClientModal()">×</button>
             </div>
-            <form id="clientForm" onsubmit="saveClient(event)">
+            <form id="clientForm" onsubmit="saveClient(event)" style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px;">
                 <div class="form-group">
                     <label>Nome *</label>
                     <input type="text" name="name" required>
@@ -1408,6 +1542,14 @@
                     <label>Cargo *</label>
                     <select id="clientPositionSelect" onchange="toggleOtherField('position')" required></select>
                     <input type="text" id="clientPositionOther" placeholder="Digite o cargo" style="display:none; margin-top:8px;">
+                </div>
+                <div class="form-group">
+                    <label>Área de Atuação (opcional)</label>
+                    <input type="text" name="area_of_activity">
+                </div>
+                <div class="form-group">
+                    <label>Contato Frio?</label>
+                    <select id="clientColdContact" name="is_cold_contact"><option value="0">Não</option><option value="1">Sim</option></select>
                 </div>
                 <div class="form-group">
                     <label>Cliente TARGET</label>
@@ -1426,14 +1568,15 @@
                 </div>
                 <div class="form-group">
                     <label>Foto</label>
-                    <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)">
+                    <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)" style="display:none;">
+                    <label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label>
                     <small style="display:block; margin-top:6px; color:#059669;">Dica: você pode colar imagem com Ctrl+V aqui.</small>
                     <img id="photoPreview" class="photo-preview" style="display:none;">
                     <input type="hidden" id="removePhotoFlag" name="remove_photo" value="0">
                     <button type="button" id="removePhotoBtn" class="btn btn-danger btn-small" style="display:none; margin-top:10px;" onclick="toggleRemovePhoto()"><i class="fas fa-trash"></i> Excluir foto atual</button>
                     <small id="removePhotoHelp" style="display:none; margin-top:6px; color:#b91c1c;">A foto atual será removida ao salvar.</small>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" style="grid-column:1/-1;">
                     <button type="button" class="btn btn-secondary" onclick="closeClientModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
@@ -1447,7 +1590,7 @@
             <div class="modal-header"><h2>Target Account</h2><button class="modal-close" onclick="closeTargetAccountModal()">×</button></div>
             <div class="form-group"><label>Empresa</label><select id="targetCompanySelect"></select></div>
             <div class="form-group"><label>Cargo</label><select id="targetPositionSelect"></select></div>
-            <div class="modal-footer">
+            <div class="modal-footer" style="grid-column:1/-1;">
                 <button type="button" class="btn btn-secondary" onclick="closeTargetAccountModal()">Cancelar</button>
                 <button type="button" class="btn btn-primary" onclick="applyTargetAccountBulk()">Aplicar</button>
             </div>
@@ -1457,12 +1600,12 @@
     <div id="newAgendaModal" class="modal"></div>
     <!-- Activity Modal -->
     <div id="activityModal" class="modal">
-        <div class="modal-content">
+        <div class="modal-content" style="max-width:560px;">
             <div class="modal-header">
                 <h2 id="activityModalTitle">Nova Atividade</h2>
                 <button class="modal-close" onclick="closeActivityModal()">×</button>
             </div>
-            <form id="activityForm" onsubmit="saveActivity(event)">
+            <form id="activityForm" class="activity-compact" onsubmit="saveActivity(event)">
                 <div class="form-group">
                     <label>Empresa/Cliente *</label>
                     <select id="companySelect" onchange="filterClientsByCompany()"></select>
@@ -1484,9 +1627,15 @@
                 </div>
                 <div class="form-group">
                     <label>Informações *</label>
-                    <textarea name="information" required rows="4"></textarea>
+                    <div style="display:flex; gap:8px; align-items:flex-end;">
+                        <textarea id="activityInformation" name="information" required rows="3" style="flex:1;"></textarea>
+                        <button type="button" id="activityVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('activityInformation','activityVoiceBtn')" title="Gravar áudio">
+                            <i class="fas fa-microphone voice-icon"></i>
+                            <span class="voice-anim"><span></span><span></span><span></span></span>
+                        </button>
+                    </div>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" style="grid-column:1/-1;">
                     <button type="button" class="btn btn-secondary" onclick="closeActivityModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
@@ -1539,6 +1688,7 @@
     </div>
 
 
+
     <script>
         const API_BASE = '/api';
         let currentEditingClientId = null;
@@ -1550,6 +1700,7 @@
         let cachedPositions = [];
         let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
+        let positionGroupings = [];
 
         // Tab switching
         function switchTab(ev, tabName) {
@@ -1557,6 +1708,9 @@
             document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
 
             document.getElementById(tabName).classList.add('active');
+
+            const mainContent = document.querySelector('.main-content');
+            if (mainContent) mainContent.classList.toggle('iata-mode', tabName === 'iata');
 
             if (ev && ev.target && ev.target.closest('.nav-item')) {
                 ev.target.closest('.nav-item').classList.add('active');
@@ -1566,16 +1720,18 @@
             }
 
             if (tabName === 'dashboard') loadDashboard();
+            else if (tabName === 'iata') { /* tela estática */ }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') loadActivities();
             else if (tabName === 'report') loadReport();
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'mapeamento') loadMapeamento();
+            else if (tabName === 'mapeamento-organizacional') loadOrganizationalMapping();
             else if (tabName === 'configuracoes') loadSettings();
         }
 
         async function loadSettings() {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings()]);
             renderSettings();
         }
 
@@ -1851,8 +2007,8 @@
                     html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
                     html += '<th style="min-width:78px; text-align:center;">TARGET</th>';
                     html += '<th style="min-width:50px;"></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 150px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 130px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
@@ -1862,15 +2018,16 @@
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
-                        const status = getStatus(client.last_activity_date, client.position, client.is_target);
+                        const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
                         const statusClass = `status-${status}`;
                         const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
-                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
                         html += `<tr>
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
-                            <td style="min-width:150px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
+                            <td style="min-width:150px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
@@ -1925,12 +2082,14 @@
                     html += '<th onclick="toggleClientsSort(\'company\')" style="cursor: pointer;">Empresa <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleClientsSort(\'position\')" style="cursor: pointer;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="clients-email-col" onclick="toggleClientsSort(\'email\')" style="cursor: pointer;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th>Área de Atuação</th>';
                     html += '<th onclick="toggleClientsSort(\'phone\')" style="cursor: pointer;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th>Ações</th>';
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
-                        const avatar = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                        const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
                         html += `<tr>
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
@@ -1938,6 +2097,7 @@
                             <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="clients-email-col">${client.email || '-'}</td>
+                            <td class="small-col-text">${client.area_of_activity || '-'}</td>
                             <td class="small-col-text">${formatPhone(client.phone) || '-'}</td>
                             <td><div class="actions">
                                 <button class="btn btn-edit-accent btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
@@ -3215,6 +3375,7 @@
             const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
             window.open(url, '_blank');
             closeWhatsAppModal();
+            askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
 
         function openEmailDraftModal(clientId) {
@@ -3250,8 +3411,9 @@
 
             const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
             const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
-            const mailto = `mailto:${encodeURIComponent(client.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-            window.location.href = mailto;
+            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            window.open(outlookUrl, '_blank');
+            askRegisterActivityFromCommunication(clientId, 'Email', body);
             closeEmailDraftModal();
         }
 
@@ -3444,8 +3606,11 @@
             const sorted = [...clientsArray].sort((a, b) => {
                 if (field === 'status') {
                     const statusRank = { green: 1, yellow: 2, red: 3 };
-                    const aStatus = statusRank[getStatus(a.last_activity_date)] || 99;
-                    const bStatus = statusRank[getStatus(b.last_activity_date)] || 99;
+                    const aStatusName = getStatus(a.last_activity_date, a.position, a.is_target, a.is_cold_contact);
+                    const bStatusName = getStatus(b.last_activity_date, b.position, b.is_target, b.is_cold_contact);
+                    const aStatus = statusRank[aStatusName] || 99;
+                    const bStatus = statusRank[bStatusName] || 99;
+                    if (aStatusName === bStatusName && Number(a.is_cold_contact) !== Number(b.is_cold_contact)) return Number(a.is_cold_contact) - Number(b.is_cold_contact);
 
                     if (aStatus < bStatus) return order === 'asc' ? -1 : 1;
                     if (aStatus > bStatus) return order === 'asc' ? 1 : -1;
@@ -3541,7 +3706,7 @@
                     .filter(activity => Number(activity.client_id) === Number(clientId))
                     .sort((a, b) => new Date(b.activity_date || b.created_at) - new Date(a.activity_date || a.created_at));
 
-                const status = getStatus(client.last_activity_date, client.position, client.is_target);
+                const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
                 const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
 
                 let historyHtml = '';
@@ -3566,7 +3731,7 @@
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
                     <div class="profile-layout">
-                        <div>${renderAvatar(client, 'profile-avatar-large')}</div>
+                        <div class="profile-avatar-wrap">${renderAvatar(client, 'profile-avatar-large')}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>
                         <div>
                             <div class="profile-info-grid">
                                 <div class="profile-field"><div class="profile-field-label">Nome</div><div class="profile-field-value">${escapeHtml(client.name)}</div></div>
@@ -3574,6 +3739,8 @@
                                 <div class="profile-field"><div class="profile-field-label">Cargo</div><div class="profile-field-value">${escapeHtml(client.position)}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Status</div><div class="profile-field-value">${statusText}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Email</div><div class="profile-field-value">${escapeHtml(client.email || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Área de Atuação</div><div class="profile-field-value">${escapeHtml(client.area_of_activity || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Contato Frio</div><div class="profile-field-value">${Number(client.is_cold_contact)===1?'Sim':'Não'}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Telefone</div><div class="profile-field-value">${escapeHtml(client.phone || '-')}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Último contato</div><div class="profile-field-value">${formatDateBr(client.last_activity_date)}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Cadastro</div><div class="profile-field-value">${formatDateBr(client.created_at)}</div></div>
@@ -3606,7 +3773,8 @@
             if (p.startsWith('c') && p.length <= 4) return 2;
             if (p.includes('diretor') || p.includes('superintendente')) return 3;
             if (p.includes('gerente')) return 4;
-            return 5;
+            if (p.includes('coordenador')) return 5;
+            return 6;
         }
 
         function sortGroupClients(groupType, list) {
@@ -3657,7 +3825,11 @@
 
         function openGroupModal(groupType, groupValue) {
             const normalizedValue = String(groupValue || '').toLowerCase();
-            const filtered = clients.filter(client => String(client[groupType] || '').toLowerCase() === normalizedValue);
+            let filtered = clients.filter(client => String(client[groupType] || '').toLowerCase() === normalizedValue);
+            if (groupType === 'position') {
+                const expanded = getGroupedPositions(groupValue).map(p => String(p || '').toLowerCase());
+                filtered = clients.filter(client => expanded.includes(String(client.position || '').toLowerCase()));
+            }
             const sortedGroup = sortGroupClients(groupType, filtered);
 
             const titlePrefix = groupType === 'position' ? 'Clientes com o cargo' : 'Clientes da empresa';
@@ -3670,10 +3842,13 @@
                 html = '<div class="mini-card-grid">';
                 sortedGroup.forEach(client => {
                     const subText = groupType === 'position' ? (client.company || '-') : (client.position || '-');
+                    const groupHasExpansion = groupType === 'position' && getGroupedPositions(groupValue).length > 1;
+                    const roleLine = groupHasExpansion ? `<div class="mini-card-sub" style="font-size:11px;">${escapeHtml(client.position || '-')}</div>` : '';
                     html += `
                         <div class="mini-card" style="cursor:pointer;" onclick="closeGroupModal(); openProfileModal(${client.id})">
                             ${renderAvatar(client)}
                             <div class="mini-card-name">${escapeHtml(client.name)}</div>
+                            ${roleLine}
                             <div class="mini-card-sub">${escapeHtml(subText)}</div>
                         </div>
                     `;
@@ -3790,12 +3965,24 @@
             return sel && sel.value === '__other__' ? (other?.value || '').trim() : (sel?.value || '').trim();
         }
 
-        async function openClientModal() {
+        async function openClientModal(prefill = null) {
             currentEditingClientId = null;
             document.getElementById('clientModalTitle').textContent = 'Novo Cliente';
             document.getElementById('clientForm').reset();
             resetClientPhotoField();
             await loadCompanyAndPositionOptions();
+            if (prefill && (prefill.company || prefill.position)) {
+                const cSel = document.getElementById('clientCompanySelect');
+                const pSel = document.getElementById('clientPositionSelect');
+                if (prefill.company) {
+                    if ([...cSel.options].some(o => o.value === prefill.company)) cSel.value = prefill.company;
+                    else { cSel.value='__other__'; document.getElementById('clientCompanyOther').value = prefill.company; }
+                }
+                if (prefill.position) {
+                    if ([...pSel.options].some(o => o.value === prefill.position)) pSel.value = prefill.position;
+                    else { pSel.value='__other__'; document.getElementById('clientPositionOther').value = prefill.position; }
+                }
+            }
             toggleOtherField('company');
             toggleOtherField('position');
             document.getElementById('clientModal').classList.add('active');
@@ -3811,6 +3998,8 @@
             document.getElementById('clientForm').email.value = client.email || '';
             document.getElementById('clientForm').phone.value = formatPhone(client.phone || '');
             document.getElementById('clientIsTarget').value = Number(client.is_target) === 1 ? '1' : '0';
+            document.getElementById('clientColdContact').value = Number(client.is_cold_contact) === 1 ? '1' : '0';
+            document.getElementById('clientForm').area_of_activity.value = client.area_of_activity || '';
             const cSel = document.getElementById('clientCompanySelect');
             const pSel = document.getElementById('clientPositionSelect');
             if ([...cSel.options].some(o => o.value === client.company)) cSel.value = client.company; else { cSel.value='__other__'; document.getElementById('clientCompanyOther').value = client.company || ''; }
@@ -3838,6 +4027,19 @@
             formData.set('is_target', document.getElementById('clientIsTarget').value === '1' ? '1' : '0');
 
             try {
+                if (!currentEditingClientId) {
+                    const duplicateRes = await fetch(`${API_BASE}/clients/check-duplicate`, {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ name: formData.get('name'), email: formData.get('email'), phone: formData.get('phone') })
+                    });
+                    const duplicatePayload = await duplicateRes.json();
+                    if (duplicatePayload.matches?.length) {
+                        const possible = duplicatePayload.matches[0];
+                        const shouldProceed = await openDuplicateWarningModal(possible);
+                        if (!shouldProceed) return;
+                        formData.set('force_create', '1');
+                    }
+                }
                 const url = currentEditingClientId ? `${API_BASE}/clientes/${currentEditingClientId}` : `${API_BASE}/clientes`;
                 const response = await fetch(url, { method: currentEditingClientId ? 'PUT' : 'POST', body: formData });
                 if (!response.ok) throw new Error('Erro ao salvar cliente');
@@ -3890,6 +4092,194 @@
             } else showError('Erro ao aplicar target em massa');
         }
 
+
+        async function saveColdStatus() {
+            const green_days = Number(document.getElementById('coldGreen').value);
+            const yellow_days = Number(document.getElementById('coldYellow').value);
+            const response = await fetch(`${API_BASE}/config/status/cold`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ green_days, yellow_days })});
+            if (response.ok) { showSuccess('Regra D por contato frio salva!'); await loadStatusConfig(); }
+            else showError('Erro ao salvar regra D');
+        }
+
+        async function loadPositionGroupings() {
+            const response = await fetch(`${API_BASE}/config/position-groupings`);
+            if (response.ok) positionGroupings = await response.json();
+            renderPositionGroupingList();
+        }
+
+        function renderPositionGroupingList() {
+            const el = document.getElementById('positionGroupingList');
+            if (!el) return;
+            if (!positionGroupings.length) { el.innerHTML = '<div style="color:#6b7280;">Nenhum agrupamento cadastrado.</div>'; return; }
+            el.innerHTML = positionGroupings.map(g => `<div class="rule-item"><div><strong>${escapeHtml(g.name)}</strong><div style="font-size:12px;color:#6b7280;">${escapeHtml((g.positions||[]).join(', '))}</div></div><button class="btn btn-danger btn-small" onclick="deletePositionGrouping(${g.id})"><i class="fas fa-trash"></i></button></div>`).join('');
+        }
+
+        async function savePositionGrouping() {
+            const name = document.getElementById('groupingName').value.trim();
+            const positions = document.getElementById('groupingPositions').value.split(',').map(v => v.trim()).filter(Boolean);
+            if (!name || positions.length < 2) { showError('Informe um nome e ao menos 2 cargos.'); return; }
+            const response = await fetch(`${API_BASE}/config/position-groupings`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, positions }) });
+            const payload = await response.json();
+            if (!response.ok) { showError(payload.error || 'Erro ao criar agrupamento'); return; }
+            document.getElementById('groupingName').value=''; document.getElementById('groupingPositions').value='';
+            await loadPositionGroupings();
+            showSuccess('Agrupamento criado!');
+        }
+
+        async function deletePositionGrouping(id) {
+            const response = await fetch(`${API_BASE}/config/position-groupings/${id}`, {method:'DELETE'});
+            if (response.ok) { await loadPositionGroupings(); showSuccess('Agrupamento removido!'); }
+        }
+
+        function getGroupedPositions(position) {
+            const normalized = String(position || '').toLowerCase();
+            const group = positionGroupings.find(g => (g.positions || []).some(p => String(p).toLowerCase() === normalized));
+            return group ? group.positions : [position];
+        }
+
+        async function askRegisterActivityFromCommunication(clientId, contactType, information) {
+            const ok = await uiConfirm(`Deseja registrar essa interação de ${contactType} como atividade no cliente?`);
+            if (!ok) return;
+            const formData = new FormData();
+            formData.set('client_id', clientId);
+            formData.set('contact_type', contactType);
+            formData.set('information', information || `${contactType} enviado.`);
+            const response = await fetch(`${API_BASE}/atividades`, { method:'POST', body: formData });
+            if (response.ok) { showSuccess('Atividade registrada com sucesso!'); await Promise.all([loadActivities(), loadDashboard()]); }
+        }
+
+        function validateIataAttachment(event) {
+            const files = Array.from(event.target.files || []);
+            const allTxt = files.every(file => file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt'));
+            if (!allTxt) {
+                event.target.value = '';
+                showError('No iAta, apenas anexo de texto (.txt).');
+            }
+            const lbl = document.getElementById('iataAttachmentLabel');
+            if (lbl) lbl.classList.toggle('has-file', allTxt && files.length > 0);
+        }
+
+        let activeRecognizer = null;
+        let activeVoiceBtnId = null;
+
+        function toggleVoiceTranscription(targetInputId, buttonId) {
+            const btn = document.getElementById(buttonId);
+            const fallbackSelector = targetInputId === 'activityInformation'
+                ? '#activityForm textarea[name="information"]'
+                : '#iataText';
+            const target = document.getElementById(targetInputId) || document.querySelector(fallbackSelector);
+            if (!btn || !target) return;
+
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SR) {
+                showError('Reconhecimento de voz não suportado neste navegador.');
+                return;
+            }
+
+            if (activeRecognizer && activeVoiceBtnId === buttonId) {
+                activeRecognizer.stop();
+                return;
+            }
+
+            if (activeRecognizer && activeVoiceBtnId && activeVoiceBtnId !== buttonId) {
+                activeRecognizer.stop();
+            }
+
+            const recognition = new SR();
+            recognition.lang = 'pt-BR';
+            recognition.interimResults = true;
+            recognition.continuous = true;
+            recognition.maxAlternatives = 1;
+
+            const initialValue = String(target.value || '').trim();
+            let finalTranscript = '';
+
+            activeRecognizer = recognition;
+            activeVoiceBtnId = buttonId;
+            btn.classList.add('active');
+            target.focus();
+
+            recognition.onresult = (event) => {
+                let interim = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = (event.results[i][0].transcript || '').trim();
+                    if (!transcript) continue;
+                    if (event.results[i].isFinal) finalTranscript += `${transcript} `;
+                    else interim += `${transcript} `;
+                }
+                const prefix = initialValue ? `${initialValue} ` : '';
+                target.value = `${prefix}${finalTranscript}${interim}`.trim();
+            };
+
+            const cleanup = () => {
+                btn.classList.remove('active');
+                if (activeVoiceBtnId === buttonId) {
+                    activeRecognizer = null;
+                    activeVoiceBtnId = null;
+                }
+            };
+
+            recognition.onend = cleanup;
+            recognition.onerror = cleanup;
+            recognition.start();
+        }
+
+        async function openDuplicateWarningModal(client) {
+            return new Promise(resolve => {
+                const avatar = client.photo_url ? `<img src="${client.photo_url}" class="profile-avatar-large" style="width:86px;height:86px;">` : `<div class="profile-avatar-large" style="width:86px;height:86px;display:flex;align-items:center;justify-content:center;">${(client.name||'?').charAt(0).toUpperCase()}</div>`;
+                const html = `
+                    <div class="modal active" id="duplicateWarningModal" onclick="if(event.target===this){document.getElementById('duplicateWarningModal').remove(); window._dupResolve(false);}">
+                        <div class="modal-content" style="max-width:700px; border:1px solid #fdba74; box-shadow:0 16px 34px rgba(249,115,22,0.22);">
+                            <h2 style="color:#9a3412; margin-bottom:10px;">Possível duplicidade</h2>
+                            <p style="color:#7c2d12; margin-bottom:12px;">Já existe um cadastro que pode ser o mesmo. Confira a ficha e confirme se deseja criar mesmo assim.</p>
+                            <div class="profile-layout" style="background:#fff7ed; border:1px solid #fed7aa; border-radius:12px; padding:12px;">
+                                <div class="profile-avatar-wrap">${avatar}</div>
+                                <div style="flex:1; min-width:220px;">
+                                    <div class="profile-info-grid">
+                                        <div class="profile-field"><div class="profile-field-label">Nome</div><div class="profile-field-value">${escapeHtml(client.name || '-')}</div></div>
+                                        <div class="profile-field"><div class="profile-field-label">Empresa</div><div class="profile-field-value">${escapeHtml(client.company || '-')}</div></div>
+                                        <div class="profile-field"><div class="profile-field-label">Cargo</div><div class="profile-field-value">${escapeHtml(client.position || '-')}</div></div>
+                                        <div class="profile-field"><div class="profile-field-label">Email</div><div class="profile-field-value">${escapeHtml(client.email || '-')}</div></div>
+                                        <div class="profile-field"><div class="profile-field-label">Telefone</div><div class="profile-field-value">${escapeHtml(client.phone || '-')}</div></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="modal-footer" style="margin-top:14px;">
+                                <button class="btn btn-secondary" style="background:#fed7aa; color:#7c2d12;" onclick="document.getElementById('duplicateWarningModal').remove(); window._dupResolve(false);">Cancelar</button>
+                                <button class="btn btn-primary" style="background:#fb923c;" onclick="document.getElementById('duplicateWarningModal').remove(); window._dupResolve(true);">Confirmar criação</button>
+                            </div>
+                        </div>
+                    </div>`;
+                window._dupResolve = resolve;
+                const existing = document.getElementById('duplicateWarningModal');
+                if (existing) existing.remove();
+                document.body.insertAdjacentHTML('beforeend', html);
+            });
+        }
+
+        async function openOrgQuickCreateClient(company, position) {
+            await openClientModal({ company, position });
+        }
+
+        async function loadOrganizationalMapping() {
+            const response = await fetch(`${API_BASE}/clientes`);
+            const data = response.ok ? await response.json() : [];
+            const companies = [...new Set(data.map(c => c.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+            const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>{ const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b); return r !== 0 ? r : a.localeCompare(b,'pt-BR'); });
+            let html = '<div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
+            companies.forEach(company => {
+                html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
+                positions.forEach(position => {
+                    const people = data.filter(c => c.company===company && c.position===position);
+                    const cell = people.length ? people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('') : `<button class="org-add-btn" title="Adicionar contato neste cargo" onclick="openOrgQuickCreateClient(${JSON.stringify(company)}, ${JSON.stringify(position)})">+</button>`;
+                    html += `<td>${cell}</td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+            document.getElementById('organizationalContent').innerHTML = html;
+        }
+
         async function saveTargetStatus() {
             const green_days = Number(document.getElementById('targetGreen').value);
             const yellow_days = Number(document.getElementById('targetYellow').value);
@@ -3907,10 +4297,26 @@
                 if (tg) tg.value = Number(statusConfig.target.green_days || 5);
                 if (ty) ty.value = Number(statusConfig.target.yellow_days || 10);
             }
+            if (statusConfig?.cold) {
+                const cg = document.getElementById('coldGreen');
+                const cy = document.getElementById('coldYellow');
+                if (cg) cg.value = Number(statusConfig.cold.green_days || 45);
+                if (cy) cy.value = Number(statusConfig.cold.yellow_days || 60);
+            }
         }
 
         const _getStatusOriginal = getStatus;
-        getStatus = function(lastActivityDate, position, isTarget = 0) {
+        getStatus = function(lastActivityDate, position, isTarget = 0, isColdContact = 0) {
+            if (Number(isColdContact) === 1 && statusConfig?.cold) {
+                const greenDays = Number(statusConfig.cold.green_days || 45);
+                const yellowDays = Number(statusConfig.cold.yellow_days || 60);
+                if (!lastActivityDate) return 'red';
+                const date = new Date(lastActivityDate);
+                const days = Math.floor((new Date() - date) / (1000 * 60 * 60 * 24));
+                if (days < greenDays) return 'green';
+                if (days < yellowDays) return 'yellow';
+                return 'red';
+            }
             if (Number(isTarget) === 1 && statusConfig?.target) {
                 const greenDays = Number(statusConfig.target.green_days || 5);
                 const yellowDays = Number(statusConfig.target.yellow_days || 10);
@@ -3983,7 +4389,7 @@
             html += '<h2 style="margin-bottom:10px;">Adicionar ao calendário do Outlook?</h2>';
             html += '<p style="color:#6b7280; margin-bottom:12px;">Deseja criar este evento no Outlook para revisão antes de salvar?</p>';
             html += '<label style="display:flex; gap:8px; align-items:center; margin-bottom:16px;"><input type="checkbox" id="skipOutlookAsk"> Não perguntar novamente</label>';
-            html += '<div class="modal-footer"><button class="btn btn-secondary" onclick="closeOutlookPromptModal()">Não</button><button class="btn btn-primary" onclick="confirmOutlookPrompt()">Sim</button></div>';
+            html += '<div class="modal-footer" style="grid-column:1/-1;"><button class="btn btn-secondary" onclick="closeOutlookPromptModal()">Não</button><button class="btn btn-primary" onclick="confirmOutlookPrompt()">Sim</button></div>';
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
             window._pendingOutlookCommitments = items;
@@ -4074,7 +4480,7 @@
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings()]);
             loadDashboard();
         });
     </script>
