@@ -1189,6 +1189,12 @@
         @keyframes voiceBars { 0%,100%{transform:scaleY(.65);} 50%{transform:scaleY(1.25);} }
         /* === Mapeamento Organizacional - Design Moderno === */
         #mapeamento-organizacional { background: transparent; }
+        /* Background azul claro degrado para branco quando o modulo esta ativo */
+        body:has(#mapeamento-organizacional.active) { background: linear-gradient(135deg, #e8f6fc 0%, #f4fbfe 40%, #ffffff 100%) !important; }
+        /* Toast de sucesso azul exclusivo para o modulo */
+        #orgSuccessMsg { position: fixed; top: 20px; right: 24px; z-index: 9999; padding: 14px 22px; border-radius: 10px; background: #daf0f9; color: #0d3a52; border: 1px solid #a8ddf0; font-size: 14px; font-weight: 600; box-shadow: 0 4px 18px rgba(96,187,217,0.25); display: none; }
+        #orgSuccessMsg.show { display: block; animation: fadeInDown 0.3s ease; }
+        @keyframes fadeInDown { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
         #mapeamento-organizacional .page-header h1 { color: #0d3a52; }
         #mapeamento-organizacional .page-header p { color: rgba(96,187,217,0.85); }
         #mapeamento-organizacional .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
@@ -1312,6 +1318,7 @@
     <!-- Main Content -->
     <main class="main-content">
         <div class="alert alert-success" id="successMsg"></div>
+        <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
 
         <div id="iata" class="tab-content">
@@ -3935,12 +3942,20 @@
             document.getElementById('groupModal').classList.remove('active');
         }
 
-        // Show Success
+        // Show Success - usa toast azul quando o modulo Mapeamento Organizacional esta ativo
         function showSuccess(message) {
-            const el = document.getElementById('successMsg');
-            el.textContent = message;
-            el.classList.add('show');
-            setTimeout(() => el.classList.remove('show'), 3000);
+            const orgActive = document.getElementById('mapeamento-organizacional')?.classList.contains('active');
+            if (orgActive) {
+                const el = document.getElementById('orgSuccessMsg');
+                el.textContent = message;
+                el.classList.add('show');
+                setTimeout(() => el.classList.remove('show'), 3000);
+            } else {
+                const el = document.getElementById('successMsg');
+                el.textContent = message;
+                el.classList.add('show');
+                setTimeout(() => el.classList.remove('show'), 3000);
+            }
         }
 
         // Show Error
