@@ -1187,21 +1187,32 @@
         .voice-anim span:nth-child(2){height:14px; animation-delay:.15s;}
         .voice-anim span:nth-child(3){height:10px; animation-delay:.3s;}
         @keyframes voiceBars { 0%,100%{transform:scaleY(.65);} 50%{transform:scaleY(1.25);} }
-        .org-table-wrap { overflow-x: auto; overflow-y: visible; padding-bottom: 10px; }
+        /* === Mapeamento Organizacional - Design Moderno === */
+        #mapeamento-organizacional { background: transparent; }
+        .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; }
+        .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 220px); border-radius: 0 0 20px 20px; }
+        .org-table-wrap::-webkit-scrollbar { width:6px; height:6px; }
+        .org-table-wrap::-webkit-scrollbar-track { background:rgba(96,187,217,0.08); }
+        .org-table-wrap::-webkit-scrollbar-thumb { background:rgba(96,187,217,0.45); border-radius:4px; }
+        .org-table-wrap::-webkit-scrollbar-thumb:hover { background:rgba(96,187,217,0.7); }
         .org-table { min-width: 900px; width:100%; border-collapse: separate; border-spacing:0; }
-        .org-table th,.org-table td { border:1px solid #1a6a8a; padding:10px; vertical-align: top; background:#fff; color:#0d4a6b; }
-        .org-table thead th { position: sticky; top:0; z-index:3; background:#60BBD9; color:#0d3a52; font-weight:700; }
-        .org-table th:first-child, .org-table td:first-child { position: sticky; left:0; z-index:2; background:#60BBD9; min-width:220px; color:#0d3a52; font-weight:700; }
-        .org-table thead th:first-child { z-index:4; background:#60BBD9; }
-        .org-table tbody tr td { background:#e8f6fc; }
-        .org-table tbody tr:nth-child(even) td { background:#d4eef8; }
-        .org-table tbody tr td:first-child { background:#60BBD9; }
-        .org-table .table-link-btn { color:#0d3a52; }
-        .org-table .table-link-btn:hover { color:#051e2e; }
-        .occupant { display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:8px; }
-        .org-add-btn { background:none; border:none; color:#1a6a8a; font-size:22px; font-weight:700; cursor:pointer; padding:2px 8px; border-radius:8px; line-height:1; transition: color 0.2s, transform 0.15s; display:block; margin:auto; }
-        .org-add-btn:hover { color:#0d3a52; transform:scale(1.2); }
-        .occupant img,.occupant .mini-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; }
+        .org-table th { border-bottom: 2px solid rgba(96,187,217,0.4); border-right: 1px solid rgba(96,187,217,0.25); padding: 14px 16px; vertical-align: middle; background: #60BBD9; color: #0d3a52; font-weight: 700; font-size: 13px; letter-spacing: 0.3px; white-space: nowrap; position: sticky; top: 0; z-index: 3; }
+        .org-table td { border-bottom: 1px solid rgba(96,187,217,0.18); border-right: 1px solid rgba(96,187,217,0.12); padding: 12px 14px; vertical-align: middle; background: #f0fafd; color: #1a4a5e; font-size: 13px; transition: background 0.15s; }
+        .org-table tbody tr:hover td { background: #ddf1f9; }
+        .org-table tbody tr:hover td:first-child { background: #4aaec8; }
+        .org-table th:first-child { position: sticky; left:0; z-index:4; background:#60BBD9; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
+        .org-table td:first-child { position: sticky; left:0; z-index:2; background:#60BBD9; color:#0d3a52; font-weight:700; font-size:14px; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
+        .org-table tbody tr:nth-child(even) td { background: #e4f5fb; }
+        .org-table tbody tr:nth-child(even) td:first-child { background: #55b3cc; }
+        .org-table .table-link-btn { color:#0d3a52; font-weight:600; font-size:13px; }
+        .org-table .table-link-btn:hover { color:#051e2e; text-decoration:underline; }
+        .occupant { display:flex; align-items:center; gap:8px; margin-bottom:6px; padding:4px 6px; border-radius:8px; transition:background 0.15s; }
+        .occupant:last-child { margin-bottom:0; }
+        .occupant:hover { background:rgba(96,187,217,0.15); }
+        .occupant img,.occupant .mini-avatar { width:30px; height:30px; border-radius:50%; object-fit:cover; flex-shrink:0; border:2px solid rgba(255,255,255,0.7); box-shadow:0 2px 6px rgba(0,0,0,0.12); }
+        .org-add-btn { background:none; border:2px dashed rgba(96,187,217,0.5); color:rgba(13,58,82,0.55); font-size:20px; font-weight:700; cursor:pointer; padding:4px 12px; border-radius:8px; line-height:1.4; transition: all 0.2s; display:block; margin:auto; width:36px; text-align:center; }
+        .org-add-btn:hover { border-color:#60BBD9; color:#0d3a52; background:rgba(96,187,217,0.12); transform:scale(1.15); }
+        .org-table .mini-avatar { width:30px; height:30px; font-size:13px; margin:0; flex-shrink:0; border:2px solid rgba(255,255,255,0.7); box-shadow:0 2px 6px rgba(0,0,0,0.12); }
         .iata-center { display:flex; align-items:center; justify-content:center; min-height:46vh; }
         .iata-input-row { display:flex; gap:8px; margin-top:14px; align-items:flex-end; }
         #iata { background:#fff; }
@@ -4264,18 +4275,34 @@
             const data = response.ok ? await response.json() : [];
             const companies = [...new Set(data.map(c => c.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
             const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>{ const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b); return r !== 0 ? r : a.localeCompare(b,'pt-BR'); });
-            let html = '<div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
+            let html = '<div class="org-map-container"><div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
             companies.forEach(company => {
                 html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
                 positions.forEach(position => {
                     const people = data.filter(c => c.company===company && c.position===position);
-                    const cell = people.length ? people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('') : `<button class="org-add-btn" title="Cadastrar cliente para ${escapeHtml(company)} - ${escapeHtml(position)}" onclick="openClientModalFromOrgMap(${JSON.stringify(company)}, ${JSON.stringify(position)})">+</button>`;
-                    html += `<td>${cell}</td>`;
+                    if (people.length) {
+                        const cell = people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('');
+                        html += `<td>${cell}</td>`;
+                    } else {
+                        const safeCompany = escapeHtml(company);
+                        const safePosition = escapeHtml(position);
+                        html += `<td><button class="org-add-btn" data-company="${safeCompany}" data-position="${safePosition}" title="Cadastrar ${safePosition} em ${safeCompany}">+</button></td>`;
+                    }
                 });
                 html += '</tr>';
             });
-            html += '</tbody></table></div>';
-            document.getElementById('organizationalContent').innerHTML = html;
+            html += '</tbody></table></div></div>';
+            const container = document.getElementById('organizationalContent');
+            container.innerHTML = html;
+            // Delegação de eventos para os botões +
+            container.querySelectorAll('.org-add-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    // getAttribute já decodifica entidades HTML automaticamente
+                    const company = this.dataset.company;
+                    const position = this.dataset.position;
+                    openClientModalFromOrgMap(company, position);
+                });
+            });
         }
 
         async function openClientModalFromOrgMap(company, position) {
