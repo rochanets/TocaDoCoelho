@@ -3845,11 +3845,12 @@
         function getCompanyImportanceRank(position) {
             const p = String(position || '').trim().toLowerCase();
             if (p === 'ceo') return 1;
-            if (p.startsWith('c') && p.length <= 4) return 2;
-            if (p.includes('diretor') || p.includes('superintendente')) return 3;
-            if (p.includes('gerente')) return 4;
-            if (p.includes('coordenador')) return 5;
-            return 6;
+            if (p === 'cio') return 2;
+            if (p.startsWith('c') && p.length <= 5) return 3; // CHO, CISO, CMO, etc.
+            if (p.includes('diretor') || p.includes('superintendente')) return 4;
+            if (p.includes('gerente')) return 5;
+            if (p.includes('coordenador')) return 6;
+            return 7;
         }
 
         function sortGroupClients(groupType, list) {
