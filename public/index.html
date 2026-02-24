@@ -1187,13 +1187,20 @@
         .voice-anim span:nth-child(2){height:14px; animation-delay:.15s;}
         .voice-anim span:nth-child(3){height:10px; animation-delay:.3s;}
         @keyframes voiceBars { 0%,100%{transform:scaleY(.65);} 50%{transform:scaleY(1.25);} }
-        .org-table-wrap { overflow-x: auto; overflow-y:auto; padding-bottom: 10px; max-height: 62vh; }
+        .org-table-wrap { overflow-x: auto; overflow-y: visible; padding-bottom: 10px; }
         .org-table { min-width: 900px; width:100%; border-collapse: separate; border-spacing:0; }
-        .org-table th,.org-table td { border:1px solid #d1fae5; padding:10px; vertical-align: top; background:#fff; }
-        .org-table thead th { position: sticky; top:0; z-index:3; background:#ecfdf5; }
-        .org-table th:first-child, .org-table td:first-child { position: sticky; left:0; z-index:2; background:#f0fdf4; min-width:220px; }
-        .org-table thead th:first-child { z-index:4; }
+        .org-table th,.org-table td { border:1px solid #1a6a8a; padding:10px; vertical-align: top; background:#fff; color:#0d4a6b; }
+        .org-table thead th { position: sticky; top:0; z-index:3; background:#60BBD9; color:#0d3a52; font-weight:700; }
+        .org-table th:first-child, .org-table td:first-child { position: sticky; left:0; z-index:2; background:#60BBD9; min-width:220px; color:#0d3a52; font-weight:700; }
+        .org-table thead th:first-child { z-index:4; background:#60BBD9; }
+        .org-table tbody tr td { background:#e8f6fc; }
+        .org-table tbody tr:nth-child(even) td { background:#d4eef8; }
+        .org-table tbody tr td:first-child { background:#60BBD9; }
+        .org-table .table-link-btn { color:#0d3a52; }
+        .org-table .table-link-btn:hover { color:#051e2e; }
         .occupant { display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:8px; }
+        .org-add-btn { background:none; border:none; color:#1a6a8a; font-size:22px; font-weight:700; cursor:pointer; padding:2px 8px; border-radius:8px; line-height:1; transition: color 0.2s, transform 0.15s; display:block; margin:auto; }
+        .org-add-btn:hover { color:#0d3a52; transform:scale(1.2); }
         .occupant img,.occupant .mini-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; }
         .iata-center { display:flex; align-items:center; justify-content:center; min-height:46vh; }
         .iata-input-row { display:flex; gap:8px; margin-top:14px; align-items:flex-end; }
@@ -1257,13 +1264,13 @@
                 <i class="fas fa-chart-line"></i>
                 <span>Atividades</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'report')">
-                <i class="fas fa-database"></i>
-                <span>Report & Backup</span>
-            </button>
             <button class="nav-item" onclick="switchTab(event, 'agenda')">
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
+            </button>
+            <button class="nav-item" onclick="switchTab(event, 'report')">
+                <i class="fas fa-database"></i>
+                <span>Report & Backup</span>
             </button>
             <button class="nav-item nav-item-settings" onclick="switchTab(event, 'configuracoes')">
                 <i class="fas fa-cog"></i>
@@ -1697,6 +1704,7 @@
         let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
         let positionGroupings = [];
+        let _orgMapOpenContext = null; // { company, position } quando aberto pelo + do mapeamento organizacional
 
         // Tab switching
         function switchTab(ev, tabName) {
@@ -2283,6 +2291,7 @@
         // Close Client Modal
         function closeClientModal() {
             resetClientPhotoField();
+            _orgMapOpenContext = null;
             document.getElementById('clientModal').classList.remove('active');
         }
 
@@ -2559,6 +2568,10 @@
                     closeClientModal();
                     loadClients();
                     loadDashboard();
+                    if (_orgMapOpenContext) {
+                        _orgMapOpenContext = null;
+                        await loadOrganizationalMapping();
+                    }
                 } else {
                     showError('Erro ao salvar cliente');
                 }
@@ -4029,7 +4042,12 @@
                 if (!response.ok) throw new Error('Erro ao salvar cliente');
                 showSuccess(currentEditingClientId ? 'Cliente atualizado!' : 'Cliente cadastrado!');
                 closeClientModal();
-                await Promise.all([loadClients(), loadDashboard(), loadPositions()]);
+                const reloadTasks = [loadClients(), loadDashboard(), loadPositions()];
+                if (_orgMapOpenContext) {
+                    _orgMapOpenContext = null;
+                    reloadTasks.push(loadOrganizationalMapping());
+                }
+                await Promise.all(reloadTasks);
             } catch (error) {
                 showError('Erro ao salvar cliente: ' + error.message);
             }
@@ -4251,13 +4269,43 @@
                 html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
                 positions.forEach(position => {
                     const people = data.filter(c => c.company===company && c.position===position);
-                    const cell = people.length ? people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('') : '-';
+                    const cell = people.length ? people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('') : `<button class="org-add-btn" title="Cadastrar cliente para ${escapeHtml(company)} - ${escapeHtml(position)}" onclick="openClientModalFromOrgMap(${JSON.stringify(company)}, ${JSON.stringify(position)})">+</button>`;
                     html += `<td>${cell}</td>`;
                 });
                 html += '</tr>';
             });
             html += '</tbody></table></div>';
             document.getElementById('organizationalContent').innerHTML = html;
+        }
+
+        async function openClientModalFromOrgMap(company, position) {
+            _orgMapOpenContext = { company, position };
+            currentEditingClientId = null;
+            document.getElementById('clientModalTitle').textContent = 'Novo Cliente';
+            document.getElementById('clientForm').reset();
+            resetClientPhotoField();
+            await loadCompanyAndPositionOptions();
+            // Pré-selecionar empresa
+            const cSel = document.getElementById('clientCompanySelect');
+            if (cSel && [...cSel.options].some(o => o.value === company)) {
+                cSel.value = company;
+            } else if (cSel) {
+                cSel.value = '__other__';
+                const cOther = document.getElementById('clientCompanyOther');
+                if (cOther) cOther.value = company;
+            }
+            toggleOtherField('company');
+            // Pré-selecionar cargo
+            const pSel = document.getElementById('clientPositionSelect');
+            if (pSel && [...pSel.options].some(o => o.value === position)) {
+                pSel.value = position;
+            } else if (pSel) {
+                pSel.value = '__other__';
+                const pOther = document.getElementById('clientPositionOther');
+                if (pOther) pOther.value = position;
+            }
+            toggleOtherField('position');
+            document.getElementById('clientModal').classList.add('active');
         }
 
         async function saveTargetStatus() {
