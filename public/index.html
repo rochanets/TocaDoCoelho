@@ -1275,8 +1275,15 @@
                 <p>Módulo inteligente para apoio de mensagens e atas.</p>
             </div>
             <div class="iata-center">
-                <video id="iataVideo" autoplay loop muted playsinline style="max-width:360px; width:100%; border-radius:14px; box-shadow:0 8px 28px rgba(15,118,110,.18);" poster="/logo-coelho.png">
-                    <source src="/coelho-iata.mp4" type="video/mp4">
+                <video
+                  autoplay
+                  loop
+                  muted
+                  playsinline
+                  preload="auto"
+                  style="width: 100%; height: auto; display: block; border-radius: 12px;"
+                >
+                  <source src="/animations/TocaVideo.mp4" type="video/mp4" />
                 </video>
             </div>
             <div class="iata-input-row">
@@ -4210,13 +4217,6 @@
                 const existing = document.getElementById('duplicateWarningModal');
                 if (existing) existing.remove();
                 document.body.insertAdjacentHTML('beforeend', html);
-            });
-        }
-
-        const iataVideo = document.getElementById('iataVideo');
-        if (iataVideo) {
-            iataVideo.addEventListener('error', () => {
-                iataVideo.outerHTML = '<img src="/logo-coelho.png" alt="iAta" class="iata-fallback-media">';
             });
         }
 
