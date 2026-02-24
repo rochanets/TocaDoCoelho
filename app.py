@@ -1454,7 +1454,8 @@ def export_group_xlsx():
                         WHEN LOWER(TRIM(position)) LIKE 'c%' AND LENGTH(TRIM(position)) <= 4 THEN 2
                         WHEN LOWER(position) LIKE '%diretor%' OR LOWER(position) LIKE '%superintendente%' THEN 3
                         WHEN LOWER(position) LIKE '%gerente%' THEN 4
-                        ELSE 5
+                        WHEN LOWER(position) LIKE '%coordenador%' THEN 5
+                        ELSE 6
                     END,
                     LOWER(name)
             ''', (group_value,))
