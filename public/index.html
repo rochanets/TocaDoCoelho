@@ -1160,8 +1160,8 @@
             text-shadow: 0 0 6px rgba(125,211,252,0.98);
             z-index: 2;
         }
-        .profile-avatar-wrap { position: relative; display: inline-block; }
-        .profile-avatar-wrap .snowflake-badge { right: -2px; bottom: -2px; font-size: 22px; }
+        .profile-avatar-wrap { position: relative; display: inline-flex; width: fit-content; }
+        .profile-avatar-wrap .snowflake-badge { right: 4px; bottom: 4px; font-size: 24px; background: transparent; pointer-events:none; }
         .voice-btn {
             border: 1px solid rgba(52, 211, 153, 0.4);
             background: #ecfeff;
@@ -1195,7 +1195,9 @@
         .occupant img,.occupant .mini-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; }
         .iata-center { display:flex; align-items:center; justify-content:center; min-height:46vh; }
         .iata-input-row { display:flex; gap:8px; margin-top:14px; align-items:flex-end; }
-        .iata-textarea { min-height: 108px; resize: vertical; }
+        #iata { background:#fff; }
+        .iata-textarea { min-height: 108px; resize: vertical; background:#f0fdf4; border-radius:26px !important; padding:14px 18px !important; }
+        .iata-textarea::placeholder { color:#6b7280; padding-left:6px; }
         .iata-fallback-media { max-width:360px; width:100%; border-radius:14px; box-shadow:0 8px 28px rgba(15,118,110,.18); animation: iataFloat 2.6s ease-in-out infinite; }
         @keyframes iataFloat { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-6px);} }
         .iata-file-input { display:none; }
@@ -1287,7 +1289,7 @@
                 </video>
             </div>
             <div class="iata-input-row">
-                <textarea id="iataText" class="iata-textarea" placeholder="Digite aqui..." style="flex:1;"></textarea>
+                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui, grave uma mensagem ou anexe um arquivo" style="flex:1;"></textarea>
                 <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
                     <i class="fas fa-microphone voice-icon"></i>
                     <span class="voice-anim"><span></span><span></span><span></span></span>
@@ -1552,7 +1554,8 @@
                 </div>
                 <div class="form-group">
                     <label>Foto</label>
-                    <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)">
+                    <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)" style="display:none;">
+                    <label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label>
                     <small style="display:block; margin-top:6px; color:#059669;">Dica: você pode colar imagem com Ctrl+V aqui.</small>
                     <img id="photoPreview" class="photo-preview" style="display:none;">
                     <input type="hidden" id="removePhotoFlag" name="remove_photo" value="0">
@@ -4132,7 +4135,10 @@
 
         function toggleVoiceTranscription(targetInputId, buttonId) {
             const btn = document.getElementById(buttonId);
-            const target = document.getElementById(targetInputId);
+            const fallbackSelector = targetInputId === 'activityInformation'
+                ? '#activityForm textarea[name="information"]'
+                : '#iataText';
+            const target = document.getElementById(targetInputId) || document.querySelector(fallbackSelector);
             if (!btn || !target) return;
 
             const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -4156,21 +4162,23 @@
             recognition.continuous = true;
             recognition.maxAlternatives = 1;
 
-            const baseValue = String(target.value || '');
+            const initialValue = String(target.value || '').trim();
             let finalTranscript = '';
 
             activeRecognizer = recognition;
             activeVoiceBtnId = buttonId;
             btn.classList.add('active');
+            target.focus();
 
             recognition.onresult = (event) => {
                 let interim = '';
                 for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-                    if (event.results[i].isFinal) finalTranscript += transcript + ' ';
-                    else interim += transcript;
+                    const transcript = (event.results[i][0].transcript || '').trim();
+                    if (!transcript) continue;
+                    if (event.results[i].isFinal) finalTranscript += `${transcript} `;
+                    else interim += `${transcript} `;
                 }
-                const prefix = baseValue ? `${baseValue} ` : '';
+                const prefix = initialValue ? `${initialValue} ` : '';
                 target.value = `${prefix}${finalTranscript}${interim}`.trim();
             };
 
@@ -4224,7 +4232,7 @@
             const response = await fetch(`${API_BASE}/clientes`);
             const data = response.ok ? await response.json() : [];
             const companies = [...new Set(data.map(c => c.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
-            const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+            const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>{ const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b); return r !== 0 ? r : a.localeCompare(b,'pt-BR'); });
             let html = '<div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
             companies.forEach(company => {
                 html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
