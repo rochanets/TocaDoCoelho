@@ -100,12 +100,30 @@ def init_db():
         name TEXT NOT NULL,
         company TEXT NOT NULL,
         position TEXT NOT NULL,
+        area_of_activity TEXT,
         email TEXT,
         phone TEXT,
         photo_url TEXT,
         is_target INTEGER DEFAULT 0,
+        is_cold_contact INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS job_groupings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS job_grouping_positions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        grouping_id INTEGER NOT NULL,
+        position TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(grouping_id) REFERENCES job_groupings(id) ON DELETE CASCADE,
+        UNIQUE(grouping_id, position)
     )''')
 
     # Tabela de configuracoes gerais
@@ -221,6 +239,10 @@ def init_db():
         c.execute('ALTER TABLE clients ADD COLUMN last_activity_date TIMESTAMP')
     if 'is_target' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN is_target INTEGER DEFAULT 0')
+    if 'area_of_activity' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN area_of_activity TEXT')
+    if 'is_cold_contact' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN is_cold_contact INTEGER DEFAULT 0')
 
     c.execute("PRAGMA table_info(commitments)")
     commitment_columns = [col[1] for col in c.fetchall()]
@@ -234,6 +256,8 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_yellow_days', '14'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('target_green_days', '5'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('target_yellow_days', '10'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_green_days', '45'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_yellow_days', '60'))
     
     conn.commit()
     
@@ -531,7 +555,7 @@ def get_status_config():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days", "target_green_days", "target_yellow_days")')
+        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days", "target_green_days", "target_yellow_days", "cold_green_days", "cold_yellow_days")')
         settings = {row['key']: row['value'] for row in c.fetchall()}
         c.execute('SELECT id, position, green_days, yellow_days FROM status_rules ORDER BY position')
         rules = [dict_from_row(row) for row in c.fetchall()]
@@ -546,6 +570,10 @@ def get_status_config():
             'target': {
                 'green_days': int(settings.get('target_green_days', '5')),
                 'yellow_days': int(settings.get('target_yellow_days', '10'))
+            },
+            'cold': {
+                'green_days': int(settings.get('cold_green_days', '45')),
+                'yellow_days': int(settings.get('cold_yellow_days', '60'))
             }
         })
     except Exception as e:
@@ -596,6 +624,84 @@ def update_target_status_config():
         return jsonify({'message': 'Configuração Target atualizada'})
     except Exception as e:
         print(f'[ERROR] PUT /api/config/status/target: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/config/status/cold', methods=['PUT'])
+def update_cold_status_config():
+    try:
+        data = request.get_json() or {}
+        green_days = int(data.get('green_days', 45))
+        yellow_days = int(data.get('yellow_days', 60))
+
+        if green_days < 0 or yellow_days <= green_days:
+            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(green_days), 'cold_green_days'))
+        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(yellow_days), 'cold_yellow_days'))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Configuração de contato frio atualizada'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/config/status/cold: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/position-groupings', methods=['GET'])
+def list_position_groupings():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, name FROM job_groupings ORDER BY name')
+        groups = [dict_from_row(row) for row in c.fetchall()]
+        for group in groups:
+            c.execute('SELECT position FROM job_grouping_positions WHERE grouping_id = ? ORDER BY position', (group['id'],))
+            group['positions'] = [row['position'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(groups)
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/position-groupings: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/position-groupings', methods=['POST'])
+def create_position_grouping():
+    try:
+        data = request.get_json() or {}
+        name = (data.get('name') or '').strip()
+        positions = sorted(set([(p or '').strip() for p in (data.get('positions') or []) if (p or '').strip()]))
+
+        if not name or len(positions) < 2:
+            return jsonify({'error': 'Informe um nome e ao menos 2 cargos'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('INSERT INTO job_groupings (name, updated_at) VALUES (?, CURRENT_TIMESTAMP)', (name,))
+        grouping_id = c.lastrowid
+        for position in positions:
+            c.execute('INSERT INTO job_grouping_positions (grouping_id, position) VALUES (?, ?)', (grouping_id, position))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Agrupamento criado'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/config/position-groupings: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/position-groupings/<int:grouping_id>', methods=['DELETE'])
+def delete_position_grouping(grouping_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM job_groupings WHERE id = ?', (grouping_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Agrupamento removido'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/config/position-groupings/{grouping_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/status/rules', methods=['POST'])
@@ -733,6 +839,48 @@ def get_client(client_id):
         print(f'[ERROR] GET /api/clients/{client_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
+
+
+@app.route('/api/clients/check-duplicate', methods=['POST'])
+def check_duplicate_client():
+    try:
+        data = request.get_json() or {}
+        name = (data.get('name') or '').strip()
+        email = (data.get('email') or '').strip()
+        phone = normalize_phone((data.get('phone') or '').strip())
+        exclude_id = data.get('exclude_id')
+
+        clauses = []
+        params = []
+        if name:
+            clauses.append('LOWER(TRIM(name)) = LOWER(TRIM(?))')
+            params.append(name)
+        if email:
+            clauses.append('LOWER(TRIM(email)) = LOWER(TRIM(?))')
+            params.append(email)
+        if phone:
+            clauses.append('TRIM(phone) = TRIM(?)')
+            params.append(phone)
+
+        if not clauses:
+            return jsonify({'matches': []})
+
+        where = ' OR '.join(f'({c})' for c in clauses)
+        sql = f'SELECT * FROM clients WHERE {where}'
+        if exclude_id:
+            sql += ' AND id != ?'
+            params.append(int(exclude_id))
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(sql, params)
+        matches = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify({'matches': matches})
+    except Exception as e:
+        print(f'[ERROR] POST /api/clients/check-duplicate: {e}')
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/clientes', methods=['POST'])
 def create_cliente():
     return create_client()
@@ -750,11 +898,35 @@ def create_client():
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        area_of_activity = request.form.get('area_of_activity', '').strip()
+        is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
+        force_create = request.form.get('force_create') in ('1', 'true', 'on')
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
         
+        if not force_create:
+            duplicate_clauses = []
+            duplicate_params = []
+            if name:
+                duplicate_clauses.append('LOWER(TRIM(name)) = LOWER(TRIM(?))')
+                duplicate_params.append(name)
+            if email:
+                duplicate_clauses.append('LOWER(TRIM(email)) = LOWER(TRIM(?))')
+                duplicate_params.append(email)
+            if phone:
+                duplicate_clauses.append('TRIM(phone) = TRIM(?)')
+                duplicate_params.append(phone)
+            if duplicate_clauses:
+                conn = get_db()
+                c = conn.cursor()
+                c.execute(f"SELECT * FROM clients WHERE {' OR '.join([f'({cl})' for cl in duplicate_clauses])} ORDER BY id DESC LIMIT 1", duplicate_params)
+                existing = dict_from_row(c.fetchone())
+                conn.close()
+                if existing:
+                    return jsonify({'error': 'Possível duplicidade encontrada', 'duplicate': existing}), 409
+
         photo_url = None
         if 'photo' in request.files:
             file = request.files['photo']
@@ -766,9 +938,9 @@ def create_client():
         
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, email, phone, photo_url, is_target)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                  (name, company, position, email or None, phone or None, photo_url, is_target))
+        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, photo_url, is_target, is_cold_contact)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact))
         conn.commit()
         client_id = c.lastrowid
         conn.close()
@@ -795,6 +967,8 @@ def update_client(client_id):
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        area_of_activity = request.form.get('area_of_activity', '').strip()
+        is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         remove_photo = request.form.get('remove_photo', '0') == '1'
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         
@@ -820,9 +994,9 @@ def update_client(client_id):
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
         
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, updated_at = CURRENT_TIMESTAMP
+        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (name, company, position, email or None, phone or None, photo_url, is_target, client_id))
+                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact, client_id))
         conn.commit()
         conn.close()
         
@@ -1280,7 +1454,8 @@ def export_group_xlsx():
                         WHEN LOWER(TRIM(position)) LIKE 'c%' AND LENGTH(TRIM(position)) <= 4 THEN 2
                         WHEN LOWER(position) LIKE '%diretor%' OR LOWER(position) LIKE '%superintendente%' THEN 3
                         WHEN LOWER(position) LIKE '%gerente%' THEN 4
-                        ELSE 5
+                        WHEN LOWER(position) LIKE '%coordenador%' THEN 5
+                        ELSE 6
                     END,
                     LOWER(name)
             ''', (group_value,))
