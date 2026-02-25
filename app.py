@@ -2627,12 +2627,13 @@ def update_account(account_id):
         professionals_count = int(professionals_count) if professionals_count.isdigit() else None
         global_presence = request.form.get('global_presence', '').strip() or None
         main_contact_ids = request.form.get('main_contact_ids', '').strip()
+        remove_logo = request.form.get('remove_logo', '0') in ('1', 'true', 'True')
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         row = dict_from_row(c.fetchone())
         if not row:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        logo_url = row.get('logo_url')
+        logo_url = None if remove_logo else row.get('logo_url')
         if 'logo' in request.files:
             f = request.files['logo']
             if f and f.filename:

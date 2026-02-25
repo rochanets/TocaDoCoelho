@@ -4726,20 +4726,88 @@
             const el = document.getElementById('accountsContent');
             if (!el) return;
             if (!accounts.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta cadastrada.</p></div>'; return; }
-            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountDetails(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:cover;"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:#6b7280;">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="padding:4px 9px; border-radius:999px; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.26); font-size:12px;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
+            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:cover;"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:#6b7280;">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="padding:4px 9px; border-radius:999px; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.26); font-size:12px;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
+        }
+
+        async function openAccountViewModal(accountId) {
+            const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
+            if (!account || account.error) return showError('Conta não encontrada');
+            let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:820px;">`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div>`;
+            html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${escapeHtml(String(account.professionals_count || '-'))}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${(account.contacts||[]).filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
+            html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4>${(account.presences||[]).length?(account.presences||[]).map(p=>`<div class='rule-item'><span>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-secondary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Detalhes</button></div></div>`).join(''):'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
+            html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${(account.contacts||[]).length?(account.contacts||[]).map(c=>`<div class='history-item' style='margin-bottom:8px;'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div></div>`).join(''):'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><h4 style="color:#065f46; margin-bottom:8px;">Histórico de Atividades</h4><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+            try {
+                const r = await fetch(`${API_BASE}/atividades`);
+                const acts = r.ok ? await r.json() : [];
+                const byCompany = acts.filter(a => (a.client_company || '').toLowerCase() === (account.name || '').toLowerCase());
+                const wrap = document.getElementById('accountActivitiesWrap');
+                if (wrap) {
+                    wrap.innerHTML = byCompany.length
+                      ? byCompany.slice(0, 20).map(a => `<div class='history-item' style='margin-bottom:8px;'><div class='history-meta'>${formatDateBr((a.activity_date||'').slice(0,10) || '')}</div><div>${escapeHtml(a.description || a.information || '-')}</div></div>`).join('')
+                      : '<div style="color:#6b7280;">Nenhuma atividade para esta conta.</div>';
+                }
+            } catch {
+                const wrap = document.getElementById('accountActivitiesWrap');
+                if (wrap) wrap.innerHTML = '<div style="color:#6b7280;">Não foi possível carregar atividades.</div>';
+            }
+        }
+
+        function closeAccountViewModal(){ const m=document.getElementById('accountViewModal'); if(m)m.remove(); }
+
+        function toggleMainContactSelection(clientId) {
+            const hidden = document.getElementById('accountMainContactsHidden');
+            const selected = new Set((hidden?.value || '').split(',').filter(Boolean));
+            const key = String(clientId);
+            if (selected.has(key)) selected.delete(key); else selected.add(key);
+            if (hidden) hidden.value = [...selected].join(',');
+            const item = document.querySelector(`[data-main-contact='${clientId}']`);
+            if (item) {
+                item.classList.toggle('active', selected.has(key));
+                item.style.background = selected.has(key) ? 'rgba(16,185,129,.18)' : 'transparent';
+                item.style.borderColor = selected.has(key) ? 'rgba(16,185,129,.45)' : 'rgba(16,185,129,.25)';
+            }
         }
 
         async function openAccountModal(accountId=null) {
+            closeAccountViewModal();
             const support = await (await fetch(`${API_BASE}/accounts/support-data`)).json();
             const account = accountId ? await (await fetch(`${API_BASE}/accounts/${accountId}`)).json() : null;
             const companyOptions = (support.companies || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
             const sectorOptions = (support.sectors || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-            let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label><input type="checkbox" name="is_target" ${Number(account?.is_target)===1?'checked':''}> Target</label></div><div class="form-group"><label>Logo da conta</label><input type="file" id="accountLogoInput" name="logo" accept="image/*"></div><div class="form-group"><label>Ponto Focal Principal (múltiplo)</label><select id="accountMainContacts" multiple></select></div><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-secondary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-plus"></i> adicionar presença</button><div id="accountPresenceList" style="margin-top:8px;">${(account?.presences||[]).map(p=>`<div class='rule-item'><span>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-secondary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Editar</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div></div>`).join('')}</div></div></div>`;
+            const logoSrc = account?.logo_url || '/logo-coelho.png';
+            const mainSelected = (account?.main_contact_ids || []).map(String).join(',');
+            const contactsList = (account?.contacts || []).map(c => {
+                const active = (account?.main_contact_ids || []).includes(c.id);
+                return `<button type="button" data-main-contact="${c.id}" onclick="toggleMainContactSelection(${c.id})" style="padding:8px 10px; border-radius:10px; border:1px solid ${active?'rgba(16,185,129,.45)':'rgba(16,185,129,.25)'}; background:${active?'rgba(16,185,129,.18)':'transparent'}; color:#065f46; cursor:pointer; text-align:left;">${escapeHtml(c.name)}</button>`;
+            }).join('') || '<div style="color:#6b7280; font-size:13px;">Sem contatos nesta conta.</div>';
+
+            let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:860px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div style="display:grid; grid-template-columns: 1.4fr .9fr; gap:14px; align-items:start;"><div><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label>Target</label><select name="is_target"><option value="0" ${Number(account?.is_target)!==1?'selected':''}>Não</option><option value="1" ${Number(account?.is_target)===1?'selected':''}>Sim</option></select></div></div><div><img id="accountLogoPreview" src="${logoSrc}" style="width:100%; max-width:180px; height:140px; object-fit:cover; border-radius:14px; border:1px solid rgba(16,185,129,.25); display:block; margin-left:auto;"><div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;"><label class="btn btn-secondary btn-small" for="accountLogoInput"><i class="fas fa-image"></i> Alterar</label><button type="button" class="btn btn-danger btn-small" onclick="removeAccountLogo()"><i class="fas fa-trash"></i> Excluir</button></div><input type="file" id="accountLogoInput" name="logo" accept="image/*" style="display:none;" onchange="previewAccountLogo(event)"><input type="hidden" id="removeAccountLogoFlag" name="remove_logo" value="0"></div></div><div class="form-group"><label>Ponto Focal Principal</label><input type="hidden" id="accountMainContactsHidden" value="${mainSelected}"><div style="display:flex; flex-wrap:wrap; gap:8px;">${contactsList}</div></div><div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-primary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-plus"></i> + serviço Stefanini</button><div id="accountPresenceList" style="margin-top:8px;">${(account?.presences||[]).map(p=>`<div class='rule-item'><span>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-secondary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Editar</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div></div>`).join('')}</div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
-            if (account && account.contacts) {
-                const sel = document.getElementById('accountMainContacts');
-                sel.innerHTML = account.contacts.map(c => `<option value="${c.id}" ${(account.main_contact_ids||[]).includes(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
-            }
+        }
+
+        function previewAccountLogo(event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById('accountLogoPreview');
+                if (img) img.src = e.target.result;
+                const flag = document.getElementById('removeAccountLogoFlag');
+                if (flag) flag.value = '0';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function removeAccountLogo() {
+            const img = document.getElementById('accountLogoPreview');
+            const flag = document.getElementById('removeAccountLogoFlag');
+            const input = document.getElementById('accountLogoInput');
+            if (img) img.src = '/logo-coelho.png';
+            if (flag) flag.value = '1';
+            if (input) input.value = '';
         }
 
         function closeAccountModal(){ const m=document.getElementById('accountModal'); if(m)m.remove(); }
@@ -4748,9 +4816,8 @@
             event.preventDefault();
             const form = document.getElementById('accountForm');
             const fd = new FormData(form);
-            fd.set('is_target', form.querySelector('[name="is_target"]').checked ? '1':'0');
-            const selected = [...document.getElementById('accountMainContacts').selectedOptions].map(o=>o.value).join(',');
-            fd.set('main_contact_ids', selected);
+            fd.set('is_target', form.querySelector('[name="is_target"]').value || '0');
+            fd.set('main_contact_ids', document.getElementById('accountMainContactsHidden')?.value || '');
             const url = accountId ? `${API_BASE}/accounts/${accountId}` : `${API_BASE}/accounts`;
             const method = accountId ? 'PUT' : 'POST';
             const response = await fetch(url, { method, body: fd });
@@ -4761,7 +4828,7 @@
         }
 
         async function openAccountDetails(accountId) {
-            await openAccountModal(accountId);
+            await openAccountViewModal(accountId);
         }
 
         async function openPresenceModal(accountId, presenceId=null) {
@@ -4790,7 +4857,8 @@
             showSuccess('Presença salva');
             await loadAccounts();
             const am = document.getElementById('accountModal'); if (am) am.remove();
-            await openAccountModal(accountId);
+            const av = document.getElementById('accountViewModal'); if (av) av.remove();
+            await openAccountViewModal(accountId);
         }
 
         async function deletePresence(accountId, presenceId) {
@@ -4799,7 +4867,8 @@
             showSuccess('Presença excluída');
             await loadAccounts();
             const am = document.getElementById('accountModal'); if (am) am.remove();
-            await openAccountModal(accountId);
+            const av = document.getElementById('accountViewModal'); if (av) av.remove();
+            await openAccountViewModal(accountId);
         }
 
         // Initialize
