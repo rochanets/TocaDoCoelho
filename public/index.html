@@ -212,7 +212,7 @@
 
         /* Dashboard específico: wrapper para scroll lateral quando necessário */
         .dashboard-scroll-wrapper {
-            width: 100%;
+            width: 95%;
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
         }
@@ -238,7 +238,7 @@
 
         /* Tabela do dashboard com largura mínima para garantir leitura em 90% de zoom */
         .dashboard-table {
-            min-width: 900px;
+            min-width: 855px;
             width: 100%;
         }
 
@@ -1189,6 +1189,15 @@
         @keyframes voiceBars { 0%,100%{transform:scaleY(.65);} 50%{transform:scaleY(1.25);} }
         /* === Mapeamento Organizacional - Design Moderno === */
         #mapeamento-organizacional { background: transparent; }
+        /* Background azul claro degrado para branco quando o modulo esta ativo */
+        body:has(#mapeamento-organizacional.active) { background: linear-gradient(135deg, #e8f6fc 0%, #f4fbfe 40%, #ffffff 100%) !important; }
+        /* Toast de sucesso azul exclusivo para o modulo */
+        #orgSuccessMsg { position: fixed; top: 20px; right: 24px; z-index: 9999; padding: 14px 22px; border-radius: 10px; background: #daf0f9; color: #0d3a52; border: 1px solid #a8ddf0; font-size: 14px; font-weight: 600; box-shadow: 0 4px 18px rgba(96,187,217,0.25); display: none; }
+        #orgSuccessMsg.show { display: block; animation: fadeInDown 0.3s ease; }
+        @keyframes fadeInDown { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
+        #mapeamento-organizacional .page-header h1 { color: #0d3a52; }
+        #mapeamento-organizacional .page-header p { color: rgba(96,187,217,0.85); }
+        #mapeamento-organizacional .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
         .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; }
         .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 220px); border-radius: 0 0 20px 20px; }
         .org-table-wrap::-webkit-scrollbar { width:6px; height:6px; }
@@ -1213,6 +1222,18 @@
         .org-add-btn { background:none; border:2px dashed rgba(96,187,217,0.5); color:rgba(13,58,82,0.55); font-size:20px; font-weight:700; cursor:pointer; padding:4px 12px; border-radius:8px; line-height:1.4; transition: all 0.2s; display:block; margin:auto; width:36px; text-align:center; }
         .org-add-btn:hover { border-color:#60BBD9; color:#0d3a52; background:rgba(96,187,217,0.12); transform:scale(1.15); }
         .org-table .mini-avatar { width:30px; height:30px; font-size:13px; margin:0; flex-shrink:0; border:2px solid rgba(255,255,255,0.7); box-shadow:0 2px 6px rgba(0,0,0,0.12); }
+        /* Botão exportar org map */
+        .btn-org-export { background: linear-gradient(135deg, #60BBD9, #3a9cbf); color: #fff; border: none; border-radius: 10px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 10px rgba(96,187,217,0.35); transition: all 0.2s; white-space: nowrap; align-self: flex-start; }
+        .btn-org-export:hover { background: linear-gradient(135deg, #4aaec8, #2a8aad); box-shadow: 0 4px 16px rgba(96,187,217,0.5); transform: translateY(-1px); }
+        .btn-org-export-confirm { background: linear-gradient(135deg, #60BBD9, #3a9cbf); color: #fff; border: none; border-radius: 10px; padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 10px rgba(96,187,217,0.35); transition: all 0.2s; }
+        .btn-org-export-confirm:hover { background: linear-gradient(135deg, #4aaec8, #2a8aad); }
+        .btn-outline-org { background: transparent; border: 1.5px solid #60BBD9; color: #0d3a52; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+        .btn-outline-org:hover { background: rgba(96,187,217,0.12); }
+        .btn-sm { padding: 5px 12px !important; font-size: 12px !important; }
+        .org-export-modal-content { max-width: 560px; border-radius: 18px; }
+        .org-export-col-item { display: flex; align-items: center; gap: 8px; background: rgba(96,187,217,0.08); border: 1.5px solid rgba(96,187,217,0.25); border-radius: 8px; padding: 7px 12px; cursor: pointer; transition: all 0.15s; user-select: none; font-size: 13px; color: #0d3a52; font-weight: 500; }
+        .org-export-col-item:hover { background: rgba(96,187,217,0.18); border-color: #60BBD9; }
+        .org-export-col-item input[type=checkbox] { accent-color: #60BBD9; width: 15px; height: 15px; cursor: pointer; }
         .iata-center { display:flex; align-items:center; justify-content:center; min-height:46vh; }
         .iata-input-row { display:flex; gap:8px; margin-top:14px; align-items:flex-end; }
         #iata { background:#fff; }
@@ -1301,6 +1322,7 @@
     <!-- Main Content -->
     <main class="main-content">
         <div class="alert alert-success" id="successMsg"></div>
+        <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
 
         <div id="iata" class="tab-content">
@@ -1432,10 +1454,41 @@
 
         <div id="mapeamento-organizacional" class="tab-content">
             <div class="page-header">
-                <h1>Mapeamento Organizacional</h1>
-                <p>Visualize clientes por empresa e cargos com acesso rápido à ficha.</p>
+                <div>
+                    <h1>Mapeamento Organizacional</h1>
+                    <p>Visualize clientes por empresa e cargos com acesso rápido à ficha.</p>
+                </div>
+                <button class="btn btn-org-export" onclick="openOrgExportModal()" title="Exportar tabela para Excel">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Exportar
+                </button>
             </div>
             <div id="organizationalContent"></div>
+        </div>
+
+        <!-- Modal de Exportação do Mapeamento Organizacional -->
+        <div id="orgExportModal" class="modal" onclick="if(event.target===this)closeOrgExportModal()">
+            <div class="modal-content org-export-modal-content">
+                <div class="modal-header">
+                    <h2 class="modal-title">Exportar Mapeamento Organizacional</h2>
+                    <button class="modal-close" onclick="closeOrgExportModal()">&#215;</button>
+                </div>
+                <div class="modal-body">
+                    <p style="color:#0d3a52;margin-bottom:16px;font-size:14px;">Selecione as colunas (cargos) que deseja exportar:</p>
+                    <div style="margin-bottom:16px;display:flex;gap:10px;">
+                        <button type="button" class="btn btn-sm btn-outline-org" onclick="orgExportSelectAll(true)">Selecionar Todos</button>
+                        <button type="button" class="btn btn-sm btn-outline-org" onclick="orgExportSelectAll(false)">Desmarcar Todos</button>
+                    </div>
+                    <div id="orgExportColumnList" style="display:flex;flex-wrap:wrap;gap:10px;max-height:280px;overflow-y:auto;padding:4px 2px;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeOrgExportModal()">Cancelar</button>
+                    <button type="button" class="btn btn-org-export-confirm" onclick="doOrgExport()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:5px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Exportar .xlsx
+                    </button>
+                </div>
+            </div>
         </div>
 
         <div id="configuracoes" class="tab-content">
@@ -2095,8 +2148,8 @@
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 150px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 130px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 140px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 120px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; min-width: 100px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
@@ -2112,7 +2165,7 @@
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td style="min-width:150px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td style="min-width:142px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
@@ -2370,9 +2423,10 @@
         }
 
         // Close Client Modal
-        function closeClientModal() {
+        function closeClientModal(fromSave = false) {
             resetClientPhotoField();
-            _orgMapOpenContext = null;
+            // Se fechado manualmente (cancelar/X), limpa o contexto do org map
+            if (!fromSave) _orgMapOpenContext = null;
             document.getElementById('clientModal').classList.remove('active');
         }
 
@@ -2650,10 +2704,11 @@
                         }
                     }
                     
-                    closeClientModal();
+                    const wasFromOrgMap = !!_orgMapOpenContext;
+                    closeClientModal(true);
                     loadClients();
                     loadDashboard();
-                    if (_orgMapOpenContext) {
+                    if (wasFromOrgMap) {
                         _orgMapOpenContext = null;
                         await loadOrganizationalMapping();
                     }
@@ -3865,11 +3920,12 @@
         function getCompanyImportanceRank(position) {
             const p = String(position || '').trim().toLowerCase();
             if (p === 'ceo') return 1;
-            if (p.startsWith('c') && p.length <= 4) return 2;
-            if (p.includes('diretor') || p.includes('superintendente')) return 3;
-            if (p.includes('gerente')) return 4;
-            if (p.includes('coordenador')) return 5;
-            return 6;
+            if (p === 'cio') return 2;
+            if (p.startsWith('c') && p.length <= 5) return 3; // CHO, CISO, CMO, etc.
+            if (p.includes('diretor') || p.includes('superintendente')) return 4;
+            if (p.includes('gerente')) return 5;
+            if (p.includes('coordenador')) return 6;
+            return 7;
         }
 
         function sortGroupClients(groupType, list) {
@@ -3962,12 +4018,20 @@
             document.getElementById('groupModal').classList.remove('active');
         }
 
-        // Show Success
+        // Show Success - usa toast azul quando o modulo Mapeamento Organizacional esta ativo
         function showSuccess(message) {
-            const el = document.getElementById('successMsg');
-            el.textContent = message;
-            el.classList.add('show');
-            setTimeout(() => el.classList.remove('show'), 3000);
+            const orgActive = document.getElementById('mapeamento-organizacional')?.classList.contains('active');
+            if (orgActive) {
+                const el = document.getElementById('orgSuccessMsg');
+                el.textContent = message;
+                el.classList.add('show');
+                setTimeout(() => el.classList.remove('show'), 3000);
+            } else {
+                const el = document.getElementById('successMsg');
+                el.textContent = message;
+                el.classList.add('show');
+                setTimeout(() => el.classList.remove('show'), 3000);
+            }
         }
 
         // Show Error
@@ -4127,9 +4191,10 @@
                 const response = await fetch(url, { method: currentEditingClientId ? 'PUT' : 'POST', body: formData });
                 if (!response.ok) throw new Error('Erro ao salvar cliente');
                 showSuccess(currentEditingClientId ? 'Cliente atualizado!' : 'Cliente cadastrado!');
-                closeClientModal();
+                const wasFromOrgMap = !!_orgMapOpenContext;
+                closeClientModal(true);
                 const reloadTasks = [loadClients(), loadDashboard(), loadPositions()];
-                if (_orgMapOpenContext) {
+                if (wasFromOrgMap) {
                     _orgMapOpenContext = null;
                     reloadTasks.push(loadOrganizationalMapping());
                 }
@@ -4408,6 +4473,96 @@
             }
             toggleOtherField('position');
             document.getElementById('clientModal').classList.add('active');
+        }
+
+        // === Exportação XLSX do Mapeamento Organizacional ===
+        let _orgExportData = null; // { clients, positions }
+
+        async function openOrgExportModal() {
+            // Buscar dados atuais
+            const response = await fetch(`${API_BASE}/clientes`);
+            const data = response.ok ? await response.json() : [];
+            const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>{
+                const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b);
+                return r !== 0 ? r : a.localeCompare(b,'pt-BR');
+            });
+            _orgExportData = { clients: data, positions };
+            // Renderizar checkboxes
+            const list = document.getElementById('orgExportColumnList');
+            list.innerHTML = positions.map(p => `
+                <label class="org-export-col-item">
+                    <input type="checkbox" name="orgExportCol" value="${escapeHtml(p)}" checked>
+                    ${escapeHtml(p)}
+                </label>
+            `).join('');
+            document.getElementById('orgExportModal').classList.add('active');
+        }
+
+        function closeOrgExportModal() {
+            document.getElementById('orgExportModal').classList.remove('active');
+            _orgExportData = null;
+        }
+
+        function orgExportSelectAll(checked) {
+            document.querySelectorAll('#orgExportColumnList input[type=checkbox]').forEach(cb => cb.checked = checked);
+        }
+
+        function doOrgExport() {
+            if (!_orgExportData) return;
+            const { clients, positions } = _orgExportData;
+            const selectedPositions = [...document.querySelectorAll('#orgExportColumnList input[type=checkbox]:checked')].map(cb => cb.value);
+            if (!selectedPositions.length) { showError('Selecione ao menos uma coluna para exportar.'); return; }
+
+            // Montar linhas: uma linha por cliente que está nas colunas selecionadas
+            const rows = [];
+            const companies = [...new Set(clients.map(c => c.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+            companies.forEach(company => {
+                selectedPositions.forEach(position => {
+                    const people = clients.filter(c => c.company === company && c.position === position);
+                    people.forEach(person => {
+                        rows.push({
+                            'Cargo': person.position || '',
+                            'Nome': person.name || '',
+                            'Cliente/Empresa': person.company || '',
+                            'Email': person.email || '',
+                            'Telefone': person.phone || ''
+                        });
+                    });
+                });
+            });
+
+            if (!rows.length) { showError('Nenhum cliente encontrado nas colunas selecionadas.'); return; }
+
+            // Gerar XLSX sem dependência externa usando CSV-to-XLSX via Blob
+            const headers = ['Cargo', 'Nome', 'Cliente/Empresa', 'Email', 'Telefone'];
+            // Usar formato XML do Excel (SpreadsheetML) para compatibilidade
+            const xmlRows = rows.map(row =>
+                '<Row>' + headers.map(h => `<Cell><Data ss:Type="String">${String(row[h] || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}</Data></Cell>`).join('') + '</Row>'
+            ).join('');
+            const xmlHeader = '<Row>' + headers.map(h => `<Cell ss:StyleID="header"><Data ss:Type="String">${h}</Data></Cell>`).join('') + '</Row>';
+            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:x="urn:schemas-microsoft-com:office:excel">
+  <Styles>
+    <Style ss:ID="header"><Font ss:Bold="1"/><Interior ss:Color="#60BBD9" ss:Pattern="Solid"/></Style>
+  </Styles>
+  <Worksheet ss:Name="Mapeamento Organizacional">
+    <Table>${xmlHeader}${xmlRows}</Table>
+  </Worksheet>
+</Workbook>`;
+            const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mapeamento_organizacional.xls';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            closeOrgExportModal();
+            showSuccess('Exportação concluída!');
         }
 
         async function saveTargetStatus() {
@@ -4730,84 +4885,10 @@
             const el = document.getElementById('accountsContent');
             if (!el) return;
             if (!accounts.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta cadastrada.</p></div>'; return; }
-            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:#6b7280;">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="display:inline-flex; width:auto; max-width:100%; padding:4px 9px; border-radius:999px; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.26); font-size:12px; font-weight:700;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
-        }
-
-        function formatIntegerPtBr(value) {
-            const n = Number(value);
-            if (!Number.isFinite(n)) return '-';
-            return n.toLocaleString('pt-BR');
-        }
-
-        function getPositionGroupSortKey(position) {
-            const normalized = String(position || '').toLowerCase().trim();
-            if (!normalized) return { g: 9999, p: 9999 };
-            for (let gi = 0; gi < positionGroupings.length; gi += 1) {
-                const positions = positionGroupings[gi].positions || [];
-                for (let pi = 0; pi < positions.length; pi += 1) {
-                    if (String(positions[pi] || '').toLowerCase().trim() === normalized) {
-                        return { g: gi, p: pi };
-                    }
-                }
-            }
-            return { g: 9998, p: 9998 };
-        }
-
-        function sortAccountContactsByRole(contacts) {
-            return [...(contacts || [])].sort((a, b) => {
-                const ka = getPositionGroupSortKey(a.position);
-                const kb = getPositionGroupSortKey(b.position);
-                if (ka.g !== kb.g) return ka.g - kb.g;
-                if (ka.p !== kb.p) return ka.p - kb.p;
-                return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
-            });
-        }
-
-        async function openAccountViewModal(accountId) {
-            const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
-            if (!account || account.error) return showError('Conta não encontrada');
-            const sortedContacts = sortAccountContactsByRole(account.contacts || []);
-            let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:860px;">`;
-            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
-            html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
-            html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4>${(account.presences||[]).length?(account.presences||[]).map(p=>`<div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px;'><span style='font-weight:700; display:inline-flex; width:auto; max-width:fit-content;'>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-primary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Detalhes</button></div></div>`).join(''):'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
-            html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><h4 style="color:#065f46; margin-bottom:8px;">Histórico de Atividades</h4><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
-            html += '</div></div>';
-            document.body.insertAdjacentHTML('beforeend', html);
-            try {
-                const r = await fetch(`${API_BASE}/atividades`);
-                const acts = r.ok ? await r.json() : [];
-                const byCompany = acts.filter(a => (a.client_company || '').toLowerCase() === (account.name || '').toLowerCase());
-                const wrap = document.getElementById('accountActivitiesWrap');
-                if (wrap) {
-                    wrap.innerHTML = byCompany.length
-                      ? byCompany.slice(0, 20).map(a => `<div class='history-item' style='margin-bottom:8px;'><div class='history-meta'>${formatDateBr((a.activity_date||'').slice(0,10) || '')}</div><div>${escapeHtml(a.description || a.information || '-')}</div></div>`).join('')
-                      : '<div style="color:#6b7280;">Nenhuma atividade para esta conta.</div>';
-                }
-            } catch {
-                const wrap = document.getElementById('accountActivitiesWrap');
-                if (wrap) wrap.innerHTML = '<div style="color:#6b7280;">Não foi possível carregar atividades.</div>';
-            }
-        }
-
-        function closeAccountViewModal(){ const m=document.getElementById('accountViewModal'); if(m)m.remove(); }
-
-        function toggleMainContactSelection(clientId) {
-            const hidden = document.getElementById('accountMainContactsHidden');
-            const selected = new Set((hidden?.value || '').split(',').filter(Boolean));
-            const key = String(clientId);
-            if (selected.has(key)) selected.delete(key); else selected.add(key);
-            if (hidden) hidden.value = [...selected].join(',');
-            const item = document.querySelector(`[data-main-contact='${clientId}']`);
-            if (item) {
-                item.classList.toggle('active', selected.has(key));
-                item.style.background = selected.has(key) ? 'rgba(16,185,129,.18)' : 'transparent';
-                item.style.borderColor = selected.has(key) ? 'rgba(16,185,129,.45)' : 'rgba(16,185,129,.25)';
-            }
+            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountDetails(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:cover;"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:#6b7280;">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="padding:4px 9px; border-radius:999px; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.26); font-size:12px;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
         }
 
         async function openAccountModal(accountId=null) {
-            closeAccountViewModal();
             const support = await (await fetch(`${API_BASE}/accounts/support-data`)).json();
             const account = accountId ? await (await fetch(`${API_BASE}/accounts/${accountId}`)).json() : null;
             const companyOptions = (support.companies || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
@@ -4861,6 +4942,12 @@
             if (img) img.src = '/logo-coelho.png';
             if (flag) flag.value = '1';
             if (input) input.value = '';
+            let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label><input type="checkbox" name="is_target" ${Number(account?.is_target)===1?'checked':''}> Target</label></div><div class="form-group"><label>Logo da conta</label><input type="file" id="accountLogoInput" name="logo" accept="image/*"></div><div class="form-group"><label>Ponto Focal Principal (múltiplo)</label><select id="accountMainContacts" multiple></select></div><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-secondary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-plus"></i> adicionar presença</button><div id="accountPresenceList" style="margin-top:8px;">${(account?.presences||[]).map(p=>`<div class='rule-item'><span>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-secondary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Editar</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div></div>`).join('')}</div></div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+            if (account && account.contacts) {
+                const sel = document.getElementById('accountMainContacts');
+                sel.innerHTML = account.contacts.map(c => `<option value="${c.id}" ${(account.main_contact_ids||[]).includes(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
+            }
         }
 
         function closeAccountModal(){ const m=document.getElementById('accountModal'); if(m)m.remove(); }
@@ -4888,7 +4975,7 @@
             if (!accountId) return showError('Salve a conta antes de adicionar presença.');
             const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
             const presence = (account.presences||[]).find(p => Number(p.id)===Number(presenceId));
-            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:520px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Faturamento Mensal</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
+            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:520px;"><h2 style="color:#047857;">${presence?'Editar':'Nova'} Presença</h2><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Faturamento Atual</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
@@ -4910,8 +4997,7 @@
             showSuccess('Presença salva');
             await loadAccounts();
             const am = document.getElementById('accountModal'); if (am) am.remove();
-            const av = document.getElementById('accountViewModal'); if (av) av.remove();
-            await openAccountViewModal(accountId);
+            await openAccountModal(accountId);
         }
 
         async function deletePresence(accountId, presenceId) {
@@ -4920,8 +5006,7 @@
             showSuccess('Presença excluída');
             await loadAccounts();
             const am = document.getElementById('accountModal'); if (am) am.remove();
-            const av = document.getElementById('accountViewModal'); if (av) av.remove();
-            await openAccountViewModal(accountId);
+            await openAccountModal(accountId);
         }
 
         // Initialize
