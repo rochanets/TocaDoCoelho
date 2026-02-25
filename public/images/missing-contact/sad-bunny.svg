@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Coelho triste">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#b5f3e8"/>
+      <stop offset="100%" stop-color="#7bdcc9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="#f3f4f6"/>
+  <ellipse cx="256" cy="422" rx="180" ry="56" fill="#c9843e"/>
+  <ellipse cx="192" cy="110" rx="46" ry="102" transform="rotate(-28 192 110)" fill="url(#g1)" stroke="#165f57" stroke-width="4"/>
+  <ellipse cx="320" cy="110" rx="46" ry="102" transform="rotate(28 320 110)" fill="url(#g1)" stroke="#165f57" stroke-width="4"/>
+  <ellipse cx="256" cy="246" rx="112" ry="112" fill="url(#g1)" stroke="#165f57" stroke-width="4"/>
+  <ellipse cx="256" cy="300" rx="92" ry="68" fill="#f4f3e8"/>
+  <path d="M205 225 q20 -18 40 0" stroke="#244a45" stroke-width="5" fill="none"/>
+  <path d="M267 225 q20 -18 40 0" stroke="#244a45" stroke-width="5" fill="none"/>
+  <path d="M238 284 q18 -12 36 0 q-18 16 -36 0Z" fill="#f48c8c" stroke="#9c4b4b" stroke-width="3"/>
+  <path d="M224 314 q32 24 64 0" stroke="#5a2828" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <path d="M188 250 C175 268,176 294,195 306" stroke="#60a5fa" stroke-width="7" fill="none"/>
+  <path d="M324 250 C337 268,336 294,317 306" stroke="#60a5fa" stroke-width="7" fill="none"/>
+  <ellipse cx="182" cy="313" rx="8" ry="12" fill="#60a5fa"/>
+  <ellipse cx="330" cy="313" rx="8" ry="12" fill="#60a5fa"/>
+</svg>
