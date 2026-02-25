@@ -212,7 +212,7 @@
 
         /* Dashboard específico: wrapper para scroll lateral quando necessário */
         .dashboard-scroll-wrapper {
-            width: 100%;
+            width: 95%;
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
         }
@@ -238,7 +238,7 @@
 
         /* Tabela do dashboard com largura mínima para garantir leitura em 90% de zoom */
         .dashboard-table {
-            min-width: 900px;
+            min-width: 855px;
             width: 100%;
         }
 
@@ -1271,6 +1271,10 @@
                 <i class="fas fa-sitemap"></i>
                 <span>Mapeamento Organizacional</span>
             </button>
+            <button class="nav-item" onclick="switchTab(event, 'gestao-conta')">
+                <i class="fas fa-building-user"></i>
+                <span>Gestão de Conta</span>
+            </button>
             <button class="nav-item" onclick="switchTab(event, 'atividades')">
                 <i class="fas fa-chart-line"></i>
                 <span>Atividades</span>
@@ -1305,15 +1309,15 @@
                 <p>Módulo inteligente para apoio de mensagens e atas.</p>
             </div>
             <div class="iata-center">
-                <video
+                <video id="iataVideoPlayer"
                   autoplay
                   loop
                   muted
                   playsinline
                   preload="auto"
-                  style="width: 100%; height: auto; display: block; border-radius: 12px;"
+                  style="width: 100%; max-width: 600px; height: auto; display: block; border-radius: 12px; margin: 0 auto;"
                 >
-                  <source src="/animations/TocaVideo.mp4" type="video/mp4" />
+                  <source id="iataVideoSource" src="/videos/TocaVideo.mp4" type="video/mp4" />
                 </video>
             </div>
             <div class="iata-input-row">
@@ -1368,6 +1372,15 @@
         </div>
 
         <!-- Atividades Tab -->
+        <div id="gestao-conta" class="tab-content">
+            <div class="page-header">
+                <h1>Gestão de Conta</h1>
+                <p>Gestão estratégica das contas, contatos e presenças Stefanini.</p>
+            </div>
+            <div style="margin-bottom:12px;"><button class="btn btn-primary" onclick="openAccountModal()"><i class="fas fa-plus"></i> Nova Conta</button></div>
+            <div id="accountsContent"></div>
+        </div>
+
         <div id="atividades" class="tab-content">
             <div class="page-header">
                 <h1>Atividades</h1>
@@ -1481,6 +1494,21 @@
                 </section>
 
                 <section class="settings-card">
+                    <h3>MSG Padrão</h3>
+                    <form onsubmit="saveMessageTemplate(event)">
+                        <input type="hidden" id="templateId">
+                        <div class="form-group"><label>Título</label><input type="text" id="templateTitle" required></div>
+                        <div class="form-group"><label>Descritivo</label><textarea id="templateDescription" rows="3" required></textarea></div>
+                        <div class="form-group" style="display:flex; gap:16px; align-items:center;">
+                            <label><input type="checkbox" id="templateWhatsapp" checked> <i class="fab fa-whatsapp"></i> WhatsApp</label>
+                            <label><input type="checkbox" id="templateEmail" checked> <i class="fas fa-envelope"></i> Email</label>
+                        </div>
+                        <button class="btn btn-secondary btn-small" type="submit"><i class="fas fa-save"></i> Salvar MSG</button>
+                    </form>
+                    <div id="templateList" style="margin-top:12px;"></div>
+                </section>
+
+                <section class="settings-card">
                     <h3>Cadastro do Usuário</h3>
                     <form id="userProfileForm" onsubmit="saveUserProfile(event)">
                         <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
@@ -1488,6 +1516,8 @@
                         <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
                         <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
                         <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
+                        <div class="form-group"><label>Boss (opcional)</label><input type="text" name="boss_name"></div>
+                        <div class="form-group"><label>Email do Boss (opcional)</label><input type="email" name="boss_email"></div>
                         <div class="form-group">
                             <label>Foto *</label>
                             <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
@@ -1742,11 +1772,12 @@
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'mapeamento') loadMapeamento();
             else if (tabName === 'mapeamento-organizacional') loadOrganizationalMapping();
+            else if (tabName === 'gestao-conta') loadAccounts();
             else if (tabName === 'configuracoes') loadSettings();
         }
 
         async function loadSettings() {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig()]);
             renderSettings();
         }
 
@@ -1781,6 +1812,8 @@
             form.position.value = userProfile?.position || '';
             form.email.value = userProfile?.email || '';
             form.phone.value = formatPhone(userProfile?.phone || '');
+            form.boss_name.value = userProfile?.boss_name || '';
+            form.boss_email.value = userProfile?.boss_email || '';
             const preview = document.getElementById('profilePhotoPreview');
             if (userProfile?.photo_url) {
                 preview.src = userProfile.photo_url;
@@ -2025,8 +2058,8 @@
                     html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Nome <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Cliente <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 150px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 130px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 140px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 120px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; min-width: 100px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
                     html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
@@ -2042,7 +2075,7 @@
                             <td style="text-align:center;"><input type="checkbox" class="target-check" ${Number(client.is_target)===1?'checked':''} onchange="toggleClientTarget(${client.id}, this.checked)"></td>
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td style="min-width:150px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td style="min-width:142px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
                             <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
@@ -3253,7 +3286,7 @@
                 html += '<div class="agenda-list">';
                 if (!items.length) html += '<div class="empty-state" style="padding:20px 8px;"><p>Nenhum compromisso neste mês.</p></div>';
                 items.forEach(item => {
-                    html += `<div class="history-item"><div class="history-meta">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name)} (${escapeHtml(item.client_company)})</div><div>${escapeHtml(item.title || item.notes || '-')}</div></div>`;
+                    html += `<div class=\"history-item\"><div class=\"history-meta\">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company?` (${escapeHtml(item.client_company)})`:''}</div><div>${escapeHtml(item.title || item.notes || '-')}</div></div>`;
                 });
                 html += '</div></div>';
 
@@ -3296,7 +3329,7 @@
                 html += '<div style="flex: 1;">';
                 html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})</div>`;
                 html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.title || activity.notes || '-')}</div>`;
-                html += `<div style="margin-top: 8px;"><button class="btn btn-danger btn-small" onclick="deleteAgendaItem(${activity.id})"><i class="fas fa-trash"></i> Excluir evento</button></div>`;
+                if ((activity.source_type || '') !== 'account_presence') { html += `<div style=\"margin-top: 8px;\"><button class=\"btn btn-danger btn-small\" onclick=\"deleteAgendaItem('${activity.id}')\"><i class=\"fas fa-trash\"></i> Excluir evento</button></div>`; }
                 html += '</div>';
                 html += '</div>';
             });
@@ -3315,6 +3348,7 @@
 
 
         async function deleteAgendaItem(commitmentId) {
+            if (String(commitmentId).startsWith('acc-')) { showError('Evento de renovação é gerado automaticamente pela presença.'); return; }
             if (!await uiConfirm('Deseja realmente excluir este evento da agenda?')) return;
             const response = await fetch(`${API_BASE}/agenda/${commitmentId}`, { method: 'DELETE' });
             if (!response.ok) {
@@ -4527,6 +4561,210 @@
             }
         }
 
+
+        let messageTemplates = [];
+        let uiConfig = { iata_video_path: '/videos/TocaVideo.mp4' };
+        let accountsCache = [];
+
+        function formatMoneyFromCents(cents) {
+            const n = Number(cents || 0) / 100;
+            return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        }
+
+        async function loadUiConfig() {
+            const response = await fetch(`${API_BASE}/config/ui`);
+            if (response.ok) {
+                uiConfig = await response.json();
+                const src = document.getElementById('iataVideoSource');
+                const vid = document.getElementById('iataVideoPlayer');
+                if (src && vid && uiConfig.iata_video_path) { src.src = uiConfig.iata_video_path; vid.load(); }
+            }
+        }
+
+        async function loadMessageTemplates() {
+            const response = await fetch(`${API_BASE}/config/templates`);
+            if (response.ok) messageTemplates = await response.json();
+            renderTemplateList();
+        }
+
+        function renderTemplateList() {
+            const el = document.getElementById('templateList');
+            if (!el) return;
+            if (!messageTemplates.length) { el.innerHTML = '<div style="color:#6b7280;">Nenhuma MSG padrão cadastrada.</div>'; return; }
+            el.innerHTML = messageTemplates.map(t => `<div class="rule-item"><div><strong>${escapeHtml(t.title)}</strong><div style="font-size:12px;color:#6b7280;">${t.available_whatsapp?'<i class="fab fa-whatsapp"></i>':''} ${t.available_email?'<i class="fas fa-envelope"></i>':''}</div></div><div><button class="btn btn-secondary btn-small" onclick="editTemplate(${t.id})"><i class="fas fa-edit"></i></button><button class="btn btn-danger btn-small" onclick="deleteTemplate(${t.id})"><i class="fas fa-trash"></i></button></div></div>`).join('');
+        }
+
+        async function saveMessageTemplate(event) {
+            event.preventDefault();
+            const id = document.getElementById('templateId').value;
+            const payload = {
+                title: document.getElementById('templateTitle').value.trim(),
+                description: document.getElementById('templateDescription').value.trim(),
+                available_whatsapp: document.getElementById('templateWhatsapp').checked,
+                available_email: document.getElementById('templateEmail').checked
+            };
+            const url = id ? `${API_BASE}/config/templates/${id}` : `${API_BASE}/config/templates`;
+            const method = id ? 'PUT' : 'POST';
+            const response = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            if (!response.ok) return showError('Erro ao salvar MSG padrão');
+            document.getElementById('templateId').value='';
+            document.getElementById('templateTitle').value='';
+            document.getElementById('templateDescription').value='';
+            document.getElementById('templateWhatsapp').checked=true;
+            document.getElementById('templateEmail').checked=true;
+            await loadMessageTemplates();
+            showSuccess('MSG padrão salva');
+        }
+
+        function editTemplate(id) {
+            const t = messageTemplates.find(v => Number(v.id)===Number(id));
+            if (!t) return;
+            document.getElementById('templateId').value = t.id;
+            document.getElementById('templateTitle').value = t.title || '';
+            document.getElementById('templateDescription').value = t.description || '';
+            document.getElementById('templateWhatsapp').checked = Number(t.available_whatsapp) === 1;
+            document.getElementById('templateEmail').checked = Number(t.available_email) === 1;
+        }
+
+        async function deleteTemplate(id) {
+            const response = await fetch(`${API_BASE}/config/templates/${id}`, { method:'DELETE' });
+            if (!response.ok) return showError('Erro ao excluir MSG padrão');
+            await loadMessageTemplates();
+            showSuccess('MSG padrão removida');
+        }
+
+        function renderTemplateDrawer(channel, targetId) {
+            const filtered = messageTemplates.filter(t => channel === 'whatsapp' ? Number(t.available_whatsapp) === 1 : Number(t.available_email) === 1);
+            if (!filtered.length) return '<div style="font-size:12px;color:#6b7280;">Nenhum conteúdo padrão para este canal.</div>';
+            return filtered.map(t => `<button class="btn btn-secondary btn-small" style="margin-bottom:8px; width:100%; text-align:left;" onclick="applyTemplateToField(${t.id}, '${targetId}')">${escapeHtml(t.title)}</button>`).join('');
+        }
+
+        function applyTemplateToField(id, targetId) {
+            const t = messageTemplates.find(v => Number(v.id)===Number(id));
+            if (!t) return;
+            const el = document.getElementById(targetId);
+            if (el) el.value = t.description || '';
+        }
+
+        openWhatsAppMessageModal = function(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.phone) return openMissingContactModal();
+            let html = `<div class="modal active" id="whatsAppModal" onclick="if(event.target === this) closeWhatsAppModal()">`;
+            html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name)}</h2><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
+            html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('whatsapp','whatsMessageText')}</div>`;
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        openEmailDraftModal = function(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.email) return openMissingContactModal();
+            const bossDisabled = !(userProfile && userProfile.boss_email);
+            let html = `<div class="modal active" id="emailDraftModal" onclick="if(event.target === this) closeEmailDraftModal()">`;
+            html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail - ${escapeHtml(client.name)}</h2><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label><input type="checkbox" id="copyBossCheckbox" ${bossDisabled?'disabled':''}> copiar o chefe?</label></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
+            html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','emailDraftBody')}</div>`;
+            html += '</div></div>';
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        openOutlookDraft = function(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (!client || !client.email) return openMissingContactModal();
+            const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
+            const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
+            const copyBoss = document.getElementById('copyBossCheckbox')?.checked;
+            const cc = copyBoss ? (userProfile?.boss_email || '') : '';
+            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            window.open(outlookUrl, '_blank');
+            askRegisterActivityFromCommunication(clientId, 'Email', body);
+            closeEmailDraftModal();
+        }
+
+        async function loadAccounts() {
+            const response = await fetch(`${API_BASE}/accounts`);
+            const accounts = response.ok ? await response.json() : [];
+            accountsCache = accounts;
+            const el = document.getElementById('accountsContent');
+            if (!el) return;
+            if (!accounts.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta cadastrada.</p></div>'; return; }
+            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountDetails(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:cover;"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:#6b7280;">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="padding:4px 9px; border-radius:999px; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.26); font-size:12px;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
+        }
+
+        async function openAccountModal(accountId=null) {
+            const support = await (await fetch(`${API_BASE}/accounts/support-data`)).json();
+            const account = accountId ? await (await fetch(`${API_BASE}/accounts/${accountId}`)).json() : null;
+            const companyOptions = (support.companies || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+            const sectorOptions = (support.sectors || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+            let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label><input type="checkbox" name="is_target" ${Number(account?.is_target)===1?'checked':''}> Target</label></div><div class="form-group"><label>Logo da conta</label><input type="file" id="accountLogoInput" name="logo" accept="image/*"></div><div class="form-group"><label>Ponto Focal Principal (múltiplo)</label><select id="accountMainContacts" multiple></select></div><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-secondary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-plus"></i> adicionar presença</button><div id="accountPresenceList" style="margin-top:8px;">${(account?.presences||[]).map(p=>`<div class='rule-item'><span>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-secondary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Editar</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div></div>`).join('')}</div></div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+            if (account && account.contacts) {
+                const sel = document.getElementById('accountMainContacts');
+                sel.innerHTML = account.contacts.map(c => `<option value="${c.id}" ${(account.main_contact_ids||[]).includes(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
+            }
+        }
+
+        function closeAccountModal(){ const m=document.getElementById('accountModal'); if(m)m.remove(); }
+
+        async function saveAccount(event, accountId) {
+            event.preventDefault();
+            const form = document.getElementById('accountForm');
+            const fd = new FormData(form);
+            fd.set('is_target', form.querySelector('[name="is_target"]').checked ? '1':'0');
+            const selected = [...document.getElementById('accountMainContacts').selectedOptions].map(o=>o.value).join(',');
+            fd.set('main_contact_ids', selected);
+            const url = accountId ? `${API_BASE}/accounts/${accountId}` : `${API_BASE}/accounts`;
+            const method = accountId ? 'PUT' : 'POST';
+            const response = await fetch(url, { method, body: fd });
+            if (!response.ok) return showError('Erro ao salvar conta');
+            showSuccess('Conta salva com sucesso');
+            closeAccountModal();
+            await loadAccounts();
+        }
+
+        async function openAccountDetails(accountId) {
+            await openAccountModal(accountId);
+        }
+
+        async function openPresenceModal(accountId, presenceId=null) {
+            if (!accountId) return showError('Salve a conta antes de adicionar presença.');
+            const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
+            const presence = (account.presences||[]).find(p => Number(p.id)===Number(presenceId));
+            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:520px;"><h2 style="color:#047857;">${presence?'Editar':'Nova'} Presença</h2><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Faturamento Atual</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closePresenceModal(){ const m=document.getElementById('presenceModal'); if(m)m.remove(); }
+
+        async function savePresence(accountId, presenceId) {
+            const payload = {
+                delivery_name: document.getElementById('presenceDelivery').value,
+                stf_owner: document.getElementById('presenceOwner').value,
+                current_revenue: document.getElementById('presenceRevenue').value,
+                validity_month: document.getElementById('presenceValidity').value,
+                focal_client_id: document.getElementById('presenceFocal').value
+            };
+            const url = presenceId ? `${API_BASE}/accounts/${accountId}/presences/${presenceId}` : `${API_BASE}/accounts/${accountId}/presences`;
+            const method = presenceId ? 'PUT' : 'POST';
+            const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            if (!r.ok) return showError('Erro ao salvar presença');
+            closePresenceModal();
+            showSuccess('Presença salva');
+            await loadAccounts();
+            const am = document.getElementById('accountModal'); if (am) am.remove();
+            await openAccountModal(accountId);
+        }
+
+        async function deletePresence(accountId, presenceId) {
+            const r = await fetch(`${API_BASE}/accounts/${accountId}/presences/${presenceId}`, { method:'DELETE' });
+            if (!r.ok) return showError('Erro ao excluir presença');
+            showSuccess('Presença excluída');
+            await loadAccounts();
+            const am = document.getElementById('accountModal'); if (am) am.remove();
+            await openAccountModal(accountId);
+        }
+
         // Initialize
         window.addEventListener('click', (event) => {
             if (event.target.id === 'profileModal') closeProfileModal();
@@ -4535,7 +4773,7 @@
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig()]);
             loadDashboard();
         });
     </script>
