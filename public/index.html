@@ -1337,7 +1337,7 @@
                   muted
                   playsinline
                   preload="auto"
-                  style="width: 100%; max-width: 600px; height: auto; display: block; border-radius: 12px; margin: 0 auto;"
+                  style="width: 100%; max-width: 300px; height: auto; display: block; border-radius: 12px; margin: 0 auto;"
                 >
                   <source id="iataVideoSource" src="/videos/TocaVideo.mp4" type="video/mp4" />
                 </video>
@@ -2055,6 +2055,43 @@
             }
         }
 
+
+
+        async function openWeekCommitmentsModal() {
+            try {
+                const today = new Date();
+                const day = (today.getDay() + 6) % 7;
+                const start = new Date(today);
+                start.setDate(today.getDate() - day);
+                const end = new Date(start);
+                end.setDate(start.getDate() + 6);
+                const startDate = start.toISOString().slice(0,10);
+                const endDate = end.toISOString().slice(0,10);
+                const response = await fetch(`${API_BASE}/agenda?start_date=${startDate}&end_date=${endDate}`);
+                const items = response.ok ? await response.json() : [];
+                let html = `<div class="modal active" id="weekCommitmentsModal" onclick="if(event.target===this) closeWeekCommitmentsModal()">`;
+                html += '<div class="modal-content" style="max-width:700px;">';
+                html += '<h2 style="color:#047857; margin-bottom:8px;">Compromissos da Semana</h2>';
+                html += `<p style="color:#6b7280; margin-bottom:14px;">Período: ${formatDateBr(startDate)} a ${formatDateBr(endDate)}</p>`;
+                if (!items.length) {
+                    html += '<div class="empty-state" style="padding:14px 8px;"><p>Nenhum compromisso nesta semana.</p></div>';
+                } else {
+                    html += '<div style="max-height:420px; overflow:auto;">';
+                    items.forEach(item => {
+                        html += `<div class="history-item" style="margin-bottom:10px;"><div class="history-meta">${formatDateBr(item.due_date)}${item.due_time ? ' ' + escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company ? ` (${escapeHtml(item.client_company)})` : ''}</div><div>${escapeHtml(item.title || item.notes || '-')}</div></div>`;
+                    });
+                    html += '</div>';
+                }
+                html += '<div style="margin-top:16px; text-align:right;"><button class="btn btn-secondary" onclick="closeWeekCommitmentsModal()">Fechar</button></div>';
+                html += '</div></div>';
+                document.body.insertAdjacentHTML('beforeend', html);
+            } catch (error) {
+                showError('Erro ao carregar compromissos da semana');
+            }
+        }
+
+        function closeWeekCommitmentsModal() { const m = document.getElementById('weekCommitmentsModal'); if (m) m.remove(); }
+
         async function renderDashboardGreeting() {
             const greetingEl = document.getElementById('dashboardGreeting');
             if (!greetingEl) return;
@@ -2103,7 +2140,7 @@
 
                     const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
 
-                    html += `<div class="summary-banner">Você tem <strong>${weekCount}</strong> compromisso(s) nesta semana.</div>`;
+                    html += `<div class="summary-banner" style="cursor:pointer;" onclick="openWeekCommitmentsModal()" title="Clique para ver os compromissos desta semana">Você tem <strong>${weekCount}</strong> compromisso(s) nesta semana.</div>`;
                     html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
                     html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
                     html += '<th style="min-width:78px; text-align:center;">TARGET</th>';
@@ -2601,15 +2638,19 @@
         }
 
         document.addEventListener('paste', (event) => {
-            const modalOpen = document.getElementById('clientModal').classList.contains('active');
-            if (!modalOpen) return;
+            const clientModal = document.getElementById('clientModal');
+            const accountModal = document.getElementById('accountModal');
+            const clientOpen = !!(clientModal && clientModal.classList.contains('active'));
+            const accountOpen = !!accountModal;
+            if (!clientOpen && !accountOpen) return;
 
             const items = event.clipboardData && event.clipboardData.items ? event.clipboardData.items : [];
             for (const item of items) {
                 if (item.type && item.type.startsWith('image/')) {
                     const blob = item.getAsFile();
                     if (blob) {
-                        setPastedImageToInput(blob);
+                        if (accountOpen) setPastedImageToAccountLogo(blob);
+                        else setPastedImageToInput(blob);
                         showSuccess('Imagem colada com sucesso!');
                         event.preventDefault();
                         break;
@@ -3368,7 +3409,7 @@
             });
 
             let html = `<div class="modal active" id="dayActivitiesModal" onclick="if(event.target === this) closeDayActivitiesModal()">`;
-            html += '<div class="modal-content" style="max-width: 600px;">';
+            html += '<div class="modal-content" style="max-width: 300px;">';
             html += `<h2 style="color: #047857; margin-bottom: 10px; text-transform: capitalize;">Atividades de ${dateFormatted}</h2>`;
             html += `<p style="color: #6b7280; margin-bottom: 20px;">${activities.length} compromisso(s) programado(s)</p>`;
 
@@ -3430,7 +3471,7 @@
             let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
             html += '<div class="modal-content" style="max-width: 460px; text-align: center;">';
             html += '<h2 style="margin-bottom: 8px;">Ops!</h2>';
-            html += '<img src="/logo-coelho.png" alt="Coelho triste" class="sad-bunny-image">';
+            html += '<img src="/images/sad-contact-bunny.svg" alt="Coelho triste" class="sad-bunny-image">';
             html += '<p style="color: #4b5563; font-size: 16px; margin: 10px 0 18px;">Você não cadastrou esse tipo de contato ainda</p>';
             html += '<button class="btn btn-secondary" onclick="closeMissingContactModal()">Fechar</button>';
             html += '</div></div>';
@@ -4852,6 +4893,55 @@
             const account = accountId ? await (await fetch(`${API_BASE}/accounts/${accountId}`)).json() : null;
             const companyOptions = (support.companies || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
             const sectorOptions = (support.sectors || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+            const logoSrc = account?.logo_url || '/logo-coelho.png';
+            const mainSelected = (account?.main_contact_ids || []).map(String).join(',');
+            const sortedContacts = sortAccountContactsByRole(account?.contacts || []);
+            const contactsList = sortedContacts.map(c => {
+                const active = (account?.main_contact_ids || []).includes(c.id);
+                return `<button type="button" data-main-contact="${c.id}" onclick="toggleMainContactSelection(${c.id})" style="padding:8px 10px; border-radius:10px; border:1px solid ${active?'rgba(16,185,129,.45)':'rgba(16,185,129,.25)'}; background:${active?'rgba(16,185,129,.18)':'transparent'}; color:#065f46; cursor:pointer; text-align:left;">${escapeHtml(c.name)}</button>`;
+            }).join('') || '<div style="color:#6b7280; font-size:13px;">Sem contatos nesta conta.</div>';
+
+            let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:860px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div style="display:grid; grid-template-columns: 1.4fr .9fr; gap:14px; align-items:start;"><div><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label>Target</label><select name="is_target"><option value="0" ${Number(account?.is_target)!==1?'selected':''}>Não</option><option value="1" ${Number(account?.is_target)===1?'selected':''}>Sim</option></select></div></div><div><img id="accountLogoPreview" src="${logoSrc}" style="width:100%; max-width:220px; height:150px; object-fit:contain; background:#fff; border-radius:14px; border:1px solid rgba(16,185,129,.25); display:block; margin-left:auto;"><div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;"><label class="btn btn-secondary btn-small" for="accountLogoInput"><i class="fas fa-image"></i> Alterar</label><button type="button" class="btn btn-danger btn-small" onclick="removeAccountLogo()"><i class="fas fa-trash"></i> Excluir</button></div><input type="file" id="accountLogoInput" name="logo" accept="image/*" style="display:none;" onchange="previewAccountLogo(event)"><input type="hidden" id="removeAccountLogoFlag" name="remove_logo" value="0"></div></div><div class="form-group"><label>Ponto Focal Principal</label><input type="hidden" id="accountMainContactsHidden" value="${mainSelected}"><div style="display:flex; flex-wrap:wrap; gap:8px;">${contactsList}</div></div><div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-primary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-briefcase"></i> Serviço Stefanini</button><div id="accountPresenceList" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">${(account?.presences||[]).map(p=>`<div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px;'><span style='font-weight:700; display:inline-flex; width:auto; max-width:fit-content;'>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-primary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Detalhes</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div></div>`).join('')}</div></div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function previewAccountLogo(event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById('accountLogoPreview');
+                if (img) img.src = e.target.result;
+                const flag = document.getElementById('removeAccountLogoFlag');
+                if (flag) flag.value = '0';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function setPastedImageToAccountLogo(blob) {
+            const input = document.getElementById('accountLogoInput');
+            if (!input || !blob) return;
+            const file = new File([blob], `logo_conta_${Date.now()}.png`, { type: blob.type || 'image/png' });
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            input.files = dt.files;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById('accountLogoPreview');
+                if (img) img.src = e.target.result;
+                const flag = document.getElementById('removeAccountLogoFlag');
+                if (flag) flag.value = '0';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function removeAccountLogo() {
+            const img = document.getElementById('accountLogoPreview');
+            const flag = document.getElementById('removeAccountLogoFlag');
+            const input = document.getElementById('accountLogoInput');
+            if (img) img.src = '/logo-coelho.png';
+            if (flag) flag.value = '1';
+            if (input) input.value = '';
             let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label><input type="checkbox" name="is_target" ${Number(account?.is_target)===1?'checked':''}> Target</label></div><div class="form-group"><label>Logo da conta</label><input type="file" id="accountLogoInput" name="logo" accept="image/*"></div><div class="form-group"><label>Ponto Focal Principal (múltiplo)</label><select id="accountMainContacts" multiple></select></div><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-secondary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-plus"></i> adicionar presença</button><div id="accountPresenceList" style="margin-top:8px;">${(account?.presences||[]).map(p=>`<div class='rule-item'><span>${escapeHtml(p.delivery_name)}</span><div><button class='btn btn-secondary btn-small' onclick='openPresenceModal(${account.id}, ${p.id})'>Editar</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div></div>`).join('')}</div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
             if (account && account.contacts) {
@@ -4866,9 +4956,8 @@
             event.preventDefault();
             const form = document.getElementById('accountForm');
             const fd = new FormData(form);
-            fd.set('is_target', form.querySelector('[name="is_target"]').checked ? '1':'0');
-            const selected = [...document.getElementById('accountMainContacts').selectedOptions].map(o=>o.value).join(',');
-            fd.set('main_contact_ids', selected);
+            fd.set('is_target', form.querySelector('[name="is_target"]').value || '0');
+            fd.set('main_contact_ids', document.getElementById('accountMainContactsHidden')?.value || '');
             const url = accountId ? `${API_BASE}/accounts/${accountId}` : `${API_BASE}/accounts`;
             const method = accountId ? 'PUT' : 'POST';
             const response = await fetch(url, { method, body: fd });
@@ -4879,7 +4968,7 @@
         }
 
         async function openAccountDetails(accountId) {
-            await openAccountModal(accountId);
+            await openAccountViewModal(accountId);
         }
 
         async function openPresenceModal(accountId, presenceId=null) {

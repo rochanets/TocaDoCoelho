@@ -386,6 +386,34 @@ def parse_currency_to_cents(value):
         return int(digits) if digits else None
 
 
+def ensure_account_for_company(cursor, company_name):
+    name = (company_name or '').strip()
+    if not name:
+        return None
+    cursor.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (name,))
+    row = cursor.fetchone()
+    if row:
+        return row['id'] if isinstance(row, sqlite3.Row) else row[0]
+    cursor.execute('INSERT INTO accounts (name, updated_at) VALUES (?, CURRENT_TIMESTAMP)', (name,))
+    return cursor.lastrowid
+
+
+def sync_accounts_from_clients():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != ""')
+        companies = [row['company'] for row in c.fetchall()]
+        for company in companies:
+            ensure_account_for_company(c, company)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f'[WARN] sync_accounts_from_clients: {e}')
+
+
+sync_accounts_from_clients()
+
 def normalize_phone(phone):
     if not phone:
         return None
@@ -1049,8 +1077,9 @@ def create_client():
         c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, photo_url, is_target, is_cold_contact)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                   (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact))
-        conn.commit()
         client_id = c.lastrowid
+        ensure_account_for_company(c, company)
+        conn.commit()
         conn.close()
         
         print(f'[DEBUG] Cliente criado com ID: {client_id}')
@@ -1105,6 +1134,7 @@ def update_client(client_id):
         c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
                   (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact, client_id))
+        ensure_account_for_company(c, company)
         conn.commit()
         conn.close()
         
@@ -1878,6 +1908,7 @@ def import_clients():
                             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
                          (row_data['name'], row_data['company'], row_data['position'], 
                           row_data['email'], row_data['phone']))
+                ensure_account_for_company(c, row_data['company'])
                 imported_count += 1
             
             conn.commit()
@@ -2480,6 +2511,7 @@ def delete_message_template(template_id):
 @app.route('/api/accounts/support-data', methods=['GET'])
 def get_accounts_support_data():
     try:
+        sync_accounts_from_clients()
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != "" ORDER BY company')
         companies = [row['company'] for row in c.fetchall()]
@@ -2510,6 +2542,7 @@ def _create_or_update_presence_event(c, account_name, account_id, presence):
 @app.route('/api/accounts', methods=['GET'])
 def list_accounts():
     try:
+        sync_accounts_from_clients()
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts ORDER BY name COLLATE NOCASE')
         accounts = [dict_from_row(r) for r in c.fetchall()]
@@ -2594,12 +2627,13 @@ def update_account(account_id):
         professionals_count = int(professionals_count) if professionals_count.isdigit() else None
         global_presence = request.form.get('global_presence', '').strip() or None
         main_contact_ids = request.form.get('main_contact_ids', '').strip()
+        remove_logo = request.form.get('remove_logo', '0') in ('1', 'true', 'True')
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         row = dict_from_row(c.fetchone())
         if not row:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        logo_url = row.get('logo_url')
+        logo_url = None if remove_logo else row.get('logo_url')
         if 'logo' in request.files:
             f = request.files['logo']
             if f and f.filename:
