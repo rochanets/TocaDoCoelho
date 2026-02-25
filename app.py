@@ -44,6 +44,8 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / 'toca-do-coelho-version2.db'
 UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
+ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Migração automática do banco de dados antigo
 if sys.platform == 'win32' and not DB_PATH.exists():
@@ -152,6 +154,72 @@ def init_db():
         photo_url TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS account_sectors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        logo_url TEXT,
+        is_target INTEGER DEFAULT 0,
+        sector TEXT,
+        average_revenue_cents INTEGER,
+        professionals_count INTEGER,
+        global_presence TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS account_main_contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        client_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+        UNIQUE(account_id, client_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS account_presences (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        delivery_name TEXT NOT NULL,
+        stf_owner TEXT,
+        current_revenue_cents INTEGER,
+        validity_month TEXT,
+        focal_client_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY(focal_client_id) REFERENCES clients(id) ON DELETE SET NULL
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS account_renewal_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        presence_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        due_date TEXT NOT NULL,
+        due_time TEXT DEFAULT '09:00',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY(presence_id) REFERENCES account_presences(id) ON DELETE CASCADE,
+        UNIQUE(presence_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS message_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        available_whatsapp INTEGER DEFAULT 1,
+        available_email INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     
     # Tabela de compromissos (agenda)
     c.execute('''CREATE TABLE IF NOT EXISTS commitments (
@@ -258,6 +326,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('target_yellow_days', '10'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_green_days', '45'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_yellow_days', '60'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('iata_video_path', '/videos/TocaVideo.mp4'))
     
     conn.commit()
     
@@ -269,6 +338,10 @@ def init_db():
             c.execute('ALTER TABLE user_profile ADD COLUMN email TEXT')
         if 'phone' not in profile_cols:
             c.execute('ALTER TABLE user_profile ADD COLUMN phone TEXT')
+        if 'boss_name' not in profile_cols:
+            c.execute('ALTER TABLE user_profile ADD COLUMN boss_name TEXT')
+        if 'boss_email' not in profile_cols:
+            c.execute('ALTER TABLE user_profile ADD COLUMN boss_email TEXT')
 
         c.execute("PRAGMA table_info(activities)")
         columns = [col[1] for col in c.fetchall()]
@@ -296,6 +369,50 @@ def dict_from_row(row):
         return None
     return dict(row)
 
+
+def parse_currency_to_cents(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = re.sub(r'[^\d,.-]', '', text)
+    if ',' in text:
+        text = text.replace('.', '').replace(',', '.')
+    try:
+        return int(round(float(text) * 100))
+    except Exception:
+        digits = re.sub(r'\D', '', str(value))
+        return int(digits) if digits else None
+
+
+def ensure_account_for_company(cursor, company_name):
+    name = (company_name or '').strip()
+    if not name:
+        return None
+    cursor.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (name,))
+    row = cursor.fetchone()
+    if row:
+        return row['id'] if isinstance(row, sqlite3.Row) else row[0]
+    cursor.execute('INSERT INTO accounts (name, updated_at) VALUES (?, CURRENT_TIMESTAMP)', (name,))
+    return cursor.lastrowid
+
+
+def sync_accounts_from_clients():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != ""')
+        companies = [row['company'] for row in c.fetchall()]
+        for company in companies:
+            ensure_account_for_company(c, company)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f'[WARN] sync_accounts_from_clients: {e}')
+
+
+sync_accounts_from_clients()
 
 def normalize_phone(phone):
     if not phone:
@@ -762,6 +879,21 @@ def get_profile_config():
         return jsonify({'error': str(e)}), 500
 
 
+
+
+@app.route('/api/config/ui', methods=['GET'])
+def get_ui_config():
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT key, value FROM app_settings WHERE key IN ("iata_video_path")')
+        settings = {row['key']: row['value'] for row in c.fetchall()}
+        conn.close()
+        return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/ui: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/config/profile', methods=['POST'])
 def save_profile_config():
     try:
@@ -770,6 +902,8 @@ def save_profile_config():
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        boss_name = request.form.get('boss_name', '').strip() or None
+        boss_email = request.form.get('boss_email', '').strip() or None
 
         if not full_name or not nickname or not position or not email or not phone:
             return jsonify({'error': 'Nome completo, apelido, cargo, email e telefone são obrigatórios'}), 400
@@ -791,8 +925,8 @@ def save_profile_config():
         if not photo_url:
             return jsonify({'error': 'Foto é obrigatória'}), 400
 
-        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, email, phone, photo_url, updated_at)
-                     VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, email, phone, photo_url, boss_name, boss_email, updated_at)
+                     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                      ON CONFLICT(id) DO UPDATE SET
                         full_name = excluded.full_name,
                         nickname = excluded.nickname,
@@ -800,8 +934,10 @@ def save_profile_config():
                         email = excluded.email,
                         phone = excluded.phone,
                         photo_url = excluded.photo_url,
+                        boss_name = excluded.boss_name,
+                        boss_email = excluded.boss_email,
                         updated_at = CURRENT_TIMESTAMP''',
-                  (full_name, nickname, position, email, phone, photo_url))
+                  (full_name, nickname, position, email, phone, photo_url, boss_name, boss_email))
         conn.commit()
         conn.close()
 
@@ -941,8 +1077,9 @@ def create_client():
         c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, photo_url, is_target, is_cold_contact)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                   (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact))
-        conn.commit()
         client_id = c.lastrowid
+        ensure_account_for_company(c, company)
+        conn.commit()
         conn.close()
         
         print(f'[DEBUG] Cliente criado com ID: {client_id}')
@@ -997,6 +1134,7 @@ def update_client(client_id):
         c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
                   (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact, client_id))
+        ensure_account_for_company(c, company)
         conn.commit()
         conn.close()
         
@@ -1207,7 +1345,8 @@ def get_agenda():
         conn = get_db()
         c = conn.cursor()
 
-        query = '''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
+        query = '''SELECT CAST(cm.id AS TEXT) as id, cm.client_id, cm.activity_id, cm.title, cm.notes, cm.due_date, cm.due_time, cm.source_type,
+                          cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
                    FROM commitments cm
                    JOIN clients cl ON cm.client_id = cl.id'''
         params = []
@@ -1216,7 +1355,15 @@ def get_agenda():
             query += ' WHERE DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
             params.extend([start_date, end_date])
 
-        query += ' ORDER BY cm.due_date ASC, cm.created_at ASC'
+        query += ''' UNION ALL SELECT "acc-" || CAST(ev.id AS TEXT) as id, NULL as client_id, NULL as activity_id, ev.title, ev.title as notes, ev.due_date, ev.due_time, "account_presence" as source_type,
+                          ac.name as client_name, ac.name as client_company, "Conta" as client_position, NULL as client_email, ac.logo_url as client_photo
+                   FROM account_renewal_events ev
+                   JOIN accounts ac ON ev.account_id = ac.id'''
+        if start_date and end_date:
+            query += ' WHERE DATE(ev.due_date) >= ? AND DATE(ev.due_date) <= ?'
+            params.extend([start_date, end_date])
+
+        query += ' ORDER BY due_date ASC, id ASC'
         c.execute(query, params)
         items = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
@@ -1224,8 +1371,6 @@ def get_agenda():
     except Exception as e:
         print(f'[ERROR] GET /api/agenda: {e}')
         return jsonify({'error': str(e)}), 500
-
-
 
 
 @app.route('/api/agenda', methods=['POST'])
@@ -1763,6 +1908,7 @@ def import_clients():
                             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
                          (row_data['name'], row_data['company'], row_data['position'], 
                           row_data['email'], row_data['phone']))
+                ensure_account_for_company(c, row_data['company'])
                 imported_count += 1
             
             conn.commit()
@@ -2288,7 +2434,308 @@ def complete_suggestion(suggestion_id):
         print(f'[ERROR] POST /api/suggestions/{suggestion_id}/complete: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/config/templates', methods=['GET'])
+def list_message_templates():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM message_templates ORDER BY title COLLATE NOCASE')
+        items = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(items)
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/templates: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/templates', methods=['POST'])
+def create_message_template():
+    try:
+        data = request.get_json() or {}
+        title = (data.get('title') or '').strip()
+        description = (data.get('description') or '').strip()
+        available_whatsapp = 1 if data.get('available_whatsapp', True) else 0
+        available_email = 1 if data.get('available_email', True) else 0
+        if not title or not description:
+            return jsonify({'error': 'Título e descritivo são obrigatórios'}), 400
+        conn = get_db(); c = conn.cursor()
+        c.execute('''INSERT INTO message_templates (title, description, available_whatsapp, available_email, updated_at)
+                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''', (title, description, available_whatsapp, available_email))
+        template_id = c.lastrowid
+        conn.commit()
+        c.execute('SELECT * FROM message_templates WHERE id = ?', (template_id,))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(item), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/config/templates: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/templates/<int:template_id>', methods=['PUT'])
+def update_message_template(template_id):
+    try:
+        data = request.get_json() or {}
+        title = (data.get('title') or '').strip()
+        description = (data.get('description') or '').strip()
+        available_whatsapp = 1 if data.get('available_whatsapp', True) else 0
+        available_email = 1 if data.get('available_email', True) else 0
+        if not title or not description:
+            return jsonify({'error': 'Título e descritivo são obrigatórios'}), 400
+        conn = get_db(); c = conn.cursor()
+        c.execute('''UPDATE message_templates
+                     SET title = ?, description = ?, available_whatsapp = ?, available_email = ?, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?''', (title, description, available_whatsapp, available_email, template_id))
+        conn.commit()
+        c.execute('SELECT * FROM message_templates WHERE id = ?', (template_id,))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(item or {'message': 'Atualizado'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/config/templates/{template_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/templates/<int:template_id>', methods=['DELETE'])
+def delete_message_template(template_id):
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('DELETE FROM message_templates WHERE id = ?', (template_id,))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Modelo removido'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/config/templates/{template_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/support-data', methods=['GET'])
+def get_accounts_support_data():
+    try:
+        sync_accounts_from_clients()
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != "" ORDER BY company')
+        companies = [row['company'] for row in c.fetchall()]
+        c.execute('SELECT name FROM account_sectors ORDER BY name')
+        sectors = [row['name'] for row in c.fetchall()]
+        conn.close()
+        return jsonify({'companies': companies, 'sectors': sectors})
+    except Exception as e:
+        print(f'[ERROR] GET /api/accounts/support-data: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _create_or_update_presence_event(c, account_name, account_id, presence):
+    validity = (presence.get('validity_month') or '').strip()
+    if not validity:
+        return
+    due_date = f"{validity}-01"
+    title = f"Renovação {account_name}: {presence.get('delivery_name') or ''}".strip()
+    c.execute('''INSERT INTO account_renewal_events (account_id, presence_id, title, due_date, due_time)
+                 VALUES (?, ?, ?, ?, '09:00')
+                 ON CONFLICT(presence_id) DO UPDATE SET
+                    title = excluded.title,
+                    due_date = excluded.due_date,
+                    due_time = '09:00' ''',
+              (account_id, presence['id'], title, due_date))
+
+
+@app.route('/api/accounts', methods=['GET'])
+def list_accounts():
+    try:
+        sync_accounts_from_clients()
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT * FROM accounts ORDER BY name COLLATE NOCASE')
+        accounts = [dict_from_row(r) for r in c.fetchall()]
+        for acc in accounts:
+            c.execute('''SELECT p.* FROM account_presences p WHERE p.account_id = ? ORDER BY p.delivery_name COLLATE NOCASE''', (acc['id'],))
+            acc['presences'] = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(accounts)
+    except Exception as e:
+        print(f'[ERROR] GET /api/accounts: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>', methods=['GET'])
+def get_account(account_id):
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
+        account = dict_from_row(c.fetchone())
+        if not account:
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        c.execute('''SELECT c.id, c.name, c.position, c.photo_url, c.email
+                     FROM clients c
+                     WHERE LOWER(TRIM(c.company)) = LOWER(TRIM(?))
+                     ORDER BY c.name''', (account['name'],))
+        account['contacts'] = [dict_from_row(r) for r in c.fetchall()]
+        c.execute('''SELECT client_id FROM account_main_contacts WHERE account_id = ? ORDER BY id''', (account_id,))
+        account['main_contact_ids'] = [row['client_id'] for row in c.fetchall()]
+        c.execute('SELECT * FROM account_presences WHERE account_id = ? ORDER BY delivery_name COLLATE NOCASE', (account_id,))
+        account['presences'] = [dict_from_row(r) for r in c.fetchall()]
+        conn.close(); return jsonify(account)
+    except Exception as e:
+        print(f'[ERROR] GET /api/accounts/{account_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts', methods=['POST'])
+def create_account():
+    try:
+        name = request.form.get('name', '').strip()
+        sector = request.form.get('sector', '').strip() or None
+        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'True') else 0
+        average_revenue_cents = parse_currency_to_cents(request.form.get('average_revenue'))
+        professionals_count = request.form.get('professionals_count', '').strip()
+        professionals_count = int(professionals_count) if professionals_count.isdigit() else None
+        global_presence = request.form.get('global_presence', '').strip() or None
+        main_contact_ids = request.form.get('main_contact_ids', '').strip()
+        if not name:
+            return jsonify({'error': 'Nome da conta é obrigatório'}), 400
+        conn = get_db(); c = conn.cursor()
+        logo_url = None
+        if 'logo' in request.files:
+            f = request.files['logo']
+            if f and f.filename:
+                filename = secure_filename(f"acc_{int(datetime.now().timestamp())}_{f.filename}")
+                f.save(str(ACCOUNT_UPLOAD_DIR / filename))
+                logo_url = f'/uploads/accounts/{filename}'
+        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                  (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence))
+        account_id = c.lastrowid
+        if sector:
+            c.execute('INSERT OR IGNORE INTO account_sectors (name) VALUES (?)', (sector,))
+        ids = [int(x) for x in main_contact_ids.split(',') if x.strip().isdigit()]
+        for cid in ids:
+            c.execute('INSERT OR IGNORE INTO account_main_contacts (account_id, client_id) VALUES (?, ?)', (account_id, cid))
+        conn.commit(); conn.close()
+        return jsonify({'id': account_id, 'message': 'Conta criada'}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/accounts: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>', methods=['PUT'])
+def update_account(account_id):
+    try:
+        name = request.form.get('name', '').strip()
+        sector = request.form.get('sector', '').strip() or None
+        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'True') else 0
+        average_revenue_cents = parse_currency_to_cents(request.form.get('average_revenue'))
+        professionals_count = request.form.get('professionals_count', '').strip()
+        professionals_count = int(professionals_count) if professionals_count.isdigit() else None
+        global_presence = request.form.get('global_presence', '').strip() or None
+        main_contact_ids = request.form.get('main_contact_ids', '').strip()
+        remove_logo = request.form.get('remove_logo', '0') in ('1', 'true', 'True')
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
+        row = dict_from_row(c.fetchone())
+        if not row:
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        logo_url = None if remove_logo else row.get('logo_url')
+        if 'logo' in request.files:
+            f = request.files['logo']
+            if f and f.filename:
+                filename = secure_filename(f"acc_{int(datetime.now().timestamp())}_{f.filename}")
+                f.save(str(ACCOUNT_UPLOAD_DIR / filename))
+                logo_url = f'/uploads/accounts/{filename}'
+        c.execute('''UPDATE accounts SET name=?, logo_url=?, is_target=?, sector=?, average_revenue_cents=?, professionals_count=?, global_presence=?, updated_at=CURRENT_TIMESTAMP WHERE id=?''',
+                  (name or row['name'], logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, account_id))
+        if sector:
+            c.execute('INSERT OR IGNORE INTO account_sectors (name) VALUES (?)', (sector,))
+        c.execute('DELETE FROM account_main_contacts WHERE account_id = ?', (account_id,))
+        ids = [int(x) for x in main_contact_ids.split(',') if x.strip().isdigit()]
+        for cid in ids:
+            c.execute('INSERT OR IGNORE INTO account_main_contacts (account_id, client_id) VALUES (?, ?)', (account_id, cid))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Conta atualizada'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/accounts/{account_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>/presences', methods=['POST'])
+def create_account_presence(account_id):
+    try:
+        data = request.get_json() or {}
+        delivery_name = (data.get('delivery_name') or '').strip()
+        if not delivery_name:
+            return jsonify({'error': 'Nome da Entrega é obrigatório'}), 400
+        stf_owner = (data.get('stf_owner') or '').strip() or None
+        current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
+        validity_month = (data.get('validity_month') or '').strip() or None
+        focal_client_id = data.get('focal_client_id')
+        focal_client_id = int(focal_client_id) if str(focal_client_id).isdigit() else None
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT name FROM accounts WHERE id = ?', (account_id,))
+        account = c.fetchone()
+        if not account:
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, current_revenue_cents, validity_month, focal_client_id, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                  (account_id, delivery_name, stf_owner, current_revenue_cents, validity_month, focal_client_id))
+        presence_id = c.lastrowid
+        c.execute('SELECT * FROM account_presences WHERE id = ?', (presence_id,))
+        presence = dict_from_row(c.fetchone())
+        _create_or_update_presence_event(c, account['name'], account_id, presence)
+        conn.commit(); conn.close()
+        return jsonify(presence), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/accounts/{account_id}/presences: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>/presences/<int:presence_id>', methods=['PUT'])
+def update_account_presence(account_id, presence_id):
+    try:
+        data = request.get_json() or {}
+        delivery_name = (data.get('delivery_name') or '').strip()
+        if not delivery_name:
+            return jsonify({'error': 'Nome da Entrega é obrigatório'}), 400
+        stf_owner = (data.get('stf_owner') or '').strip() or None
+        current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
+        validity_month = (data.get('validity_month') or '').strip() or None
+        focal_client_id = data.get('focal_client_id')
+        focal_client_id = int(focal_client_id) if str(focal_client_id).isdigit() else None
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT name FROM accounts WHERE id = ?', (account_id,))
+        account = c.fetchone()
+        if not account:
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        c.execute('''UPDATE account_presences
+                     SET delivery_name=?, stf_owner=?, current_revenue_cents=?, validity_month=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
+                     WHERE id=? AND account_id=?''',
+                  (delivery_name, stf_owner, current_revenue_cents, validity_month, focal_client_id, presence_id, account_id))
+        c.execute('SELECT * FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
+        presence = dict_from_row(c.fetchone())
+        if presence:
+            _create_or_update_presence_event(c, account['name'], account_id, presence)
+        conn.commit(); conn.close()
+        return jsonify(presence or {'message': 'Atualizada'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/accounts/{account_id}/presences/{presence_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>/presences/<int:presence_id>', methods=['DELETE'])
+def delete_account_presence(account_id, presence_id):
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('DELETE FROM account_renewal_events WHERE presence_id = ?', (presence_id,))
+        c.execute('DELETE FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Presença removida'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
 # Servir arquivos estaticos
+
+@app.route('/uploads/accounts/<filename>')
+def serve_account_upload(filename):
+    return send_from_directory(str(ACCOUNT_UPLOAD_DIR), filename)
+
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(str(UPLOAD_DIR), filename)
