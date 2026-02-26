@@ -4327,13 +4327,30 @@
         let activeAudioChunks = [];
         let activeVoiceTargetInputId = null;
 
+        const VOICE_DEBUG = true;
+
         async function transcribeRecordedAudio(audioBlob) {
             const formData = new FormData();
             formData.append('audio', audioBlob, 'gravacao.webm');
-            const response = await fetch(`${API_BASE}/transcribe-audio`, { method: 'POST', body: formData });
+            const response = await fetch(`${API_BASE}/transcribe-audio`, {
+                method: 'POST',
+                body: formData,
+                headers: { Accept: 'application/json' }
+            });
             const payload = await response.json().catch(() => ({}));
             if (!response.ok) {
-                throw new Error(payload.error || 'Falha ao transcrever áudio.');
+                const backendMessage = payload.error || `HTTP ${response.status}`;
+                if (VOICE_DEBUG) {
+                    console.error('[Voice][Transcription] Falha no backend', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        payload
+                    });
+                }
+                throw new Error(`Falha na transcrição: ${backendMessage}`);
+            }
+            if (VOICE_DEBUG) {
+                console.log('[Voice][Transcription] Sucesso', { chars: String(payload.text || '').length });
             }
             return String(payload.text || '').trim();
         }
@@ -4392,7 +4409,7 @@
                         if (!transcribedText || !currentTarget) return;
                         currentTarget.value = [initialValue, transcribedText].filter(Boolean).join(' ').trim();
                     } catch (error) {
-                        showError(error.message || 'Falha ao transcrever áudio.');
+                        showError((error && error.message) ? error.message : 'Falha ao transcrever áudio. Veja o console/log do servidor para detalhes.');
                     } finally {
                         activeMediaRecorder = null;
                         activeVoiceBtnId = null;
@@ -4894,7 +4911,7 @@
             if (!client || !client.phone) return openMissingContactModal();
             let html = `<div class="modal active" id="whatsAppModal" onclick="if(event.target === this) closeWhatsAppModal()">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name || '-')}</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('whatsapp','whatsMessageText')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);

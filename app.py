@@ -10,6 +10,7 @@ import re
 import zipfile
 import tempfile
 import threading
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -58,6 +59,7 @@ ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
+TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
 
 
 def get_whisper_model():
@@ -643,10 +645,20 @@ def parse_xlsx_without_openpyxl(file_storage):
     return rows
 
 
-@app.route('/api/transcribe-audio', methods=['POST'])
+@app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
+@app.route('/api/transcribe-audio/', methods=['POST', 'OPTIONS'])
 def transcribe_audio():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    if TRANSCRIPTION_DEBUG:
+        print('[Transcription][DEBUG] Requisição recebida em /api/transcribe-audio')
+        print(f"[Transcription][DEBUG] Content-Type: {request.content_type}")
+        print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
+
     if not WHISPER_AVAILABLE:
-        return jsonify({'error': 'Biblioteca whisper não encontrada. Instale as dependências novamente.'}), 500
+        print('[Transcription][ERROR] Biblioteca whisper indisponível neste ambiente.')
+        return jsonify({'error': 'Biblioteca whisper não encontrada. Instale as dependências novamente.'}), 503
 
     audio_file = request.files.get('audio')
     if not audio_file:
@@ -659,16 +671,28 @@ def transcribe_audio():
             audio_file.save(tmp)
             temp_path = tmp.name
 
+        if TRANSCRIPTION_DEBUG:
+            print(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
+            print(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
+
         model = get_whisper_model()
         result = model.transcribe(temp_path, language='pt')
         text = (result.get('text') or '').strip()
+
+        if TRANSCRIPTION_DEBUG:
+            print(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
+
         return jsonify({'text': text})
     except Exception as e:
-        print(f'[ERROR] POST /api/transcribe-audio: {e}')
-        return jsonify({'error': 'Falha ao transcrever áudio com Whisper.'}), 500
+        print(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
+        if TRANSCRIPTION_DEBUG:
+            traceback.print_exc()
+        return jsonify({'error': f'Falha ao transcrever áudio com Whisper: {e}'}), 500
     finally:
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
+            if TRANSCRIPTION_DEBUG:
+                print(f"[Transcription][DEBUG] Arquivo temporário removido: {temp_path}")
 
 # API - Clientes (rotas alternativas para compatibilidade)
 @app.route('/api/clientes', methods=['GET'])
