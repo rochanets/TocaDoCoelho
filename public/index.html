@@ -1187,6 +1187,12 @@
         .voice-anim span:nth-child(2){height:14px; animation-delay:.15s;}
         .voice-anim span:nth-child(3){height:10px; animation-delay:.3s;}
         @keyframes voiceBars { 0%,100%{transform:scaleY(.65);} 50%{transform:scaleY(1.25);} }
+        .voice-processing { display:none; font-size:16px; animation: voiceSpin 1s linear infinite; }
+        .voice-btn.transcribing { background:#f59e0b; color:#fff; border-color:#d97706; box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2); cursor: wait; }
+        .voice-btn.transcribing .voice-processing { display:inline-block; }
+        .voice-btn.transcribing .voice-icon,
+        .voice-btn.transcribing .voice-anim { display:none; }
+        @keyframes voiceSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         /* === Mapeamento Organizacional - Design Moderno === */
         #mapeamento-organizacional { background: transparent; }
         /* Background azul claro degrado para branco quando o modulo esta ativo */
@@ -1347,6 +1353,7 @@
                 <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
                     <i class="fas fa-microphone voice-icon"></i>
                     <span class="voice-anim"><span></span><span></span><span></span></span>
+                    <span class="voice-processing">⏳</span>
                 </button>
                 <input type="file" id="iataAttachment" class="iata-file-input" accept=".txt,text/plain" multiple onchange="validateIataAttachment(event)">
                 <label for="iataAttachment" id="iataAttachmentLabel" class="iata-file-btn" title="Anexar texto"><i class="fas fa-paperclip"></i></label>
@@ -1729,6 +1736,7 @@
                         <button type="button" id="activityVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('activityInformation','activityVoiceBtn')" title="Gravar áudio">
                             <i class="fas fa-microphone voice-icon"></i>
                             <span class="voice-anim"><span></span><span></span><span></span></span>
+                            <span class="voice-processing">⏳</span>
                         </button>
                     </div>
                 </div>
@@ -3477,11 +3485,12 @@
             return newWindow;
         }
 
+
         function openMissingContactModal() {
             let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
             html += '<div class="modal-content" style="max-width: 460px; text-align: center;">';
             html += '<h2 style="margin-bottom: 8px;">Ops!</h2>';
-            html += '<img src="/images/missing-contact/sad-bunny-v2.svg" alt="Coelho triste" class="sad-bunny-image" style="max-width:200px; width:100%; height:auto; object-fit:contain;">';
+            // Mantemos SVG versionado para evitar problemas com arquivos binários personalizados
             html += '<p style="color: #4b5563; font-size: 16px; margin: 10px 0 18px;">Você não cadastrou esse tipo de contato ainda</p>';
             html += '<button class="btn btn-secondary" onclick="closeMissingContactModal()">Fechar</button>';
             html += '</div></div>';
@@ -4325,9 +4334,17 @@
         let activeMediaRecorder = null;
         let activeVoiceBtnId = null;
         let activeAudioChunks = [];
-        let activeVoiceTargetInputId = null;
+        let activeVoiceTargetElement = null;
+        let activeVoiceInitialValue = '';
 
         const VOICE_DEBUG = true;
+
+        function setVoiceButtonState(btn, state) {
+            if (!btn) return;
+            btn.classList.remove('active', 'transcribing');
+            if (state === 'recording') btn.classList.add('active');
+            if (state === 'transcribing') btn.classList.add('transcribing');
+        }
 
         async function transcribeRecordedAudio(audioBlob) {
             const formData = new FormData();
@@ -4378,6 +4395,7 @@
 
             if (activeMediaRecorder && activeVoiceBtnId && activeVoiceBtnId !== buttonId) {
                 activeMediaRecorder.stop();
+                return;
             }
 
             try {
@@ -4386,8 +4404,9 @@
                 activeAudioChunks = [];
                 activeMediaRecorder = mediaRecorder;
                 activeVoiceBtnId = buttonId;
-                activeVoiceTargetInputId = targetInputId;
-                btn.classList.add('active');
+                activeVoiceTargetElement = target;
+                activeVoiceInitialValue = String(target.value || '').trim();
+                setVoiceButtonState(btn, 'recording');
                 target.focus();
 
                 mediaRecorder.ondataavailable = (event) => {
@@ -4395,35 +4414,38 @@
                 };
 
                 mediaRecorder.onerror = () => {
+                    setVoiceButtonState(btn, 'idle');
                     showError('Erro durante gravação de áudio.');
                 };
 
                 mediaRecorder.onstop = async () => {
                     stream.getTracks().forEach(track => track.stop());
-                    btn.classList.remove('active');
-
-                    const currentTarget = document.getElementById(activeVoiceTargetInputId) || document.querySelector(fallbackSelector);
-                    const initialValue = String(currentTarget?.value || '').trim();
+                    setVoiceButtonState(btn, 'transcribing');
 
                     try {
                         if (!activeAudioChunks.length) return;
                         const audioBlob = new Blob(activeAudioChunks, { type: 'audio/webm' });
                         const transcribedText = await transcribeRecordedAudio(audioBlob);
+                        const currentTarget = activeVoiceTargetElement || target;
                         if (!transcribedText || !currentTarget) return;
-                        currentTarget.value = [initialValue, transcribedText].filter(Boolean).join(' ').trim();
+                        const currentValue = String(currentTarget.value || '').trim();
+                        const baseValue = currentValue || activeVoiceInitialValue;
+                        currentTarget.value = [baseValue, transcribedText].filter(Boolean).join(' ').trim();
                     } catch (error) {
                         showError((error && error.message) ? error.message : 'Falha ao transcrever áudio. Veja o console/log do servidor para detalhes.');
                     } finally {
+                        setVoiceButtonState(btn, 'idle');
                         activeMediaRecorder = null;
                         activeVoiceBtnId = null;
                         activeAudioChunks = [];
-                        activeVoiceTargetInputId = null;
+                        activeVoiceTargetElement = null;
+                        activeVoiceInitialValue = '';
                     }
                 };
 
                 mediaRecorder.start();
             } catch (error) {
-                btn.classList.remove('active');
+                setVoiceButtonState(btn, 'idle');
                 showError('Não foi possível acessar o microfone.');
             }
         }
@@ -4461,16 +4483,53 @@
             });
         }
 
+        function normalizeCompanyKey(name) {
+            return String(name || '').trim().toLowerCase();
+        }
+
         async function loadOrganizationalMapping() {
-            const response = await fetch(`${API_BASE}/clientes`);
-            const data = response.ok ? await response.json() : [];
-            const companies = [...new Set(data.map(c => c.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+            const [clientsRes, accountsRes] = await Promise.all([
+                fetch(`${API_BASE}/clientes`),
+                fetch(`${API_BASE}/accounts`)
+            ]);
+            const data = clientsRes.ok ? await clientsRes.json() : [];
+            const accounts = accountsRes.ok ? await accountsRes.json() : [];
+
+            const accountByCompany = {};
+            (accounts || []).forEach(acc => {
+                const key = normalizeCompanyKey(acc.name);
+                if (key) accountByCompany[key] = acc;
+            });
+
+            const companySet = new Set();
+            data.forEach(c => { if (c.company) companySet.add(c.company); });
+            accounts.forEach(a => { if (a.name) companySet.add(a.name); });
+
+            const companies = [...companySet].sort((a, b) => {
+                const accA = accountByCompany[normalizeCompanyKey(a)] || {};
+                const accB = accountByCompany[normalizeCompanyKey(b)] || {};
+                const targetDiff = Number(accB.is_target || 0) - Number(accA.is_target || 0);
+                if (targetDiff !== 0) return targetDiff;
+                return String(a || '').localeCompare(String(b || ''), 'pt-BR');
+            });
+
             const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>{ const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b); return r !== 0 ? r : a.localeCompare(b,'pt-BR'); });
             let html = '<div class="org-map-container"><div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
             companies.forEach(company => {
-                html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
+                const account = accountByCompany[normalizeCompanyKey(company)] || {};
+                const companyLogo = account.logo_url || '/logo-coelho.png';
+                const companyTag = Number(account.is_target) === 1
+                    ? '<span style="font-size:11px; color:#065f46; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.28); border-radius:999px; padding:2px 8px; margin-left:8px;">Target</span>'
+                    : '';
+                html += `<tr><td><div style="display:flex; align-items:center; gap:8px;"><img src="${companyLogo}" style="width:24px; height:24px; border-radius:6px; object-fit:cover; border:1px solid rgba(96,187,217,.35); background:#fff;"><strong>${escapeHtml(company)}</strong>${companyTag}</div></td>`;
                 positions.forEach(position => {
-                    const people = data.filter(c => c.company===company && c.position===position);
+                    const people = data
+                        .filter(c => String(c.company || '').toLowerCase() === String(company || '').toLowerCase() && c.position===position)
+                        .sort((a,b) => {
+                            const targetDiff = Number(b.is_target || 0) - Number(a.is_target || 0);
+                            if (targetDiff !== 0) return targetDiff;
+                            return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
+                        });
                     if (people.length) {
                         const cell = people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('');
                         html += `<td>${cell}</td>`;

@@ -784,10 +784,13 @@ def get_positions():
 @app.route('/api/empresas', methods=['GET'])
 def get_companies():
     try:
+        sync_accounts_from_clients()
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != "" ORDER BY company')
-        companies = [row['company'] for row in c.fetchall()]
+        c.execute('''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
+                     WHERE name IS NOT NULL AND TRIM(name) != ''
+                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''')
+        companies = [row['name'] for row in c.fetchall()]
         conn.close()
         return jsonify(companies)
     except Exception as e:
@@ -2641,9 +2644,11 @@ def get_accounts_support_data():
     try:
         sync_accounts_from_clients()
         conn = get_db(); c = conn.cursor()
-        c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != "" ORDER BY company')
-        companies = [row['company'] for row in c.fetchall()]
-        c.execute('SELECT name FROM account_sectors ORDER BY name')
+        c.execute('''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
+                     WHERE name IS NOT NULL AND TRIM(name) != ''
+                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''')
+        companies = [row['name'] for row in c.fetchall()]
+        c.execute('SELECT name FROM account_sectors ORDER BY name COLLATE NOCASE')
         sectors = [row['name'] for row in c.fetchall()]
         conn.close()
         return jsonify({'companies': companies, 'sectors': sectors})
