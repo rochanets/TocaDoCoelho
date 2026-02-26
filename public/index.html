@@ -3463,6 +3463,20 @@
             return digits;
         }
 
+        let whatsappWindowRef = null;
+        let emailWindowRef = null;
+
+        function openOrReuseExternalTab(windowRef, url) {
+            if (windowRef && !windowRef.closed) {
+                windowRef.location.href = url;
+                windowRef.focus();
+                return windowRef;
+            }
+            const newWindow = window.open(url, '_blank');
+            if (newWindow) newWindow.focus();
+            return newWindow;
+        }
+
         function openMissingContactModal() {
             let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
             html += '<div class="modal-content" style="max-width: 460px; text-align: center;">';
@@ -3519,7 +3533,7 @@
             }
 
             const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-            window.open(url, '_blank');
+            whatsappWindowRef = openOrReuseExternalTab(whatsappWindowRef, url);
             closeWhatsAppModal();
             askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
@@ -4308,10 +4322,23 @@
             if (lbl) lbl.classList.toggle('has-file', allTxt && files.length > 0);
         }
 
-        let activeRecognizer = null;
+        let activeMediaRecorder = null;
         let activeVoiceBtnId = null;
+        let activeAudioChunks = [];
+        let activeVoiceTargetInputId = null;
 
-        function toggleVoiceTranscription(targetInputId, buttonId) {
+        async function transcribeRecordedAudio(audioBlob) {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'gravacao.webm');
+            const response = await fetch(`${API_BASE}/transcribe-audio`, { method: 'POST', body: formData });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload.error || 'Falha ao transcrever áudio.');
+            }
+            return String(payload.text || '').trim();
+        }
+
+        async function toggleVoiceTranscription(targetInputId, buttonId) {
             const btn = document.getElementById(buttonId);
             const fallbackSelector = targetInputId === 'activityInformation'
                 ? '#activityForm textarea[name="information"]'
@@ -4319,58 +4346,66 @@
             const target = document.getElementById(targetInputId) || document.querySelector(fallbackSelector);
             if (!btn || !target) return;
 
-            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SR) {
-                showError('Reconhecimento de voz não suportado neste navegador.');
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+                showError('Captura de áudio não suportada neste navegador.');
                 return;
             }
 
-            if (activeRecognizer && activeVoiceBtnId === buttonId) {
-                activeRecognizer.stop();
+            if (activeMediaRecorder && activeVoiceBtnId === buttonId) {
+                activeMediaRecorder.stop();
                 return;
             }
 
-            if (activeRecognizer && activeVoiceBtnId && activeVoiceBtnId !== buttonId) {
-                activeRecognizer.stop();
+            if (activeMediaRecorder && activeVoiceBtnId && activeVoiceBtnId !== buttonId) {
+                activeMediaRecorder.stop();
             }
 
-            const recognition = new SR();
-            recognition.lang = 'pt-BR';
-            recognition.interimResults = true;
-            recognition.continuous = true;
-            recognition.maxAlternatives = 1;
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mediaRecorder = new MediaRecorder(stream);
+                activeAudioChunks = [];
+                activeMediaRecorder = mediaRecorder;
+                activeVoiceBtnId = buttonId;
+                activeVoiceTargetInputId = targetInputId;
+                btn.classList.add('active');
+                target.focus();
 
-            const initialValue = String(target.value || '').trim();
-            let finalTranscript = '';
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) activeAudioChunks.push(event.data);
+                };
 
-            activeRecognizer = recognition;
-            activeVoiceBtnId = buttonId;
-            btn.classList.add('active');
-            target.focus();
+                mediaRecorder.onerror = () => {
+                    showError('Erro durante gravação de áudio.');
+                };
 
-            recognition.onresult = (event) => {
-                let interim = '';
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = (event.results[i][0].transcript || '').trim();
-                    if (!transcript) continue;
-                    if (event.results[i].isFinal) finalTranscript += `${transcript} `;
-                    else interim += `${transcript} `;
-                }
-                const prefix = initialValue ? `${initialValue} ` : '';
-                target.value = `${prefix}${finalTranscript}${interim}`.trim();
-            };
+                mediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(track => track.stop());
+                    btn.classList.remove('active');
 
-            const cleanup = () => {
+                    const currentTarget = document.getElementById(activeVoiceTargetInputId) || document.querySelector(fallbackSelector);
+                    const initialValue = String(currentTarget?.value || '').trim();
+
+                    try {
+                        if (!activeAudioChunks.length) return;
+                        const audioBlob = new Blob(activeAudioChunks, { type: 'audio/webm' });
+                        const transcribedText = await transcribeRecordedAudio(audioBlob);
+                        if (!transcribedText || !currentTarget) return;
+                        currentTarget.value = [initialValue, transcribedText].filter(Boolean).join(' ').trim();
+                    } catch (error) {
+                        showError(error.message || 'Falha ao transcrever áudio.');
+                    } finally {
+                        activeMediaRecorder = null;
+                        activeVoiceBtnId = null;
+                        activeAudioChunks = [];
+                        activeVoiceTargetInputId = null;
+                    }
+                };
+
+                mediaRecorder.start();
+            } catch (error) {
                 btn.classList.remove('active');
-                if (activeVoiceBtnId === buttonId) {
-                    activeRecognizer = null;
-                    activeVoiceBtnId = null;
-                }
-            };
-
-            recognition.onend = cleanup;
-            recognition.onerror = cleanup;
-            recognition.start();
+                showError('Não foi possível acessar o microfone.');
+            }
         }
 
         async function openDuplicateWarningModal(client) {
@@ -4859,7 +4894,7 @@
             if (!client || !client.phone) return openMissingContactModal();
             let html = `<div class="modal active" id="whatsAppModal" onclick="if(event.target === this) closeWhatsAppModal()">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name)}</h2><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('whatsapp','whatsMessageText')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -4871,7 +4906,7 @@
             const bossDisabled = !(userProfile && userProfile.boss_email);
             let html = `<div class="modal active" id="emailDraftModal" onclick="if(event.target === this) closeEmailDraftModal()">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label>Copiar chefe?</label><select id="copyBossSelect" ${bossDisabled?'disabled':''}><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label>Copiar chefe?</label><select id="copyBossSelect" ${bossDisabled?'disabled':''}><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','emailDraftBody')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -4885,7 +4920,7 @@
             const copyBoss = (document.getElementById('copyBossSelect')?.value || 'nao') === 'sim';
             const cc = copyBoss ? (userProfile?.boss_email || '') : '';
             const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-            window.open(outlookUrl, '_blank');
+            emailWindowRef = openOrReuseExternalTab(emailWindowRef, outlookUrl);
             askRegisterActivityFromCommunication(clientId, 'Email', body);
             closeEmailDraftModal();
         }

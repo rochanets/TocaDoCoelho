@@ -8,6 +8,8 @@ import sqlite3
 import webbrowser
 import re
 import zipfile
+import tempfile
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -25,6 +27,13 @@ try:
     CHARDET_AVAILABLE = True
 except ImportError:
     CHARDET_AVAILABLE = False
+
+try:
+    import whisper
+    WHISPER_AVAILABLE = True
+except ImportError:
+    whisper = None
+    WHISPER_AVAILABLE = False
 
 # Configuracao
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -46,6 +55,19 @@ UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
 ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+WHISPER_MODEL = None
+WHISPER_MODEL_LOCK = threading.Lock()
+
+
+def get_whisper_model():
+    global WHISPER_MODEL
+    if not WHISPER_AVAILABLE:
+        return None
+    with WHISPER_MODEL_LOCK:
+        if WHISPER_MODEL is None:
+            WHISPER_MODEL = whisper.load_model('base')
+    return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
 if sys.platform == 'win32' and not DB_PATH.exists():
@@ -619,6 +641,34 @@ def parse_xlsx_without_openpyxl(file_storage):
             rows.append(row_data)
 
     return rows
+
+
+@app.route('/api/transcribe-audio', methods=['POST'])
+def transcribe_audio():
+    if not WHISPER_AVAILABLE:
+        return jsonify({'error': 'Biblioteca whisper não encontrada. Instale as dependências novamente.'}), 500
+
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({'error': 'Arquivo de áudio não enviado.'}), 400
+
+    suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            audio_file.save(tmp)
+            temp_path = tmp.name
+
+        model = get_whisper_model()
+        result = model.transcribe(temp_path, language='pt')
+        text = (result.get('text') or '').strip()
+        return jsonify({'text': text})
+    except Exception as e:
+        print(f'[ERROR] POST /api/transcribe-audio: {e}')
+        return jsonify({'error': 'Falha ao transcrever áudio com Whisper.'}), 500
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 # API - Clientes (rotas alternativas para compatibilidade)
 @app.route('/api/clientes', methods=['GET'])
