@@ -11,6 +11,7 @@ import zipfile
 import tempfile
 import threading
 import traceback
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -36,6 +37,13 @@ except ImportError:
     whisper = None
     WHISPER_AVAILABLE = False
 
+try:
+    import imageio_ffmpeg
+    IMAGEIO_FFMPEG_AVAILABLE = True
+except ImportError:
+    imageio_ffmpeg = None
+    IMAGEIO_FFMPEG_AVAILABLE = False
+
 # Configuracao
 app = Flask(__name__, static_folder='public', static_url_path='')
 CORS(app)
@@ -60,6 +68,30 @@ ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
 TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
+
+
+def configure_ffmpeg_for_whisper():
+    ffmpeg_binary = os.environ.get('FFMPEG_BINARY')
+    if ffmpeg_binary and Path(ffmpeg_binary).exists():
+        return ffmpeg_binary
+
+    ffmpeg_on_path = shutil.which('ffmpeg')
+    if ffmpeg_on_path:
+        os.environ['FFMPEG_BINARY'] = ffmpeg_on_path
+        return ffmpeg_on_path
+
+    if IMAGEIO_FFMPEG_AVAILABLE:
+        try:
+            ffmpeg_imageio = imageio_ffmpeg.get_ffmpeg_exe()
+            ffmpeg_dir = str(Path(ffmpeg_imageio).parent)
+            os.environ['PATH'] = f"{ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            os.environ['FFMPEG_BINARY'] = ffmpeg_imageio
+            return ffmpeg_imageio
+        except Exception as e:
+            if TRANSCRIPTION_DEBUG:
+                print(f"[Transcription][DEBUG] Falha ao obter ffmpeg via imageio_ffmpeg: {e}")
+
+    return None
 
 
 def get_whisper_model():
@@ -664,6 +696,10 @@ def transcribe_audio():
     if not audio_file:
         return jsonify({'error': 'Arquivo de áudio não enviado.'}), 400
 
+    ffmpeg_path = configure_ffmpeg_for_whisper()
+    if not ffmpeg_path:
+        return jsonify({'error': 'FFmpeg não encontrado. Instale o FFmpeg no sistema ou adicione imageio-ffmpeg nas dependências.'}), 500
+
     suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
     temp_path = None
     try:
@@ -674,6 +710,7 @@ def transcribe_audio():
         if TRANSCRIPTION_DEBUG:
             print(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
             print(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
+            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path}")
 
         model = get_whisper_model()
         result = model.transcribe(temp_path, language='pt')
