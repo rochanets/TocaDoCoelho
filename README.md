@@ -26,6 +26,7 @@ Se preferir não usar o instalador:
 
 ### Requisitos
 - **Python 3.7+** instalado e adicionado ao PATH
+- **FFmpeg** instalado e disponível no PATH (necessário para transcrição de voz com Whisper)
 
 ### Passos
 

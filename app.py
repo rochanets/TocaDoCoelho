@@ -8,6 +8,10 @@ import sqlite3
 import webbrowser
 import re
 import zipfile
+import tempfile
+import threading
+import traceback
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -25,6 +29,20 @@ try:
     CHARDET_AVAILABLE = True
 except ImportError:
     CHARDET_AVAILABLE = False
+
+try:
+    import whisper
+    WHISPER_AVAILABLE = True
+except ImportError:
+    whisper = None
+    WHISPER_AVAILABLE = False
+
+try:
+    import imageio_ffmpeg
+    IMAGEIO_FFMPEG_AVAILABLE = True
+except ImportError:
+    imageio_ffmpeg = None
+    IMAGEIO_FFMPEG_AVAILABLE = False
 
 # Configuracao
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -46,6 +64,56 @@ UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
 ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+WHISPER_MODEL = None
+WHISPER_MODEL_LOCK = threading.Lock()
+TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
+
+
+def configure_ffmpeg_for_whisper():
+    ffmpeg_binary = os.environ.get('FFMPEG_BINARY')
+    if ffmpeg_binary and Path(ffmpeg_binary).exists():
+        return ffmpeg_binary
+
+    ffmpeg_on_path = shutil.which('ffmpeg')
+    if ffmpeg_on_path:
+        os.environ['FFMPEG_BINARY'] = ffmpeg_on_path
+        return ffmpeg_on_path
+
+    if IMAGEIO_FFMPEG_AVAILABLE:
+        try:
+            ffmpeg_imageio = imageio_ffmpeg.get_ffmpeg_exe()
+            ffmpeg_dir = str(Path(ffmpeg_imageio).parent)
+            os.environ['PATH'] = f"{ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            os.environ['FFMPEG_BINARY'] = ffmpeg_imageio
+            return ffmpeg_imageio
+        except Exception as e:
+            if TRANSCRIPTION_DEBUG:
+                print(f"[Transcription][DEBUG] Falha ao obter ffmpeg via imageio_ffmpeg: {e}")
+
+    return None
+
+
+def get_ffmpeg_install_instructions():
+    if sys.platform == 'win32':
+        return [
+            'Windows (winget): winget install -e --id Gyan.FFmpeg',
+            'Ou Windows (choco): choco install ffmpeg -y',
+            'Depois reinicie o app.'
+        ]
+    if sys.platform == 'darwin':
+        return ['macOS: brew install ffmpeg', 'Depois reinicie o app.']
+    return ['Linux (Debian/Ubuntu): sudo apt update && sudo apt install -y ffmpeg', 'Depois reinicie o app.']
+
+
+def get_whisper_model():
+    global WHISPER_MODEL
+    if not WHISPER_AVAILABLE:
+        return None
+    with WHISPER_MODEL_LOCK:
+        if WHISPER_MODEL is None:
+            WHISPER_MODEL = whisper.load_model('base')
+    return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
 if sys.platform == 'win32' and not DB_PATH.exists():
@@ -619,6 +687,66 @@ def parse_xlsx_without_openpyxl(file_storage):
             rows.append(row_data)
 
     return rows
+
+
+@app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
+@app.route('/api/transcribe-audio/', methods=['POST', 'OPTIONS'])
+def transcribe_audio():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    if TRANSCRIPTION_DEBUG:
+        print('[Transcription][DEBUG] Requisição recebida em /api/transcribe-audio')
+        print(f"[Transcription][DEBUG] Content-Type: {request.content_type}")
+        print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
+
+    if not WHISPER_AVAILABLE:
+        print('[Transcription][ERROR] Biblioteca whisper indisponível neste ambiente.')
+        return jsonify({'error': 'Biblioteca whisper não encontrada. Instale as dependências novamente.'}), 503
+
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({'error': 'Arquivo de áudio não enviado.'}), 400
+
+    ffmpeg_path = configure_ffmpeg_for_whisper()
+    if not ffmpeg_path:
+        instructions = get_ffmpeg_install_instructions()
+        return jsonify({
+            'error': 'FFmpeg não encontrado para processar áudio.',
+            'install_instructions': instructions,
+            'resolution': 'Instale o FFmpeg e reinicie o aplicativo.'
+        }), 500
+
+    suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            audio_file.save(tmp)
+            temp_path = tmp.name
+
+        if TRANSCRIPTION_DEBUG:
+            print(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
+            print(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
+            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path}")
+
+        model = get_whisper_model()
+        result = model.transcribe(temp_path, language='pt')
+        text = (result.get('text') or '').strip()
+
+        if TRANSCRIPTION_DEBUG:
+            print(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
+
+        return jsonify({'text': text})
+    except Exception as e:
+        print(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
+        if TRANSCRIPTION_DEBUG:
+            traceback.print_exc()
+        return jsonify({'error': f'Falha ao transcrever áudio com Whisper: {e}'}), 500
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+            if TRANSCRIPTION_DEBUG:
+                print(f"[Transcription][DEBUG] Arquivo temporário removido: {temp_path}")
 
 # API - Clientes (rotas alternativas para compatibilidade)
 @app.route('/api/clientes', methods=['GET'])
