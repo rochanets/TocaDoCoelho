@@ -1204,8 +1204,8 @@
         #mapeamento-organizacional .page-header h1 { color: #0d3a52; }
         #mapeamento-organizacional .page-header p { color: rgba(96,187,217,0.85); }
         #mapeamento-organizacional .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-        .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; }
-        .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 220px); border-radius: 0 0 20px 20px; }
+        .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; min-height: calc(100vh - 170px); }
+        .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 170px); border-radius: 0 0 20px 20px; }
         .org-table-wrap::-webkit-scrollbar { width:6px; height:6px; }
         .org-table-wrap::-webkit-scrollbar-track { background:rgba(96,187,217,0.08); }
         .org-table-wrap::-webkit-scrollbar-thumb { background:rgba(96,187,217,0.45); border-radius:4px; }
@@ -1216,7 +1216,7 @@
         .org-table tbody tr:hover td { background: #ddf1f9; }
         .org-table tbody tr:hover td:first-child { background: #4aaec8; }
         .org-table th:first-child { position: sticky; left:0; z-index:4; background:#60BBD9; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
-        .org-table td:first-child { position: sticky; left:0; z-index:2; background:#60BBD9; color:#0d3a52; font-weight:700; font-size:14px; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
+        .org-table td:first-child { position: sticky; left:0; z-index:2; background:#60BBD9; color:#ffffff; font-weight:700; font-size:14px; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
         .org-table tbody tr:nth-child(even) td { background: #e4f5fb; }
         .org-table tbody tr:nth-child(even) td:first-child { background: #55b3cc; }
         .org-table .table-link-btn { color:#0d3a52; font-weight:600; font-size:13px; }
@@ -4518,10 +4518,7 @@
             companies.forEach(company => {
                 const account = accountByCompany[normalizeCompanyKey(company)] || {};
                 const companyLogo = account.logo_url || '/logo-coelho.png';
-                const companyTag = Number(account.is_target) === 1
-                    ? '<span style="font-size:11px; color:#065f46; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.28); border-radius:999px; padding:2px 8px; margin-left:8px;">Target</span>'
-                    : '';
-                html += `<tr><td><div style="display:flex; align-items:center; gap:8px;"><img src="${companyLogo}" style="width:24px; height:24px; border-radius:6px; object-fit:cover; border:1px solid rgba(96,187,217,.35); background:#fff;"><strong>${escapeHtml(company)}</strong>${companyTag}</div></td>`;
+                html += `<tr><td><div style="display:flex; align-items:center; gap:8px;"><img src="${companyLogo}" style="width:24px; height:24px; border-radius:6px; object-fit:contain; border:1px solid rgba(96,187,217,.35); background:#fff;"><strong style="color:#fff;">${escapeHtml(company)}</strong></div></td>`;
                 positions.forEach(position => {
                     const people = data
                         .filter(c => String(c.company || '').toLowerCase() === String(company || '').toLowerCase() && c.position===position)
