@@ -212,7 +212,7 @@
 
         /* Dashboard específico: wrapper para scroll lateral quando necessário */
         .dashboard-scroll-wrapper {
-            width: 95%;
+            width: 100%;
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
         }
@@ -1187,6 +1187,12 @@
         .voice-anim span:nth-child(2){height:14px; animation-delay:.15s;}
         .voice-anim span:nth-child(3){height:10px; animation-delay:.3s;}
         @keyframes voiceBars { 0%,100%{transform:scaleY(.65);} 50%{transform:scaleY(1.25);} }
+        .voice-processing { display:none; font-size:16px; animation: voiceSpin 1s linear infinite; }
+        .voice-btn.transcribing { background:#f59e0b; color:#fff; border-color:#d97706; box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2); cursor: wait; }
+        .voice-btn.transcribing .voice-processing { display:inline-block; }
+        .voice-btn.transcribing .voice-icon,
+        .voice-btn.transcribing .voice-anim { display:none; }
+        @keyframes voiceSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         /* === Mapeamento Organizacional - Design Moderno === */
         #mapeamento-organizacional { background: transparent; }
         /* Background azul claro degrado para branco quando o modulo esta ativo */
@@ -1198,8 +1204,8 @@
         #mapeamento-organizacional .page-header h1 { color: #0d3a52; }
         #mapeamento-organizacional .page-header p { color: rgba(96,187,217,0.85); }
         #mapeamento-organizacional .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-        .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; }
-        .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 220px); border-radius: 0 0 20px 20px; }
+        .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; min-height: calc(100vh - 170px); }
+        .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 170px); border-radius: 0 0 20px 20px; }
         .org-table-wrap::-webkit-scrollbar { width:6px; height:6px; }
         .org-table-wrap::-webkit-scrollbar-track { background:rgba(96,187,217,0.08); }
         .org-table-wrap::-webkit-scrollbar-thumb { background:rgba(96,187,217,0.45); border-radius:4px; }
@@ -1210,7 +1216,7 @@
         .org-table tbody tr:hover td { background: #ddf1f9; }
         .org-table tbody tr:hover td:first-child { background: #4aaec8; }
         .org-table th:first-child { position: sticky; left:0; z-index:4; background:#60BBD9; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
-        .org-table td:first-child { position: sticky; left:0; z-index:2; background:#60BBD9; color:#0d3a52; font-weight:700; font-size:14px; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
+        .org-table td:first-child { position: sticky; left:0; z-index:2; background:#60BBD9; color:#ffffff; font-weight:700; font-size:14px; min-width:200px; border-right: 2px solid rgba(255,255,255,0.35); }
         .org-table tbody tr:nth-child(even) td { background: #e4f5fb; }
         .org-table tbody tr:nth-child(even) td:first-child { background: #55b3cc; }
         .org-table .table-link-btn { color:#0d3a52; font-weight:600; font-size:13px; }
@@ -1347,6 +1353,7 @@
                 <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
                     <i class="fas fa-microphone voice-icon"></i>
                     <span class="voice-anim"><span></span><span></span><span></span></span>
+                    <span class="voice-processing">⏳</span>
                 </button>
                 <input type="file" id="iataAttachment" class="iata-file-input" accept=".txt,text/plain" multiple onchange="validateIataAttachment(event)">
                 <label for="iataAttachment" id="iataAttachmentLabel" class="iata-file-btn" title="Anexar texto"><i class="fas fa-paperclip"></i></label>
@@ -1729,6 +1736,7 @@
                         <button type="button" id="activityVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('activityInformation','activityVoiceBtn')" title="Gravar áudio">
                             <i class="fas fa-microphone voice-icon"></i>
                             <span class="voice-anim"><span></span><span></span><span></span></span>
+                            <span class="voice-processing">⏳</span>
                         </button>
                     </div>
                 </div>
@@ -3463,11 +3471,26 @@
             return digits;
         }
 
+        let whatsappWindowRef = null;
+        let emailWindowRef = null;
+
+        function openOrReuseExternalTab(windowRef, url) {
+            if (windowRef && !windowRef.closed) {
+                windowRef.location.href = url;
+                windowRef.focus();
+                return windowRef;
+            }
+            const newWindow = window.open(url, '_blank');
+            if (newWindow) newWindow.focus();
+            return newWindow;
+        }
+
+
         function openMissingContactModal() {
             let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
             html += '<div class="modal-content" style="max-width: 460px; text-align: center;">';
             html += '<h2 style="margin-bottom: 8px;">Ops!</h2>';
-            html += '<img src="/images/missing-contact/sad-bunny-v2.svg" alt="Coelho triste" class="sad-bunny-image" style="max-width:200px; width:100%; height:auto; object-fit:contain;">';
+            // Mantemos SVG versionado para evitar problemas com arquivos binários personalizados
             html += '<p style="color: #4b5563; font-size: 16px; margin: 10px 0 18px;">Você não cadastrou esse tipo de contato ainda</p>';
             html += '<button class="btn btn-secondary" onclick="closeMissingContactModal()">Fechar</button>';
             html += '</div></div>';
@@ -3519,7 +3542,7 @@
             }
 
             const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-            window.open(url, '_blank');
+            whatsappWindowRef = openOrReuseExternalTab(whatsappWindowRef, url);
             closeWhatsAppModal();
             askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
@@ -4308,10 +4331,51 @@
             if (lbl) lbl.classList.toggle('has-file', allTxt && files.length > 0);
         }
 
-        let activeRecognizer = null;
+        let activeMediaRecorder = null;
         let activeVoiceBtnId = null;
+        let activeAudioChunks = [];
+        let activeVoiceTargetElement = null;
+        let activeVoiceInitialValue = '';
 
-        function toggleVoiceTranscription(targetInputId, buttonId) {
+        const VOICE_DEBUG = true;
+
+        function setVoiceButtonState(btn, state) {
+            if (!btn) return;
+            btn.classList.remove('active', 'transcribing');
+            if (state === 'recording') btn.classList.add('active');
+            if (state === 'transcribing') btn.classList.add('transcribing');
+        }
+
+        async function transcribeRecordedAudio(audioBlob) {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'gravacao.webm');
+            const response = await fetch(`${API_BASE}/transcribe-audio`, {
+                method: 'POST',
+                body: formData,
+                headers: { Accept: 'application/json' }
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const backendMessage = payload.error || `HTTP ${response.status}`;
+                const installHelp = Array.isArray(payload.install_instructions)
+                    ? `\n${payload.install_instructions.join('\n')}`
+                    : '';
+                if (VOICE_DEBUG) {
+                    console.error('[Voice][Transcription] Falha no backend', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        payload
+                    });
+                }
+                throw new Error(`Falha na transcrição: ${backendMessage}${installHelp}`);
+            }
+            if (VOICE_DEBUG) {
+                console.log('[Voice][Transcription] Sucesso', { chars: String(payload.text || '').length });
+            }
+            return String(payload.text || '').trim();
+        }
+
+        async function toggleVoiceTranscription(targetInputId, buttonId) {
             const btn = document.getElementById(buttonId);
             const fallbackSelector = targetInputId === 'activityInformation'
                 ? '#activityForm textarea[name="information"]'
@@ -4319,58 +4383,71 @@
             const target = document.getElementById(targetInputId) || document.querySelector(fallbackSelector);
             if (!btn || !target) return;
 
-            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SR) {
-                showError('Reconhecimento de voz não suportado neste navegador.');
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+                showError('Captura de áudio não suportada neste navegador.');
                 return;
             }
 
-            if (activeRecognizer && activeVoiceBtnId === buttonId) {
-                activeRecognizer.stop();
+            if (activeMediaRecorder && activeVoiceBtnId === buttonId) {
+                activeMediaRecorder.stop();
                 return;
             }
 
-            if (activeRecognizer && activeVoiceBtnId && activeVoiceBtnId !== buttonId) {
-                activeRecognizer.stop();
+            if (activeMediaRecorder && activeVoiceBtnId && activeVoiceBtnId !== buttonId) {
+                activeMediaRecorder.stop();
+                return;
             }
 
-            const recognition = new SR();
-            recognition.lang = 'pt-BR';
-            recognition.interimResults = true;
-            recognition.continuous = true;
-            recognition.maxAlternatives = 1;
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mediaRecorder = new MediaRecorder(stream);
+                activeAudioChunks = [];
+                activeMediaRecorder = mediaRecorder;
+                activeVoiceBtnId = buttonId;
+                activeVoiceTargetElement = target;
+                activeVoiceInitialValue = String(target.value || '').trim();
+                setVoiceButtonState(btn, 'recording');
+                target.focus();
 
-            const initialValue = String(target.value || '').trim();
-            let finalTranscript = '';
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) activeAudioChunks.push(event.data);
+                };
 
-            activeRecognizer = recognition;
-            activeVoiceBtnId = buttonId;
-            btn.classList.add('active');
-            target.focus();
+                mediaRecorder.onerror = () => {
+                    setVoiceButtonState(btn, 'idle');
+                    showError('Erro durante gravação de áudio.');
+                };
 
-            recognition.onresult = (event) => {
-                let interim = '';
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = (event.results[i][0].transcript || '').trim();
-                    if (!transcript) continue;
-                    if (event.results[i].isFinal) finalTranscript += `${transcript} `;
-                    else interim += `${transcript} `;
-                }
-                const prefix = initialValue ? `${initialValue} ` : '';
-                target.value = `${prefix}${finalTranscript}${interim}`.trim();
-            };
+                mediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(track => track.stop());
+                    setVoiceButtonState(btn, 'transcribing');
 
-            const cleanup = () => {
-                btn.classList.remove('active');
-                if (activeVoiceBtnId === buttonId) {
-                    activeRecognizer = null;
-                    activeVoiceBtnId = null;
-                }
-            };
+                    try {
+                        if (!activeAudioChunks.length) return;
+                        const audioBlob = new Blob(activeAudioChunks, { type: 'audio/webm' });
+                        const transcribedText = await transcribeRecordedAudio(audioBlob);
+                        const currentTarget = activeVoiceTargetElement || target;
+                        if (!transcribedText || !currentTarget) return;
+                        const currentValue = String(currentTarget.value || '').trim();
+                        const baseValue = currentValue || activeVoiceInitialValue;
+                        currentTarget.value = [baseValue, transcribedText].filter(Boolean).join(' ').trim();
+                    } catch (error) {
+                        showError((error && error.message) ? error.message : 'Falha ao transcrever áudio. Veja o console/log do servidor para detalhes.');
+                    } finally {
+                        setVoiceButtonState(btn, 'idle');
+                        activeMediaRecorder = null;
+                        activeVoiceBtnId = null;
+                        activeAudioChunks = [];
+                        activeVoiceTargetElement = null;
+                        activeVoiceInitialValue = '';
+                    }
+                };
 
-            recognition.onend = cleanup;
-            recognition.onerror = cleanup;
-            recognition.start();
+                mediaRecorder.start();
+            } catch (error) {
+                setVoiceButtonState(btn, 'idle');
+                showError('Não foi possível acessar o microfone.');
+            }
         }
 
         async function openDuplicateWarningModal(client) {
@@ -4406,16 +4483,50 @@
             });
         }
 
+        function normalizeCompanyKey(name) {
+            return String(name || '').trim().toLowerCase();
+        }
+
         async function loadOrganizationalMapping() {
-            const response = await fetch(`${API_BASE}/clientes`);
-            const data = response.ok ? await response.json() : [];
-            const companies = [...new Set(data.map(c => c.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+            const [clientsRes, accountsRes] = await Promise.all([
+                fetch(`${API_BASE}/clientes`),
+                fetch(`${API_BASE}/accounts`)
+            ]);
+            const data = clientsRes.ok ? await clientsRes.json() : [];
+            const accounts = accountsRes.ok ? await accountsRes.json() : [];
+
+            const accountByCompany = {};
+            (accounts || []).forEach(acc => {
+                const key = normalizeCompanyKey(acc.name);
+                if (key) accountByCompany[key] = acc;
+            });
+
+            const companySet = new Set();
+            data.forEach(c => { if (c.company) companySet.add(c.company); });
+            accounts.forEach(a => { if (a.name) companySet.add(a.name); });
+
+            const companies = [...companySet].sort((a, b) => {
+                const accA = accountByCompany[normalizeCompanyKey(a)] || {};
+                const accB = accountByCompany[normalizeCompanyKey(b)] || {};
+                const targetDiff = Number(accB.is_target || 0) - Number(accA.is_target || 0);
+                if (targetDiff !== 0) return targetDiff;
+                return String(a || '').localeCompare(String(b || ''), 'pt-BR');
+            });
+
             const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>{ const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b); return r !== 0 ? r : a.localeCompare(b,'pt-BR'); });
             let html = '<div class="org-map-container"><div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
             companies.forEach(company => {
-                html += `<tr><td><strong>${escapeHtml(company)}</strong></td>`;
+                const account = accountByCompany[normalizeCompanyKey(company)] || {};
+                const companyLogo = account.logo_url || '/logo-coelho.png';
+                html += `<tr><td><div style="display:flex; align-items:center; gap:8px;"><img src="${companyLogo}" style="width:24px; height:24px; border-radius:6px; object-fit:contain; border:1px solid rgba(96,187,217,.35); background:#fff;"><strong style="color:#fff;">${escapeHtml(company)}</strong></div></td>`;
                 positions.forEach(position => {
-                    const people = data.filter(c => c.company===company && c.position===position);
+                    const people = data
+                        .filter(c => String(c.company || '').toLowerCase() === String(company || '').toLowerCase() && c.position===position)
+                        .sort((a,b) => {
+                            const targetDiff = Number(b.is_target || 0) - Number(a.is_target || 0);
+                            if (targetDiff !== 0) return targetDiff;
+                            return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
+                        });
                     if (people.length) {
                         const cell = people.map(person => `<div class="occupant">${renderAvatar(person)}<button class="table-link-btn" onclick="openProfileModal(${person.id})">${escapeHtml(person.name)}</button></div>`).join('');
                         html += `<td>${cell}</td>`;
@@ -4859,7 +4970,7 @@
             if (!client || !client.phone) return openMissingContactModal();
             let html = `<div class="modal active" id="whatsAppModal" onclick="if(event.target === this) closeWhatsAppModal()">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name)}</h2><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name || '-')}</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('whatsapp','whatsMessageText')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -4871,7 +4982,7 @@
             const bossDisabled = !(userProfile && userProfile.boss_email);
             let html = `<div class="modal active" id="emailDraftModal" onclick="if(event.target === this) closeEmailDraftModal()">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label>Copiar chefe?</label><select id="copyBossSelect" ${bossDisabled?'disabled':''}><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label>Copiar chefe?</label><select id="copyBossSelect" ${bossDisabled?'disabled':''}><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','emailDraftBody')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -4885,7 +4996,7 @@
             const copyBoss = (document.getElementById('copyBossSelect')?.value || 'nao') === 'sim';
             const cc = copyBoss ? (userProfile?.boss_email || '') : '';
             const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-            window.open(outlookUrl, '_blank');
+            emailWindowRef = openOrReuseExternalTab(emailWindowRef, outlookUrl);
             askRegisterActivityFromCommunication(clientId, 'Email', body);
             closeEmailDraftModal();
         }
