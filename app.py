@@ -94,6 +94,18 @@ def configure_ffmpeg_for_whisper():
     return None
 
 
+def get_ffmpeg_install_instructions():
+    if sys.platform == 'win32':
+        return [
+            'Windows (winget): winget install -e --id Gyan.FFmpeg',
+            'Ou Windows (choco): choco install ffmpeg -y',
+            'Depois reinicie o app.'
+        ]
+    if sys.platform == 'darwin':
+        return ['macOS: brew install ffmpeg', 'Depois reinicie o app.']
+    return ['Linux (Debian/Ubuntu): sudo apt update && sudo apt install -y ffmpeg', 'Depois reinicie o app.']
+
+
 def get_whisper_model():
     global WHISPER_MODEL
     if not WHISPER_AVAILABLE:
@@ -698,7 +710,12 @@ def transcribe_audio():
 
     ffmpeg_path = configure_ffmpeg_for_whisper()
     if not ffmpeg_path:
-        return jsonify({'error': 'FFmpeg não encontrado. Instale o FFmpeg no sistema ou adicione imageio-ffmpeg nas dependências.'}), 500
+        instructions = get_ffmpeg_install_instructions()
+        return jsonify({
+            'error': 'FFmpeg não encontrado para processar áudio.',
+            'install_instructions': instructions,
+            'resolution': 'Instale o FFmpeg e reinicie o aplicativo.'
+        }), 500
 
     suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
     temp_path = None

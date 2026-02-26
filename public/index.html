@@ -4340,6 +4340,9 @@
             const payload = await response.json().catch(() => ({}));
             if (!response.ok) {
                 const backendMessage = payload.error || `HTTP ${response.status}`;
+                const installHelp = Array.isArray(payload.install_instructions)
+                    ? `\n${payload.install_instructions.join('\n')}`
+                    : '';
                 if (VOICE_DEBUG) {
                     console.error('[Voice][Transcription] Falha no backend', {
                         status: response.status,
@@ -4347,7 +4350,7 @@
                         payload
                     });
                 }
-                throw new Error(`Falha na transcrição: ${backendMessage}`);
+                throw new Error(`Falha na transcrição: ${backendMessage}${installHelp}`);
             }
             if (VOICE_DEBUG) {
                 console.log('[Voice][Transcription] Sucesso', { chars: String(payload.text || '').length });
