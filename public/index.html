@@ -4988,14 +4988,32 @@
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
-        openOutlookDraft = function(clientId) {
+        function encodeHtml(text) {
+            return String(text || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function buildOutlookBodyWithAptos(message) {
+            const safeHtml = encodeHtml(message || '').replace(/\n/g, '<br>');
+            return `<div style="font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;">${safeHtml}</div>`;
+        }
+
+        openOutlookDraft = async function(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.email) return openMissingContactModal();
             const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
             const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
             const copyBoss = (document.getElementById('copyBossSelect')?.value || 'nao') === 'sim';
+            if (copyBoss && !userProfile?.boss_email) {
+                await loadUserProfile();
+            }
             const cc = copyBoss ? (userProfile?.boss_email || '') : '';
-            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            const formattedBody = buildOutlookBodyWithAptos(body);
+            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(formattedBody)}&bodyIsHtml=true`;
             emailWindowRef = openOrReuseExternalTab(emailWindowRef, outlookUrl);
             askRegisterActivityFromCommunication(clientId, 'Email', body);
             closeEmailDraftModal();
