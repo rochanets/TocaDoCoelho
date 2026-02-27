@@ -4979,41 +4979,50 @@
         openEmailDraftModal = function(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.email) return openMissingContactModal();
-            const bossDisabled = !(userProfile && userProfile.boss_email);
             let html = `<div class="modal active" id="emailDraftModal" onclick="if(event.target === this) closeEmailDraftModal()">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label>Copiar chefe?</label><select id="copyBossSelect" ${bossDisabled?'disabled':''}><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label>Copiar chefe?</label><select id="copyBossSelect"><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','emailDraftBody')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
-        function encodeHtml(text) {
-            return String(text || '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
-
-        function buildOutlookBodyWithAptos(message) {
-            const safeHtml = encodeHtml(message || '').replace(/\n/g, '<br>');
-            return `<div style="font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;">${safeHtml}</div>`;
+        async function getBossEmailForDraft() {
+            try {
+                const response = await fetch(`${API_BASE}/config/profile`, { headers: { Accept: 'application/json' } });
+                if (!response.ok) return '';
+                const profile = await response.json();
+                userProfile = profile || userProfile;
+                return (profile?.boss_email || '').trim();
+            } catch (_) {
+                return (userProfile?.boss_email || '').trim();
+            }
         }
 
         openOutlookDraft = async function(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.email) return openMissingContactModal();
+
             const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
             const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
             const copyBoss = (document.getElementById('copyBossSelect')?.value || 'nao') === 'sim';
-            if (copyBoss && !userProfile?.boss_email) {
-                await loadUserProfile();
+            const cc = copyBoss ? await getBossEmailForDraft() : '';
+            if (copyBoss && !cc) {
+                showError('Não foi possível localizar o e-mail do chefe no seu perfil. Atualize em Configurações > Meu Cadastro.');
             }
-            const cc = copyBoss ? (userProfile?.boss_email || '') : '';
-            const formattedBody = buildOutlookBodyWithAptos(body);
-            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.email)}&cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(formattedBody)}&bodyIsHtml=true`;
+
+            const params = new URLSearchParams({
+                to: client.email,
+                subject,
+                body
+            });
+
+            if (cc) {
+                params.set('cc', cc);
+                params.set('ccRecipients', cc);
+            }
+
+            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?${params.toString()}`;
             emailWindowRef = openOrReuseExternalTab(emailWindowRef, outlookUrl);
             askRegisterActivityFromCommunication(clientId, 'Email', body);
             closeEmailDraftModal();
