@@ -5011,19 +5011,18 @@
                 showError('Não foi possível localizar o e-mail do chefe no seu perfil. Atualize em Configurações > Meu Cadastro.');
             }
 
-            const params = new URLSearchParams({
-                to: client.email,
-                subject,
-                body
-            });
+            const queryParts = [
+                `to=${encodeURIComponent(client.email)}`,
+                `subject=${encodeURIComponent(subject)}`,
+                `body=${encodeURIComponent(body)}`
+            ];
 
             if (cc) {
-                params.set('cc', cc);
-                params.set('ccRecipients', cc);
+                queryParts.push(`cc=${encodeURIComponent(cc)}`);
             }
 
-            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?${params.toString()}`;
-            emailWindowRef = openOrReuseExternalTab(emailWindowRef, outlookUrl);
+            const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?${queryParts.join('&')}`;
+            emailWindowRef = window.open(outlookUrl, '_blank');
             askRegisterActivityFromCommunication(clientId, 'Email', body);
             closeEmailDraftModal();
         }
