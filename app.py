@@ -820,6 +820,7 @@ def _run_openrouter_synthesis(result_payload):
         headers={
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}',
+            'Authentication': f'Bearer {api_key}',
             'HTTP-Referer': os.environ.get('OPENROUTER_SITE_URL', 'http://localhost'),
             'X-Title': os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')
         },
