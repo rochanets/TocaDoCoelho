@@ -739,6 +739,136 @@ def _run_tavily_search(company, country, industry):
     return all_results, section_errors, execution_meta
 
 
+
+
+def _default_llm_summary(sections):
+    summary = {}
+    for section_key in (sections or {}).keys():
+        summary[section_key] = {
+            'final_answer': 'Inconclusivo com as evidências atuais.',
+            'confidence_percent': 20,
+            'certainty': 'uncertain',
+            'reasoning': 'Não houve evidência específica suficiente para consolidar uma resposta final.'
+        }
+    return summary
+
+
+def _extract_json_object_from_text(text):
+    if not text:
+        return None
+    first = text.find('{')
+    last = text.rfind('}')
+    if first == -1 or last == -1 or last <= first:
+        return None
+    chunk = text[first:last+1]
+    try:
+        return json.loads(chunk)
+    except Exception:
+        return None
+
+
+def _run_openrouter_synthesis(result_payload):
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('A chave da OpenRouter não está configurada. Defina OPENROUTER_API_KEY no ambiente.')
+
+    model = os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini').strip() or 'openai/gpt-4o-mini'
+    sections = result_payload.get('sections') or {}
+
+    compact_sections = {}
+    for section_key, section_data in sections.items():
+        evidence = section_data.get('evidence') or []
+        compact_sections[section_key] = {
+            'status': section_data.get('status'),
+            'confidence': section_data.get('confidence'),
+            'matched_keywords': section_data.get('matched_keywords') or [],
+            'query_used': section_data.get('query_used'),
+            'evidence': [
+                {'url': ev.get('url'), 'snippet': (ev.get('snippet') or '')[:280]}
+                for ev in evidence[:2]
+            ]
+        }
+
+    user_payload = {
+        'company': result_payload.get('company'),
+        'country': result_payload.get('country'),
+        'industry': result_payload.get('industry'),
+        'sections': compact_sections
+    }
+
+    system_prompt = (
+        'Você é um analista técnico corporativo extremamente conservador com alucinações. '
+        'Responda APENAS em JSON válido. Para cada seção, gere UMA resposta final amigável em português. '
+        'Se não houver evidência forte e específica da empresa, responda com incerteza ao invés de inventar. '
+        'confidence_percent deve ser inteiro de 0 a 100. '
+        'Formato obrigatório: '
+        '{"sections":{"cloud":{"final_answer":"...","confidence_percent":0,"certainty":"confirmed|uncertain","reasoning":"..."}, ...}}'
+    )
+
+    request_payload = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False)}
+        ],
+        'temperature': 0.1
+    }
+
+    req = urllib.request.Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=json.dumps(request_payload).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+            'HTTP-Referer': os.environ.get('OPENROUTER_SITE_URL', 'http://localhost'),
+            'X-Title': os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')
+        },
+        method='POST'
+    )
+
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+
+    choices = data.get('choices') or []
+    message_content = ''
+    if choices:
+        content = ((choices[0] or {}).get('message') or {}).get('content')
+        if isinstance(content, list):
+            message_content = ''.join([part.get('text', '') for part in content if isinstance(part, dict)])
+        else:
+            message_content = str(content or '')
+
+    parsed = _extract_json_object_from_text(message_content)
+    llm_sections = ((parsed or {}).get('sections') or {}) if isinstance(parsed, dict) else {}
+
+    final_sections = _default_llm_summary(sections)
+    for section_key in final_sections.keys():
+        candidate = llm_sections.get(section_key)
+        if not isinstance(candidate, dict):
+            continue
+        answer = (candidate.get('final_answer') or '').strip() or final_sections[section_key]['final_answer']
+        reasoning = (candidate.get('reasoning') or '').strip() or final_sections[section_key]['reasoning']
+        certainty = candidate.get('certainty') if candidate.get('certainty') in {'confirmed', 'uncertain'} else 'uncertain'
+        try:
+            confidence = int(candidate.get('confidence_percent'))
+        except Exception:
+            confidence = final_sections[section_key]['confidence_percent']
+        confidence = max(0, min(100, confidence))
+
+        final_sections[section_key] = {
+            'final_answer': answer,
+            'confidence_percent': confidence,
+            'certainty': certainty,
+            'reasoning': reasoning
+        }
+
+    meta = {
+        'provider': 'openrouter',
+        'model': model,
+        'raw_response_received': bool(message_content)
+    }
+    return final_sections, meta
+
 def normalize_phone(phone):
     if not phone:
         return None
@@ -3165,8 +3295,22 @@ def run_automapping():
 
         result_payload = _build_automapping_payload(company, country, industry, evidence_results, section_errors, execution_meta)
 
-        c.execute('''INSERT INTO automapping_runs (company, country, industry, query_key, result_json)
-                     VALUES (?, ?, ?, ?, ?)''',
+        c.execute('SELECT 1 FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1', (company,))
+        result_payload['client_exists'] = bool(c.fetchone())
+
+        try:
+            llm_summary, llm_meta = _run_openrouter_synthesis(result_payload)
+            result_payload['llm_summary'] = llm_summary
+            result_payload['llm_meta'] = llm_meta
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar OpenRouter: {detail[:400]}'}), 502
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar OpenRouter: {str(e)}'}), 502
+
+        c.execute('INSERT INTO automapping_runs (company, country, industry, query_key, result_json) VALUES (?, ?, ?, ?, ?)',
                   (company, country, industry, query_key, json.dumps(result_payload, ensure_ascii=False)))
         run_id = c.lastrowid
         conn.commit()

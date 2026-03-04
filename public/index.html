@@ -3857,7 +3857,19 @@
             `;
         }
 
+        function getLLMSectionSummary(sectionKey) {
+            const result = autoMappingState.result || {};
+            const llmSummary = result.llm_summary || {};
+            return llmSummary[sectionKey] || null;
+        }
+
         function buildSectionSuggestionText(sectionKey, section) {
+            const llm = getLLMSectionSummary(sectionKey);
+            if (llm && llm.final_answer) {
+                const pct = Number(llm.confidence_percent ?? 0);
+                return `${llm.final_answer} (probabilidade: ${isNaN(pct) ? 0 : pct}%)`;
+            }
+
             const confidence = section.confidence || 'unknown';
             if (section.status === 'error') return `Erro na coleta: ${section.error || 'Falha no provider'}`;
             if (section.value) return `${section.value} (confiança: ${confidence})`;
@@ -3875,15 +3887,19 @@
             let html = `<div class="modal active" id="autoMappingResultModal" onclick="if(event.target === this) closeAutoMappingResultModal()">`;
             html += '<div class="modal-content" style="max-width: 900px;">';
             html += `<h2 style="color:#0f766e; margin-bottom:6px;">Resultado do AutoMapping</h2>`;
-            html += `<p style="color:#4b5563; margin-bottom:16px;">${escapeHtml(result.company)} · ${escapeHtml(result.country)} · ${escapeHtml(result.industry)}</p>`;
+            html += `<p style="color:#4b5563; margin-bottom:10px;">${escapeHtml(result.company)} · ${escapeHtml(result.country)} · ${escapeHtml(result.industry)}</p>`;
+            if (result.client_exists === false) {
+                html += '<div style="background:#fff7ed; border:1px solid #fdba74; color:#9a3412; border-radius:10px; padding:10px; margin-bottom:10px; font-size:13px;"><strong>Aviso:</strong> não há registro desse cliente no sistema. Para registrar, cadastre o cliente pelo módulo GESTÃO DE CONTA.</div>';
+            }
             html += '<div style="max-height:65vh; overflow:auto;">';
 
             sectionEntries.forEach(([key, section]) => {
+                const llm = getLLMSectionSummary(key);
                 const statusColor = section.status === 'identified' ? '#166534' : (section.status === 'error' ? '#b91c1c' : '#92400e');
                 const suggestionText = buildSectionSuggestionText(key, section);
                 html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:10px;">`;
                 html += `<div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">`;
-                html += `<div><div style="font-weight:700; color:#111827; text-transform:capitalize;">${escapeHtml(key.replace('_', ' '))}</div><div style="font-size:11px; color:${statusColor}; margin-top:4px;">Status: ${escapeHtml(section.status || 'unknown')} · Confiança: ${escapeHtml(section.confidence || 'unknown')} · Quality: ${escapeHtml(String(section.evidence_quality ?? 0))}</div><div style="font-size:13px; color:#374151; margin-top:4px;">${escapeHtml(suggestionText)}</div><div style="font-size:11px; color:#6b7280; margin-top:4px;">Query: ${escapeHtml(section.query_used || 'n/a')}</div></div>`;
+                html += `<div><div style="font-weight:700; color:#111827; text-transform:capitalize;">${escapeHtml(key.replace('_', ' '))}</div><div style="font-size:11px; color:${statusColor}; margin-top:4px;">Status busca: ${escapeHtml(section.status || 'unknown')} · Confiança busca: ${escapeHtml(section.confidence || 'unknown')} · Quality: ${escapeHtml(String(section.evidence_quality ?? 0))}</div><div style="font-size:13px; color:#374151; margin-top:6px;">${escapeHtml(suggestionText)}</div>${llm ? `<div style="font-size:11px; color:#6b7280; margin-top:4px;">LLM: ${escapeHtml(llm.certainty || 'uncertain')} · ${escapeHtml(String(llm.confidence_percent ?? 0))}%</div>` : ''}<div style="font-size:11px; color:#6b7280; margin-top:4px;">Query: ${escapeHtml(section.query_used || 'n/a')}</div></div>`;
                 html += `<button class="btn btn-primary btn-small" onclick="applyAutoMappingToCard('${escapeHtml(key)}')">Incluir no card referência</button>`;
                 html += `</div>`;
 
@@ -3911,6 +3927,35 @@
             if (modal) modal.remove();
         }
 
+        function closeAutoMappingCardPicker(result = null) {
+            const modal = document.getElementById('autoMappingCardPickerModal');
+            if (window._autoMappingCardPickerResolve) {
+                window._autoMappingCardPickerResolve(result);
+                window._autoMappingCardPickerResolve = null;
+            }
+            if (modal) modal.remove();
+        }
+
+        function openAutoMappingCardPicker(sectionKey) {
+            return new Promise(resolve => {
+                window._autoMappingCardPickerResolve = resolve;
+                const options = (mappingCards || []).map(c => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('');
+                const html = `
+                    <div class="modal active" id="autoMappingCardPickerModal" onclick="if(event.target===this) closeAutoMappingCardPicker(null)">
+                        <div class="modal-content" style="max-width:520px;">
+                            <h2 style="color:#0f766e; margin-bottom:8px;">Escolher card de destino</h2>
+                            <p style="color:#4b5563; margin-bottom:10px; font-size:13px;">Não encontramos card compatível para <strong>${escapeHtml(sectionKey)}</strong>. Escolha em qual card deseja inserir a informação.</p>
+                            <select id="autoMappingCardPickerSelect" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px;">${options}</select>
+                            <div class="modal-footer" style="justify-content:flex-end; margin-top:12px;">
+                                <button class="btn btn-secondary" onclick="closeAutoMappingCardPicker(null)">Cancelar</button>
+                                <button class="btn btn-primary" onclick="closeAutoMappingCardPicker(document.getElementById('autoMappingCardPickerSelect').value)">Confirmar</button>
+                            </div>
+                        </div>
+                    </div>`;
+                document.body.insertAdjacentHTML('beforeend', html);
+            });
+        }
+
         async function applyAutoMappingToCard(sectionKey) {
             const result = autoMappingState.result;
             if (!result || !result.sections || !result.sections[sectionKey]) return;
@@ -3925,7 +3970,7 @@
                 const targetClient = clientsList.find(c => (c.company || '').toLowerCase() === company.toLowerCase()) || (mappingSelectedClient ? clientsList.find(c => c.id === mappingSelectedClient) : null);
 
                 if (!targetClient) {
-                    showError('Nenhum cliente encontrado para essa empresa.');
+                    showError('Cliente não cadastrado no sistema. Cadastre no módulo GESTÃO DE CONTA para incluir essa informação em cards.');
                     return;
                 }
 
@@ -3939,9 +3984,20 @@
                     ai: ['ai', 'ia', 'inteligência artificial']
                 };
                 const hints = cardKeyHints[sectionKey] || [sectionKey.toLowerCase()];
-                const card = mappingCards.find(c => hints.some(h => (c.title || '').toLowerCase().includes(h))) || mappingCards[0];
+                let card = mappingCards.find(c => hints.some(h => (c.title || '').toLowerCase().includes(h)));
+
                 if (!card) {
-                    showError('Nenhum card disponível para incluir informação.');
+                    if (!mappingCards.length) {
+                        showError('Nenhum card disponível para incluir informação.');
+                        return;
+                    }
+                    const selectedId = await openAutoMappingCardPicker(sectionKey);
+                    if (!selectedId) return;
+                    card = mappingCards.find(c => String(c.id) === String(selectedId));
+                }
+
+                if (!card) {
+                    showError('Card de destino não encontrado.');
                     return;
                 }
 
