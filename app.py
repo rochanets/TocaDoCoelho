@@ -2892,6 +2892,47 @@ def delete_account_presence(account_id, presence_id):
 WIKI_ALLOWED_EXTENSIONS = {'.pdf', '.xls', '.xlsx', '.doc', '.docx'}
 
 
+WIKI_TAG_STOPWORDS = {
+    'a','o','os','as','de','da','do','das','dos','e','é','em','no','na','nos','nas','um','uma','uns','umas',
+    'para','por','com','sem','que','se','ao','aos','à','às','ou','como','mais','menos','já','não','sim',
+    'ser','estar','ter','fazer','sobre','entre','até','após','antes','depois','quando','onde','qual','quais'
+}
+
+
+def normalize_wiki_tag(tag):
+    value = re.sub(r'[^a-zA-Z0-9À-ÿ\- ]', ' ', str(tag or '').lower())
+    value = re.sub(r'\s+', ' ', value).strip()
+    return value
+
+
+def suggest_wiki_tags(title, content, max_tags=6):
+    base_text = f"{title or ''} {content or ''}"
+    words = re.findall(r'[a-zA-ZÀ-ÿ0-9\-]{3,}', base_text.lower())
+    ranked = {}
+    for word in words:
+        cleaned = normalize_wiki_tag(word)
+        if not cleaned or cleaned in WIKI_TAG_STOPWORDS or cleaned.isdigit():
+            continue
+        ranked[cleaned] = ranked.get(cleaned, 0) + 1
+    tags = sorted(ranked.keys(), key=lambda k: (-ranked[k], k))
+    return tags[:max_tags]
+
+
+def merge_tags(user_tags, suggested_tags):
+    final = []
+    seen = set()
+    raw = []
+    if user_tags:
+        raw.extend([tag.strip() for tag in str(user_tags).split(',')])
+    raw.extend(suggested_tags or [])
+    for item in raw:
+        cleaned = normalize_wiki_tag(item)
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            final.append(cleaned)
+    return ', '.join(final[:10])
+
+
 def serialize_wiki_entry(row):
     item = dict_from_row(row)
     tags_text = (item.get('tags') or '').strip()
@@ -2931,11 +2972,13 @@ def create_wikitoca_entry():
         tags = (data.get('tags') or '').strip()
         if not title or not content:
             return jsonify({'error': 'Título e conteúdo são obrigatórios'}), 400
+        suggested = suggest_wiki_tags(title, content)
+        merged_tags = merge_tags(tags, suggested)
         conn = get_db(); c = conn.cursor()
         c.execute('''
             INSERT INTO wiki_entries (title, category, content, tags)
             VALUES (?, ?, ?, ?)
-        ''', (title, category, content, tags))
+        ''', (title, category, content, merged_tags))
         entry_id = c.lastrowid
         conn.commit()
         c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
@@ -2957,12 +3000,14 @@ def update_wikitoca_entry(entry_id):
         tags = (data.get('tags') or '').strip()
         if not title or not content:
             return jsonify({'error': 'Título e conteúdo são obrigatórios'}), 400
+        suggested = suggest_wiki_tags(title, content)
+        merged_tags = merge_tags(tags, suggested)
         conn = get_db(); c = conn.cursor()
         c.execute('''
             UPDATE wiki_entries
             SET title = ?, category = ?, content = ?, tags = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        ''', (title, category, content, tags, entry_id))
+        ''', (title, category, content, merged_tags, entry_id))
         conn.commit()
         c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
         row = c.fetchone()

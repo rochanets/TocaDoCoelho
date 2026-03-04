@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Toca do Coelho - Gestão de Clientes</title>
+    <title>Toca do Coelho - Sales Engagement</title>
     <link rel="icon" type="image/svg+xml" href="/images/coelho.svg">
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -1294,6 +1294,11 @@
         .wiki-entry-item h4, .wiki-doc-item h4 { margin:0 0 6px 0; color:#065f46; }
         .wiki-meta { font-size:12px; color:#6b7280; margin-bottom:8px; }
         .wiki-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+        .wiki-search-input { border:1px solid #bbf7d0; background:#f0fdf4; color:#065f46; border-radius:10px; padding:10px 12px; min-width:220px; flex:1; }
+        .wiki-search-input:focus { outline:none; border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
+        .wiki-action-btn { border-radius:10px; }
+        .wiki-doc-upload-row { display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+        .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
 
         @media (max-width: 1080px) {
             .wiki-grid { grid-template-columns: 1fr; }
@@ -1308,22 +1313,22 @@
             <img src="/logo-coelho.png" alt="Coelho Toca do Coelho" style="width: 120px; height: 120px; object-fit: contain;">
             <div class="sidebar-logo-text">
                 <h1>Toca do Coelho</h1>
-                <p>Gestão de Clientes</p>
+                <p>Sales Engagement</p>
             </div>
         </div>
 
         <nav class="sidebar-nav">
-            <button class="nav-item" onclick="switchTab(event, 'iata')">
-                <i class="fas fa-robot"></i>
-                <span>iAta</span>
+            <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
+                <i class="fas fa-th-large"></i>
+                <span>Dashboard</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'wikitoca')">
                 <i class="fas fa-book-open"></i>
                 <span>WikiToca</span>
             </button>
-            <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
-                <i class="fas fa-th-large"></i>
-                <span>Dashboard</span>
+            <button class="nav-item" onclick="switchTab(event, 'iata')">
+                <i class="fas fa-robot"></i>
+                <span>iAta</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'clientes')">
                 <i class="fas fa-users"></i>
@@ -1410,9 +1415,9 @@
             </div>
 
             <div class="wiki-toolbar">
-                <input id="wikiSearchInput" class="form-control" style="max-width:420px;" placeholder="Pesquisar tópico, categoria, tag ou documento...">
-                <button class="btn btn-secondary" onclick="loadWikiTocaData()"><i class="fas fa-search"></i> Buscar</button>
-                <button class="btn btn-primary" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
+                <input id="wikiSearchInput" class="wiki-search-input" placeholder="Pesquisar">
+                <button class="btn btn-secondary wiki-action-btn" onclick="loadWikiTocaData()"><i class="fas fa-search"></i> Buscar</button>
+                <button class="btn btn-primary wiki-action-btn" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
             </div>
 
             <div class="wiki-grid">
@@ -1422,10 +1427,12 @@
                 </section>
                 <section class="wiki-card">
                     <h3 style="color:#047857; margin-bottom:12px;">Documentos (PDF, Excel, Word)</h3>
-                    <div style="display:flex; gap:8px; margin-bottom:12px;">
-                        <input id="wikiDocumentTitle" class="form-control" placeholder="Título do documento" style="flex:1;">
-                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" style="flex:1;">
-                        <button class="btn btn-primary" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i></button>
+                    <div class="wiki-doc-upload-row">
+                        <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1;">
+                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" style="display:none;" onchange="onWikiFileSelected(event)">
+                        <button type="button" class="btn btn-secondary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo</button>
+                        <span id="wikiFileName" class="wiki-file-name">Nenhum arquivo selecionado</span>
+                        <button class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
                     </div>
                     <div id="wikiDocumentsList"></div>
                 </section>
@@ -5415,7 +5422,11 @@
             const url = id ? `${API_BASE}/wikitoca/entries/${id}` : `${API_BASE}/wikitoca/entries`;
             const method = id ? 'PUT' : 'POST';
             const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-            if (!response.ok) return showError('Não foi possível salvar o conhecimento.');
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                return showError(err.error || 'Não foi possível salvar o conhecimento.');
+            }
+            document.getElementById('wikiSearchInput').value = '';
             closeWikiEntryModal();
             showSuccess('Conhecimento salvo com sucesso!');
             await loadWikiTocaData();
@@ -5444,6 +5455,9 @@
             }
             if (titleInput) titleInput.value = '';
             if (fileInput) fileInput.value = '';
+            const fileName = document.getElementById('wikiFileName');
+            if (fileName) fileName.textContent = 'Nenhum arquivo selecionado';
+            document.getElementById('wikiSearchInput').value = '';
             showSuccess('Documento enviado com sucesso!');
             await loadWikiTocaData();
         }
@@ -5454,6 +5468,37 @@
             if (!response.ok) return showError('Não foi possível remover o documento.');
             showSuccess('Documento removido.');
             await loadWikiTocaData();
+        }
+
+        function onWikiFileSelected(event) {
+            const fileName = document.getElementById('wikiFileName');
+            const file = event?.target?.files?.[0];
+            if (fileName) fileName.textContent = file ? file.name : 'Nenhum arquivo selecionado';
+        }
+
+        function suggestTagsFromKnowledge(title, content) {
+            const stopwords = new Set(['a','o','os','as','de','da','do','das','dos','e','é','em','no','na','nos','nas','um','uma','uns','umas','para','por','com','sem','que','se','ao','aos','à','às','ou','como','mais','menos','ja','não','sim']);
+            const words = `${title || ''} ${content || ''}`.toLowerCase().match(/[a-zà-ÿ0-9-]{3,}/g) || [];
+            const rank = {};
+            words.forEach((word) => {
+                if (stopwords.has(word) || /^\d+$/.test(word)) return;
+                rank[word] = (rank[word] || 0) + 1;
+            });
+            return Object.entries(rank)
+                .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+                .slice(0, 6)
+                .map(([word]) => word);
+        }
+
+        function autoFillWikiTags() {
+            const title = document.getElementById('wikiEntryTitle')?.value || '';
+            const content = document.getElementById('wikiEntryContent')?.value || '';
+            const tagsInput = document.getElementById('wikiEntryTags');
+            if (!tagsInput) return;
+            const current = (tagsInput.value || '').split(',').map(tag => tag.trim()).filter(Boolean);
+            const suggested = suggestTagsFromKnowledge(title, content);
+            const merged = [...new Set([...current, ...suggested])].slice(0, 10);
+            tagsInput.value = merged.join(', ');
         }
 
         function formatFileSize(bytes) {
@@ -5482,6 +5527,10 @@
                     }
                 });
             }
+            const wikiTitle = document.getElementById('wikiEntryTitle');
+            const wikiContent = document.getElementById('wikiEntryContent');
+            if (wikiTitle) wikiTitle.addEventListener('blur', autoFillWikiTags);
+            if (wikiContent) wikiContent.addEventListener('blur', autoFillWikiTags);
             loadDashboard();
         });
     </script>
