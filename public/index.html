@@ -1297,7 +1297,7 @@
         .wiki-search-input { border:1px solid #bbf7d0; background:#f0fdf4; color:#065f46; border-radius:10px; padding:10px 12px; min-width:220px; flex:1; }
         .wiki-search-input:focus { outline:none; border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
         .wiki-action-btn { border-radius:10px; }
-        .wiki-doc-upload-row { display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+        .wiki-doc-upload-row { display:flex; gap:8px; margin-bottom:12px; align-items:flex-start; flex-wrap:wrap; justify-content:flex-start; }
         .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
 
         @media (max-width: 1080px) {
@@ -1411,7 +1411,7 @@
                     <h1>WikiToca</h1>
                     <p>Base de conhecimento interna para registros rápidos, consulta diária e arquivos de apoio.</p>
                 </div>
-                <img src="/coelho-sugestoes.png" alt="Mascote WikiToca">
+                <img src="/coelho_wiki.png" alt="Mascote WikiToca">
             </div>
 
             <div class="wiki-toolbar">
@@ -1428,11 +1428,11 @@
                 <section class="wiki-card">
                     <h3 style="color:#047857; margin-bottom:12px;">Documentos (PDF, Excel, Word)</h3>
                     <div class="wiki-doc-upload-row">
-                        <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1;">
                         <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
                         <button type="button" class="btn btn-secondary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
-                        <span id="wikiFileName" class="wiki-file-name"></span>
                         <button class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
+                        <span id="wikiFileName" class="wiki-file-name"></span>
+                        <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1; min-width:220px;">
                     </div>
                     <div id="wikiDocumentsList"></div>
                 </section>
@@ -5345,65 +5345,81 @@
         async function loadWikiTocaData() {
             const query = (document.getElementById('wikiSearchInput')?.value || '').trim();
             const params = query ? `?q=${encodeURIComponent(query)}` : '';
-            await Promise.all([loadWikiEntries(params), loadWikiDocuments(params)]);
+            const results = await Promise.allSettled([loadWikiEntries(params), loadWikiDocuments(params)]);
+            const failed = results.some(result => result.status === 'rejected');
+            if (failed) {
+                showError('Não foi possível atualizar todos os dados do WikiToca. Tente novamente.');
+            }
         }
 
         async function loadWikiEntries(params = '') {
-            const response = await fetch(`${API_BASE}/wikitoca/entries${params}`);
             const el = document.getElementById('wikiEntriesList');
             if (!el) return;
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
+            try {
+                const response = await fetch(`${API_BASE}/wikitoca/entries${params}`);
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    wikiEntries = [];
+                    el.innerHTML = '<p style="color:#ef4444;">Erro ao carregar conhecimentos.</p>';
+                    showError(err.error || 'Não foi possível carregar os conhecimentos do WikiToca.');
+                    return;
+                }
+                wikiEntries = await response.json();
+                if (!wikiEntries.length) {
+                    el.innerHTML = '<p style="color:#6b7280;">Nenhum conhecimento registrado ainda.</p>';
+                    return;
+                }
+                el.innerHTML = wikiEntries.map(item => `
+                    <div class="wiki-entry-item">
+                        <h4>${escapeHtml(item.title || '')}</h4>
+                        <div class="wiki-meta">${escapeHtml(item.category || 'Sem categoria')} • Atualizado em ${formatDate(item.updated_at)}${item.tags ? ` • Tags: ${escapeHtml(item.tags)}` : ''}</div>
+                        <div style="white-space:pre-wrap; color:#1f2937; margin-bottom:8px;">${escapeHtml(item.content || '')}</div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-secondary btn-small" onclick="openWikiEntryModal(${item.id})"><i class="fas fa-edit"></i> Editar</button>
+                            <button class="btn btn-danger btn-small" onclick="deleteWikiEntry(${item.id})"><i class="fas fa-trash"></i> Excluir</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
                 wikiEntries = [];
                 el.innerHTML = '<p style="color:#ef4444;">Erro ao carregar conhecimentos.</p>';
-                showError(err.error || 'Não foi possível carregar os conhecimentos do WikiToca.');
-                return;
+                throw error;
             }
-            wikiEntries = await response.json();
-            if (!wikiEntries.length) {
-                el.innerHTML = '<p style="color:#6b7280;">Nenhum conhecimento registrado ainda.</p>';
-                return;
-            }
-            el.innerHTML = wikiEntries.map(item => `
-                <div class="wiki-entry-item">
-                    <h4>${escapeHtml(item.title || '')}</h4>
-                    <div class="wiki-meta">${escapeHtml(item.category || 'Sem categoria')} • Atualizado em ${formatDate(item.updated_at)}${item.tags ? ` • Tags: ${escapeHtml(item.tags)}` : ''}</div>
-                    <div style="white-space:pre-wrap; color:#1f2937; margin-bottom:8px;">${escapeHtml(item.content || '')}</div>
-                    <div style="display:flex; gap:8px;">
-                        <button class="btn btn-secondary btn-small" onclick="openWikiEntryModal(${item.id})"><i class="fas fa-edit"></i> Editar</button>
-                        <button class="btn btn-danger btn-small" onclick="deleteWikiEntry(${item.id})"><i class="fas fa-trash"></i> Excluir</button>
-                    </div>
-                </div>
-            `).join('');
         }
 
         async function loadWikiDocuments(params = '') {
-            const response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
             const el = document.getElementById('wikiDocumentsList');
             if (!el) return;
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
+            try {
+                const response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    wikiDocuments = [];
+                    el.innerHTML = '<p style="color:#ef4444;">Erro ao carregar documentos.</p>';
+                    showError(err.error || 'Não foi possível carregar os documentos do WikiToca.');
+                    return;
+                }
+                wikiDocuments = await response.json();
+                if (!wikiDocuments.length) {
+                    el.innerHTML = '<p style="color:#6b7280;">Nenhum documento cadastrado ainda.</p>';
+                    return;
+                }
+                el.innerHTML = wikiDocuments.map(doc => `
+                    <div class="wiki-doc-item">
+                        <h4>${escapeHtml(doc.title || doc.original_name || 'Documento')}</h4>
+                        <div class="wiki-meta">${escapeHtml(doc.original_name || '')} • ${formatFileSize(doc.file_size)} • ${formatDate(doc.updated_at)}</div>
+                        <div style="display:flex; gap:8px;">
+                            <a class="btn btn-secondary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
+                            <a class="btn btn-primary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
+                            <button class="btn btn-danger btn-small" onclick="deleteWikiDocument(${doc.id})"><i class="fas fa-trash"></i></button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
                 wikiDocuments = [];
                 el.innerHTML = '<p style="color:#ef4444;">Erro ao carregar documentos.</p>';
-                showError(err.error || 'Não foi possível carregar os documentos do WikiToca.');
-                return;
+                throw error;
             }
-            wikiDocuments = await response.json();
-            if (!wikiDocuments.length) {
-                el.innerHTML = '<p style="color:#6b7280;">Nenhum documento cadastrado ainda.</p>';
-                return;
-            }
-            el.innerHTML = wikiDocuments.map(doc => `
-                <div class="wiki-doc-item">
-                    <h4>${escapeHtml(doc.title || doc.original_name || 'Documento')}</h4>
-                    <div class="wiki-meta">${escapeHtml(doc.original_name || '')} • ${formatFileSize(doc.file_size)} • ${formatDate(doc.updated_at)}</div>
-                    <div style="display:flex; gap:8px;">
-                        <a class="btn btn-secondary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
-                        <a class="btn btn-primary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
-                        <button class="btn btn-danger btn-small" onclick="deleteWikiDocument(${doc.id})"><i class="fas fa-trash"></i></button>
-                    </div>
-                </div>
-            `).join('');
         }
 
         function openWikiEntryModal(entryId = null) {
