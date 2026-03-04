@@ -1502,6 +1502,7 @@
             </div>
             <div id="mapeamentoContent"></div>
             <div id="autoMappingResultSection" style="margin-top:20px;"></div>
+            <div id="autoMappingQueriesSection" style="margin-top:20px;"></div>
         </div>
 
         <div id="mapeamento-organizacional" class="tab-content">
@@ -3016,6 +3017,7 @@
         // Mapeamento de Ambiente
         let mappingCards = [];
         let mappingSelectedClient = null;
+        let mappingCompanies = [];
 
         async function loadMapeamento() {
             try {
@@ -3027,31 +3029,34 @@
                 const cardsResponse = await fetch(`${API_BASE}/environment/cards`);
                 mappingCards = await cardsResponse.json();
 
-                // Carregar clientes para o dropdown
-                const clientsResponse = await fetch(`${API_BASE}/clientes`);
+                // Carregar empresas (mesma base usada em outros pontos do sistema)
+                const [companiesResponse, clientsResponse] = await Promise.all([
+                    fetch(`${API_BASE}/empresas`),
+                    fetch(`${API_BASE}/clientes`)
+                ]);
+                mappingCompanies = await companiesResponse.json();
                 const clientsList = await clientsResponse.json();
 
-                // Preencher dropdown de clientes (apenas empresas únicas)
+                // Preencher dropdown de clientes usando lista de empresas completa
                 filterSelect.innerHTML = '<option value="">Selecione um cliente</option>';
-                
-                // Agrupar por empresa (pegar apenas a primeira ocorrência de cada empresa)
+
+                // Mapeamento empresa -> client_id (quando existir cliente vinculado)
                 const companiesMap = new Map();
                 clientsList.forEach(client => {
                     if (client.company && !companiesMap.has(client.company)) {
                         companiesMap.set(client.company, client.id);
                     }
                 });
-                
-                // Ordenar empresas alfabeticamente
-                const sortedCompanies = Array.from(companiesMap.entries()).sort((a, b) => 
-                    a[0].localeCompare(b[0], 'pt-BR')
-                );
-                
-                // Adicionar opções ao dropdown
-                sortedCompanies.forEach(([company, clientId]) => {
+
+                const sortedCompanies = (mappingCompanies || []).slice().sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+                sortedCompanies.forEach((company) => {
                     const option = document.createElement('option');
-                    option.value = clientId;
+                    option.value = company;
                     option.textContent = company;
+                    if (!companiesMap.has(company)) {
+                        option.title = 'Sem cliente vinculado para respostas';
+                    }
                     filterSelect.appendChild(option);
                 });
 
@@ -3061,10 +3066,14 @@
                 }
 
                 // Obter cliente selecionado
-                mappingSelectedClient = filterSelect.value ? parseInt(filterSelect.value) : null;
+                const selectedCompany = filterSelect.value || '';
+                mappingSelectedClient = selectedCompany && companiesMap.has(selectedCompany)
+                    ? parseInt(companiesMap.get(selectedCompany))
+                    : null;
 
                 // Renderizar cards
                 await renderMappingCards();
+                await loadAutoMappingQueriesHistory();
             } catch (error) {
                 showError('Erro ao carregar mapeamento de ambiente');
             }
@@ -3098,6 +3107,58 @@
 
             html += '</div>';
             content.innerHTML = html;
+        }
+
+        async function loadAutoMappingQueriesHistory() {
+            const container = document.getElementById('autoMappingQueriesSection');
+            if (!container) return;
+            try {
+                const response = await fetch(`${API_BASE}/automapping/runs?days=20`);
+                const payload = await response.json();
+                const runs = payload.runs || [];
+                if (!runs.length) {
+                    container.innerHTML = `
+                        <div class="automapping-result-card" style="background:#fff; border-color:#e5e7eb;">
+                            <h3 style="margin:0; color:#1f2937;">Consultas do AutoMapping (últimos 20 dias)</h3>
+                            <p style="margin-top:8px; color:#6b7280; font-size:13px;">Nenhuma execução encontrada.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = `
+                    <div class="automapping-result-card" style="background:#fff; border-color:#e5e7eb;">
+                        <h3 style="margin:0 0 10px; color:#1f2937;">Consultas do AutoMapping (últimos 20 dias)</h3>
+                        <div style="display:flex; flex-direction:column; gap:10px; max-height:320px; overflow:auto;">
+                `;
+
+                runs.forEach(run => {
+                    const queriesEntries = Object.entries(run.queries || {});
+                    html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:10px;">`;
+                    html += `<div style="font-size:13px; color:#111827; font-weight:600;">${escapeHtml(run.company || '-')} · ${escapeHtml(run.country || '-')} · ${escapeHtml(run.industry || '-')}</div>`;
+                    html += `<div style="font-size:11px; color:#6b7280; margin-top:2px;">Execução: ${escapeHtml(run.created_at || '-')}</div>`;
+                    if (!queriesEntries.length) {
+                        html += `<div style="font-size:12px; color:#9ca3af; margin-top:6px;">Sem queries registradas.</div>`;
+                    } else {
+                        html += `<div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">`;
+                        queriesEntries.forEach(([section, query]) => {
+                            html += `<div style="font-size:12px; color:#374151;"><strong>${escapeHtml(section)}:</strong> ${escapeHtml(query)}</div>`;
+                        });
+                        html += `</div>`;
+                    }
+                    html += `</div>`;
+                });
+
+                html += '</div></div>';
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `
+                    <div class="automapping-result-card" style="background:#fff5f5; border-color:#fecaca;">
+                        <h3 style="margin:0; color:#991b1b;">Consultas do AutoMapping (últimos 20 dias)</h3>
+                        <p style="margin-top:8px; color:#7f1d1d; font-size:13px;">Não foi possível carregar o histórico.</p>
+                    </div>
+                `;
+            }
         }
 
         async function getMappingResponse(cardId, clientId) {
@@ -3761,6 +3822,7 @@
                 autoMappingState.result = payload.result;
                 autoMappingState.runId = payload.run_id;
                 renderAutoMappingResultSection();
+                await loadAutoMappingQueriesHistory();
                 openAutoMappingResultModal();
             } catch (error) {
                 if (error.name === 'AbortError') {

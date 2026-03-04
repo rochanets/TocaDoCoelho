@@ -3201,6 +3201,50 @@ def get_automapping_run(run_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/automapping/runs', methods=['GET'])
+def list_automapping_runs():
+    try:
+        days = request.args.get('days', '20')
+        try:
+            days = max(1, min(60, int(days)))
+        except Exception:
+            days = 20
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT id, company, country, industry, result_json, created_at
+                     FROM automapping_runs
+                     WHERE datetime(created_at) >= datetime('now', ?)
+                     ORDER BY datetime(created_at) DESC''', (f'-{days} days',))
+        rows = c.fetchall()
+        conn.close()
+
+        runs = []
+        for row in rows:
+            parsed = dict_from_row(row)
+            result = json.loads(parsed.get('result_json') or '{}')
+            sections = result.get('sections') or {}
+            queries = {
+                section_key: section_val.get('query_used')
+                for section_key, section_val in sections.items()
+                if isinstance(section_val, dict) and section_val.get('query_used')
+            }
+            runs.append({
+                'id': parsed.get('id'),
+                'company': parsed.get('company'),
+                'country': parsed.get('country'),
+                'industry': parsed.get('industry'),
+                'created_at': parsed.get('created_at'),
+                'queries': queries,
+                'sections_count': len(queries)
+            })
+
+        return jsonify({'days': days, 'runs': runs})
+    except Exception as e:
+        print(f'[ERROR] GET /api/automapping/runs: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 # Servir arquivos estaticos
 
 @app.route('/uploads/accounts/<filename>')
