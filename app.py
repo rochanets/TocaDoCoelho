@@ -508,13 +508,27 @@ def _normalize_automapping_key(company, country, industry):
 
 def _extract_tavily_evidence(results, max_items=5):
     evidences = []
-    for item in (results or [])[:max_items]:
-        url = item.get('url') or ''
-        snippet = item.get('content') or item.get('snippet') or ''
-        title = item.get('title') or ''
+    seen_urls = set()
+    for item in (results or []):
+        url = (item.get('url') or '').strip()
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+
+        snippet = (item.get('content') or item.get('snippet') or '').strip()
+        title = (item.get('title') or '').strip()
+        score = item.get('score')
         if title and snippet:
             snippet = f"{title}: {snippet}"
-        evidences.append({'url': url, 'snippet': snippet[:500]})
+        evidences.append({
+            'url': url,
+            'snippet': snippet[:500],
+            'title': title,
+            'score': score
+        })
+        if len(evidences) >= max_items:
+            break
     return evidences
 
 
@@ -523,31 +537,98 @@ def _detect_keywords_in_evidence(evidence, keywords):
     return [kw for kw in keywords if kw in haystack]
 
 
-def _build_automapping_sections(evidence):
-    cloud_tools = _detect_keywords_in_evidence(evidence, ['aws', 'azure', 'google cloud', 'gcp', 'oracle cloud'])
-    erp_tools = _detect_keywords_in_evidence(evidence, ['sap', 'oracle erp', 'totvs', 'protheus', 'microsoft dynamics'])
-    crm_tools = _detect_keywords_in_evidence(evidence, ['salesforce', 'hubspot', 'dynamics 365', 'zoho crm'])
-    observability_tools = _detect_keywords_in_evidence(evidence, ['datadog', 'splunk', 'new relic', 'dynatrace', 'grafana'])
-    security_tools = _detect_keywords_in_evidence(evidence, ['crowdstrike', 'palo alto', 'sentinelone', 'fortinet', 'okta'])
-    data_tools = _detect_keywords_in_evidence(evidence, ['snowflake', 'databricks', 'power bi', 'tableau', 'bigquery'])
-    ai_tools = _detect_keywords_in_evidence(evidence, ['openai', 'copilot', 'gemini', 'claude', 'machine learning'])
-
-    def status_for(arr):
-        return 'identified' if arr else 'unknown'
-
+def _build_automapping_search_plan(company, country, industry):
+    company_hint = f'"{company}"'
+    base_context = f'{industry} {country}'
     return {
-        'cloud': {'value': ', '.join(cloud_tools) if cloud_tools else 'Não identificado', 'status': status_for(cloud_tools), 'evidence': evidence, 'partners': []},
-        'erp': {'value': ', '.join(erp_tools) if erp_tools else 'Não identificado', 'status': status_for(erp_tools), 'evidence': evidence, 'partners': []},
-        'crm': {'value': ', '.join(crm_tools) if crm_tools else 'Não identificado', 'status': status_for(crm_tools), 'evidence': evidence, 'partners': []},
-        'observability': {'tools': observability_tools, 'status': status_for(observability_tools), 'evidence': evidence},
-        'security': {'tools': security_tools, 'status': status_for(security_tools), 'evidence': evidence},
-        'data_analytics': {'tools': data_tools, 'status': status_for(data_tools), 'evidence': evidence},
-        'ai': {'tools': ai_tools, 'status': status_for(ai_tools), 'evidence': evidence}
+        'cloud': {
+            'type': 'value',
+            'keywords': ['aws', 'azure', 'microsoft azure', 'google cloud', 'gcp', 'oracle cloud', 'nuvem'],
+            'query': f'{company_hint} {base_context} infraestrutura cloud provedor de nuvem aws azure gcp'
+        },
+        'erp': {
+            'type': 'value',
+            'keywords': ['sap', 'oracle erp', 'totvs', 'protheus', 'microsoft dynamics', 's/4hana'],
+            'query': f'{company_hint} {base_context} sistema erp sap totvs oracle dynamics'
+        },
+        'crm': {
+            'type': 'value',
+            'keywords': ['salesforce', 'hubspot', 'dynamics 365', 'zoho crm', 'crm'],
+            'query': f'{company_hint} {base_context} crm salesforce hubspot dynamics 365'
+        },
+        'observability': {
+            'type': 'tools',
+            'keywords': ['datadog', 'splunk', 'new relic', 'dynatrace', 'grafana', 'observability', 'observabilidade'],
+            'query': f'{company_hint} {base_context} observabilidade datadog splunk dynatrace grafana'
+        },
+        'security': {
+            'type': 'tools',
+            'keywords': ['crowdstrike', 'palo alto', 'sentinelone', 'fortinet', 'okta', 'siem', 'edr', 'xdr'],
+            'query': f'{company_hint} {base_context} cibersegurança siem edr xdr crowdstrike fortinet palo alto'
+        },
+        'data_analytics': {
+            'type': 'tools',
+            'keywords': ['snowflake', 'databricks', 'power bi', 'tableau', 'bigquery', 'data lake', 'analytics'],
+            'query': f'{company_hint} {base_context} analytics bi power bi tableau databricks snowflake'
+        },
+        'ai': {
+            'type': 'tools',
+            'keywords': ['openai', 'copilot', 'gemini', 'claude', 'machine learning', 'ia generativa', 'inteligência artificial'],
+            'query': f'{company_hint} {base_context} inteligência artificial ia generativa openai copilot gemini'
+        }
     }
 
 
-def _build_automapping_payload(company, country, industry, evidence):
-    sections = _build_automapping_sections(evidence)
+def _calculate_section_confidence(evidence, matched_keywords):
+    evidence_count = len(evidence or [])
+    keyword_hits = len(matched_keywords or [])
+    if evidence_count == 0:
+        return 'unknown'
+    if keyword_hits >= 2:
+        return 'high'
+    if keyword_hits == 1:
+        return 'medium'
+    if evidence_count >= 3:
+        return 'low'
+    return 'unknown'
+
+
+def _build_section_result(section_key, section_cfg, evidence):
+    matched_keywords = _detect_keywords_in_evidence(evidence, section_cfg['keywords'])
+    confidence = _calculate_section_confidence(evidence, matched_keywords)
+    status = 'identified' if matched_keywords else ('investigate' if evidence else 'unknown')
+
+    base = {
+        'status': status,
+        'confidence': confidence,
+        'evidence': evidence,
+        'matched_keywords': matched_keywords,
+        'query_used': section_cfg['query']
+    }
+
+    if section_cfg['type'] == 'value':
+        value = ', '.join(matched_keywords) if matched_keywords else 'Não identificado'
+        base['value'] = value
+        if section_key in {'cloud', 'erp', 'crm'}:
+            base['partners'] = []
+    else:
+        base['tools'] = matched_keywords
+
+    return base
+
+
+def _build_automapping_sections(company, country, industry, search_results_by_section):
+    plan = _build_automapping_search_plan(company, country, industry)
+    sections = {}
+    for section_key, section_cfg in plan.items():
+        raw_results = search_results_by_section.get(section_key, [])
+        evidence = _extract_tavily_evidence(raw_results, max_items=4)
+        sections[section_key] = _build_section_result(section_key, section_cfg, evidence)
+    return sections
+
+
+def _build_automapping_payload(company, country, industry, search_results_by_section):
+    sections = _build_automapping_sections(company, country, industry, search_results_by_section)
     return {
         'company': company,
         'country': country,
@@ -562,17 +643,12 @@ def _build_automapping_payload(company, country, industry, evidence):
     }
 
 
-def _run_tavily_search(company, country, industry):
-    api_key = os.environ.get('TAVILY_API_KEY', '').strip()
-    if not api_key:
-        raise RuntimeError('A chave da Tavily não está configurada. Defina TAVILY_API_KEY no ambiente.')
-
-    query = f"{company} {industry} {country} tecnologia stack ERP CRM cloud segurança observabilidade"
+def _run_tavily_request(api_key, query, max_results=6):
     payload = {
         'api_key': api_key,
         'query': query,
         'search_depth': 'advanced',
-        'max_results': 8,
+        'max_results': max_results,
         'include_answer': False,
         'include_raw_content': False
     }
@@ -584,9 +660,22 @@ def _run_tavily_search(company, country, industry):
         method='POST'
     )
 
-    with urllib.request.urlopen(req, timeout=50) as resp:
+    with urllib.request.urlopen(req, timeout=25) as resp:
         data = json.loads(resp.read().decode('utf-8'))
     return data.get('results') or []
+
+
+def _run_tavily_search(company, country, industry):
+    api_key = os.environ.get('TAVILY_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('A chave da Tavily não está configurada. Defina TAVILY_API_KEY no ambiente.')
+
+    plan = _build_automapping_search_plan(company, country, industry)
+    all_results = {}
+    for section_key, section_cfg in plan.items():
+        all_results[section_key] = _run_tavily_request(api_key, section_cfg['query'])
+
+    return all_results
 
 
 def normalize_phone(phone):
@@ -3013,8 +3102,7 @@ def run_automapping():
             conn.close()
             return jsonify({'error': f'Falha ao consultar Tavily: {str(e)}'}), 502
 
-        evidence = _extract_tavily_evidence(evidence_results)
-        result_payload = _build_automapping_payload(company, country, industry, evidence)
+        result_payload = _build_automapping_payload(company, country, industry, evidence_results)
 
         c.execute('''INSERT INTO automapping_runs (company, country, industry, query_key, result_json)
                      VALUES (?, ?, ?, ?, ?)''',

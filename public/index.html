@@ -3795,9 +3795,10 @@
         }
 
         function buildSectionSuggestionText(sectionKey, section) {
-            if (section.value) return section.value;
-            if (Array.isArray(section.tools) && section.tools.length) return section.tools.join(', ');
-            return `Status: ${section.status || 'unknown'}`;
+            const confidence = section.confidence || 'unknown';
+            if (section.value) return `${section.value} (confiança: ${confidence})`;
+            if (Array.isArray(section.tools) && section.tools.length) return `${section.tools.join(', ')} (confiança: ${confidence})`;
+            return `Status: ${section.status || 'unknown'} · Confiança: ${confidence}`;
         }
 
         function openAutoMappingResultModal() {
@@ -3817,7 +3818,7 @@
                 const suggestionText = buildSectionSuggestionText(key, section);
                 html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:10px;">`;
                 html += `<div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">`;
-                html += `<div><div style="font-weight:700; color:#111827; text-transform:capitalize;">${escapeHtml(key.replace('_', ' '))}</div><div style="font-size:13px; color:#374151; margin-top:4px;">${escapeHtml(suggestionText)}</div></div>`;
+                html += `<div><div style="font-weight:700; color:#111827; text-transform:capitalize;">${escapeHtml(key.replace('_', ' '))}</div><div style="font-size:13px; color:#374151; margin-top:4px;">${escapeHtml(suggestionText)}</div><div style="font-size:11px; color:#6b7280; margin-top:4px;">Query: ${escapeHtml(section.query_used || 'n/a')}</div></div>`;
                 html += `<button class="btn btn-primary btn-small" onclick="applyAutoMappingToCard('${escapeHtml(key)}')">Incluir no card referência</button>`;
                 html += `</div>`;
 
@@ -3863,7 +3864,17 @@
                     return;
                 }
 
-                const card = mappingCards.find(c => (c.title || '').toLowerCase().includes(sectionKey.toLowerCase().split('_')[0])) || mappingCards[0];
+                const cardKeyHints = {
+                    cloud: ['cloud', 'nuvem'],
+                    erp: ['erp'],
+                    crm: ['crm'],
+                    observability: ['observability', 'observabilidade', 'cyber'],
+                    security: ['security', 'segurança', 'cyber'],
+                    data_analytics: ['analytics', 'dados', 'bi', 'data'],
+                    ai: ['ai', 'ia', 'inteligência artificial']
+                };
+                const hints = cardKeyHints[sectionKey] || [sectionKey.toLowerCase()];
+                const card = mappingCards.find(c => hints.some(h => (c.title || '').toLowerCase().includes(h))) || mappingCards[0];
                 if (!card) {
                     showError('Nenhum card disponível para incluir informação.');
                     return;
