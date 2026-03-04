@@ -827,8 +827,28 @@ def _run_openrouter_synthesis(result_payload):
         method='POST'
     )
 
-    with urllib.request.urlopen(req, timeout=45) as resp:
-        data = json.loads(resp.read().decode('utf-8'))
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+        diagnostics = {
+            'status': getattr(e, 'code', None),
+            'model': model,
+            'has_api_key': bool(api_key),
+            'api_key_prefix': api_key[:7] if api_key else '',
+            'sent_headers': ['Content-Type', 'Authorization', 'Authentication', 'HTTP-Referer', 'X-Title']
+        }
+        print(f'[ERROR][OpenRouter] HTTPError diagnostics={diagnostics} body={detail[:500]}')
+        raise RuntimeError(f'OpenRouter HTTP {diagnostics["status"]} - body: {detail[:400]} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}')
+    except Exception as e:
+        diagnostics = {
+            'model': model,
+            'has_api_key': bool(api_key),
+            'api_key_prefix': api_key[:7] if api_key else ''
+        }
+        print(f'[ERROR][OpenRouter] Exception diagnostics={diagnostics} error={e}')
+        raise RuntimeError(f'Falha inesperada OpenRouter: {str(e)} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}')
 
     choices = data.get('choices') or []
     message_content = ''
@@ -3343,6 +3363,23 @@ def get_automapping_run(run_id):
         return jsonify(payload)
     except Exception as e:
         print(f'[ERROR] GET /api/automapping/runs/{run_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/automapping/runs/<int:run_id>', methods=['DELETE'])
+def delete_automapping_run(run_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM automapping_runs WHERE id = ?', (run_id,))
+        deleted = c.rowcount
+        conn.commit()
+        conn.close()
+        if not deleted:
+            return jsonify({'error': 'Execução não encontrada'}), 404
+        return jsonify({'message': 'Log de AutoMapping removido com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/automapping/runs/{run_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 

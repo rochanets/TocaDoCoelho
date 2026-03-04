@@ -3109,6 +3109,29 @@
             content.innerHTML = html;
         }
 
+        function toggleAutoMappingRunDetails(runId) {
+            const panel = document.getElementById(`autoMapRunDetails_${runId}`);
+            const icon = document.getElementById(`autoMapRunIcon_${runId}`);
+            if (!panel) return;
+            const isHidden = panel.style.display === 'none' || !panel.style.display;
+            panel.style.display = isHidden ? 'block' : 'none';
+            if (icon) icon.textContent = isHidden ? '▾' : '▸';
+        }
+
+        async function deleteAutoMappingRun(runId) {
+            const confirmed = await openConfirmDialog('Excluir Log', 'Deseja realmente excluir este log do AutoMapping?');
+            if (!confirmed) return;
+            try {
+                const response = await fetch(`${API_BASE}/automapping/runs/${runId}`, { method: 'DELETE' });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'Falha ao excluir log');
+                showSuccess('Log de AutoMapping excluído.');
+                await loadAutoMappingQueriesHistory();
+            } catch (error) {
+                showError(`Não foi possível excluir o log: ${error.message}`);
+            }
+        }
+
         async function loadAutoMappingQueriesHistory() {
             const container = document.getElementById('autoMappingQueriesSection');
             if (!container) return;
@@ -3135,17 +3158,24 @@
                 runs.forEach(run => {
                     const queriesEntries = Object.entries(run.queries || {});
                     html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:10px;">`;
-                    html += `<div style="font-size:13px; color:#111827; font-weight:600;">${escapeHtml(run.company || '-')} · ${escapeHtml(run.country || '-')} · ${escapeHtml(run.industry || '-')}</div>`;
-                    html += `<div style="font-size:11px; color:#6b7280; margin-top:2px;">Execução: ${escapeHtml(run.created_at || '-')}</div>`;
+                    html += `<div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">`;
+                    html += `<button type="button" onclick="toggleAutoMappingRunDetails(${run.id})" style="background:transparent; border:none; text-align:left; cursor:pointer; flex:1;">`;
+                    html += `<div style="font-size:13px; color:#111827; font-weight:600;"><span id="autoMapRunIcon_${run.id}">▸</span> ${escapeHtml(run.company || '-')} · ${escapeHtml(run.country || '-')} · ${escapeHtml(run.industry || '-')}</div>`;
+                    html += `<div style="font-size:11px; color:#6b7280; margin-top:2px;">Execução: ${escapeHtml(run.created_at || '-')} · ${queriesEntries.length} queries</div>`;
+                    html += `</button>`;
+                    html += `<button class="btn btn-danger btn-small" onclick="deleteAutoMappingRun(${run.id})" title="Excluir log"><i class="fas fa-trash"></i></button>`;
+                    html += `</div>`;
+                    html += `<div id="autoMapRunDetails_${run.id}" style="display:none; margin-top:8px;">`;
                     if (!queriesEntries.length) {
-                        html += `<div style="font-size:12px; color:#9ca3af; margin-top:6px;">Sem queries registradas.</div>`;
+                        html += `<div style="font-size:12px; color:#9ca3af;">Sem queries registradas.</div>`;
                     } else {
-                        html += `<div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">`;
+                        html += `<div style="display:flex; flex-direction:column; gap:4px;">`;
                         queriesEntries.forEach(([section, query]) => {
                             html += `<div style="font-size:12px; color:#374151;"><strong>${escapeHtml(section)}:</strong> ${escapeHtml(query)}</div>`;
                         });
                         html += `</div>`;
                     }
+                    html += `</div>`;
                     html += `</div>`;
                 });
 
