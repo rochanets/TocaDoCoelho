@@ -14,6 +14,7 @@ import traceback
 import shutil
 import urllib.request
 import urllib.error
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -593,17 +594,41 @@ def _calculate_section_confidence(evidence, matched_keywords):
     return 'unknown'
 
 
-def _build_section_result(section_key, section_cfg, evidence):
+def _calculate_evidence_quality(evidence):
+    if not evidence:
+        return 0
+    quality = 0
+    for ev in evidence:
+        url = (ev.get('url') or '').lower()
+        snippet = (ev.get('snippet') or '')
+        if url.startswith('https://'):
+            quality += 2
+        if any(domain in url for domain in ['.gov', '.edu', 'microsoft.com', 'oracle.com', 'sap.com', 'aws.amazon.com', 'salesforce.com']):
+            quality += 2
+        if len(snippet) >= 120:
+            quality += 1
+    return quality
+
+
+def _build_section_result(section_key, section_cfg, evidence, error_message=None):
     matched_keywords = _detect_keywords_in_evidence(evidence, section_cfg['keywords'])
     confidence = _calculate_section_confidence(evidence, matched_keywords)
     status = 'identified' if matched_keywords else ('investigate' if evidence else 'unknown')
+
+    if error_message:
+        status = 'error'
+        confidence = 'unknown'
+
+    evidence_quality = _calculate_evidence_quality(evidence)
 
     base = {
         'status': status,
         'confidence': confidence,
         'evidence': evidence,
         'matched_keywords': matched_keywords,
-        'query_used': section_cfg['query']
+        'query_used': section_cfg['query'],
+        'evidence_quality': evidence_quality,
+        'error': error_message
     }
 
     if section_cfg['type'] == 'value':
@@ -617,28 +642,40 @@ def _build_section_result(section_key, section_cfg, evidence):
     return base
 
 
-def _build_automapping_sections(company, country, industry, search_results_by_section):
+def _build_automapping_sections(company, country, industry, search_results_by_section, section_errors=None):
     plan = _build_automapping_search_plan(company, country, industry)
     sections = {}
+    section_errors = section_errors or {}
     for section_key, section_cfg in plan.items():
         raw_results = search_results_by_section.get(section_key, [])
         evidence = _extract_tavily_evidence(raw_results, max_items=4)
-        sections[section_key] = _build_section_result(section_key, section_cfg, evidence)
+        sections[section_key] = _build_section_result(section_key, section_cfg, evidence, section_errors.get(section_key))
     return sections
 
 
-def _build_automapping_payload(company, country, industry, search_results_by_section):
-    sections = _build_automapping_sections(company, country, industry, search_results_by_section)
+def _build_automapping_payload(company, country, industry, search_results_by_section, section_errors=None, execution_meta=None):
+    sections = _build_automapping_sections(company, country, industry, search_results_by_section, section_errors)
+    identified_sections = [k for k, v in sections.items() if v.get('status') == 'identified']
+    error_sections = [k for k, v in sections.items() if v.get('status') == 'error']
     return {
+        'schema_version': '2.0',
         'company': company,
         'country': country,
         'industry': industry,
         'sections': sections,
+        'execution_summary': {
+            'identified_sections_count': len(identified_sections),
+            'error_sections_count': len(error_sections),
+            'identified_sections': identified_sections,
+            'error_sections': error_sections,
+            'mode': 'partial' if error_sections else 'complete'
+        },
         'strategic_reading': {
             'competitive_space': [],
             'lock_in_risk': [],
             'entry_points': []
         },
+        'execution_meta': execution_meta or {},
         'generated_at': datetime.utcnow().isoformat() + 'Z'
     }
 
@@ -672,10 +709,34 @@ def _run_tavily_search(company, country, industry):
 
     plan = _build_automapping_search_plan(company, country, industry)
     all_results = {}
-    for section_key, section_cfg in plan.items():
-        all_results[section_key] = _run_tavily_request(api_key, section_cfg['query'])
+    section_errors = {}
+    attempts_by_section = {}
 
-    return all_results
+    for section_key, section_cfg in plan.items():
+        max_attempts = 2
+        attempts = 0
+        last_error = None
+        while attempts < max_attempts:
+            attempts += 1
+            try:
+                all_results[section_key] = _run_tavily_request(api_key, section_cfg['query'])
+                last_error = None
+                break
+            except Exception as e:
+                last_error = str(e)
+                if attempts < max_attempts:
+                    time.sleep(0.4 * attempts)
+        attempts_by_section[section_key] = attempts
+        if last_error is not None:
+            section_errors[section_key] = f'Falha ao consultar provider: {last_error[:180]}'
+            all_results[section_key] = []
+
+    execution_meta = {
+        'provider': 'tavily',
+        'attempts_by_section': attempts_by_section,
+        'searched_sections_count': len(plan)
+    }
+    return all_results, section_errors, execution_meta
 
 
 def normalize_phone(phone):
@@ -3093,7 +3154,7 @@ def run_automapping():
             }), 200
 
         try:
-            evidence_results = _run_tavily_search(company, country, industry)
+            evidence_results, section_errors, execution_meta = _run_tavily_search(company, country, industry)
         except urllib.error.HTTPError as e:
             detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
             conn.close()
@@ -3102,7 +3163,7 @@ def run_automapping():
             conn.close()
             return jsonify({'error': f'Falha ao consultar Tavily: {str(e)}'}), 502
 
-        result_payload = _build_automapping_payload(company, country, industry, evidence_results)
+        result_payload = _build_automapping_payload(company, country, industry, evidence_results, section_errors, execution_meta)
 
         c.execute('''INSERT INTO automapping_runs (company, country, industry, query_key, result_json)
                      VALUES (?, ?, ?, ?, ?)''',
