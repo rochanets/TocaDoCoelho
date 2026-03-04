@@ -1318,6 +1318,10 @@
         </div>
 
         <nav class="sidebar-nav">
+            <button class="nav-item" onclick="switchTab(event, 'iata')">
+                <i class="fas fa-robot"></i>
+                <span>iAta</span>
+            </button>
             <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
@@ -1325,14 +1329,6 @@
             <button class="nav-item" onclick="switchTab(event, 'wikitoca')">
                 <i class="fas fa-book-open"></i>
                 <span>WikiToca</span>
-            </button>
-            <button class="nav-item" onclick="switchTab(event, 'iata')">
-                <i class="fas fa-robot"></i>
-                <span>iAta</span>
-            </button>
-            <button class="nav-item" onclick="switchTab(event, 'clientes')">
-                <i class="fas fa-users"></i>
-                <span>Gestão de Clientes</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
                 <i class="fas fa-map-marked-alt"></i>
@@ -1353,6 +1349,10 @@
             <button class="nav-item" onclick="switchTab(event, 'agenda')">
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
+            </button>
+            <button class="nav-item" onclick="switchTab(event, 'clientes')">
+                <i class="fas fa-users"></i>
+                <span>Gestão de Contatos</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'report')">
                 <i class="fas fa-database"></i>
@@ -1429,9 +1429,9 @@
                     <h3 style="color:#047857; margin-bottom:12px;">Documentos (PDF, Excel, Word)</h3>
                     <div class="wiki-doc-upload-row">
                         <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1;">
-                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" style="display:none;" onchange="onWikiFileSelected(event)">
-                        <button type="button" class="btn btn-secondary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo</button>
-                        <span id="wikiFileName" class="wiki-file-name">Nenhum arquivo selecionado</span>
+                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
+                        <button type="button" class="btn btn-secondary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
+                        <span id="wikiFileName" class="wiki-file-name"></span>
                         <button class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
                     </div>
                     <div id="wikiDocumentsList"></div>
@@ -1449,7 +1449,7 @@
                     <input type="hidden" id="wikiEntryId">
                     <div class="form-group"><label>Título *</label><input id="wikiEntryTitle" required></div>
                     <div class="form-group"><label>Categoria</label><input id="wikiEntryCategory" placeholder="Ex: Comercial, Processos, Produto"></div>
-                    <div class="form-group"><label>Tags</label><input id="wikiEntryTags" placeholder="Ex: proposta, crm, check-list"></div>
+                    <div class="form-group"><label>Tags (automático)</label><input id="wikiEntryTags" placeholder="Gerado automaticamente" readonly style="background:#ecfdf5;color:#065f46;cursor:not-allowed;"></div>
                     <div class="form-group"><label>Conteúdo *</label><textarea id="wikiEntryContent" rows="7" required></textarea></div>
                     <div style="display:flex; gap:8px; justify-content:flex-end;">
                         <button type="button" class="btn btn-secondary" onclick="closeWikiEntryModal()">Cancelar</button>
@@ -1479,7 +1479,7 @@
         <!-- Clientes Tab -->
         <div id="clientes" class="tab-content">
             <div class="page-header">
-                <h1>Gestão de Clientes</h1>
+                <h1>Gestão de Contatos</h1>
                 <p>Cadastre e gerencie seus clientes</p>
             </div>
             <div class="section-title">
@@ -5350,9 +5350,16 @@
 
         async function loadWikiEntries(params = '') {
             const response = await fetch(`${API_BASE}/wikitoca/entries${params}`);
-            wikiEntries = response.ok ? await response.json() : [];
             const el = document.getElementById('wikiEntriesList');
             if (!el) return;
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                wikiEntries = [];
+                el.innerHTML = '<p style="color:#ef4444;">Erro ao carregar conhecimentos.</p>';
+                showError(err.error || 'Não foi possível carregar os conhecimentos do WikiToca.');
+                return;
+            }
+            wikiEntries = await response.json();
             if (!wikiEntries.length) {
                 el.innerHTML = '<p style="color:#6b7280;">Nenhum conhecimento registrado ainda.</p>';
                 return;
@@ -5372,9 +5379,16 @@
 
         async function loadWikiDocuments(params = '') {
             const response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
-            wikiDocuments = response.ok ? await response.json() : [];
             const el = document.getElementById('wikiDocumentsList');
             if (!el) return;
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                wikiDocuments = [];
+                el.innerHTML = '<p style="color:#ef4444;">Erro ao carregar documentos.</p>';
+                showError(err.error || 'Não foi possível carregar os documentos do WikiToca.');
+                return;
+            }
+            wikiDocuments = await response.json();
             if (!wikiDocuments.length) {
                 el.innerHTML = '<p style="color:#6b7280;">Nenhum documento cadastrado ainda.</p>';
                 return;
@@ -5443,22 +5457,22 @@
         async function uploadWikiDocument() {
             const fileInput = document.getElementById('wikiDocumentFile');
             const titleInput = document.getElementById('wikiDocumentTitle');
-            const file = fileInput?.files?.[0];
-            if (!file) return showError('Selecione um arquivo para upload.');
+            const files = Array.from(fileInput?.files || []);
+            if (!files.length) return showError('Selecione ao menos um arquivo para upload.');
             const formData = new FormData();
-            formData.append('file', file);
+            files.forEach((file) => formData.append('files', file));
             formData.append('title', (titleInput?.value || '').trim());
             const response = await fetch(`${API_BASE}/wikitoca/documents`, { method: 'POST', body: formData });
             if (!response.ok) {
                 const err = await response.json().catch(() => ({}));
-                return showError(err.error || 'Falha ao enviar documento.');
+                return showError(err.error || 'Falha ao enviar documento(s).');
             }
             if (titleInput) titleInput.value = '';
             if (fileInput) fileInput.value = '';
             const fileName = document.getElementById('wikiFileName');
-            if (fileName) fileName.textContent = 'Nenhum arquivo selecionado';
+            if (fileName) fileName.textContent = '';
             document.getElementById('wikiSearchInput').value = '';
-            showSuccess('Documento enviado com sucesso!');
+            showSuccess(files.length > 1 ? 'Documentos enviados com sucesso!' : 'Documento enviado com sucesso!');
             await loadWikiTocaData();
         }
 
@@ -5472,8 +5486,15 @@
 
         function onWikiFileSelected(event) {
             const fileName = document.getElementById('wikiFileName');
-            const file = event?.target?.files?.[0];
-            if (fileName) fileName.textContent = file ? file.name : 'Nenhum arquivo selecionado';
+            const files = Array.from(event?.target?.files || []);
+            if (!fileName) return;
+            if (!files.length) {
+                fileName.textContent = '';
+            } else if (files.length === 1) {
+                fileName.textContent = files[0].name;
+            } else {
+                fileName.textContent = `${files.length} arquivos selecionados`;
+            }
         }
 
         function suggestTagsFromKnowledge(title, content) {

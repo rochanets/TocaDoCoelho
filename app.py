@@ -3057,35 +3057,45 @@ def get_wikitoca_documents():
 @app.route('/api/wikitoca/documents', methods=['POST'])
 def create_wikitoca_document():
     try:
-        file = request.files.get('file')
+        files = request.files.getlist('files')
+        if not files:
+            single = request.files.get('file')
+            if single:
+                files = [single]
         title = (request.form.get('title') or '').strip()
-        if not file or not file.filename:
+        files = [f for f in files if f and f.filename]
+        if not files:
             return jsonify({'error': 'Arquivo não informado'}), 400
 
-        original_name = secure_filename(file.filename)
-        extension = Path(original_name).suffix.lower()
-        if extension not in WIKI_ALLOWED_EXTENSIONS:
-            return jsonify({'error': 'Formato não suportado. Use PDF, Excel ou Word'}), 400
-
-        display_title = title or Path(original_name).stem
-        stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
-        stored_name = f"wikitoca_{stamp}{extension}"
-        file_path = WIKI_UPLOAD_DIR / stored_name
-        file.save(str(file_path))
-        file_size = file_path.stat().st_size
-        file_url = f'/uploads/wikitoca/{stored_name}'
-
         conn = get_db(); c = conn.cursor()
-        c.execute('''
-            INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (display_title, stored_name, original_name, file_url, extension, file_size))
-        doc_id = c.lastrowid
-        conn.commit()
-        c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
-        row = c.fetchone()
-        conn.close()
-        return jsonify(dict_from_row(row)), 201
+        created_documents = []
+
+        for index, file in enumerate(files):
+            original_name = secure_filename(file.filename)
+            extension = Path(original_name).suffix.lower()
+            if extension not in WIKI_ALLOWED_EXTENSIONS:
+                conn.close()
+                return jsonify({'error': f'Formato não suportado ({original_name}). Use PDF, Excel ou Word'}), 400
+
+            base_title = title or Path(original_name).stem
+            display_title = f"{base_title} ({index + 1})" if title and len(files) > 1 else base_title
+            stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+            stored_name = f"wikitoca_{stamp}_{index}{extension}"
+            file_path = WIKI_UPLOAD_DIR / stored_name
+            file.save(str(file_path))
+            file_size = file_path.stat().st_size
+            file_url = f'/uploads/wikitoca/{stored_name}'
+
+            c.execute('''
+                INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (display_title, stored_name, original_name, file_url, extension, file_size))
+            doc_id = c.lastrowid
+            c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
+            created_documents.append(dict_from_row(c.fetchone()))
+
+        conn.commit(); conn.close()
+        return jsonify(created_documents), 201
     except Exception as e:
         print(f'[ERROR] POST /api/wikitoca/documents: {e}')
         return jsonify({'error': str(e)}), 500
