@@ -924,6 +924,29 @@
             color: #DC2626;
         }
 
+        .automapping-progress {
+            width: 100%;
+            height: 10px;
+            background: #e5e7eb;
+            border-radius: 999px;
+            overflow: hidden;
+            margin: 8px 0 4px;
+        }
+
+        .automapping-progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #34d399, #10b981);
+            transition: width 0.3s;
+        }
+
+        .automapping-result-card {
+            border: 1px solid #bfdbfe;
+            background: #eff6ff;
+            border-radius: 12px;
+            padding: 12px;
+            margin-top: 12px;
+        }
+
         .mapping-response-inline {
             margin-top: 12px;
             padding: 10px;
@@ -1478,6 +1501,7 @@
                 </select>
             </div>
             <div id="mapeamentoContent"></div>
+            <div id="autoMappingResultSection" style="margin-top:20px;"></div>
         </div>
 
         <div id="mapeamento-organizacional" class="tab-content">
@@ -3607,6 +3631,11 @@
             closeEmailDraftModal();
         }
 
+        let autoMappingState = {
+            result: null,
+            runId: null
+        };
+
         function openAutoMappingModal() {
             const html = `
                 <div class="modal active" id="autoMappingModal" onclick="if(event.target === this) closeAutoMappingModal()">
@@ -3615,18 +3644,24 @@
                         <p style="color:#4b5563; margin-bottom: 16px; line-height: 1.5;">Bem vindo ao AutoMapping. Aqui nós faremos o possível para trazer informações do ambiente dos seus clientes. Por favor, digite abaixo o nome do cliente (empresa), a área de negócio e o país de origem do cliente.</p>
                         <div class="form-group">
                             <label>Cliente</label>
-                            <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)">
+                            <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)" value="">
                         </div>
                         <div class="form-group">
                             <label>Área de Negócio</label>
-                            <input id="autoMappingBusinessArea" type="text" placeholder="Área de negócio">
+                            <input id="autoMappingBusinessArea" type="text" placeholder="Área de negócio" value="">
                         </div>
                         <div class="form-group">
                             <label>País</label>
-                            <input id="autoMappingCountry" type="text" placeholder="País de origem">
+                            <input id="autoMappingCountry" type="text" placeholder="País de origem" value="">
                         </div>
-                        <div style="display:flex; justify-content:flex-start; margin-top: 12px;">
-                            <button class="btn btn-primary" onclick="submitAutoMappingForm()">Enviar</button>
+                        <div id="autoMappingError" style="display:none; color:#b91c1c; font-size:13px; margin-top: 8px;"></div>
+                        <div id="autoMappingProgressWrapper" style="display:none; margin-top:10px;">
+                            <div id="autoMappingProgressText" style="font-size:13px; color:#374151;">Buscando evidências...</div>
+                            <div class="automapping-progress"><div id="autoMappingProgressBar" class="automapping-progress-bar" style="width:0%;"></div></div>
+                        </div>
+                        <div style="display:flex; justify-content:flex-start; margin-top: 12px; gap:8px;">
+                            <button class="btn btn-secondary" onclick="closeAutoMappingModal()">Cancelar</button>
+                            <button id="autoMappingSubmitBtn" class="btn btn-primary" onclick="submitAutoMappingForm(false)">Enviar</button>
                         </div>
                     </div>
                 </div>`;
@@ -3638,18 +3673,223 @@
             if (modal) modal.remove();
         }
 
-        function submitAutoMappingForm() {
+        function updateAutoMappingProgress(text, percent) {
+            const wrapper = document.getElementById('autoMappingProgressWrapper');
+            const label = document.getElementById('autoMappingProgressText');
+            const bar = document.getElementById('autoMappingProgressBar');
+            if (wrapper) wrapper.style.display = 'block';
+            if (label) label.textContent = text;
+            if (bar) bar.style.width = `${percent}%`;
+        }
+
+        function setAutoMappingError(message) {
+            const el = document.getElementById('autoMappingError');
+            if (!el) return;
+            if (!message) {
+                el.style.display = 'none';
+                el.textContent = '';
+                return;
+            }
+            el.style.display = 'block';
+            el.textContent = message;
+        }
+
+        async function submitAutoMappingForm(forceRun = false) {
+            const submitBtn = document.getElementById('autoMappingSubmitBtn');
             const clientName = document.getElementById('autoMappingClient')?.value?.trim();
             const businessArea = document.getElementById('autoMappingBusinessArea')?.value?.trim();
             const country = document.getElementById('autoMappingCountry')?.value?.trim();
 
+            setAutoMappingError('');
+
             if (!clientName || !businessArea || !country) {
-                showError('Preencha Cliente, Área de Negócio e País para continuar.');
+                setAutoMappingError('Preencha Cliente, Área de Negócio e País para continuar.');
                 return;
             }
 
-            closeAutoMappingModal();
-            showSuccess('Dados recebidos! Em breve integraremos ao Auto Mapping inteligente.');
+            if (submitBtn) submitBtn.disabled = true;
+
+            try {
+                updateAutoMappingProgress('Buscando evidências...', 25);
+
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 60000);
+
+                const response = await fetch(`${API_BASE}/automapping`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        company: clientName,
+                        country,
+                        industry: businessArea,
+                        force: forceRun
+                    }),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeout);
+                updateAutoMappingProgress('Analisando com IA...', 75);
+
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.error || 'Falha no AutoMapping');
+                }
+
+                if (payload.already_exists && !forceRun) {
+                    if (submitBtn) submitBtn.disabled = false;
+                    updateAutoMappingProgress('Concluído', 100);
+                    const shouldReuse = await openSystemDialog({
+                        title: 'AutoMapping recente encontrado',
+                        message: 'Já existe um AutoMapping para esses dados nos últimos 20 dias. Deseja ver o resultado existente?',
+                        showCancel: true
+                    });
+
+                    if (shouldReuse) {
+                        autoMappingState.result = payload.result;
+                        autoMappingState.runId = payload.run_id;
+                        renderAutoMappingResultSection();
+                        openAutoMappingResultModal();
+                        closeAutoMappingModal();
+                    } else {
+                        updateAutoMappingProgress('Executando novo AutoMapping...', 35);
+                        return submitAutoMappingForm(true);
+                    }
+                    return;
+                }
+
+                updateAutoMappingProgress('Concluído', 100);
+                autoMappingState.result = payload.result;
+                autoMappingState.runId = payload.run_id;
+                renderAutoMappingResultSection();
+                openAutoMappingResultModal();
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    setAutoMappingError('Tempo limite excedido (60s). Tente novamente.');
+                } else {
+                    setAutoMappingError(`Não foi possível concluir o AutoMapping: ${error.message}`);
+                }
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        }
+
+        function renderAutoMappingResultSection() {
+            const container = document.getElementById('autoMappingResultSection');
+            if (!container) return;
+
+            if (!autoMappingState.result) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const result = autoMappingState.result;
+            const sections = Object.keys(result.sections || {});
+            container.innerHTML = `
+                <div class="automapping-result-card">
+                    <h3 style="margin:0 0 6px; color:#1d4ed8;">Resultado do AutoMapping</h3>
+                    <p style="margin:0; color:#374151; font-size:13px;">Empresa: <strong>${escapeHtml(result.company)}</strong> · País: <strong>${escapeHtml(result.country)}</strong> · Área: <strong>${escapeHtml(result.industry)}</strong></p>
+                    <p style="margin:8px 0 0; color:#6b7280; font-size:13px;">${sections.length} seções analisadas.</p>
+                    <div style="margin-top:10px;"><button class="btn btn-primary" onclick="openAutoMappingResultModal()">Ver resultado completo</button></div>
+                </div>
+            `;
+        }
+
+        function buildSectionSuggestionText(sectionKey, section) {
+            if (section.value) return section.value;
+            if (Array.isArray(section.tools) && section.tools.length) return section.tools.join(', ');
+            return `Status: ${section.status || 'unknown'}`;
+        }
+
+        function openAutoMappingResultModal() {
+            if (!autoMappingState.result) {
+                showError('Nenhum resultado disponível para exibição.');
+                return;
+            }
+            const result = autoMappingState.result;
+            const sectionEntries = Object.entries(result.sections || {});
+            let html = `<div class="modal active" id="autoMappingResultModal" onclick="if(event.target === this) closeAutoMappingResultModal()">`;
+            html += '<div class="modal-content" style="max-width: 900px;">';
+            html += `<h2 style="color:#0f766e; margin-bottom:6px;">Resultado do AutoMapping</h2>`;
+            html += `<p style="color:#4b5563; margin-bottom:16px;">${escapeHtml(result.company)} · ${escapeHtml(result.country)} · ${escapeHtml(result.industry)}</p>`;
+            html += '<div style="max-height:65vh; overflow:auto;">';
+
+            sectionEntries.forEach(([key, section]) => {
+                const suggestionText = buildSectionSuggestionText(key, section);
+                html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:10px;">`;
+                html += `<div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">`;
+                html += `<div><div style="font-weight:700; color:#111827; text-transform:capitalize;">${escapeHtml(key.replace('_', ' '))}</div><div style="font-size:13px; color:#374151; margin-top:4px;">${escapeHtml(suggestionText)}</div></div>`;
+                html += `<button class="btn btn-primary btn-small" onclick="applyAutoMappingToCard('${escapeHtml(key)}')">Incluir no card referência</button>`;
+                html += `</div>`;
+
+                if (Array.isArray(section.evidence) && section.evidence.length) {
+                    html += '<div style="margin-top:8px;">';
+                    section.evidence.slice(0, 3).forEach(ev => {
+                        html += `<div style="font-size:12px; color:#6b7280; margin-top:4px;">• <a href="${escapeHtml(ev.url || '#')}" target="_blank" rel="noopener">${escapeHtml(ev.url || 'Fonte')}</a> — ${escapeHtml(ev.snippet || '')}</div>`;
+                    });
+                    html += '</div>';
+                }
+                html += '</div>';
+            });
+
+            html += '</div>';
+            html += '<div class="modal-footer" style="justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeAutoMappingResultModal()">Fechar</button></div>';
+            html += '</div></div>';
+
+            const old = document.getElementById('autoMappingResultModal');
+            if (old) old.remove();
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeAutoMappingResultModal() {
+            const modal = document.getElementById('autoMappingResultModal');
+            if (modal) modal.remove();
+        }
+
+        async function applyAutoMappingToCard(sectionKey) {
+            const result = autoMappingState.result;
+            if (!result || !result.sections || !result.sections[sectionKey]) return;
+
+            const company = result.company;
+            const section = result.sections[sectionKey];
+            const text = buildSectionSuggestionText(sectionKey, section);
+
+            try {
+                const clientsResponse = await fetch(`${API_BASE}/clientes`);
+                const clientsList = await clientsResponse.json();
+                const targetClient = clientsList.find(c => (c.company || '').toLowerCase() === company.toLowerCase()) || (mappingSelectedClient ? clientsList.find(c => c.id === mappingSelectedClient) : null);
+
+                if (!targetClient) {
+                    showError('Nenhum cliente encontrado para essa empresa.');
+                    return;
+                }
+
+                const card = mappingCards.find(c => (c.title || '').toLowerCase().includes(sectionKey.toLowerCase().split('_')[0])) || mappingCards[0];
+                if (!card) {
+                    showError('Nenhum card disponível para incluir informação.');
+                    return;
+                }
+
+                const existing = await getMappingResponse(card.id, targetClient.id);
+                const composed = existing && existing.response ? `${existing.response}
+
+[AutoMapping ${new Date().toLocaleDateString('pt-BR')}] ${text}` : `[AutoMapping ${new Date().toLocaleDateString('pt-BR')}] ${text}`;
+
+                const saveResponse = await fetch(`${API_BASE}/environment/responses`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ card_id: card.id, client_id: targetClient.id, response: composed })
+                });
+
+                if (!saveResponse.ok) {
+                    const err = await saveResponse.json();
+                    throw new Error(err.error || 'Falha ao salvar no card');
+                }
+
+                showSuccess(`Informação incluída no card "${card.title}".`);
+                await loadMapeamento();
+            } catch (error) {
+                showError(`Não foi possível incluir no card: ${error.message}`);
+            }
         }
 
         // Funções de Sugestões Diárias

@@ -12,6 +12,8 @@ import tempfile
 import threading
 import traceback
 import shutil
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -351,6 +353,20 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         completed_at TIMESTAMP
     )''')
+
+    # Histórico de execuções de AutoMapping
+    c.execute('''CREATE TABLE IF NOT EXISTS automapping_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company TEXT NOT NULL,
+        country TEXT NOT NULL,
+        industry TEXT NOT NULL,
+        query_key TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_query_key ON automapping_runs(query_key)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_created_at ON automapping_runs(created_at)')
     
     # Inserir cards pré-definidos se não existirem
     predefined_cards = [
@@ -480,7 +496,98 @@ def sync_accounts_from_clients():
         print(f'[WARN] sync_accounts_from_clients: {e}')
 
 
+
 sync_accounts_from_clients()
+
+
+def _normalize_automapping_key(company, country, industry):
+    def clean(v):
+        return re.sub(r'\s+', ' ', (v or '').strip().lower())
+    return f"{clean(company)}|{clean(country)}|{clean(industry)}"
+
+
+def _extract_tavily_evidence(results, max_items=5):
+    evidences = []
+    for item in (results or [])[:max_items]:
+        url = item.get('url') or ''
+        snippet = item.get('content') or item.get('snippet') or ''
+        title = item.get('title') or ''
+        if title and snippet:
+            snippet = f"{title}: {snippet}"
+        evidences.append({'url': url, 'snippet': snippet[:500]})
+    return evidences
+
+
+def _detect_keywords_in_evidence(evidence, keywords):
+    haystack = ' '.join([(e.get('snippet') or '').lower() for e in evidence])
+    return [kw for kw in keywords if kw in haystack]
+
+
+def _build_automapping_sections(evidence):
+    cloud_tools = _detect_keywords_in_evidence(evidence, ['aws', 'azure', 'google cloud', 'gcp', 'oracle cloud'])
+    erp_tools = _detect_keywords_in_evidence(evidence, ['sap', 'oracle erp', 'totvs', 'protheus', 'microsoft dynamics'])
+    crm_tools = _detect_keywords_in_evidence(evidence, ['salesforce', 'hubspot', 'dynamics 365', 'zoho crm'])
+    observability_tools = _detect_keywords_in_evidence(evidence, ['datadog', 'splunk', 'new relic', 'dynatrace', 'grafana'])
+    security_tools = _detect_keywords_in_evidence(evidence, ['crowdstrike', 'palo alto', 'sentinelone', 'fortinet', 'okta'])
+    data_tools = _detect_keywords_in_evidence(evidence, ['snowflake', 'databricks', 'power bi', 'tableau', 'bigquery'])
+    ai_tools = _detect_keywords_in_evidence(evidence, ['openai', 'copilot', 'gemini', 'claude', 'machine learning'])
+
+    def status_for(arr):
+        return 'identified' if arr else 'unknown'
+
+    return {
+        'cloud': {'value': ', '.join(cloud_tools) if cloud_tools else 'Não identificado', 'status': status_for(cloud_tools), 'evidence': evidence, 'partners': []},
+        'erp': {'value': ', '.join(erp_tools) if erp_tools else 'Não identificado', 'status': status_for(erp_tools), 'evidence': evidence, 'partners': []},
+        'crm': {'value': ', '.join(crm_tools) if crm_tools else 'Não identificado', 'status': status_for(crm_tools), 'evidence': evidence, 'partners': []},
+        'observability': {'tools': observability_tools, 'status': status_for(observability_tools), 'evidence': evidence},
+        'security': {'tools': security_tools, 'status': status_for(security_tools), 'evidence': evidence},
+        'data_analytics': {'tools': data_tools, 'status': status_for(data_tools), 'evidence': evidence},
+        'ai': {'tools': ai_tools, 'status': status_for(ai_tools), 'evidence': evidence}
+    }
+
+
+def _build_automapping_payload(company, country, industry, evidence):
+    sections = _build_automapping_sections(evidence)
+    return {
+        'company': company,
+        'country': country,
+        'industry': industry,
+        'sections': sections,
+        'strategic_reading': {
+            'competitive_space': [],
+            'lock_in_risk': [],
+            'entry_points': []
+        },
+        'generated_at': datetime.utcnow().isoformat() + 'Z'
+    }
+
+
+def _run_tavily_search(company, country, industry):
+    api_key = os.environ.get('TAVILY_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('A chave da Tavily não está configurada. Defina TAVILY_API_KEY no ambiente.')
+
+    query = f"{company} {industry} {country} tecnologia stack ERP CRM cloud segurança observabilidade"
+    payload = {
+        'api_key': api_key,
+        'query': query,
+        'search_depth': 'advanced',
+        'max_results': 8,
+        'include_answer': False,
+        'include_raw_content': False
+    }
+
+    req = urllib.request.Request(
+        'https://api.tavily.com/search',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST'
+    )
+
+    with urllib.request.urlopen(req, timeout=50) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    return data.get('results') or []
+
 
 def normalize_phone(phone):
     if not phone:
@@ -2862,6 +2969,88 @@ def delete_account_presence(account_id, presence_id):
     except Exception as e:
         print(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/automapping', methods=['POST'])
+def run_automapping():
+    try:
+        data = request.get_json() or {}
+        company = (data.get('company') or '').strip()
+        country = (data.get('country') or '').strip()
+        industry = (data.get('industry') or '').strip()
+        force = bool(data.get('force'))
+
+        if not company or not country or not industry:
+            return jsonify({'error': 'company, country e industry são obrigatórios'}), 400
+
+        query_key = _normalize_automapping_key(company, country, industry)
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT id, result_json, created_at FROM automapping_runs
+                     WHERE query_key = ?
+                       AND datetime(created_at) >= datetime('now', '-20 days')
+                     ORDER BY datetime(created_at) DESC
+                     LIMIT 1''', (query_key,))
+        cached = c.fetchone()
+
+        if cached and not force:
+            conn.close()
+            return jsonify({
+                'already_exists': True,
+                'message': 'Já existe um AutoMapping para os mesmos dados nos últimos 20 dias.',
+                'run_id': cached['id'],
+                'created_at': cached['created_at'],
+                'result': json.loads(cached['result_json'])
+            }), 200
+
+        try:
+            evidence_results = _run_tavily_search(company, country, industry)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar Tavily: {detail[:400]}'}), 502
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar Tavily: {str(e)}'}), 502
+
+        evidence = _extract_tavily_evidence(evidence_results)
+        result_payload = _build_automapping_payload(company, country, industry, evidence)
+
+        c.execute('''INSERT INTO automapping_runs (company, country, industry, query_key, result_json)
+                     VALUES (?, ?, ?, ?, ?)''',
+                  (company, country, industry, query_key, json.dumps(result_payload, ensure_ascii=False)))
+        run_id = c.lastrowid
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            'already_exists': False,
+            'run_id': run_id,
+            'result': result_payload
+        }), 200
+
+    except Exception as e:
+        print(f'[ERROR] POST /api/automapping: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/automapping/runs/<int:run_id>', methods=['GET'])
+def get_automapping_run(run_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM automapping_runs WHERE id = ?', (run_id,))
+        run = c.fetchone()
+        conn.close()
+        if not run:
+            return jsonify({'error': 'Execução não encontrada'}), 404
+        payload = dict_from_row(run)
+        payload['result'] = json.loads(payload['result_json'])
+        return jsonify(payload)
+    except Exception as e:
+        print(f'[ERROR] GET /api/automapping/runs/{run_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 # Servir arquivos estaticos
 
