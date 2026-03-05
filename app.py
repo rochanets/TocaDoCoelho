@@ -425,49 +425,54 @@ def init_db():
     
     # Migração: adicionar colunas se não existirem
     try:
+        def add_column_if_missing(table_name, columns, column_name, definition):
+            if column_name in columns:
+                return
+            c.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}')
+            columns.append(column_name)
+
         c.execute("PRAGMA table_info(user_profile)")
         profile_cols = [col[1] for col in c.fetchall()]
-        if 'email' not in profile_cols:
-            c.execute('ALTER TABLE user_profile ADD COLUMN email TEXT')
-        if 'phone' not in profile_cols:
-            c.execute('ALTER TABLE user_profile ADD COLUMN phone TEXT')
-        if 'boss_name' not in profile_cols:
-            c.execute('ALTER TABLE user_profile ADD COLUMN boss_name TEXT')
-        if 'boss_email' not in profile_cols:
-            c.execute('ALTER TABLE user_profile ADD COLUMN boss_email TEXT')
+        add_column_if_missing('user_profile', profile_cols, 'email', 'TEXT')
+        add_column_if_missing('user_profile', profile_cols, 'phone', 'TEXT')
+        add_column_if_missing('user_profile', profile_cols, 'boss_name', 'TEXT')
+        add_column_if_missing('user_profile', profile_cols, 'boss_email', 'TEXT')
 
         c.execute("PRAGMA table_info(activities)")
         columns = [col[1] for col in c.fetchall()]
-        if 'contact_type' not in columns:
-            c.execute('ALTER TABLE activities ADD COLUMN contact_type TEXT DEFAULT "Outro"')
-        if 'information' not in columns:
-            c.execute('ALTER TABLE activities ADD COLUMN information TEXT')
+        add_column_if_missing('activities', columns, 'contact_type', 'TEXT DEFAULT "Outro"')
+        add_column_if_missing('activities', columns, 'information', 'TEXT')
 
         # Garantir schema mínimo do WikiToca para bases antigas/parciais
         c.execute("PRAGMA table_info(wiki_entries)")
         wiki_entry_columns = [col[1] for col in c.fetchall()]
-        if 'category' not in wiki_entry_columns:
-            c.execute('ALTER TABLE wiki_entries ADD COLUMN category TEXT')
-        if 'tags' not in wiki_entry_columns:
-            c.execute('ALTER TABLE wiki_entries ADD COLUMN tags TEXT')
-        if 'created_at' not in wiki_entry_columns:
-            c.execute('ALTER TABLE wiki_entries ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
-        if 'updated_at' not in wiki_entry_columns:
-            c.execute('ALTER TABLE wiki_entries ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        add_column_if_missing('wiki_entries', wiki_entry_columns, 'category', 'TEXT')
+        add_column_if_missing('wiki_entries', wiki_entry_columns, 'tags', 'TEXT')
+        # Em SQLite, ALTER TABLE não permite CURRENT_TIMESTAMP como default em colunas adicionadas.
+        add_column_if_missing('wiki_entries', wiki_entry_columns, 'created_at', 'TIMESTAMP')
+        add_column_if_missing('wiki_entries', wiki_entry_columns, 'updated_at', 'TIMESTAMP')
+        c.execute('''
+            UPDATE wiki_entries
+            SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+                updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)
+            WHERE created_at IS NULL OR updated_at IS NULL
+        ''')
 
         c.execute("PRAGMA table_info(wiki_documents)")
         wiki_doc_columns = [col[1] for col in c.fetchall()]
-        if 'file_ext' not in wiki_doc_columns:
-            c.execute('ALTER TABLE wiki_documents ADD COLUMN file_ext TEXT')
-        if 'file_size' not in wiki_doc_columns:
-            c.execute('ALTER TABLE wiki_documents ADD COLUMN file_size INTEGER')
-        if 'created_at' not in wiki_doc_columns:
-            c.execute('ALTER TABLE wiki_documents ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
-        if 'updated_at' not in wiki_doc_columns:
-            c.execute('ALTER TABLE wiki_documents ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        add_column_if_missing('wiki_documents', wiki_doc_columns, 'file_ext', 'TEXT')
+        add_column_if_missing('wiki_documents', wiki_doc_columns, 'file_size', 'INTEGER')
+        add_column_if_missing('wiki_documents', wiki_doc_columns, 'created_at', 'TIMESTAMP')
+        add_column_if_missing('wiki_documents', wiki_doc_columns, 'updated_at', 'TIMESTAMP')
+        c.execute('''
+            UPDATE wiki_documents
+            SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+                updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)
+            WHERE created_at IS NULL OR updated_at IS NULL
+        ''')
         conn.commit()
-    except:
-        pass
+    except Exception as e:
+        print(f'[Database] Aviso durante migração de schema: {e}')
     
     conn.close()
     print('[Database] Banco de dados inicializado')
