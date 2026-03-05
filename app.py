@@ -75,6 +75,28 @@ WHISPER_MODEL_LOCK = threading.Lock()
 TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
 
 
+AUTOMAPPING_CANCELLED_REQUESTS = set()
+AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
+
+
+def _mark_automapping_cancelled(request_id):
+    if not request_id:
+        return
+    with AUTOMAPPING_CANCELLED_LOCK:
+        AUTOMAPPING_CANCELLED_REQUESTS.add(request_id)
+
+
+def _is_automapping_cancelled(request_id, consume=False):
+    if not request_id:
+        return False
+    with AUTOMAPPING_CANCELLED_LOCK:
+        if request_id not in AUTOMAPPING_CANCELLED_REQUESTS:
+            return False
+        if consume:
+            AUTOMAPPING_CANCELLED_REQUESTS.discard(request_id)
+        return True
+
+
 def configure_ffmpeg_for_whisper():
     ffmpeg_binary = os.environ.get('FFMPEG_BINARY')
     if ffmpeg_binary and Path(ffmpeg_binary).exists():
@@ -3345,6 +3367,21 @@ def delete_account_presence(account_id, presence_id):
         print(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/automapping/cancel', methods=['POST'])
+def cancel_automapping():
+    try:
+        data = request.get_json() or {}
+        request_id = (data.get('request_id') or '').strip()
+        if not request_id:
+            return jsonify({'error': 'request_id é obrigatório'}), 400
+        _mark_automapping_cancelled(request_id)
+        return jsonify({'message': 'Cancelamento registrado'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/automapping/cancel: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/automapping', methods=['POST'])
 def run_automapping():
     try:
@@ -3353,9 +3390,13 @@ def run_automapping():
         country = (data.get('country') or '').strip()
         industry = (data.get('industry') or '').strip()
         force = bool(data.get('force'))
+        request_id = (data.get('request_id') or '').strip()
 
         if not company or not country or not industry:
             return jsonify({'error': 'company, country e industry são obrigatórios'}), 400
+
+        if _is_automapping_cancelled(request_id, consume=True):
+            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
 
         query_key = _normalize_automapping_key(company, country, industry)
 
@@ -3378,6 +3419,10 @@ def run_automapping():
                 'result': json.loads(cached['result_json'])
             }), 200
 
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
+
         try:
             evidence_results, section_errors, execution_meta = _run_tavily_search(company, country, industry)
         except urllib.error.HTTPError as e:
@@ -3388,10 +3433,18 @@ def run_automapping():
             conn.close()
             return jsonify({'error': f'Falha ao consultar Tavily: {str(e)}'}), 502
 
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
+
         result_payload = _build_automapping_payload(company, country, industry, evidence_results, section_errors, execution_meta)
 
         c.execute('SELECT 1 FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1', (company,))
         result_payload['client_exists'] = bool(c.fetchone())
+
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
 
         try:
             llm_summary, llm_meta = _run_openrouter_synthesis(result_payload)
@@ -3404,6 +3457,10 @@ def run_automapping():
         except Exception as e:
             conn.close()
             return jsonify({'error': f'Falha ao consultar OpenRouter: {str(e)}'}), 502
+
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
 
         c.execute('INSERT INTO automapping_runs (company, country, industry, query_key, result_json) VALUES (?, ?, ?, ?, ?)',
                   (company, country, industry, query_key, json.dumps(result_payload, ensure_ascii=False)))
