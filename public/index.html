@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Toca do Coelho - Gestão de Clientes</title>
+    <title>Toca do Coelho - Sales Engagement</title>
     <link rel="icon" type="image/svg+xml" href="/images/coelho.svg">
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -1285,6 +1285,27 @@
         .activity-compact .form-group textarea,
         .activity-compact .form-group select { padding:8px; font-size:13px; }
 
+
+        .wiki-header { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+        .wiki-header img { width:78px; height:78px; object-fit:contain; }
+        .wiki-grid { display:grid; grid-template-columns: 1.15fr 1fr; gap:16px; margin-top:16px; }
+        .wiki-card { background:#fff; border:1px solid rgba(15,118,110,.15); border-radius:16px; padding:16px; box-shadow:0 6px 18px rgba(15,118,110,.08); }
+        .wiki-entry-item, .wiki-doc-item { border:1px solid #d1fae5; border-radius:10px; padding:10px; margin-bottom:10px; }
+        .wiki-entry-item h4, .wiki-doc-item h4 { margin:0 0 6px 0; color:#065f46; }
+        .wiki-meta { font-size:12px; color:#6b7280; margin-bottom:8px; }
+        .wiki-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+        .wiki-search-input { border:1px solid #bbf7d0; background:#f0fdf4; color:#065f46; border-radius:10px; padding:10px 12px; min-width:220px; flex:1; }
+        .wiki-search-input:focus { outline:none; border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
+        .wiki-action-btn { border-radius:10px; }
+        .wiki-doc-upload-row { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; align-items:flex-start; }
+        .wiki-doc-upload-main { display:flex; gap:8px; align-items:center; width:100%; flex-wrap:wrap; }
+        .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
+        .wiki-upload-actions { display:flex; gap:8px; justify-content:flex-start; width:100%; }
+
+        @media (max-width: 1080px) {
+            .wiki-grid { grid-template-columns: 1fr; }
+        }
+
     </style>
 </head>
 <body>
@@ -1294,7 +1315,7 @@
             <img src="/logo-coelho.png" alt="Coelho Toca do Coelho" style="width: 120px; height: 120px; object-fit: contain;">
             <div class="sidebar-logo-text">
                 <h1>Toca do Coelho</h1>
-                <p>Gestão de Clientes</p>
+                <p>Sales Engagement</p>
             </div>
         </div>
 
@@ -1307,9 +1328,9 @@
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'clientes')">
-                <i class="fas fa-users"></i>
-                <span>Gestão de Clientes</span>
+            <button class="nav-item" onclick="switchTab(event, 'wikitoca')">
+                <i class="fas fa-book-open"></i>
+                <span>WikiToca</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
                 <i class="fas fa-map-marked-alt"></i>
@@ -1330,6 +1351,10 @@
             <button class="nav-item" onclick="switchTab(event, 'agenda')">
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
+            </button>
+            <button class="nav-item" onclick="switchTab(event, 'clientes')">
+                <i class="fas fa-users"></i>
+                <span>Gestão de Contatos</span>
             </button>
             <button class="nav-item" onclick="switchTab(event, 'report')">
                 <i class="fas fa-database"></i>
@@ -1381,6 +1406,65 @@
             </div>
         </div>
 
+
+        <div id="wikitoca" class="tab-content">
+            <div class="page-header wiki-header">
+                <div>
+                    <h1>WikiToca</h1>
+                    <p>Base de conhecimento interna para registros rápidos, consulta diária e arquivos de apoio.</p>
+                </div>
+                <img src="/wikitoca-header.png" alt="Mascote WikiToca">
+            </div>
+
+            <div class="wiki-toolbar">
+                <input id="wikiSearchInput" class="wiki-search-input" placeholder="Pesquisar">
+                <button class="btn btn-secondary wiki-action-btn" onclick="loadWikiTocaData()"><i class="fas fa-search"></i> Buscar</button>
+                <button class="btn btn-primary wiki-action-btn" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
+            </div>
+
+            <div class="wiki-grid">
+                <section class="wiki-card">
+                    <h3 style="color:#047857; margin-bottom:12px;">Conhecimentos registrados</h3>
+                    <div id="wikiEntriesList"></div>
+                </section>
+                <section class="wiki-card">
+                    <h3 style="color:#047857; margin-bottom:12px;">Documentos (PDF, Excel, Word)</h3>
+                    <div class="wiki-doc-upload-row">
+                        <div class="wiki-doc-upload-main">
+                            <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1;">
+                            <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
+                            <button type="button" class="btn btn-secondary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
+                        </div>
+                        <span id="wikiFileName" class="wiki-file-name"></span>
+                        <div class="wiki-upload-actions">
+                            <button class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
+                        </div>
+                    </div>
+                    <div id="wikiDocumentsList"></div>
+                </section>
+            </div>
+        </div>
+
+        <div id="wikiEntryModal" class="modal" onclick="if(event.target===this) closeWikiEntryModal()">
+            <div class="modal-content" style="max-width:640px;">
+                <div class="modal-header">
+                    <h2 class="modal-title" id="wikiEntryModalTitle">Novo conhecimento</h2>
+                    <button class="modal-close" onclick="closeWikiEntryModal()">&#215;</button>
+                </div>
+                <form id="wikiEntryForm" onsubmit="saveWikiEntry(event)">
+                    <input type="hidden" id="wikiEntryId">
+                    <div class="form-group"><label>Título *</label><input id="wikiEntryTitle" required></div>
+                    <div class="form-group"><label>Categoria</label><input id="wikiEntryCategory" placeholder="Ex: Comercial, Processos, Produto"></div>
+                    <div class="form-group"><label>Tags (automático)</label><input id="wikiEntryTags" placeholder="Gerado automaticamente" readonly style="background:#ecfdf5;color:#065f46;cursor:not-allowed;"></div>
+                    <div class="form-group"><label>Conteúdo *</label><textarea id="wikiEntryContent" rows="7" required></textarea></div>
+                    <div style="display:flex; gap:8px; justify-content:flex-end;">
+                        <button type="button" class="btn btn-secondary" onclick="closeWikiEntryModal()">Cancelar</button>
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
             <div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
@@ -1401,7 +1485,7 @@
         <!-- Clientes Tab -->
         <div id="clientes" class="tab-content">
             <div class="page-header">
-                <h1>Gestão de Clientes</h1>
+                <h1>Gestão de Contatos</h1>
                 <p>Cadastre e gerencie seus clientes</p>
             </div>
             <div class="section-title">
@@ -1855,6 +1939,7 @@
             else if (tabName === 'mapeamento') loadMapeamento();
             else if (tabName === 'mapeamento-organizacional') loadOrganizationalMapping();
             else if (tabName === 'gestao-conta') loadAccounts();
+            else if (tabName === 'wikitoca') loadWikiTocaData();
             else if (tabName === 'configuracoes') loadSettings();
         }
 
@@ -4888,6 +4973,8 @@
 
         let messageTemplates = [];
         let uiConfig = { iata_video_path: '/videos/TocaVideo.mp4' };
+        let wikiEntries = [];
+        let wikiDocuments = [];
         let accountsCache = [];
 
         function formatMoneyFromCents(cents) {
@@ -5260,15 +5347,253 @@
             await refreshAccountPresencePanels(accountId);
         }
 
+
+        async function loadWikiTocaData() {
+            const query = (document.getElementById('wikiSearchInput')?.value || '').trim();
+            const params = query ? `?q=${encodeURIComponent(query)}` : '';
+            await Promise.all([loadWikiEntries(params), loadWikiDocuments(params)]);
+        }
+
+        function getWikiApiErrorDetails(err, fallbackMessage) {
+            const message = err?.error || fallbackMessage;
+            const code = err?.error_code ? `Código: ${err.error_code}` : '';
+            const details = err?.details ? `Detalhes técnicos: ${err.details}` : '';
+            const hint = err?.hint ? `Como corrigir: ${err.hint}` : '';
+            return [message, code, details, hint].filter(Boolean);
+        }
+
+        function renderWikiErrorBlock(lines) {
+            return `<div style="background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:10px; padding:10px;">${lines.map(line => `<div>${escapeHtml(line)}</div>`).join('')}</div>`;
+        }
+
+        async function loadWikiEntries(params = '') {
+            const el = document.getElementById('wikiEntriesList');
+            if (!el) return;
+            let response;
+            try {
+                response = await fetch(`${API_BASE}/wikitoca/entries${params}`);
+            } catch (error) {
+                wikiEntries = [];
+                const lines = [
+                    'Falha de conexão ao carregar conhecimentos do WikiToca.',
+                    `Detalhes técnicos: ${error.message}`,
+                    'Como corrigir: verifique se o backend está ativo e acessível em /api/wikitoca/entries.'
+                ];
+                el.innerHTML = renderWikiErrorBlock(lines);
+                showError(lines.join(' | '));
+                return;
+            }
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                wikiEntries = [];
+                const lines = getWikiApiErrorDetails(err, 'Não foi possível carregar os conhecimentos do WikiToca.');
+                el.innerHTML = renderWikiErrorBlock(lines);
+                showError(lines.join(' | '));
+                return;
+            }
+            wikiEntries = await response.json();
+            if (!wikiEntries.length) {
+                el.innerHTML = '<p style="color:#6b7280;">Nenhum conhecimento registrado ainda.</p>';
+                return;
+            }
+            el.innerHTML = wikiEntries.map(item => `
+                <div class="wiki-entry-item">
+                    <h4>${escapeHtml(item.title || '')}</h4>
+                    <div class="wiki-meta">${escapeHtml(item.category || 'Sem categoria')} • Atualizado em ${formatDate(item.updated_at)}${item.tags ? ` • Tags: ${escapeHtml(item.tags)}` : ''}</div>
+                    <div style="white-space:pre-wrap; color:#1f2937; margin-bottom:8px;">${escapeHtml(item.content || '')}</div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-secondary btn-small" onclick="openWikiEntryModal(${item.id})"><i class="fas fa-edit"></i> Editar</button>
+                        <button class="btn btn-danger btn-small" onclick="deleteWikiEntry(${item.id})"><i class="fas fa-trash"></i> Excluir</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadWikiDocuments(params = '') {
+            const el = document.getElementById('wikiDocumentsList');
+            if (!el) return;
+            let response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
+            if (!response.ok) {
+                await new Promise(resolve => setTimeout(resolve, 250));
+                response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
+            }
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                wikiDocuments = [];
+                el.innerHTML = '<p style="color:#ef4444;">Erro ao carregar documentos.</p>';
+                showError(err.error || 'Não foi possível carregar os documentos do WikiToca.');
+                return;
+            }
+            wikiDocuments = await response.json();
+            if (!wikiDocuments.length) {
+                el.innerHTML = '<p style="color:#6b7280;">Nenhum documento cadastrado ainda.</p>';
+                return;
+            }
+            el.innerHTML = wikiDocuments.map(doc => `
+                <div class="wiki-doc-item">
+                    <h4>${escapeHtml(doc.title || doc.original_name || 'Documento')}</h4>
+                    <div class="wiki-meta">${escapeHtml(doc.original_name || '')} • ${formatFileSize(doc.file_size)} • ${formatDate(doc.updated_at)}</div>
+                    <div style="display:flex; gap:8px;">
+                        <a class="btn btn-secondary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
+                        <a class="btn btn-primary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
+                        <button class="btn btn-danger btn-small" onclick="deleteWikiDocument(${doc.id})"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function openWikiEntryModal(entryId = null) {
+            const modal = document.getElementById('wikiEntryModal');
+            if (!modal) return;
+            const entry = wikiEntries.find(item => Number(item.id) === Number(entryId));
+            document.getElementById('wikiEntryModalTitle').textContent = entry ? 'Editar conhecimento' : 'Novo conhecimento';
+            document.getElementById('wikiEntryId').value = entry ? entry.id : '';
+            document.getElementById('wikiEntryTitle').value = entry?.title || '';
+            document.getElementById('wikiEntryCategory').value = entry?.category || '';
+            document.getElementById('wikiEntryTags').value = entry?.tags || '';
+            document.getElementById('wikiEntryContent').value = entry?.content || '';
+            modal.classList.add('active');
+        }
+
+        function closeWikiEntryModal() {
+            const modal = document.getElementById('wikiEntryModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        async function saveWikiEntry(event) {
+            event.preventDefault();
+            const id = document.getElementById('wikiEntryId').value;
+            const payload = {
+                title: document.getElementById('wikiEntryTitle').value.trim(),
+                category: document.getElementById('wikiEntryCategory').value.trim(),
+                tags: document.getElementById('wikiEntryTags').value.trim(),
+                content: document.getElementById('wikiEntryContent').value.trim()
+            };
+            const url = id ? `${API_BASE}/wikitoca/entries/${id}` : `${API_BASE}/wikitoca/entries`;
+            const method = id ? 'PUT' : 'POST';
+            let response;
+            try {
+                response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            } catch (error) {
+                return showError(`Falha de conexão ao salvar conhecimento. Detalhes técnicos: ${error.message}`);
+            }
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                const lines = getWikiApiErrorDetails(err, 'Não foi possível salvar o conhecimento.');
+                return showError(lines.join(' | '));
+            }
+            document.getElementById('wikiSearchInput').value = '';
+            closeWikiEntryModal();
+            showSuccess('Conhecimento salvo com sucesso!');
+            await loadWikiTocaData();
+        }
+
+        async function deleteWikiEntry(entryId) {
+            if (!confirm('Deseja remover este conhecimento?')) return;
+            const response = await fetch(`${API_BASE}/wikitoca/entries/${entryId}`, { method: 'DELETE' });
+            if (!response.ok) return showError('Não foi possível excluir o conhecimento.');
+            showSuccess('Conhecimento excluído.');
+            await loadWikiTocaData();
+        }
+
+        async function uploadWikiDocument() {
+            const fileInput = document.getElementById('wikiDocumentFile');
+            const titleInput = document.getElementById('wikiDocumentTitle');
+            const files = Array.from(fileInput?.files || []);
+            if (!files.length) return showError('Selecione ao menos um arquivo para upload.');
+            const formData = new FormData();
+            files.forEach((file) => formData.append('files', file));
+            formData.append('title', (titleInput?.value || '').trim());
+            const response = await fetch(`${API_BASE}/wikitoca/documents`, { method: 'POST', body: formData });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                return showError(err.error || 'Falha ao enviar documento(s).');
+            }
+            if (titleInput) titleInput.value = '';
+            if (fileInput) fileInput.value = '';
+            const fileName = document.getElementById('wikiFileName');
+            if (fileName) fileName.textContent = '';
+            document.getElementById('wikiSearchInput').value = '';
+            showSuccess(files.length > 1 ? 'Documentos enviados com sucesso!' : 'Documento enviado com sucesso!');
+            await loadWikiTocaData();
+        }
+
+        async function deleteWikiDocument(documentId) {
+            if (!confirm('Deseja remover este documento?')) return;
+            const response = await fetch(`${API_BASE}/wikitoca/documents/${documentId}`, { method: 'DELETE' });
+            if (!response.ok) return showError('Não foi possível remover o documento.');
+            showSuccess('Documento removido.');
+            await loadWikiTocaData();
+        }
+
+        function onWikiFileSelected(event) {
+            const fileName = document.getElementById('wikiFileName');
+            const files = Array.from(event?.target?.files || []);
+            if (!fileName) return;
+            if (!files.length) {
+                fileName.textContent = '';
+            } else if (files.length === 1) {
+                fileName.textContent = files[0].name;
+            } else {
+                fileName.textContent = `${files.length} arquivos selecionados`;
+            }
+        }
+
+        function suggestTagsFromKnowledge(title, content) {
+            const stopwords = new Set(['a','o','os','as','de','da','do','das','dos','e','é','em','no','na','nos','nas','um','uma','uns','umas','para','por','com','sem','que','se','ao','aos','à','às','ou','como','mais','menos','ja','não','sim']);
+            const words = `${title || ''} ${content || ''}`.toLowerCase().match(/[a-zà-ÿ0-9-]{3,}/g) || [];
+            const rank = {};
+            words.forEach((word) => {
+                if (stopwords.has(word) || /^\d+$/.test(word)) return;
+                rank[word] = (rank[word] || 0) + 1;
+            });
+            return Object.entries(rank)
+                .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+                .slice(0, 6)
+                .map(([word]) => word);
+        }
+
+        function autoFillWikiTags() {
+            const title = document.getElementById('wikiEntryTitle')?.value || '';
+            const content = document.getElementById('wikiEntryContent')?.value || '';
+            const tagsInput = document.getElementById('wikiEntryTags');
+            if (!tagsInput) return;
+            const current = (tagsInput.value || '').split(',').map(tag => tag.trim()).filter(Boolean);
+            const suggested = suggestTagsFromKnowledge(title, content);
+            const merged = [...new Set([...current, ...suggested])].slice(0, 10);
+            tagsInput.value = merged.join(', ');
+        }
+
+        function formatFileSize(bytes) {
+            const size = Number(bytes || 0);
+            if (size < 1024) return `${size} B`;
+            if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+            return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+        }
+
         // Initialize
         window.addEventListener('click', (event) => {
             if (event.target.id === 'profileModal') closeProfileModal();
             if (event.target.id === 'groupModal') closeGroupModal();
             if (event.target.id === 'statusRuleModal') closeStatusRuleModal();
+            if (event.target.id === 'wikiEntryModal') closeWikiEntryModal();
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig()]);
+            const wikiSearchInput = document.getElementById('wikiSearchInput');
+            if (wikiSearchInput) {
+                wikiSearchInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        loadWikiTocaData();
+                    }
+                });
+            }
+            const wikiTitle = document.getElementById('wikiEntryTitle');
+            const wikiContent = document.getElementById('wikiEntryContent');
+            if (wikiTitle) wikiTitle.addEventListener('blur', autoFillWikiTags);
+            if (wikiContent) wikiContent.addEventListener('blur', autoFillWikiTags);
             loadDashboard();
         });
     </script>
