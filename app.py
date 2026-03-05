@@ -6,6 +6,7 @@ import sys
 import json
 import sqlite3
 import webbrowser
+import logging
 import re
 import zipfile
 import tempfile
@@ -21,6 +22,7 @@ from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
@@ -53,16 +55,21 @@ CORS(app)
 
 # Diretorio de dados
 if sys.platform == 'win32':
-    DATA_DIR = Path('C:/toca-do-coelho-version2')
-    OLD_DATA_DIR = Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho'
-    OLD_DATA_DIR_V1 = Path('C:/toca-do-coelho')  # Migrar da versão anterior sem versionamento
+    DATA_DIR = Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho'
+    LEGACY_DATA_DIR_V2 = Path('C:/toca-do-coelho-version2')
+    LEGACY_DATA_DIR_V1 = Path('C:/toca-do-coelho')
 else:
-    DATA_DIR = Path.home() / '.toca-do-coelho-version2'
-    OLD_DATA_DIR = None
-    OLD_DATA_DIR_V1 = None
+    DATA_DIR = Path.home() / '.toca-do-coelho'
+    LEGACY_DATA_DIR_V2 = None
+    LEGACY_DATA_DIR_V1 = None
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / 'toca-do-coelho-version2.db'
+DB_PATH = DATA_DIR / 'toca-do-coelho.db'
+BACKUP_DIR = DATA_DIR / 'backups'
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = DATA_DIR / 'logs'
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / 'app.log'
 UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
@@ -73,6 +80,34 @@ WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
 TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
+
+
+def setup_logging():
+    formatter = logging.Formatter(
+        '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    if not root_logger.handlers:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+    file_handler_exists = any(
+        isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', '') == str(LOG_FILE)
+        for handler in root_logger.handlers
+    )
+    if not file_handler_exists:
+        file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+
+
+setup_logging()
+logger = logging.getLogger('toca-do-coelho')
 
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
@@ -98,6 +133,21 @@ def _is_automapping_cancelled(request_id, consume=False):
 
 
 def configure_ffmpeg_for_whisper():
+    bundled_candidates = []
+
+    if getattr(sys, 'frozen', False):
+        bundled_candidates.append(Path(sys.executable).parent / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'))
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            bundled_candidates.append(Path(meipass) / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'))
+
+    bundled_candidates.append(Path(__file__).resolve().parent / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'))
+
+    for candidate in bundled_candidates:
+        if candidate.exists():
+            os.environ['FFMPEG_BINARY'] = str(candidate)
+            return str(candidate)
+
     ffmpeg_binary = os.environ.get('FFMPEG_BINARY')
     if ffmpeg_binary and Path(ffmpeg_binary).exists():
         return ffmpeg_binary
@@ -116,7 +166,7 @@ def configure_ffmpeg_for_whisper():
             return ffmpeg_imageio
         except Exception as e:
             if TRANSCRIPTION_DEBUG:
-                print(f"[Transcription][DEBUG] Falha ao obter ffmpeg via imageio_ffmpeg: {e}")
+                logger.debug(f"[Transcription] Falha ao obter ffmpeg via imageio_ffmpeg: {e}")
 
     return None
 
@@ -146,45 +196,36 @@ def get_whisper_model():
 if sys.platform == 'win32' and not DB_PATH.exists():
     import shutil
     migrated = False
-    
-    # Prioridade 1: Migrar de C:/toca-do-coelho (versão anterior sem versionamento)
-    if OLD_DATA_DIR_V1 and OLD_DATA_DIR_V1.exists():
-        old_db = OLD_DATA_DIR_V1 / 'toca-do-coelho.db'
-        if old_db.exists():
-            print(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
-            shutil.copy2(str(old_db), str(DB_PATH))
-            # Migrar também a pasta de uploads
-            old_uploads = OLD_DATA_DIR_V1 / 'uploads'
-            if old_uploads.exists():
-                for item in old_uploads.iterdir():
-                    dest = UPLOAD_DIR / item.name
-                    if not dest.exists():
-                        if item.is_file():
-                            shutil.copy2(str(item), str(dest))
-                        elif item.is_dir():
-                            shutil.copytree(str(item), str(dest))
-            print(f'[Database] Migração de C:/toca-do-coelho concluída com sucesso!')
-            migrated = True
-    
-    # Prioridade 2: Migrar de AppData/Roaming (versão original)
-    if not migrated and OLD_DATA_DIR and OLD_DATA_DIR.exists():
-        old_db = OLD_DATA_DIR / 'toca-do-coelho.db'
-        if old_db.exists():
-            print(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
-            shutil.copy2(str(old_db), str(DB_PATH))
-            # Migrar também a pasta de uploads
-            old_uploads = OLD_DATA_DIR / 'uploads'
-            if old_uploads.exists():
-                for item in old_uploads.iterdir():
-                    dest = UPLOAD_DIR / item.name
-                    if not dest.exists():
-                        if item.is_file():
-                            shutil.copy2(str(item), str(dest))
-                        elif item.is_dir():
-                            shutil.copytree(str(item), str(dest))
-            print(f'[Database] Migração de AppData/Roaming concluída com sucesso!')
 
-print(f'[Database] Caminho: {DB_PATH}')
+    legacy_sources = [
+        ('C:/toca-do-coelho-version2', LEGACY_DATA_DIR_V2, 'toca-do-coelho-version2.db'),
+        ('C:/toca-do-coelho', LEGACY_DATA_DIR_V1, 'toca-do-coelho.db'),
+    ]
+
+    for source_label, legacy_dir, legacy_db_name in legacy_sources:
+        if migrated or not legacy_dir or not legacy_dir.exists():
+            continue
+
+        old_db = legacy_dir / legacy_db_name
+        if old_db.exists():
+            logger.info(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
+            shutil.copy2(str(old_db), str(DB_PATH))
+
+            old_uploads = legacy_dir / 'uploads'
+            if old_uploads.exists():
+                for item in old_uploads.iterdir():
+                    dest = UPLOAD_DIR / item.name
+                    if dest.exists():
+                        continue
+                    if item.is_file():
+                        shutil.copy2(str(item), str(dest))
+                    elif item.is_dir():
+                        shutil.copytree(str(item), str(dest))
+
+            logger.info(f'[Database] Migração de {source_label} concluída com sucesso!')
+            migrated = True
+
+logger.info(f'[Database] Caminho: {DB_PATH}')
 
 # Inicializar banco de dados
 def init_db():
@@ -459,6 +500,11 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_green_days', '45'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_yellow_days', '60'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('iata_video_path', '/videos/TocaVideo.mp4'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('tavily_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'stepfun/step-3.5-flash:free'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_site_url', 'http://localhost'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
     
     conn.commit()
     
@@ -509,9 +555,46 @@ def init_db():
         pass
     
     conn.close()
-    print('[Database] Banco de dados inicializado')
+    logger.info('[Database] Banco de dados inicializado')
+
+
+def run_automatic_db_backup(interval_days=3):
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute('SELECT value FROM app_settings WHERE key = ?', ('db_last_backup_at',))
+        row = c.fetchone()
+
+        now = datetime.utcnow()
+        should_backup = True
+
+        if row and row[0]:
+            try:
+                last_backup = datetime.fromisoformat(row[0])
+                should_backup = (now - last_backup) >= timedelta(days=interval_days)
+            except Exception:
+                should_backup = True
+
+        if should_backup and DB_PATH.exists():
+            backup_name = f"toca-do-coelho-backup-{now.strftime('%Y%m%d-%H%M%S')}.db"
+            backup_path = BACKUP_DIR / backup_name
+            shutil.copy2(str(DB_PATH), str(backup_path))
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+                ('db_last_backup_at', now.isoformat())
+            )
+            conn.commit()
+            logger.info(f'[Backup] Backup automático criado em: {backup_path}')
+        else:
+            logger.info('[Backup] Backup automático não necessário neste momento.')
+
+        conn.close()
+    except Exception as e:
+        logger.exception(f'[Backup] Falha ao executar backup automático: {e}')
 
 init_db()
+run_automatic_db_backup(interval_days=3)
 
 # Funcoes auxiliares
 def get_db():
@@ -523,6 +606,26 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+def _load_app_settings_map(keys):
+    conn = get_db()
+    c = conn.cursor()
+    placeholders = ','.join(['?'] * len(keys))
+    c.execute(f'SELECT key, value FROM app_settings WHERE key IN ({placeholders})', tuple(keys))
+    mapping = {row['key']: row['value'] for row in c.fetchall()}
+    conn.close()
+    return mapping
+
+
+def _resolve_setting(secret_key, env_key):
+    try:
+        db_value = (_load_app_settings_map([secret_key]).get(secret_key) or '').strip()
+    except Exception:
+        db_value = ''
+    if db_value:
+        return db_value
+    return (os.environ.get(env_key, '') or '').strip()
 
 
 def api_error(status, code, message, details=None, hint=None):
@@ -785,9 +888,9 @@ def _run_tavily_request(api_key, query, max_results=6):
 
 
 def _run_tavily_search(company, country, industry):
-    api_key = os.environ.get('TAVILY_API_KEY', '').strip()
+    api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
     if not api_key:
-        raise RuntimeError('A chave da Tavily não está configurada. Defina TAVILY_API_KEY no ambiente.')
+        raise RuntimeError('A chave da Tavily não está configurada. Configure em Configurações > Integrações ou defina TAVILY_API_KEY no ambiente.')
 
     plan = _build_automapping_search_plan(company, country, industry)
     all_results = {}
@@ -860,15 +963,23 @@ def _validate_openrouter_api_key(api_key):
 
 
 def _run_openrouter_synthesis(result_payload):
-    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    settings_map = _load_app_settings_map([
+        'openrouter_model',
+        'openrouter_site_url',
+        'openrouter_app_name'
+    ])
+
+    api_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
     if not api_key:
-        raise RuntimeError('A chave da OpenRouter não está configurada. Defina OPENROUTER_API_KEY no ambiente.')
+        raise RuntimeError('A chave da OpenRouter não está configurada. Configure em Configurações > Integrações ou defina OPENROUTER_API_KEY no ambiente.')
 
     key_ok, key_msg = _validate_openrouter_api_key(api_key)
     if not key_ok:
         raise RuntimeError(f'Chave OpenRouter inválida: {key_msg}')
 
-    model = os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini').strip() or 'openai/gpt-4o-mini'
+    model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
     sections = result_payload.get('sections') or {}
 
     compact_sections = {}
@@ -916,8 +1027,8 @@ def _run_openrouter_synthesis(result_payload):
         headers={
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}',
-            'HTTP-Referer': os.environ.get('OPENROUTER_SITE_URL', 'http://localhost'),
-            'X-Title': os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')
+            'HTTP-Referer': site_url,
+            'X-Title': app_name
         },
         method='POST'
     )
@@ -1526,6 +1637,76 @@ def get_ui_config():
         return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
     except Exception as e:
         print(f'[ERROR] GET /api/config/ui: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/integrations', methods=['GET'])
+def get_integrations_config():
+    try:
+        settings_map = _load_app_settings_map([
+            'tavily_api_key',
+            'openrouter_api_key',
+            'openrouter_model',
+            'openrouter_site_url',
+            'openrouter_app_name'
+        ])
+
+        tavily_key = (settings_map.get('tavily_api_key') or '').strip() or (os.environ.get('TAVILY_API_KEY', '') or '').strip()
+        openrouter_key = (settings_map.get('openrouter_api_key') or '').strip() or (os.environ.get('OPENROUTER_API_KEY', '') or '').strip()
+        model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+
+        return jsonify({
+            'tavily_configured': bool(tavily_key),
+            'tavily_key_preview': tavily_key[:6] + '...' if tavily_key else '',
+            'openrouter_configured': bool(openrouter_key),
+            'openrouter_key_preview': openrouter_key[:9] + '...' if openrouter_key else '',
+            'openrouter_model': model,
+            'openrouter_site_url': site_url,
+            'openrouter_app_name': app_name
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/integrations: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/integrations', methods=['PUT'])
+def save_integrations_config():
+    try:
+        data = request.get_json() or {}
+        tavily_api_key = (data.get('tavily_api_key') or '').strip()
+        openrouter_api_key = (data.get('openrouter_api_key') or '').strip()
+        openrouter_model = (data.get('openrouter_model') or '').strip() or 'stepfun/step-3.5-flash:free'
+        openrouter_site_url = (data.get('openrouter_site_url') or '').strip() or 'http://localhost'
+        openrouter_app_name = (data.get('openrouter_app_name') or '').strip() or 'TocaDoCoelho'
+
+        if openrouter_api_key:
+            key_ok, key_msg = _validate_openrouter_api_key(openrouter_api_key)
+            if not key_ok:
+                return jsonify({'error': f'OpenRouter inválida: {key_msg}'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        updates = [
+            ('tavily_api_key', tavily_api_key),
+            ('openrouter_api_key', openrouter_api_key),
+            ('openrouter_model', openrouter_model),
+            ('openrouter_site_url', openrouter_site_url),
+            ('openrouter_app_name', openrouter_app_name)
+        ]
+        for key, value in updates:
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+                (key, value)
+            )
+        conn.commit()
+        conn.close()
+
+        return jsonify({'message': 'Integrações salvas com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] PUT /api/config/integrations: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -3984,6 +4165,14 @@ def serve_static(path):
     if path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     return send_from_directory(app.static_folder, path)
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_exception(error):
+    if isinstance(error, HTTPException):
+        return error
+    logger.exception(f'[Unhandled] Erro inesperado: {error}')
+    return jsonify({'error': 'Erro interno inesperado. Consulte os logs para suporte.'}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))

@@ -1,110 +1,85 @@
 # Toca do Coelho - Sistema de Gestão de Clientes
 
-Sistema profissional de gestão de clientes com interface moderna estilo iOS.
+Sistema de gestão de clientes com interface web local.
 
-## 📦 Instalação (Recomendado)
+## 📦 Instalação (Windows - recomendado)
 
-### Windows (Instalador)
+### Fluxo oficial de release (version3)
 
-1. **Baixe** o arquivo `TocaDoCoelho-1.0.0-Setup.exe`
-2. **Duplo clique** para iniciar a instalação
-3. Siga as instruções do instalador
-4. Um atalho será criado na **Área de Trabalho**
-5. Duplo clique no atalho para abrir
+1. Gere o executável com PyInstaller (inclui runtime Python + binários do FFmpeg via `imageio_ffmpeg`):
+   ```bash
+   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg --collect-all whisper launcher.py
+   ```
+2. Compile o instalador NSIS:
+   - Execute `BUILD_INSTALLER.bat`
+3. Distribua `TocaDoCoelho-1.0.0-Setup.exe`
 
-**Vantagens:**
-- ✅ Instalação automática de dependências
-- ✅ Atalho na Área de Trabalho
-- ✅ Atalho no Menu Iniciar
-- ✅ Registrado em Adicionar/Remover Programas
-- ✅ Desinstalação completa
-- ✅ Sem terminal visível
+### Experiência do usuário final
 
-## 🚀 Instalação Manual (Alternativa)
+- Duplo clique em `TocaDoCoelho-1.0.0-Setup.exe`
+- Next → Next → Install
+- Atalho criado na Área de Trabalho/Menu Iniciar
+- Pronto para usar (sem instalar Python ou FFmpeg via terminal)
 
-Se preferir não usar o instalador:
+## 💾 Onde os dados ficam
 
-### Requisitos
-- **Python 3.7+** instalado e adicionado ao PATH
-- **FFmpeg** instalado e disponível no PATH (necessário para transcrição de voz com Whisper)
+- **Windows:** `%AppData%\toca-do-coelho\`
+- **Mac/Linux:** `~/.toca-do-coelho/`
 
-### Passos
+### Regras de atualização/desinstalação
 
-1. **Extraia** o arquivo ZIP em qualquer pasta
-2. **Abra o Prompt de Comando** na pasta extraída
-3. **Execute** `INSTALAR.bat` (apenas uma vez)
-4. **Reinicie o computador** (opcional, mas recomendado)
+- A atualização troca os binários em `C:\Program Files\TocaDoCoelho`.
+- O banco SQLite e uploads permanecem em `%AppData%\toca-do-coelho`.
+- A desinstalação **preserva os dados do usuário por padrão**.
 
-### Como usar
+## 🔄 Migração automática de dados legados
 
-1. **Execute** `INICIAR.bat` (duplo clique)
-2. O navegador abrirá automaticamente em `http://localhost:3000`
-3. O sistema estará pronto para usar!
+Na primeira execução (Windows), se o banco novo não existir, o app tenta migrar automaticamente:
 
-## 📋 Funcionalidades
+1. `C:\toca-do-coelho-version2\toca-do-coelho-version2.db`
+2. `C:\toca-do-coelho\toca-do-coelho.db`
 
-✅ **Dashboard** - Visualize todos os clientes com status  
-✅ **Gestão de Clientes** - Adicione, edite e delete clientes  
-✅ **Upload de Foto** - Adicione fotos aos clientes (em círculo)  
-✅ **Atividades** - Registre contatos e interações com edição  
-✅ **Report** - Exporte dados em CSV  
-✅ **Status Automático** - Atualiza conforme atividades registradas  
+Uploads também são migrados quando encontrados.
 
-## 📊 Regra de Status
+## 🧾 Logs e suporte pós-release
 
-- 🟢 **Verde (Em dia)**: Menos de 7 dias sem contato
-- 🟡 **Amarelo (Atenção)**: 7 a 14 dias sem contato
-- 🔴 **Vermelho (Atrasado)**: Mais de 14 dias sem contato
+- Log de aplicação: `%AppData%\toca-do-coelho\logs\app.log`
+- O app grava eventos importantes (inicialização, migrações, backup e erros inesperados).
+- Para suporte, peça ao usuário o arquivo `app.log`.
 
-## 💾 Dados
+## 🔑 Chaves de API por usuário (Tavily / OpenRouter)
 
-Os dados são salvos em:
-- **Windows**: `C:\Users\[SeuUsuário]\AppData\Roaming\toca-do-coelho\`
-- **Mac/Linux**: `~/.toca-do-coelho/`
+- Agora o usuário pode configurar as próprias chaves em **Configurações > Integrações de API**.
+- Campos disponíveis:
+  - Tavily API Key (busca)
+  - OpenRouter API Key (LLM)
+  - Modelo, Referer e Nome do app (OpenRouter)
+- As configurações são persistidas em `app_settings` no SQLite local do usuário.
+- Compatibilidade: se o usuário não preencher na UI, o sistema ainda tenta ler variáveis de ambiente (`TAVILY_API_KEY`, `OPENROUTER_API_KEY`, etc.).
 
-## 🔄 Atualização para v1.0.0
+## 💽 Backup automático
 
-Se você está atualizando de uma versão anterior:
+- O SQLite é copiado automaticamente para `%AppData%\toca-do-coelho\backups\`
+- Frequência: **a cada 3 dias** (quando o app é aberto e detectar período vencido).
+- Nome do arquivo: `toca-do-coelho-backup-AAAAMMDD-HHMMSS.db`
 
-1. **Execute** `RESETAR_BANCO.bat` (deleta o banco de dados antigo)
-2. **Execute** `INICIAR.bat` (cria novo banco com schema atualizado)
+## 🛠️ Dependências pesadas (Whisper / FFmpeg)
 
-**ATENÇÃO**: Isso vai deletar todos os dados anteriores!
+Para transcrição por voz, o app usa Whisper e precisa de FFmpeg.
 
-## ❓ Problemas Comuns
+Na release atual, a recomendação é **incluir FFmpeg no bundle** (via `--collect-binaries imageio_ffmpeg`) para não exigir instalação manual.
 
-### Python não encontrado
-- Instale Python de https://www.python.org/downloads/
-- **IMPORTANTE**: Marque "Add Python to PATH" durante a instalação
-- Reinicie o computador após instalar
+## 🧪 Troubleshooting rápido
 
-### Porta 3000 já em uso
-- Feche o navegador e tente novamente
-- Se persistir, reinicie o computador
+### Porta 3000 em uso
+- Feche instâncias antigas do app e tente novamente.
 
 ### Dados não salvam
-- Verifique se tem permissão de escrita na pasta AppData/Roaming
-- Tente executar como Administrador
+- Verifique permissão de escrita em `%AppData%\toca-do-coelho`.
 
-### Erro ao salvar atividade
-- Execute `RESETAR_BANCO.bat` para resetar o banco de dados
-- Isso resolve problemas de schema incompatível
-
-## 🛠️ Compilar Instalador
-
-Para compilar o instalador Windows (`.exe`):
-
-1. Instale NSIS: https://nsis.sourceforge.io/Download
-2. Abra o Prompt de Comando na pasta do projeto
-3. Execute: `BUILD_INSTALLER.bat`
-4. O arquivo `TocaDoCoelho-1.0.0-Setup.exe` será criado
-
-Veja `GUIA_INSTALADOR.md` para mais detalhes.
+### Erro de transcrição
+- Verifique se o build foi gerado com `--collect-binaries imageio_ffmpeg`.
 
 ## 📝 Versão
 
-**Toca do Coelho v1.0.0** - Registro de Atividades
-
----
-
-Desenvolvido com ❤️ para gerenciar seus clientes de forma eficiente.
+Branch de release alvo: **version3**.
