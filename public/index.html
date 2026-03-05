@@ -3338,8 +3338,7 @@
             if (icon) icon.textContent = isHidden ? '▾' : '▸';
         }
 
-        async function deleteAutoMappingRun(runId, event) {
-            if (event) event.stopPropagation();
+        async function deleteAutoMappingRun(runId, triggerEl) {
             const confirmed = await openConfirmDialog('Excluir Log', 'Deseja realmente excluir este log do AutoMapping?');
             if (!confirmed) return;
             try {
@@ -3385,7 +3384,7 @@
                     html += `<div style="font-size:13px; color:#111827; font-weight:600;"><span id="autoMapRunIcon_${run.id}">▸</span> ${escapeHtml(run.company || '-')} · ${escapeHtml(run.country || '-')} · ${escapeHtml(run.industry || '-')}</div>`;
                     html += `<div style="font-size:11px; color:#6b7280; margin-top:2px;">Execução: ${escapeHtml(run.created_at || '-')} · ${queriesEntries.length} queries</div>`;
                     html += `</button>`;
-                    html += `<button class="btn btn-danger btn-small" onclick="deleteAutoMappingRun(${run.id}, event)" title="Excluir log"><i class="fas fa-trash"></i></button>`;
+                    html += `<button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteAutoMappingRun(${run.id}, this)" title="Excluir log"><i class="fas fa-trash"></i></button>`;
                     html += `</div>`;
                     html += `<div id="autoMapRunDetails_${run.id}" style="display:none; margin-top:8px;">`;
                     if (!queriesEntries.length) {
@@ -4232,9 +4231,22 @@
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
-        function closeAutoMappingResultModal() {
+        async function closeAutoMappingResultModal() {
             const modal = document.getElementById('autoMappingResultModal');
             if (modal) modal.remove();
+
+            // Se o modal de entrada ainda estiver aberto por trás, fechamos para voltar
+            // ao estado inicial do módulo de Mapeamento de Ambiente.
+            const formModal = document.getElementById('autoMappingModal');
+            if (formModal) formModal.remove();
+
+            autoMappingState.result = null;
+            autoMappingState.runId = null;
+            renderAutoMappingResultSection();
+
+            if (document.getElementById('mapeamento')?.classList.contains('active')) {
+                await loadMapeamento();
+            }
         }
 
         function closeAutoMappingCardPicker(result = null) {
@@ -4327,7 +4339,7 @@
                     throw new Error(err.error || 'Falha ao salvar no card');
                 }
 
-                showSuccess(`Informação incluída no card "${card.title}".`);
+                showSuccess(`Sucesso! Informação incluída no card "${card.title}".`);
                 await loadMapeamento();
             } catch (error) {
                 showError(`Não foi possível incluir no card: ${error.message}`);
