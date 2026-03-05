@@ -67,6 +67,8 @@ UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
 ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
+WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -203,6 +205,29 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # WikiToca (base de conhecimento + documentos)
+    c.execute('''CREATE TABLE IF NOT EXISTS wiki_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT,
+        content TEXT NOT NULL,
+        tags TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS wiki_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        original_name TEXT NOT NULL,
+        file_url TEXT NOT NULL,
+        file_ext TEXT,
+        file_size INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
 
@@ -434,6 +459,29 @@ def init_db():
             c.execute('ALTER TABLE activities ADD COLUMN contact_type TEXT DEFAULT "Outro"')
         if 'information' not in columns:
             c.execute('ALTER TABLE activities ADD COLUMN information TEXT')
+
+        # Garantir schema mínimo do WikiToca para bases antigas/parciais
+        c.execute("PRAGMA table_info(wiki_entries)")
+        wiki_entry_columns = [col[1] for col in c.fetchall()]
+        if 'category' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN category TEXT')
+        if 'tags' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN tags TEXT')
+        if 'created_at' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        if 'updated_at' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+
+        c.execute("PRAGMA table_info(wiki_documents)")
+        wiki_doc_columns = [col[1] for col in c.fetchall()]
+        if 'file_ext' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN file_ext TEXT')
+        if 'file_size' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN file_size INTEGER')
+        if 'created_at' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        if 'updated_at' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
         conn.commit()
     except:
         pass
@@ -453,6 +501,18 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+def api_error(status, code, message, details=None, hint=None):
+    payload = {
+        'error': message,
+        'error_code': code
+    }
+    if details:
+        payload['details'] = str(details)
+    if hint:
+        payload['hint'] = hint
+    return jsonify(payload), status
 
 
 def parse_currency_to_cents(value):
@@ -2840,7 +2900,7 @@ def get_today_suggestions():
                 suggestions.append({
                     'type': 'incomplete_profile',
                     'title': f'Completar cadastro de {name} ({company})',
-                    'description': f'Faltam: {', '.join(missing_fields)}',
+                    'description': 'Faltam: ' + ', '.join(missing_fields),
                     'target_id': client_id,
                     'target_data': json.dumps({'client_id': client_id, 'missing': missing_fields})
                 })
@@ -3446,6 +3506,10 @@ def list_automapping_runs():
 @app.route('/uploads/accounts/<filename>')
 def serve_account_upload(filename):
     return send_from_directory(str(ACCOUNT_UPLOAD_DIR), filename)
+
+@app.route('/uploads/wikitoca/<filename>')
+def serve_wikitoca_upload(filename):
+    return send_from_directory(str(WIKI_UPLOAD_DIR), filename)
 
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
