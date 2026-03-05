@@ -53,16 +53,16 @@ CORS(app)
 
 # Diretorio de dados
 if sys.platform == 'win32':
-    DATA_DIR = Path('C:/toca-do-coelho-version2')
-    OLD_DATA_DIR = Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho'
-    OLD_DATA_DIR_V1 = Path('C:/toca-do-coelho')  # Migrar da versão anterior sem versionamento
+    DATA_DIR = Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho'
+    LEGACY_DATA_DIR_V2 = Path('C:/toca-do-coelho-version2')
+    LEGACY_DATA_DIR_V1 = Path('C:/toca-do-coelho')
 else:
-    DATA_DIR = Path.home() / '.toca-do-coelho-version2'
-    OLD_DATA_DIR = None
-    OLD_DATA_DIR_V1 = None
+    DATA_DIR = Path.home() / '.toca-do-coelho'
+    LEGACY_DATA_DIR_V2 = None
+    LEGACY_DATA_DIR_V1 = None
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / 'toca-do-coelho-version2.db'
+DB_PATH = DATA_DIR / 'toca-do-coelho.db'
 UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
@@ -146,43 +146,34 @@ def get_whisper_model():
 if sys.platform == 'win32' and not DB_PATH.exists():
     import shutil
     migrated = False
-    
-    # Prioridade 1: Migrar de C:/toca-do-coelho (versão anterior sem versionamento)
-    if OLD_DATA_DIR_V1 and OLD_DATA_DIR_V1.exists():
-        old_db = OLD_DATA_DIR_V1 / 'toca-do-coelho.db'
+
+    legacy_sources = [
+        ('C:/toca-do-coelho-version2', LEGACY_DATA_DIR_V2, 'toca-do-coelho-version2.db'),
+        ('C:/toca-do-coelho', LEGACY_DATA_DIR_V1, 'toca-do-coelho.db'),
+    ]
+
+    for source_label, legacy_dir, legacy_db_name in legacy_sources:
+        if migrated or not legacy_dir or not legacy_dir.exists():
+            continue
+
+        old_db = legacy_dir / legacy_db_name
         if old_db.exists():
             print(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
             shutil.copy2(str(old_db), str(DB_PATH))
-            # Migrar também a pasta de uploads
-            old_uploads = OLD_DATA_DIR_V1 / 'uploads'
+
+            old_uploads = legacy_dir / 'uploads'
             if old_uploads.exists():
                 for item in old_uploads.iterdir():
                     dest = UPLOAD_DIR / item.name
-                    if not dest.exists():
-                        if item.is_file():
-                            shutil.copy2(str(item), str(dest))
-                        elif item.is_dir():
-                            shutil.copytree(str(item), str(dest))
-            print(f'[Database] Migração de C:/toca-do-coelho concluída com sucesso!')
+                    if dest.exists():
+                        continue
+                    if item.is_file():
+                        shutil.copy2(str(item), str(dest))
+                    elif item.is_dir():
+                        shutil.copytree(str(item), str(dest))
+
+            print(f'[Database] Migração de {source_label} concluída com sucesso!')
             migrated = True
-    
-    # Prioridade 2: Migrar de AppData/Roaming (versão original)
-    if not migrated and OLD_DATA_DIR and OLD_DATA_DIR.exists():
-        old_db = OLD_DATA_DIR / 'toca-do-coelho.db'
-        if old_db.exists():
-            print(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
-            shutil.copy2(str(old_db), str(DB_PATH))
-            # Migrar também a pasta de uploads
-            old_uploads = OLD_DATA_DIR / 'uploads'
-            if old_uploads.exists():
-                for item in old_uploads.iterdir():
-                    dest = UPLOAD_DIR / item.name
-                    if not dest.exists():
-                        if item.is_file():
-                            shutil.copy2(str(item), str(dest))
-                        elif item.is_dir():
-                            shutil.copytree(str(item), str(dest))
-            print(f'[Database] Migração de AppData/Roaming concluída com sucesso!')
 
 print(f'[Database] Caminho: {DB_PATH}')
 
