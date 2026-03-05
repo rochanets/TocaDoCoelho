@@ -1454,7 +1454,7 @@
 
             <div class="wiki-toolbar-search">
                 <input id="wikiSearchInput" class="wiki-search-input" placeholder="Pesquisar">
-                <button class="btn btn-secondary wiki-action-btn" onclick="loadWikiTocaData()"><i class="fas fa-search"></i> Buscar</button>
+                <button class="btn btn-primary wiki-action-btn" onclick="loadWikiTocaData()"><i class="fas fa-search"></i> Buscar</button>
                 <button class="btn btn-secondary wiki-action-btn" onclick="clearWikiSearch()" title="Limpar pesquisa"><i class="fas fa-times"></i> Limpar</button>
             </div>
 
@@ -1465,8 +1465,7 @@
                         <div style="display:flex; gap:6px; align-items:center;">
                             <div class="wiki-import-export">
                                 <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiEntries()" title="Exportar conhecimentos"><i class="fas fa-file-export"></i> Exportar</button>
-                                <label class="btn btn-secondary btn-small wiki-action-btn" for="wikiImportInput" title="Importar conhecimentos" style="cursor:pointer; margin:0;"><i class="fas fa-file-import"></i> Importar</label>
-                                <input type="file" id="wikiImportInput" accept=".json" style="display:none;" onchange="importWikiEntries(event)">
+                                <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiImportModal()" title="Importar conhecimentos"><i class="fas fa-file-import"></i> Importar</button>
                             </div>
                             <button class="btn btn-primary btn-small wiki-action-btn" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
                         </div>
@@ -1479,7 +1478,7 @@
                         <div class="wiki-doc-upload-main">
                             <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1;">
                             <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
-                            <button type="button" class="btn btn-secondary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
+                            <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
                         </div>
                         <span id="wikiFileName" class="wiki-file-name"></span>
                         <div class="wiki-upload-actions">
@@ -1488,6 +1487,37 @@
                     </div>
                     <div id="wikiDocumentsList"></div>
                 </section>
+            </div>
+        </div>
+
+        <!-- Modal de Importação WikiToca -->
+        <div id="wikiImportModal" class="modal" onclick="if(event.target===this) closeWikiImportModal()">
+            <div class="modal-content" style="max-width:520px;">
+                <div class="modal-header">
+                    <h2 class="modal-title">Importar Conhecimentos</h2>
+                    <button class="modal-close" onclick="closeWikiImportModal()">&#215;</button>
+                </div>
+                <div style="padding:4px 0 16px 0;">
+                    <p style="color:#374151; margin-bottom:16px; line-height:1.6;">Importe conhecimentos a partir de um arquivo <strong>.xlsx</strong>. O arquivo deve conter as colunas <strong>Título</strong>, <strong>Categoria</strong> e <strong>Descrição</strong>. As tags serão geradas automaticamente.</p>
+                    <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:12px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                        <div>
+                            <div style="font-weight:600; color:#065f46; margin-bottom:2px;">Baixar template</div>
+                            <div style="font-size:12px; color:#6b7280;">Arquivo .xlsx com as colunas prontas para preenchimento</div>
+                        </div>
+                        <a class="btn btn-secondary btn-small" href="/api/wikitoca/entries/template-xlsx" download="wikitoca_template.xlsx" style="white-space:nowrap;"><i class="fas fa-download"></i> Template .xlsx</a>
+                    </div>
+                    <div style="border:2px dashed #bbf7d0; border-radius:10px; padding:20px; text-align:center; cursor:pointer;" onclick="document.getElementById('wikiXlsxInput').click()" id="wikiImportDropzone">
+                        <i class="fas fa-file-excel" style="font-size:28px; color:#34D399; margin-bottom:8px;"></i>
+                        <div style="color:#065f46; font-weight:600; margin-bottom:4px;">Clique para selecionar o arquivo .xlsx</div>
+                        <div style="font-size:12px; color:#9ca3af;" id="wikiXlsxFileName">Nenhum arquivo selecionado</div>
+                        <input type="file" id="wikiXlsxInput" accept=".xlsx" style="display:none;" onchange="onWikiXlsxSelected(event)">
+                    </div>
+                    <div id="wikiImportProgress" style="display:none; margin-top:12px; padding:10px; background:#f0fdf4; border-radius:8px; color:#065f46; font-size:13px;"></div>
+                </div>
+                <div class="modal-footer" style="justify-content:flex-end;">
+                    <button class="btn btn-secondary" onclick="closeWikiImportModal()">Cancelar</button>
+                    <button class="btn btn-primary" id="wikiImportConfirmBtn" onclick="confirmWikiXlsxImport()" disabled style="opacity:0.5;"><i class="fas fa-file-import"></i> Importar</button>
+                </div>
             </div>
         </div>
 
@@ -5866,7 +5896,7 @@
                     <h4>${escapeHtml(doc.title || doc.original_name || 'Documento')}</h4>
                     <div class="wiki-meta">${formatFileSize(doc.file_size)} • ${formatDateBr(doc.updated_at)}</div>
                     <div style="display:flex; gap:8px;">
-                        <a class="btn btn-secondary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
+                        <a class="btn btn-primary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
                         <a class="btn btn-primary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
                         <button class="btn btn-danger btn-small" onclick="deleteWikiDocument(${doc.id})"><i class="fas fa-trash"></i></button>
                     </div>
@@ -6017,46 +6047,68 @@
 
         function exportWikiEntries() {
             if (!wikiEntries || !wikiEntries.length) return showError('Nenhum conhecimento para exportar.');
-            const data = JSON.stringify(wikiEntries, null, 2);
-            const blob = new Blob([data], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `wikitoca_conhecimentos_${new Date().toISOString().slice(0,10)}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            showSuccess('Conhecimentos exportados com sucesso!');
+            window.location.href = `${API_BASE}/wikitoca/entries/export-xlsx`;
         }
 
-        async function importWikiEntries(event) {
+        function openWikiImportModal() {
+            const modal = document.getElementById('wikiImportModal');
+            if (!modal) return;
+            const fileInput = document.getElementById('wikiXlsxInput');
+            const fileLabel = document.getElementById('wikiXlsxFileName');
+            const progress = document.getElementById('wikiImportProgress');
+            const btn = document.getElementById('wikiImportConfirmBtn');
+            if (fileInput) fileInput.value = '';
+            if (fileLabel) fileLabel.textContent = 'Nenhum arquivo selecionado';
+            if (progress) { progress.style.display = 'none'; progress.textContent = ''; }
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+            modal.classList.add('active');
+        }
+
+        function closeWikiImportModal() {
+            const modal = document.getElementById('wikiImportModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        function onWikiXlsxSelected(event) {
             const file = event.target.files?.[0];
-            if (!file) return;
-            event.target.value = '';
-            let entries;
+            const label = document.getElementById('wikiXlsxFileName');
+            const btn = document.getElementById('wikiImportConfirmBtn');
+            if (file) {
+                if (label) label.textContent = file.name;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            } else {
+                if (label) label.textContent = 'Nenhum arquivo selecionado';
+                if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+            }
+        }
+
+        async function confirmWikiXlsxImport() {
+            const fileInput = document.getElementById('wikiXlsxInput');
+            const file = fileInput?.files?.[0];
+            if (!file) return showError('Selecione um arquivo .xlsx para importar.');
+            const progress = document.getElementById('wikiImportProgress');
+            const btn = document.getElementById('wikiImportConfirmBtn');
+            if (progress) { progress.style.display = 'block'; progress.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importando...'; }
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+            const formData = new FormData();
+            formData.append('file', file);
             try {
-                const text = await file.text();
-                entries = JSON.parse(text);
-                if (!Array.isArray(entries)) throw new Error('Formato inválido');
-            } catch (e) {
-                return showError('Arquivo inválido. Envie um JSON exportado pelo WikiToca.');
+                const res = await fetch(`${API_BASE}/wikitoca/entries/import-xlsx`, { method: 'POST', body: formData });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    if (progress) progress.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-times-circle"></i> Erro: ${data.error || 'Falha na importação'}</span>`;
+                    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+                    return;
+                }
+                const msg = `${data.imported} conhecimento(s) importado(s) com sucesso${data.failed ? `, ${data.failed} com erro` : ''}.`;
+                if (progress) progress.innerHTML = `<span style="color:#065f46;"><i class="fas fa-check-circle"></i> ${msg}</span>`;
+                showSuccess(msg);
+                await loadWikiTocaData();
+                setTimeout(() => closeWikiImportModal(), 1800);
+            } catch (err) {
+                if (progress) progress.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-times-circle"></i> Erro de conexão: ${err.message}</span>`;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
             }
-            const valid = entries.filter(e => e.title && e.content);
-            if (!valid.length) return showError('Nenhum item válido encontrado no arquivo.');
-            const confirmed = await uiConfirm(`Importar ${valid.length} conhecimento(s)? Itens duplicados serão adicionados como novos registros.`, 'Importar conhecimentos');
-            if (!confirmed) return;
-            let ok = 0, fail = 0;
-            for (const entry of valid) {
-                try {
-                    const res = await fetch(`${API_BASE}/wikitoca/entries`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ title: entry.title, category: entry.category || '', tags: entry.tags || '', content: entry.content })
-                    });
-                    if (res.ok) ok++; else fail++;
-                } catch { fail++; }
-            }
-            showSuccess(`Importação concluída: ${ok} importado(s)${fail ? `, ${fail} com erro` : ''}`);
-            await loadWikiTocaData();
         }
 
         function formatFileSize(bytes) {
