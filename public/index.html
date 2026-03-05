@@ -924,6 +924,29 @@
             color: #DC2626;
         }
 
+        .automapping-progress {
+            width: 100%;
+            height: 10px;
+            background: #e5e7eb;
+            border-radius: 999px;
+            overflow: hidden;
+            margin: 8px 0 4px;
+        }
+
+        .automapping-progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #34d399, #10b981);
+            transition: width 0.3s;
+        }
+
+        .automapping-result-card {
+            border: 1px solid #bfdbfe;
+            background: #eff6ff;
+            border-radius: 12px;
+            padding: 12px;
+            margin-top: 12px;
+        }
+
         .mapping-response-inline {
             margin-top: 12px;
             padding: 10px;
@@ -1478,6 +1501,8 @@
                 </select>
             </div>
             <div id="mapeamentoContent"></div>
+            <div id="autoMappingResultSection" style="margin-top:20px;"></div>
+            <div id="autoMappingQueriesSection" style="margin-top:20px;"></div>
         </div>
 
         <div id="mapeamento-organizacional" class="tab-content">
@@ -2992,6 +3017,7 @@
         // Mapeamento de Ambiente
         let mappingCards = [];
         let mappingSelectedClient = null;
+        let mappingCompanies = [];
 
         async function loadMapeamento() {
             try {
@@ -3003,31 +3029,34 @@
                 const cardsResponse = await fetch(`${API_BASE}/environment/cards`);
                 mappingCards = await cardsResponse.json();
 
-                // Carregar clientes para o dropdown
-                const clientsResponse = await fetch(`${API_BASE}/clientes`);
+                // Carregar empresas (mesma base usada em outros pontos do sistema)
+                const [companiesResponse, clientsResponse] = await Promise.all([
+                    fetch(`${API_BASE}/empresas`),
+                    fetch(`${API_BASE}/clientes`)
+                ]);
+                mappingCompanies = await companiesResponse.json();
                 const clientsList = await clientsResponse.json();
 
-                // Preencher dropdown de clientes (apenas empresas únicas)
+                // Preencher dropdown de clientes usando lista de empresas completa
                 filterSelect.innerHTML = '<option value="">Selecione um cliente</option>';
-                
-                // Agrupar por empresa (pegar apenas a primeira ocorrência de cada empresa)
+
+                // Mapeamento empresa -> client_id (quando existir cliente vinculado)
                 const companiesMap = new Map();
                 clientsList.forEach(client => {
                     if (client.company && !companiesMap.has(client.company)) {
                         companiesMap.set(client.company, client.id);
                     }
                 });
-                
-                // Ordenar empresas alfabeticamente
-                const sortedCompanies = Array.from(companiesMap.entries()).sort((a, b) => 
-                    a[0].localeCompare(b[0], 'pt-BR')
-                );
-                
-                // Adicionar opções ao dropdown
-                sortedCompanies.forEach(([company, clientId]) => {
+
+                const sortedCompanies = (mappingCompanies || []).slice().sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+                sortedCompanies.forEach((company) => {
                     const option = document.createElement('option');
-                    option.value = clientId;
+                    option.value = company;
                     option.textContent = company;
+                    if (!companiesMap.has(company)) {
+                        option.title = 'Sem cliente vinculado para respostas';
+                    }
                     filterSelect.appendChild(option);
                 });
 
@@ -3037,10 +3066,14 @@
                 }
 
                 // Obter cliente selecionado
-                mappingSelectedClient = filterSelect.value ? parseInt(filterSelect.value) : null;
+                const selectedCompany = filterSelect.value || '';
+                mappingSelectedClient = selectedCompany && companiesMap.has(selectedCompany)
+                    ? parseInt(companiesMap.get(selectedCompany))
+                    : null;
 
                 // Renderizar cards
                 await renderMappingCards();
+                await loadAutoMappingQueriesHistory();
             } catch (error) {
                 showError('Erro ao carregar mapeamento de ambiente');
             }
@@ -3074,6 +3107,88 @@
 
             html += '</div>';
             content.innerHTML = html;
+        }
+
+        function toggleAutoMappingRunDetails(runId) {
+            const panel = document.getElementById(`autoMapRunDetails_${runId}`);
+            const icon = document.getElementById(`autoMapRunIcon_${runId}`);
+            if (!panel) return;
+            const isHidden = panel.style.display === 'none' || !panel.style.display;
+            panel.style.display = isHidden ? 'block' : 'none';
+            if (icon) icon.textContent = isHidden ? '▾' : '▸';
+        }
+
+        async function deleteAutoMappingRun(runId) {
+            const confirmed = await openConfirmDialog('Excluir Log', 'Deseja realmente excluir este log do AutoMapping?');
+            if (!confirmed) return;
+            try {
+                const response = await fetch(`${API_BASE}/automapping/runs/${runId}`, { method: 'DELETE' });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'Falha ao excluir log');
+                showSuccess('Log de AutoMapping excluído.');
+                await loadAutoMappingQueriesHistory();
+            } catch (error) {
+                showError(`Não foi possível excluir o log: ${error.message}`);
+            }
+        }
+
+        async function loadAutoMappingQueriesHistory() {
+            const container = document.getElementById('autoMappingQueriesSection');
+            if (!container) return;
+            try {
+                const response = await fetch(`${API_BASE}/automapping/runs?days=20`);
+                const payload = await response.json();
+                const runs = payload.runs || [];
+                if (!runs.length) {
+                    container.innerHTML = `
+                        <div class="automapping-result-card" style="background:#fff; border-color:#e5e7eb;">
+                            <h3 style="margin:0; color:#1f2937;">Consultas do AutoMapping (últimos 20 dias)</h3>
+                            <p style="margin-top:8px; color:#6b7280; font-size:13px;">Nenhuma execução encontrada.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = `
+                    <div class="automapping-result-card" style="background:#fff; border-color:#e5e7eb;">
+                        <h3 style="margin:0 0 10px; color:#1f2937;">Consultas do AutoMapping (últimos 20 dias)</h3>
+                        <div style="display:flex; flex-direction:column; gap:10px; max-height:320px; overflow:auto;">
+                `;
+
+                runs.forEach(run => {
+                    const queriesEntries = Object.entries(run.queries || {});
+                    html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:10px;">`;
+                    html += `<div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">`;
+                    html += `<button type="button" onclick="toggleAutoMappingRunDetails(${run.id})" style="background:transparent; border:none; text-align:left; cursor:pointer; flex:1;">`;
+                    html += `<div style="font-size:13px; color:#111827; font-weight:600;"><span id="autoMapRunIcon_${run.id}">▸</span> ${escapeHtml(run.company || '-')} · ${escapeHtml(run.country || '-')} · ${escapeHtml(run.industry || '-')}</div>`;
+                    html += `<div style="font-size:11px; color:#6b7280; margin-top:2px;">Execução: ${escapeHtml(run.created_at || '-')} · ${queriesEntries.length} queries</div>`;
+                    html += `</button>`;
+                    html += `<button class="btn btn-danger btn-small" onclick="deleteAutoMappingRun(${run.id})" title="Excluir log"><i class="fas fa-trash"></i></button>`;
+                    html += `</div>`;
+                    html += `<div id="autoMapRunDetails_${run.id}" style="display:none; margin-top:8px;">`;
+                    if (!queriesEntries.length) {
+                        html += `<div style="font-size:12px; color:#9ca3af;">Sem queries registradas.</div>`;
+                    } else {
+                        html += `<div style="display:flex; flex-direction:column; gap:4px;">`;
+                        queriesEntries.forEach(([section, query]) => {
+                            html += `<div style="font-size:12px; color:#374151;"><strong>${escapeHtml(section)}:</strong> ${escapeHtml(query)}</div>`;
+                        });
+                        html += `</div>`;
+                    }
+                    html += `</div>`;
+                    html += `</div>`;
+                });
+
+                html += '</div></div>';
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `
+                    <div class="automapping-result-card" style="background:#fff5f5; border-color:#fecaca;">
+                        <h3 style="margin:0; color:#991b1b;">Consultas do AutoMapping (últimos 20 dias)</h3>
+                        <p style="margin-top:8px; color:#7f1d1d; font-size:13px;">Não foi possível carregar o histórico.</p>
+                    </div>
+                `;
+            }
         }
 
         async function getMappingResponse(cardId, clientId) {
@@ -3607,6 +3722,11 @@
             closeEmailDraftModal();
         }
 
+        let autoMappingState = {
+            result: null,
+            runId: null
+        };
+
         function openAutoMappingModal() {
             const html = `
                 <div class="modal active" id="autoMappingModal" onclick="if(event.target === this) closeAutoMappingModal()">
@@ -3615,18 +3735,24 @@
                         <p style="color:#4b5563; margin-bottom: 16px; line-height: 1.5;">Bem vindo ao AutoMapping. Aqui nós faremos o possível para trazer informações do ambiente dos seus clientes. Por favor, digite abaixo o nome do cliente (empresa), a área de negócio e o país de origem do cliente.</p>
                         <div class="form-group">
                             <label>Cliente</label>
-                            <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)">
+                            <input id="autoMappingClient" type="text" placeholder="Nome do cliente (empresa)" value="">
                         </div>
                         <div class="form-group">
                             <label>Área de Negócio</label>
-                            <input id="autoMappingBusinessArea" type="text" placeholder="Área de negócio">
+                            <input id="autoMappingBusinessArea" type="text" placeholder="Área de negócio" value="">
                         </div>
                         <div class="form-group">
                             <label>País</label>
-                            <input id="autoMappingCountry" type="text" placeholder="País de origem">
+                            <input id="autoMappingCountry" type="text" placeholder="País de origem" value="">
                         </div>
-                        <div style="display:flex; justify-content:flex-start; margin-top: 12px;">
-                            <button class="btn btn-primary" onclick="submitAutoMappingForm()">Enviar</button>
+                        <div id="autoMappingError" style="display:none; color:#b91c1c; font-size:13px; margin-top: 8px;"></div>
+                        <div id="autoMappingProgressWrapper" style="display:none; margin-top:10px;">
+                            <div id="autoMappingProgressText" style="font-size:13px; color:#374151;">Buscando evidências...</div>
+                            <div class="automapping-progress"><div id="autoMappingProgressBar" class="automapping-progress-bar" style="width:0%;"></div></div>
+                        </div>
+                        <div style="display:flex; justify-content:flex-start; margin-top: 12px; gap:8px;">
+                            <button class="btn btn-secondary" onclick="closeAutoMappingModal()">Cancelar</button>
+                            <button id="autoMappingSubmitBtn" class="btn btn-primary" onclick="submitAutoMappingForm(false)">Enviar</button>
                         </div>
                     </div>
                 </div>`;
@@ -3638,18 +3764,294 @@
             if (modal) modal.remove();
         }
 
-        function submitAutoMappingForm() {
+        function updateAutoMappingProgress(text, percent) {
+            const wrapper = document.getElementById('autoMappingProgressWrapper');
+            const label = document.getElementById('autoMappingProgressText');
+            const bar = document.getElementById('autoMappingProgressBar');
+            if (wrapper) wrapper.style.display = 'block';
+            if (label) label.textContent = text;
+            if (bar) bar.style.width = `${percent}%`;
+        }
+
+        function setAutoMappingError(message) {
+            const el = document.getElementById('autoMappingError');
+            if (!el) return;
+            if (!message) {
+                el.style.display = 'none';
+                el.textContent = '';
+                return;
+            }
+            el.style.display = 'block';
+            el.textContent = message;
+        }
+
+        async function submitAutoMappingForm(forceRun = false) {
+            const submitBtn = document.getElementById('autoMappingSubmitBtn');
             const clientName = document.getElementById('autoMappingClient')?.value?.trim();
             const businessArea = document.getElementById('autoMappingBusinessArea')?.value?.trim();
             const country = document.getElementById('autoMappingCountry')?.value?.trim();
 
+            setAutoMappingError('');
+
             if (!clientName || !businessArea || !country) {
-                showError('Preencha Cliente, Área de Negócio e País para continuar.');
+                setAutoMappingError('Preencha Cliente, Área de Negócio e País para continuar.');
                 return;
             }
 
-            closeAutoMappingModal();
-            showSuccess('Dados recebidos! Em breve integraremos ao Auto Mapping inteligente.');
+            if (submitBtn) submitBtn.disabled = true;
+
+            try {
+                updateAutoMappingProgress('Buscando evidências...', 25);
+
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 60000);
+
+                const response = await fetch(`${API_BASE}/automapping`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        company: clientName,
+                        country,
+                        industry: businessArea,
+                        force: forceRun
+                    }),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeout);
+                updateAutoMappingProgress('Analisando com IA...', 75);
+
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.error || 'Falha no AutoMapping');
+                }
+
+                if (payload.already_exists && !forceRun) {
+                    if (submitBtn) submitBtn.disabled = false;
+                    updateAutoMappingProgress('Concluído', 100);
+                    const shouldReuse = await openSystemDialog({
+                        title: 'AutoMapping recente encontrado',
+                        message: 'Já existe um AutoMapping para esses dados nos últimos 20 dias. Deseja ver o resultado existente?',
+                        showCancel: true
+                    });
+
+                    if (shouldReuse) {
+                        autoMappingState.result = payload.result;
+                        autoMappingState.runId = payload.run_id;
+                        renderAutoMappingResultSection();
+                        openAutoMappingResultModal();
+                        closeAutoMappingModal();
+                    } else {
+                        updateAutoMappingProgress('Executando novo AutoMapping...', 35);
+                        return submitAutoMappingForm(true);
+                    }
+                    return;
+                }
+
+                updateAutoMappingProgress('Concluído', 100);
+                autoMappingState.result = payload.result;
+                autoMappingState.runId = payload.run_id;
+                renderAutoMappingResultSection();
+                await loadAutoMappingQueriesHistory();
+                openAutoMappingResultModal();
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    setAutoMappingError('Tempo limite excedido (60s). Tente novamente.');
+                } else {
+                    setAutoMappingError(`Não foi possível concluir o AutoMapping: ${error.message}`);
+                }
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        }
+
+        function renderAutoMappingResultSection() {
+            const container = document.getElementById('autoMappingResultSection');
+            if (!container) return;
+
+            if (!autoMappingState.result) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const result = autoMappingState.result;
+            const sections = Object.keys(result.sections || {});
+            container.innerHTML = `
+                <div class="automapping-result-card">
+                    <h3 style="margin:0 0 6px; color:#1d4ed8;">Resultado do AutoMapping</h3>
+                    <p style="margin:0; color:#374151; font-size:13px;">Empresa: <strong>${escapeHtml(result.company)}</strong> · País: <strong>${escapeHtml(result.country)}</strong> · Área: <strong>${escapeHtml(result.industry)}</strong></p>
+                    <p style="margin:8px 0 0; color:#6b7280; font-size:13px;">${sections.length} seções analisadas.</p>
+                    <p style="margin:6px 0 0; color:#6b7280; font-size:12px;">Identificadas: <strong>${result.execution_summary?.identified_sections_count ?? 0}</strong> · Com erro: <strong>${result.execution_summary?.error_sections_count ?? 0}</strong></p>
+                    <div style="margin-top:10px;"><button class="btn btn-primary" onclick="openAutoMappingResultModal()">Ver resultado completo</button></div>
+                </div>
+            `;
+        }
+
+        function getLLMSectionSummary(sectionKey) {
+            const result = autoMappingState.result || {};
+            const llmSummary = result.llm_summary || {};
+            return llmSummary[sectionKey] || null;
+        }
+
+        function buildSectionSuggestionText(sectionKey, section) {
+            const llm = getLLMSectionSummary(sectionKey);
+            if (llm && llm.final_answer) {
+                const pct = Number(llm.confidence_percent ?? 0);
+                return `${llm.final_answer} (probabilidade: ${isNaN(pct) ? 0 : pct}%)`;
+            }
+
+            const confidence = section.confidence || 'unknown';
+            if (section.status === 'error') return `Erro na coleta: ${section.error || 'Falha no provider'}`;
+            if (section.value) return `${section.value} (confiança: ${confidence})`;
+            if (Array.isArray(section.tools) && section.tools.length) return `${section.tools.join(', ')} (confiança: ${confidence})`;
+            return `Status: ${section.status || 'unknown'} · Confiança: ${confidence}`;
+        }
+
+        function openAutoMappingResultModal() {
+            if (!autoMappingState.result) {
+                showError('Nenhum resultado disponível para exibição.');
+                return;
+            }
+            const result = autoMappingState.result;
+            const sectionEntries = Object.entries(result.sections || {});
+            let html = `<div class="modal active" id="autoMappingResultModal" onclick="if(event.target === this) closeAutoMappingResultModal()">`;
+            html += '<div class="modal-content" style="max-width: 900px;">';
+            html += `<h2 style="color:#0f766e; margin-bottom:6px;">Resultado do AutoMapping</h2>`;
+            html += `<p style="color:#4b5563; margin-bottom:10px;">${escapeHtml(result.company)} · ${escapeHtml(result.country)} · ${escapeHtml(result.industry)}</p>`;
+            if (result.client_exists === false) {
+                html += '<div style="background:#fff7ed; border:1px solid #fdba74; color:#9a3412; border-radius:10px; padding:10px; margin-bottom:10px; font-size:13px;"><strong>Aviso:</strong> não há registro desse cliente no sistema. Para registrar, cadastre o cliente pelo módulo GESTÃO DE CONTA.</div>';
+            }
+            html += '<div style="max-height:65vh; overflow:auto;">';
+
+            sectionEntries.forEach(([key, section]) => {
+                const llm = getLLMSectionSummary(key);
+                const statusColor = section.status === 'identified' ? '#166534' : (section.status === 'error' ? '#b91c1c' : '#92400e');
+                const suggestionText = buildSectionSuggestionText(key, section);
+                html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:10px;">`;
+                html += `<div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">`;
+                html += `<div><div style="font-weight:700; color:#111827; text-transform:capitalize;">${escapeHtml(key.replace('_', ' '))}</div><div style="font-size:11px; color:${statusColor}; margin-top:4px;">Status busca: ${escapeHtml(section.status || 'unknown')} · Confiança busca: ${escapeHtml(section.confidence || 'unknown')} · Quality: ${escapeHtml(String(section.evidence_quality ?? 0))}</div><div style="font-size:13px; color:#374151; margin-top:6px;">${escapeHtml(suggestionText)}</div>${llm ? `<div style="font-size:11px; color:#6b7280; margin-top:4px;">LLM: ${escapeHtml(llm.certainty || 'uncertain')} · ${escapeHtml(String(llm.confidence_percent ?? 0))}%</div>` : ''}<div style="font-size:11px; color:#6b7280; margin-top:4px;">Query: ${escapeHtml(section.query_used || 'n/a')}</div></div>`;
+                html += `<button class="btn btn-primary btn-small" onclick="applyAutoMappingToCard('${escapeHtml(key)}')">Incluir no card referência</button>`;
+                html += `</div>`;
+
+                if (Array.isArray(section.evidence) && section.evidence.length) {
+                    html += '<div style="margin-top:8px;">';
+                    section.evidence.slice(0, 3).forEach(ev => {
+                        html += `<div style="font-size:12px; color:#6b7280; margin-top:4px;">• <a href="${escapeHtml(ev.url || '#')}" target="_blank" rel="noopener">${escapeHtml(ev.url || 'Fonte')}</a> — ${escapeHtml(ev.snippet || '')}</div>`;
+                    });
+                    html += '</div>';
+                }
+                html += '</div>';
+            });
+
+            html += '</div>';
+            html += '<div class="modal-footer" style="justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeAutoMappingResultModal()">Fechar</button></div>';
+            html += '</div></div>';
+
+            const old = document.getElementById('autoMappingResultModal');
+            if (old) old.remove();
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeAutoMappingResultModal() {
+            const modal = document.getElementById('autoMappingResultModal');
+            if (modal) modal.remove();
+        }
+
+        function closeAutoMappingCardPicker(result = null) {
+            const modal = document.getElementById('autoMappingCardPickerModal');
+            if (window._autoMappingCardPickerResolve) {
+                window._autoMappingCardPickerResolve(result);
+                window._autoMappingCardPickerResolve = null;
+            }
+            if (modal) modal.remove();
+        }
+
+        function openAutoMappingCardPicker(sectionKey) {
+            return new Promise(resolve => {
+                window._autoMappingCardPickerResolve = resolve;
+                const options = (mappingCards || []).map(c => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('');
+                const html = `
+                    <div class="modal active" id="autoMappingCardPickerModal" onclick="if(event.target===this) closeAutoMappingCardPicker(null)">
+                        <div class="modal-content" style="max-width:520px;">
+                            <h2 style="color:#0f766e; margin-bottom:8px;">Escolher card de destino</h2>
+                            <p style="color:#4b5563; margin-bottom:10px; font-size:13px;">Não encontramos card compatível para <strong>${escapeHtml(sectionKey)}</strong>. Escolha em qual card deseja inserir a informação.</p>
+                            <select id="autoMappingCardPickerSelect" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px;">${options}</select>
+                            <div class="modal-footer" style="justify-content:flex-end; margin-top:12px;">
+                                <button class="btn btn-secondary" onclick="closeAutoMappingCardPicker(null)">Cancelar</button>
+                                <button class="btn btn-primary" onclick="closeAutoMappingCardPicker(document.getElementById('autoMappingCardPickerSelect').value)">Confirmar</button>
+                            </div>
+                        </div>
+                    </div>`;
+                document.body.insertAdjacentHTML('beforeend', html);
+            });
+        }
+
+        async function applyAutoMappingToCard(sectionKey) {
+            const result = autoMappingState.result;
+            if (!result || !result.sections || !result.sections[sectionKey]) return;
+
+            const company = result.company;
+            const section = result.sections[sectionKey];
+            const text = buildSectionSuggestionText(sectionKey, section);
+
+            try {
+                const clientsResponse = await fetch(`${API_BASE}/clientes`);
+                const clientsList = await clientsResponse.json();
+                const targetClient = clientsList.find(c => (c.company || '').toLowerCase() === company.toLowerCase()) || (mappingSelectedClient ? clientsList.find(c => c.id === mappingSelectedClient) : null);
+
+                if (!targetClient) {
+                    showError('Cliente não cadastrado no sistema. Cadastre no módulo GESTÃO DE CONTA para incluir essa informação em cards.');
+                    return;
+                }
+
+                const cardKeyHints = {
+                    cloud: ['cloud', 'nuvem'],
+                    erp: ['erp'],
+                    crm: ['crm'],
+                    observability: ['observability', 'observabilidade', 'cyber'],
+                    security: ['security', 'segurança', 'cyber'],
+                    data_analytics: ['analytics', 'dados', 'bi', 'data'],
+                    ai: ['ai', 'ia', 'inteligência artificial']
+                };
+                const hints = cardKeyHints[sectionKey] || [sectionKey.toLowerCase()];
+                let card = mappingCards.find(c => hints.some(h => (c.title || '').toLowerCase().includes(h)));
+
+                if (!card) {
+                    if (!mappingCards.length) {
+                        showError('Nenhum card disponível para incluir informação.');
+                        return;
+                    }
+                    const selectedId = await openAutoMappingCardPicker(sectionKey);
+                    if (!selectedId) return;
+                    card = mappingCards.find(c => String(c.id) === String(selectedId));
+                }
+
+                if (!card) {
+                    showError('Card de destino não encontrado.');
+                    return;
+                }
+
+                const existing = await getMappingResponse(card.id, targetClient.id);
+                const composed = existing && existing.response ? `${existing.response}
+
+[AutoMapping ${new Date().toLocaleDateString('pt-BR')}] ${text}` : `[AutoMapping ${new Date().toLocaleDateString('pt-BR')}] ${text}`;
+
+                const saveResponse = await fetch(`${API_BASE}/environment/responses`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ card_id: card.id, client_id: targetClient.id, response: composed })
+                });
+
+                if (!saveResponse.ok) {
+                    const err = await saveResponse.json();
+                    throw new Error(err.error || 'Falha ao salvar no card');
+                }
+
+                showSuccess(`Informação incluída no card "${card.title}".`);
+                await loadMapeamento();
+            } catch (error) {
+                showError(`Não foi possível incluir no card: ${error.message}`);
+            }
         }
 
         // Funções de Sugestões Diárias

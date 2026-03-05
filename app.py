@@ -12,6 +12,9 @@ import tempfile
 import threading
 import traceback
 import shutil
+import urllib.request
+import urllib.error
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -351,6 +354,20 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         completed_at TIMESTAMP
     )''')
+
+    # Histórico de execuções de AutoMapping
+    c.execute('''CREATE TABLE IF NOT EXISTS automapping_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company TEXT NOT NULL,
+        country TEXT NOT NULL,
+        industry TEXT NOT NULL,
+        query_key TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_query_key ON automapping_runs(query_key)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_created_at ON automapping_runs(created_at)')
     
     # Inserir cards pré-definidos se não existirem
     predefined_cards = [
@@ -480,7 +497,412 @@ def sync_accounts_from_clients():
         print(f'[WARN] sync_accounts_from_clients: {e}')
 
 
+
 sync_accounts_from_clients()
+
+
+def _normalize_automapping_key(company, country, industry):
+    def clean(v):
+        return re.sub(r'\s+', ' ', (v or '').strip().lower())
+    return f"{clean(company)}|{clean(country)}|{clean(industry)}"
+
+
+def _extract_tavily_evidence(results, max_items=5):
+    evidences = []
+    seen_urls = set()
+    for item in (results or []):
+        url = (item.get('url') or '').strip()
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+
+        snippet = (item.get('content') or item.get('snippet') or '').strip()
+        title = (item.get('title') or '').strip()
+        score = item.get('score')
+        if title and snippet:
+            snippet = f"{title}: {snippet}"
+        evidences.append({
+            'url': url,
+            'snippet': snippet[:500],
+            'title': title,
+            'score': score
+        })
+        if len(evidences) >= max_items:
+            break
+    return evidences
+
+
+def _detect_keywords_in_evidence(evidence, keywords):
+    haystack = ' '.join([(e.get('snippet') or '').lower() for e in evidence])
+    return [kw for kw in keywords if kw in haystack]
+
+
+def _build_automapping_search_plan(company, country, industry):
+    company_hint = f'"{company}"'
+    base_context = f'{industry} {country}'
+    return {
+        'cloud': {
+            'type': 'value',
+            'keywords': ['aws', 'azure', 'microsoft azure', 'google cloud', 'gcp', 'oracle cloud', 'nuvem'],
+            'query': f'{company_hint} {base_context} infraestrutura cloud provedor de nuvem aws azure gcp'
+        },
+        'erp': {
+            'type': 'value',
+            'keywords': ['sap', 'oracle erp', 'totvs', 'protheus', 'microsoft dynamics', 's/4hana'],
+            'query': f'{company_hint} {base_context} sistema erp sap totvs oracle dynamics'
+        },
+        'crm': {
+            'type': 'value',
+            'keywords': ['salesforce', 'hubspot', 'dynamics 365', 'zoho crm', 'crm'],
+            'query': f'{company_hint} {base_context} crm salesforce hubspot dynamics 365'
+        },
+        'observability': {
+            'type': 'tools',
+            'keywords': ['datadog', 'splunk', 'new relic', 'dynatrace', 'grafana', 'observability', 'observabilidade'],
+            'query': f'{company_hint} {base_context} observabilidade datadog splunk dynatrace grafana'
+        },
+        'security': {
+            'type': 'tools',
+            'keywords': ['crowdstrike', 'palo alto', 'sentinelone', 'fortinet', 'okta', 'siem', 'edr', 'xdr'],
+            'query': f'{company_hint} {base_context} cibersegurança siem edr xdr crowdstrike fortinet palo alto'
+        },
+        'data_analytics': {
+            'type': 'tools',
+            'keywords': ['snowflake', 'databricks', 'power bi', 'tableau', 'bigquery', 'data lake', 'analytics'],
+            'query': f'{company_hint} {base_context} analytics bi power bi tableau databricks snowflake'
+        },
+        'ai': {
+            'type': 'tools',
+            'keywords': ['openai', 'copilot', 'gemini', 'claude', 'machine learning', 'ia generativa', 'inteligência artificial'],
+            'query': f'{company_hint} {base_context} inteligência artificial ia generativa openai copilot gemini'
+        }
+    }
+
+
+def _calculate_section_confidence(evidence, matched_keywords):
+    evidence_count = len(evidence or [])
+    keyword_hits = len(matched_keywords or [])
+    if evidence_count == 0:
+        return 'unknown'
+    if keyword_hits >= 2:
+        return 'high'
+    if keyword_hits == 1:
+        return 'medium'
+    if evidence_count >= 3:
+        return 'low'
+    return 'unknown'
+
+
+def _calculate_evidence_quality(evidence):
+    if not evidence:
+        return 0
+    quality = 0
+    for ev in evidence:
+        url = (ev.get('url') or '').lower()
+        snippet = (ev.get('snippet') or '')
+        if url.startswith('https://'):
+            quality += 2
+        if any(domain in url for domain in ['.gov', '.edu', 'microsoft.com', 'oracle.com', 'sap.com', 'aws.amazon.com', 'salesforce.com']):
+            quality += 2
+        if len(snippet) >= 120:
+            quality += 1
+    return quality
+
+
+def _build_section_result(section_key, section_cfg, evidence, error_message=None):
+    matched_keywords = _detect_keywords_in_evidence(evidence, section_cfg['keywords'])
+    confidence = _calculate_section_confidence(evidence, matched_keywords)
+    status = 'identified' if matched_keywords else ('investigate' if evidence else 'unknown')
+
+    if error_message:
+        status = 'error'
+        confidence = 'unknown'
+
+    evidence_quality = _calculate_evidence_quality(evidence)
+
+    base = {
+        'status': status,
+        'confidence': confidence,
+        'evidence': evidence,
+        'matched_keywords': matched_keywords,
+        'query_used': section_cfg['query'],
+        'evidence_quality': evidence_quality,
+        'error': error_message
+    }
+
+    if section_cfg['type'] == 'value':
+        value = ', '.join(matched_keywords) if matched_keywords else 'Não identificado'
+        base['value'] = value
+        if section_key in {'cloud', 'erp', 'crm'}:
+            base['partners'] = []
+    else:
+        base['tools'] = matched_keywords
+
+    return base
+
+
+def _build_automapping_sections(company, country, industry, search_results_by_section, section_errors=None):
+    plan = _build_automapping_search_plan(company, country, industry)
+    sections = {}
+    section_errors = section_errors or {}
+    for section_key, section_cfg in plan.items():
+        raw_results = search_results_by_section.get(section_key, [])
+        evidence = _extract_tavily_evidence(raw_results, max_items=4)
+        sections[section_key] = _build_section_result(section_key, section_cfg, evidence, section_errors.get(section_key))
+    return sections
+
+
+def _build_automapping_payload(company, country, industry, search_results_by_section, section_errors=None, execution_meta=None):
+    sections = _build_automapping_sections(company, country, industry, search_results_by_section, section_errors)
+    identified_sections = [k for k, v in sections.items() if v.get('status') == 'identified']
+    error_sections = [k for k, v in sections.items() if v.get('status') == 'error']
+    return {
+        'schema_version': '2.0',
+        'company': company,
+        'country': country,
+        'industry': industry,
+        'sections': sections,
+        'execution_summary': {
+            'identified_sections_count': len(identified_sections),
+            'error_sections_count': len(error_sections),
+            'identified_sections': identified_sections,
+            'error_sections': error_sections,
+            'mode': 'partial' if error_sections else 'complete'
+        },
+        'strategic_reading': {
+            'competitive_space': [],
+            'lock_in_risk': [],
+            'entry_points': []
+        },
+        'execution_meta': execution_meta or {},
+        'generated_at': datetime.utcnow().isoformat() + 'Z'
+    }
+
+
+def _run_tavily_request(api_key, query, max_results=6):
+    payload = {
+        'api_key': api_key,
+        'query': query,
+        'search_depth': 'advanced',
+        'max_results': max_results,
+        'include_answer': False,
+        'include_raw_content': False
+    }
+
+    req = urllib.request.Request(
+        'https://api.tavily.com/search',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST'
+    )
+
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    return data.get('results') or []
+
+
+def _run_tavily_search(company, country, industry):
+    api_key = os.environ.get('TAVILY_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('A chave da Tavily não está configurada. Defina TAVILY_API_KEY no ambiente.')
+
+    plan = _build_automapping_search_plan(company, country, industry)
+    all_results = {}
+    section_errors = {}
+    attempts_by_section = {}
+
+    for section_key, section_cfg in plan.items():
+        max_attempts = 2
+        attempts = 0
+        last_error = None
+        while attempts < max_attempts:
+            attempts += 1
+            try:
+                all_results[section_key] = _run_tavily_request(api_key, section_cfg['query'])
+                last_error = None
+                break
+            except Exception as e:
+                last_error = str(e)
+                if attempts < max_attempts:
+                    time.sleep(0.4 * attempts)
+        attempts_by_section[section_key] = attempts
+        if last_error is not None:
+            section_errors[section_key] = f'Falha ao consultar provider: {last_error[:180]}'
+            all_results[section_key] = []
+
+    execution_meta = {
+        'provider': 'tavily',
+        'attempts_by_section': attempts_by_section,
+        'searched_sections_count': len(plan)
+    }
+    return all_results, section_errors, execution_meta
+
+
+
+
+def _default_llm_summary(sections):
+    summary = {}
+    for section_key in (sections or {}).keys():
+        summary[section_key] = {
+            'final_answer': 'Inconclusivo com as evidências atuais.',
+            'confidence_percent': 20,
+            'certainty': 'uncertain',
+            'reasoning': 'Não houve evidência específica suficiente para consolidar uma resposta final.'
+        }
+    return summary
+
+
+def _extract_json_object_from_text(text):
+    if not text:
+        return None
+    first = text.find('{')
+    last = text.rfind('}')
+    if first == -1 or last == -1 or last <= first:
+        return None
+    chunk = text[first:last+1]
+    try:
+        return json.loads(chunk)
+    except Exception:
+        return None
+
+
+def _validate_openrouter_api_key(api_key):
+    key = (api_key or '').strip()
+    if not key:
+        return False, 'OPENROUTER_API_KEY vazia.'
+    # Formato mais comum das chaves OpenRouter: sk-or-v1-...
+    if key.startswith('sk-or-'):
+        return True, ''
+    return False, 'OPENROUTER_API_KEY com formato inválido (esperado prefixo sk-or-).'
+
+
+def _run_openrouter_synthesis(result_payload):
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('A chave da OpenRouter não está configurada. Defina OPENROUTER_API_KEY no ambiente.')
+
+    key_ok, key_msg = _validate_openrouter_api_key(api_key)
+    if not key_ok:
+        raise RuntimeError(f'Chave OpenRouter inválida: {key_msg}')
+
+    model = os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini').strip() or 'openai/gpt-4o-mini'
+    sections = result_payload.get('sections') or {}
+
+    compact_sections = {}
+    for section_key, section_data in sections.items():
+        evidence = section_data.get('evidence') or []
+        compact_sections[section_key] = {
+            'status': section_data.get('status'),
+            'confidence': section_data.get('confidence'),
+            'matched_keywords': section_data.get('matched_keywords') or [],
+            'query_used': section_data.get('query_used'),
+            'evidence': [
+                {'url': ev.get('url'), 'snippet': (ev.get('snippet') or '')[:280]}
+                for ev in evidence[:2]
+            ]
+        }
+
+    user_payload = {
+        'company': result_payload.get('company'),
+        'country': result_payload.get('country'),
+        'industry': result_payload.get('industry'),
+        'sections': compact_sections
+    }
+
+    system_prompt = (
+        'Você é um analista técnico corporativo extremamente conservador com alucinações. '
+        'Responda APENAS em JSON válido. Para cada seção, gere UMA resposta final amigável em português. '
+        'Se não houver evidência forte e específica da empresa, responda com incerteza ao invés de inventar. '
+        'confidence_percent deve ser inteiro de 0 a 100. '
+        'Formato obrigatório: '
+        '{"sections":{"cloud":{"final_answer":"...","confidence_percent":0,"certainty":"confirmed|uncertain","reasoning":"..."}, ...}}'
+    )
+
+    request_payload = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False)}
+        ],
+        'temperature': 0.1
+    }
+
+    req = urllib.request.Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=json.dumps(request_payload).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+            'HTTP-Referer': os.environ.get('OPENROUTER_SITE_URL', 'http://localhost'),
+            'X-Title': os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')
+        },
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+        diagnostics = {
+            'status': getattr(e, 'code', None),
+            'model': model,
+            'has_api_key': bool(api_key),
+            'api_key_prefix': api_key[:7] if api_key else '',
+            'sent_headers': ['Content-Type', 'Authorization', 'HTTP-Referer', 'X-Title']
+        }
+        print(f'[ERROR][OpenRouter] HTTPError diagnostics={diagnostics} body={detail[:500]}')
+        hint = ' Verifique se OPENROUTER_API_KEY é a chave da OpenRouter (prefixo sk-or-) e se foi exportada no mesmo terminal do app.' if diagnostics.get('status') == 401 else ''
+        raise RuntimeError(f'OpenRouter HTTP {diagnostics["status"]} - body: {detail[:400]} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}{hint}')
+    except Exception as e:
+        diagnostics = {
+            'model': model,
+            'has_api_key': bool(api_key),
+            'api_key_prefix': api_key[:7] if api_key else ''
+        }
+        print(f'[ERROR][OpenRouter] Exception diagnostics={diagnostics} error={e}')
+        raise RuntimeError(f'Falha inesperada OpenRouter: {str(e)} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}')
+
+    choices = data.get('choices') or []
+    message_content = ''
+    if choices:
+        content = ((choices[0] or {}).get('message') or {}).get('content')
+        if isinstance(content, list):
+            message_content = ''.join([part.get('text', '') for part in content if isinstance(part, dict)])
+        else:
+            message_content = str(content or '')
+
+    parsed = _extract_json_object_from_text(message_content)
+    llm_sections = ((parsed or {}).get('sections') or {}) if isinstance(parsed, dict) else {}
+
+    final_sections = _default_llm_summary(sections)
+    for section_key in final_sections.keys():
+        candidate = llm_sections.get(section_key)
+        if not isinstance(candidate, dict):
+            continue
+        answer = (candidate.get('final_answer') or '').strip() or final_sections[section_key]['final_answer']
+        reasoning = (candidate.get('reasoning') or '').strip() or final_sections[section_key]['reasoning']
+        certainty = candidate.get('certainty') if candidate.get('certainty') in {'confirmed', 'uncertain'} else 'uncertain'
+        try:
+            confidence = int(candidate.get('confidence_percent'))
+        except Exception:
+            confidence = final_sections[section_key]['confidence_percent']
+        confidence = max(0, min(100, confidence))
+
+        final_sections[section_key] = {
+            'final_answer': answer,
+            'confidence_percent': confidence,
+            'certainty': certainty,
+            'reasoning': reasoning
+        }
+
+    meta = {
+        'provider': 'openrouter',
+        'model': model,
+        'raw_response_received': bool(message_content)
+    }
+    return final_sections, meta
 
 def normalize_phone(phone):
     if not phone:
@@ -2862,6 +3284,162 @@ def delete_account_presence(account_id, presence_id):
     except Exception as e:
         print(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/automapping', methods=['POST'])
+def run_automapping():
+    try:
+        data = request.get_json() or {}
+        company = (data.get('company') or '').strip()
+        country = (data.get('country') or '').strip()
+        industry = (data.get('industry') or '').strip()
+        force = bool(data.get('force'))
+
+        if not company or not country or not industry:
+            return jsonify({'error': 'company, country e industry são obrigatórios'}), 400
+
+        query_key = _normalize_automapping_key(company, country, industry)
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT id, result_json, created_at FROM automapping_runs
+                     WHERE query_key = ?
+                       AND datetime(created_at) >= datetime('now', '-20 days')
+                     ORDER BY datetime(created_at) DESC
+                     LIMIT 1''', (query_key,))
+        cached = c.fetchone()
+
+        if cached and not force:
+            conn.close()
+            return jsonify({
+                'already_exists': True,
+                'message': 'Já existe um AutoMapping para os mesmos dados nos últimos 20 dias.',
+                'run_id': cached['id'],
+                'created_at': cached['created_at'],
+                'result': json.loads(cached['result_json'])
+            }), 200
+
+        try:
+            evidence_results, section_errors, execution_meta = _run_tavily_search(company, country, industry)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar Tavily: {detail[:400]}'}), 502
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar Tavily: {str(e)}'}), 502
+
+        result_payload = _build_automapping_payload(company, country, industry, evidence_results, section_errors, execution_meta)
+
+        c.execute('SELECT 1 FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1', (company,))
+        result_payload['client_exists'] = bool(c.fetchone())
+
+        try:
+            llm_summary, llm_meta = _run_openrouter_synthesis(result_payload)
+            result_payload['llm_summary'] = llm_summary
+            result_payload['llm_meta'] = llm_meta
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar OpenRouter: {detail[:400]}'}), 502
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Falha ao consultar OpenRouter: {str(e)}'}), 502
+
+        c.execute('INSERT INTO automapping_runs (company, country, industry, query_key, result_json) VALUES (?, ?, ?, ?, ?)',
+                  (company, country, industry, query_key, json.dumps(result_payload, ensure_ascii=False)))
+        run_id = c.lastrowid
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            'already_exists': False,
+            'run_id': run_id,
+            'result': result_payload
+        }), 200
+
+    except Exception as e:
+        print(f'[ERROR] POST /api/automapping: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/automapping/runs/<int:run_id>', methods=['GET'])
+def get_automapping_run(run_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM automapping_runs WHERE id = ?', (run_id,))
+        run = c.fetchone()
+        conn.close()
+        if not run:
+            return jsonify({'error': 'Execução não encontrada'}), 404
+        payload = dict_from_row(run)
+        payload['result'] = json.loads(payload['result_json'])
+        return jsonify(payload)
+    except Exception as e:
+        print(f'[ERROR] GET /api/automapping/runs/{run_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/automapping/runs/<int:run_id>', methods=['DELETE'])
+def delete_automapping_run(run_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM automapping_runs WHERE id = ?', (run_id,))
+        deleted = c.rowcount
+        conn.commit()
+        conn.close()
+        if not deleted:
+            return jsonify({'error': 'Execução não encontrada'}), 404
+        return jsonify({'message': 'Log de AutoMapping removido com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/automapping/runs/{run_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/automapping/runs', methods=['GET'])
+def list_automapping_runs():
+    try:
+        days = request.args.get('days', '20')
+        try:
+            days = max(1, min(60, int(days)))
+        except Exception:
+            days = 20
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT id, company, country, industry, result_json, created_at
+                     FROM automapping_runs
+                     WHERE datetime(created_at) >= datetime('now', ?)
+                     ORDER BY datetime(created_at) DESC''', (f'-{days} days',))
+        rows = c.fetchall()
+        conn.close()
+
+        runs = []
+        for row in rows:
+            parsed = dict_from_row(row)
+            result = json.loads(parsed.get('result_json') or '{}')
+            sections = result.get('sections') or {}
+            queries = {
+                section_key: section_val.get('query_used')
+                for section_key, section_val in sections.items()
+                if isinstance(section_val, dict) and section_val.get('query_used')
+            }
+            runs.append({
+                'id': parsed.get('id'),
+                'company': parsed.get('company'),
+                'country': parsed.get('country'),
+                'industry': parsed.get('industry'),
+                'created_at': parsed.get('created_at'),
+                'queries': queries,
+                'sections_count': len(queries)
+            })
+
+        return jsonify({'days': days, 'runs': runs})
+    except Exception as e:
+        print(f'[ERROR] GET /api/automapping/runs: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 # Servir arquivos estaticos
 
