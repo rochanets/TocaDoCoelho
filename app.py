@@ -2886,7 +2886,7 @@ def get_today_suggestions():
                 suggestions.append({
                     'type': 'incomplete_profile',
                     'title': f'Completar cadastro de {name} ({company})',
-                    'description': f'Faltam: {', '.join(missing_fields)}',
+                    'description': 'Faltam: ' + ', '.join(missing_fields),
                     'target_id': client_id,
                     'target_data': json.dumps({'client_id': client_id, 'missing': missing_fields})
                 })
@@ -3485,6 +3485,210 @@ def list_automapping_runs():
     except Exception as e:
         print(f'[ERROR] GET /api/automapping/runs: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────
+# WikiToca – Conhecimentos registrados
+# ─────────────────────────────────────────────────────────────
+
+@app.route('/api/wikitoca/entries', methods=['GET'])
+def list_wiki_entries():
+    try:
+        q = (request.args.get('q') or '').strip()
+        conn = get_db()
+        c = conn.cursor()
+        if q:
+            like = f'%{q}%'
+            c.execute(
+                '''SELECT * FROM wiki_entries
+                   WHERE title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?
+                   ORDER BY updated_at DESC''',
+                (like, like, like, like)
+            )
+        else:
+            c.execute('SELECT * FROM wiki_entries ORDER BY updated_at DESC')
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        print(f'[ERROR] GET /api/wikitoca/entries: {e}')
+        return api_error(500, 'WIKI_ENTRIES_LIST_ERROR', 'Erro ao listar conhecimentos.', details=str(e),
+                         hint='Verifique se o banco de dados está acessível.')
+
+
+@app.route('/api/wikitoca/entries', methods=['POST'])
+def create_wiki_entry():
+    try:
+        data = request.get_json(force=True) or {}
+        title = (data.get('title') or '').strip()
+        content = (data.get('content') or '').strip()
+        category = (data.get('category') or '').strip() or None
+        tags = (data.get('tags') or '').strip() or None
+        if not title or not content:
+            return api_error(400, 'WIKI_ENTRY_MISSING_FIELDS', 'Título e conteúdo são obrigatórios.')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            '''INSERT INTO wiki_entries (title, category, content, tags, created_at, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+            (title, category, content, tags)
+        )
+        conn.commit()
+        entry_id = c.lastrowid
+        c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
+        entry = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(entry), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/wikitoca/entries: {e}')
+        return api_error(500, 'WIKI_ENTRY_CREATE_ERROR', 'Erro ao criar conhecimento.', details=str(e))
+
+
+@app.route('/api/wikitoca/entries/<int:entry_id>', methods=['PUT'])
+def update_wiki_entry(entry_id):
+    try:
+        data = request.get_json(force=True) or {}
+        title = (data.get('title') or '').strip()
+        content = (data.get('content') or '').strip()
+        category = (data.get('category') or '').strip() or None
+        tags = (data.get('tags') or '').strip() or None
+        if not title or not content:
+            return api_error(400, 'WIKI_ENTRY_MISSING_FIELDS', 'Título e conteúdo são obrigatórios.')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM wiki_entries WHERE id = ?', (entry_id,))
+        if not c.fetchone():
+            conn.close()
+            return api_error(404, 'WIKI_ENTRY_NOT_FOUND', 'Conhecimento não encontrado.')
+        c.execute(
+            '''UPDATE wiki_entries
+               SET title = ?, category = ?, content = ?, tags = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?''',
+            (title, category, content, tags, entry_id)
+        )
+        conn.commit()
+        c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
+        entry = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(entry)
+    except Exception as e:
+        print(f'[ERROR] PUT /api/wikitoca/entries/{entry_id}: {e}')
+        return api_error(500, 'WIKI_ENTRY_UPDATE_ERROR', 'Erro ao atualizar conhecimento.', details=str(e))
+
+
+@app.route('/api/wikitoca/entries/<int:entry_id>', methods=['DELETE'])
+def delete_wiki_entry(entry_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM wiki_entries WHERE id = ?', (entry_id,))
+        if not c.fetchone():
+            conn.close()
+            return api_error(404, 'WIKI_ENTRY_NOT_FOUND', 'Conhecimento não encontrado.')
+        c.execute('DELETE FROM wiki_entries WHERE id = ?', (entry_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Conhecimento excluído com sucesso.'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/wikitoca/entries/{entry_id}: {e}')
+        return api_error(500, 'WIKI_ENTRY_DELETE_ERROR', 'Erro ao excluir conhecimento.', details=str(e))
+
+
+# ─────────────────────────────────────────────────────────────
+# WikiToca – Documentos
+# ─────────────────────────────────────────────────────────────
+
+ALLOWED_WIKI_EXTENSIONS = {'.pdf', '.xls', '.xlsx', '.doc', '.docx'}
+
+
+@app.route('/api/wikitoca/documents', methods=['GET'])
+def list_wiki_documents():
+    try:
+        q = (request.args.get('q') or '').strip()
+        conn = get_db()
+        c = conn.cursor()
+        if q:
+            like = f'%{q}%'
+            c.execute(
+                '''SELECT * FROM wiki_documents
+                   WHERE title LIKE ? OR original_name LIKE ?
+                   ORDER BY updated_at DESC''',
+                (like, like)
+            )
+        else:
+            c.execute('SELECT * FROM wiki_documents ORDER BY updated_at DESC')
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        print(f'[ERROR] GET /api/wikitoca/documents: {e}')
+        return api_error(500, 'WIKI_DOCS_LIST_ERROR', 'Erro ao listar documentos.', details=str(e))
+
+
+@app.route('/api/wikitoca/documents', methods=['POST'])
+def upload_wiki_documents():
+    try:
+        files = request.files.getlist('files')
+        if not files or all(not f.filename for f in files):
+            return api_error(400, 'WIKI_DOC_NO_FILE', 'Nenhum arquivo enviado.')
+        title = (request.form.get('title') or '').strip()
+        conn = get_db()
+        c = conn.cursor()
+        created = []
+        for f in files:
+            if not f.filename:
+                continue
+            ext = Path(f.filename).suffix.lower()
+            if ext not in ALLOWED_WIKI_EXTENSIONS:
+                continue
+            original_name = f.filename
+            safe_name = secure_filename(f'wiki_{int(datetime.now().timestamp())}_{original_name}')
+            save_path = WIKI_UPLOAD_DIR / safe_name
+            f.save(str(save_path))
+            file_size = save_path.stat().st_size
+            file_url = f'/uploads/wikitoca/{safe_name}'
+            doc_title = title or original_name
+            c.execute(
+                '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
+                                              created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                (doc_title, safe_name, original_name, file_url, ext, file_size)
+            )
+            conn.commit()
+            doc_id = c.lastrowid
+            c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
+            created.append(dict_from_row(c.fetchone()))
+        conn.close()
+        if not created:
+            return api_error(400, 'WIKI_DOC_INVALID_TYPE',
+                             'Nenhum arquivo válido enviado. Tipos aceitos: PDF, XLS, XLSX, DOC, DOCX.')
+        return jsonify(created), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/wikitoca/documents: {e}')
+        return api_error(500, 'WIKI_DOC_UPLOAD_ERROR', 'Erro ao enviar documento.', details=str(e))
+
+
+@app.route('/api/wikitoca/documents/<int:document_id>', methods=['DELETE'])
+def delete_wiki_document(document_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM wiki_documents WHERE id = ?', (document_id,))
+        row = dict_from_row(c.fetchone())
+        if not row:
+            conn.close()
+            return api_error(404, 'WIKI_DOC_NOT_FOUND', 'Documento não encontrado.')
+        # Remover arquivo físico se existir
+        file_path = WIKI_UPLOAD_DIR / row['file_name']
+        if file_path.exists():
+            file_path.unlink()
+        c.execute('DELETE FROM wiki_documents WHERE id = ?', (document_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Documento removido com sucesso.'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/wikitoca/documents/{document_id}: {e}')
+        return api_error(500, 'WIKI_DOC_DELETE_ERROR', 'Erro ao remover documento.', details=str(e))
 
 
 # Servir arquivos estaticos
