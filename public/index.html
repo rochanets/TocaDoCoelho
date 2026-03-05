@@ -1752,7 +1752,7 @@
                         </div>
                         <div class="form-group">
                             <label>Modelo OpenRouter</label>
-                            <input type="text" id="openrouterModel" placeholder="openai/gpt-4o-mini">
+                            <input type="text" id="openrouterModel" placeholder="stepfun/step-3.5-flash:free">
                         </div>
                         <div class="form-group">
                             <label>HTTP Referer (OpenRouter)</label>
@@ -2020,7 +2020,7 @@
             tavily_key_preview: '',
             openrouter_configured: false,
             openrouter_key_preview: '',
-            openrouter_model: 'openai/gpt-4o-mini',
+            openrouter_model: 'stepfun/step-3.5-flash:free',
             openrouter_site_url: 'http://localhost',
             openrouter_app_name: 'TocaDoCoelho'
         };
@@ -2120,7 +2120,7 @@
 
             document.getElementById('tavilyApiKey').value = '';
             document.getElementById('openrouterApiKey').value = '';
-            document.getElementById('openrouterModel').value = integrationConfig?.openrouter_model || 'openai/gpt-4o-mini';
+            document.getElementById('openrouterModel').value = integrationConfig?.openrouter_model || 'stepfun/step-3.5-flash:free';
             document.getElementById('openrouterSiteUrl').value = integrationConfig?.openrouter_site_url || 'http://localhost';
             document.getElementById('openrouterAppName').value = integrationConfig?.openrouter_app_name || 'TocaDoCoelho';
             document.getElementById('tavilyKeyStatus').textContent = integrationConfig?.tavily_configured

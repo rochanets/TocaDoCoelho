@@ -502,7 +502,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('iata_video_path', '/videos/TocaVideo.mp4'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('tavily_api_key', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_api_key', ''))
-    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'openai/gpt-4o-mini'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'stepfun/step-3.5-flash:free'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_site_url', 'http://localhost'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
     
@@ -977,7 +977,7 @@ def _run_openrouter_synthesis(result_payload):
     if not key_ok:
         raise RuntimeError(f'Chave OpenRouter inválida: {key_msg}')
 
-    model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini')).strip() or 'openai/gpt-4o-mini'
+    model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
     site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
     app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
     sections = result_payload.get('sections') or {}
@@ -1653,7 +1653,7 @@ def get_integrations_config():
 
         tavily_key = (settings_map.get('tavily_api_key') or '').strip() or (os.environ.get('TAVILY_API_KEY', '') or '').strip()
         openrouter_key = (settings_map.get('openrouter_api_key') or '').strip() or (os.environ.get('OPENROUTER_API_KEY', '') or '').strip()
-        model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini')).strip() or 'openai/gpt-4o-mini'
+        model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
         site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
         app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
 
@@ -1677,7 +1677,7 @@ def save_integrations_config():
         data = request.get_json() or {}
         tavily_api_key = (data.get('tavily_api_key') or '').strip()
         openrouter_api_key = (data.get('openrouter_api_key') or '').strip()
-        openrouter_model = (data.get('openrouter_model') or '').strip() or 'openai/gpt-4o-mini'
+        openrouter_model = (data.get('openrouter_model') or '').strip() or 'stepfun/step-3.5-flash:free'
         openrouter_site_url = (data.get('openrouter_site_url') or '').strip() or 'http://localhost'
         openrouter_app_name = (data.get('openrouter_app_name') or '').strip() or 'TocaDoCoelho'
 
