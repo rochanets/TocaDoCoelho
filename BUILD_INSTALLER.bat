@@ -8,6 +8,17 @@ echo   COMPILAR INSTALADOR - TOCA DO COELHO
 echo ========================================================
 echo.
 
+REM Verificar se build PyInstaller existe
+if not exist "dist\TocaDoCoelho\TocaDoCoelho.exe" (
+    echo [ERRO] Build não encontrado!
+    echo.
+    echo Gere primeiro o executável com PyInstaller:
+    echo   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg --collect-all whisper launcher.py
+    echo.
+    pause
+    exit /b 1
+)
+
 REM Verificar se NSIS está instalado
 if not exist "C:\Program Files\NSIS\makensis.exe" (
     if not exist "C:\Program Files (x86)\NSIS\makensis.exe" (
