@@ -5803,7 +5803,7 @@
             el.innerHTML = wikiEntries.map(item => `
                 <div class="wiki-entry-item">
                     <h4>${escapeHtml(item.title || '')}</h4>
-                    <div class="wiki-meta">${escapeHtml(item.category || 'Sem categoria')} • Atualizado em ${formatDate(item.updated_at)}${item.tags ? ` • Tags: ${escapeHtml(item.tags)}` : ''}</div>
+                    <div class="wiki-meta">${escapeHtml(item.category || 'Sem categoria')} • Atualizado em ${formatDateBr(item.updated_at)}${item.tags ? ` • Tags: ${escapeHtml(item.tags)}` : ''}</div>
                     <div style="white-space:pre-wrap; color:#1f2937; margin-bottom:8px;">${escapeHtml(item.content || '')}</div>
                     <div style="display:flex; gap:8px;">
                         <button class="btn btn-secondary btn-small" onclick="openWikiEntryModal(${item.id})"><i class="fas fa-edit"></i> Editar</button>
@@ -5836,7 +5836,7 @@
             el.innerHTML = wikiDocuments.map(doc => `
                 <div class="wiki-doc-item">
                     <h4>${escapeHtml(doc.title || doc.original_name || 'Documento')}</h4>
-                    <div class="wiki-meta">${escapeHtml(doc.original_name || '')} • ${formatFileSize(doc.file_size)} • ${formatDate(doc.updated_at)}</div>
+                    <div class="wiki-meta">${escapeHtml(doc.original_name || '')} • ${formatFileSize(doc.file_size)} • ${formatDateBr(doc.updated_at)}</div>
                     <div style="display:flex; gap:8px;">
                         <a class="btn btn-secondary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
                         <a class="btn btn-primary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
