@@ -1737,6 +1737,36 @@
                 </section>
 
                 <section class="settings-card">
+                    <h3>Integrações de API</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Configure as chaves do usuário final para busca (Tavily) e LLM (OpenRouter).</p>
+                    <form id="integrationConfigForm" onsubmit="saveIntegrationConfig(event)">
+                        <div class="form-group">
+                            <label>Tavily API Key</label>
+                            <input type="password" id="tavilyApiKey" placeholder="tvly-..." autocomplete="off">
+                            <small id="tavilyKeyStatus" style="color:#6b7280;"></small>
+                        </div>
+                        <div class="form-group">
+                            <label>OpenRouter API Key</label>
+                            <input type="password" id="openrouterApiKey" placeholder="sk-or-v1-..." autocomplete="off">
+                            <small id="openrouterKeyStatus" style="color:#6b7280;"></small>
+                        </div>
+                        <div class="form-group">
+                            <label>Modelo OpenRouter</label>
+                            <input type="text" id="openrouterModel" placeholder="openai/gpt-4o-mini">
+                        </div>
+                        <div class="form-group">
+                            <label>HTTP Referer (OpenRouter)</label>
+                            <input type="text" id="openrouterSiteUrl" placeholder="http://localhost">
+                        </div>
+                        <div class="form-group">
+                            <label>Nome da Aplicação (OpenRouter)</label>
+                            <input type="text" id="openrouterAppName" placeholder="TocaDoCoelho">
+                        </div>
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar Integrações</button>
+                    </form>
+                </section>
+
+                <section class="settings-card">
                     <h3>MSG Padrão</h3>
                     <form onsubmit="saveMessageTemplate(event)">
                         <input type="hidden" id="templateId">
@@ -1985,6 +2015,15 @@
         let activities = [];
         let statusConfig = { universal: { green_days: 7, yellow_days: 14 }, rules: [] };
         let userProfile = null;
+        let integrationConfig = {
+            tavily_configured: false,
+            tavily_key_preview: '',
+            openrouter_configured: false,
+            openrouter_key_preview: '',
+            openrouter_model: 'openai/gpt-4o-mini',
+            openrouter_site_url: 'http://localhost',
+            openrouter_app_name: 'TocaDoCoelho'
+        };
         let cachedPositions = [];
         let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
@@ -2022,8 +2061,13 @@
         }
 
         async function loadSettings() {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig()]);
             renderSettings();
+        }
+
+        async function loadIntegrationConfig() {
+            const response = await fetch(`${API_BASE}/config/integrations`);
+            if (response.ok) integrationConfig = await response.json();
         }
 
         async function loadStatusConfig() {
@@ -2072,6 +2116,44 @@
             const deleteBtn = document.getElementById('deleteUserBtn');
             if (deleteBtn) {
                 deleteBtn.style.display = userProfile ? 'inline-block' : 'none';
+            }
+
+            document.getElementById('tavilyApiKey').value = '';
+            document.getElementById('openrouterApiKey').value = '';
+            document.getElementById('openrouterModel').value = integrationConfig?.openrouter_model || 'openai/gpt-4o-mini';
+            document.getElementById('openrouterSiteUrl').value = integrationConfig?.openrouter_site_url || 'http://localhost';
+            document.getElementById('openrouterAppName').value = integrationConfig?.openrouter_app_name || 'TocaDoCoelho';
+            document.getElementById('tavilyKeyStatus').textContent = integrationConfig?.tavily_configured
+                ? `Configurada (${integrationConfig?.tavily_key_preview || '***'})`
+                : 'Não configurada';
+            document.getElementById('openrouterKeyStatus').textContent = integrationConfig?.openrouter_configured
+                ? `Configurada (${integrationConfig?.openrouter_key_preview || '***'})`
+                : 'Não configurada';
+        }
+
+        async function saveIntegrationConfig(event) {
+            event.preventDefault();
+            const payload = {
+                tavily_api_key: document.getElementById('tavilyApiKey').value.trim(),
+                openrouter_api_key: document.getElementById('openrouterApiKey').value.trim(),
+                openrouter_model: document.getElementById('openrouterModel').value.trim(),
+                openrouter_site_url: document.getElementById('openrouterSiteUrl').value.trim(),
+                openrouter_app_name: document.getElementById('openrouterAppName').value.trim()
+            };
+
+            const response = await fetch(`${API_BASE}/config/integrations`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+                showSuccess('Integrações salvas com sucesso!');
+                await loadIntegrationConfig();
+                renderSettings();
+            } else {
+                const result = await response.json().catch(() => ({}));
+                showError(result.error || 'Erro ao salvar integrações');
             }
         }
 

@@ -500,6 +500,11 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_green_days', '45'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('cold_yellow_days', '60'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('iata_video_path', '/videos/TocaVideo.mp4'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('tavily_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'openai/gpt-4o-mini'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_site_url', 'http://localhost'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
     
     conn.commit()
     
@@ -601,6 +606,26 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+def _load_app_settings_map(keys):
+    conn = get_db()
+    c = conn.cursor()
+    placeholders = ','.join(['?'] * len(keys))
+    c.execute(f'SELECT key, value FROM app_settings WHERE key IN ({placeholders})', tuple(keys))
+    mapping = {row['key']: row['value'] for row in c.fetchall()}
+    conn.close()
+    return mapping
+
+
+def _resolve_setting(secret_key, env_key):
+    try:
+        db_value = (_load_app_settings_map([secret_key]).get(secret_key) or '').strip()
+    except Exception:
+        db_value = ''
+    if db_value:
+        return db_value
+    return (os.environ.get(env_key, '') or '').strip()
 
 
 def api_error(status, code, message, details=None, hint=None):
@@ -863,9 +888,9 @@ def _run_tavily_request(api_key, query, max_results=6):
 
 
 def _run_tavily_search(company, country, industry):
-    api_key = os.environ.get('TAVILY_API_KEY', '').strip()
+    api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
     if not api_key:
-        raise RuntimeError('A chave da Tavily não está configurada. Defina TAVILY_API_KEY no ambiente.')
+        raise RuntimeError('A chave da Tavily não está configurada. Configure em Configurações > Integrações ou defina TAVILY_API_KEY no ambiente.')
 
     plan = _build_automapping_search_plan(company, country, industry)
     all_results = {}
@@ -938,15 +963,23 @@ def _validate_openrouter_api_key(api_key):
 
 
 def _run_openrouter_synthesis(result_payload):
-    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    settings_map = _load_app_settings_map([
+        'openrouter_model',
+        'openrouter_site_url',
+        'openrouter_app_name'
+    ])
+
+    api_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
     if not api_key:
-        raise RuntimeError('A chave da OpenRouter não está configurada. Defina OPENROUTER_API_KEY no ambiente.')
+        raise RuntimeError('A chave da OpenRouter não está configurada. Configure em Configurações > Integrações ou defina OPENROUTER_API_KEY no ambiente.')
 
     key_ok, key_msg = _validate_openrouter_api_key(api_key)
     if not key_ok:
         raise RuntimeError(f'Chave OpenRouter inválida: {key_msg}')
 
-    model = os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini').strip() or 'openai/gpt-4o-mini'
+    model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini')).strip() or 'openai/gpt-4o-mini'
+    site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
     sections = result_payload.get('sections') or {}
 
     compact_sections = {}
@@ -994,8 +1027,8 @@ def _run_openrouter_synthesis(result_payload):
         headers={
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}',
-            'HTTP-Referer': os.environ.get('OPENROUTER_SITE_URL', 'http://localhost'),
-            'X-Title': os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')
+            'HTTP-Referer': site_url,
+            'X-Title': app_name
         },
         method='POST'
     )
@@ -1604,6 +1637,76 @@ def get_ui_config():
         return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
     except Exception as e:
         print(f'[ERROR] GET /api/config/ui: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/integrations', methods=['GET'])
+def get_integrations_config():
+    try:
+        settings_map = _load_app_settings_map([
+            'tavily_api_key',
+            'openrouter_api_key',
+            'openrouter_model',
+            'openrouter_site_url',
+            'openrouter_app_name'
+        ])
+
+        tavily_key = (settings_map.get('tavily_api_key') or '').strip() or (os.environ.get('TAVILY_API_KEY', '') or '').strip()
+        openrouter_key = (settings_map.get('openrouter_api_key') or '').strip() or (os.environ.get('OPENROUTER_API_KEY', '') or '').strip()
+        model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini')).strip() or 'openai/gpt-4o-mini'
+        site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+
+        return jsonify({
+            'tavily_configured': bool(tavily_key),
+            'tavily_key_preview': tavily_key[:6] + '...' if tavily_key else '',
+            'openrouter_configured': bool(openrouter_key),
+            'openrouter_key_preview': openrouter_key[:9] + '...' if openrouter_key else '',
+            'openrouter_model': model,
+            'openrouter_site_url': site_url,
+            'openrouter_app_name': app_name
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/integrations: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/integrations', methods=['PUT'])
+def save_integrations_config():
+    try:
+        data = request.get_json() or {}
+        tavily_api_key = (data.get('tavily_api_key') or '').strip()
+        openrouter_api_key = (data.get('openrouter_api_key') or '').strip()
+        openrouter_model = (data.get('openrouter_model') or '').strip() or 'openai/gpt-4o-mini'
+        openrouter_site_url = (data.get('openrouter_site_url') or '').strip() or 'http://localhost'
+        openrouter_app_name = (data.get('openrouter_app_name') or '').strip() or 'TocaDoCoelho'
+
+        if openrouter_api_key:
+            key_ok, key_msg = _validate_openrouter_api_key(openrouter_api_key)
+            if not key_ok:
+                return jsonify({'error': f'OpenRouter inválida: {key_msg}'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        updates = [
+            ('tavily_api_key', tavily_api_key),
+            ('openrouter_api_key', openrouter_api_key),
+            ('openrouter_model', openrouter_model),
+            ('openrouter_site_url', openrouter_site_url),
+            ('openrouter_app_name', openrouter_app_name)
+        ]
+        for key, value in updates:
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+                (key, value)
+            )
+        conn.commit()
+        conn.close()
+
+        return jsonify({'message': 'Integrações salvas com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] PUT /api/config/integrations: {e}')
         return jsonify({'error': str(e)}), 500
 
 

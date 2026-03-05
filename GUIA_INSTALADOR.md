@@ -12,10 +12,10 @@
 
 ## 🚀 Passo a passo
 
-### 1) Gerar executável (runtime embutido + FFmpeg)
+### 1) Gerar executável (runtime embutido + FFmpeg + Whisper)
 
 ```bash
-pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg launcher.py
+pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg --collect-all whisper launcher.py
 ```
 
 Saída esperada:
@@ -48,6 +48,12 @@ Saída:
 - Logs: `%AppData%\toca-do-coelho\logs\app.log`
 - Backups automáticos: `%AppData%\toca-do-coelho\backups\` (a cada 3 dias)
 
+
+## 🔑 Configuração de APIs no app
+
+- O usuário final pode informar as próprias chaves em **Configurações > Integrações de API**.
+- O app persiste as configurações no SQLite local e usa essas chaves nas features de busca/LLM.
+
 ## ❓ Problemas comuns
 
 ### Erro: build não encontrado
@@ -57,4 +63,4 @@ Saída:
 - Instale NSIS e rode o script novamente.
 
 ### App abre mas transcrição falha
-- Verifique se o build foi feito com `--collect-binaries imageio_ffmpeg`.
+- Verifique se o build foi feito com `--collect-binaries imageio_ffmpeg --collect-all whisper`.

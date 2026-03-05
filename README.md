@@ -8,7 +8,7 @@ Sistema de gestão de clientes com interface web local.
 
 1. Gere o executável com PyInstaller (inclui runtime Python + binários do FFmpeg via `imageio_ffmpeg`):
    ```bash
-   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg launcher.py
+   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg --collect-all whisper launcher.py
    ```
 2. Compile o instalador NSIS:
    - Execute `BUILD_INSTALLER.bat`
@@ -46,6 +46,16 @@ Uploads também são migrados quando encontrados.
 - Log de aplicação: `%AppData%\toca-do-coelho\logs\app.log`
 - O app grava eventos importantes (inicialização, migrações, backup e erros inesperados).
 - Para suporte, peça ao usuário o arquivo `app.log`.
+
+## 🔑 Chaves de API por usuário (Tavily / OpenRouter)
+
+- Agora o usuário pode configurar as próprias chaves em **Configurações > Integrações de API**.
+- Campos disponíveis:
+  - Tavily API Key (busca)
+  - OpenRouter API Key (LLM)
+  - Modelo, Referer e Nome do app (OpenRouter)
+- As configurações são persistidas em `app_settings` no SQLite local do usuário.
+- Compatibilidade: se o usuário não preencher na UI, o sistema ainda tenta ler variáveis de ambiente (`TAVILY_API_KEY`, `OPENROUTER_API_KEY`, etc.).
 
 ## 💽 Backup automático
 
