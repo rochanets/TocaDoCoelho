@@ -3730,6 +3730,180 @@ def delete_wiki_document(document_id):
         return api_error(500, 'WIKI_DOC_DELETE_ERROR', 'Erro ao remover documento.', details=str(e))
 
 
+# WikiToca - Export/Import XLSX
+
+@app.route('/api/wikitoca/entries/export-xlsx', methods=['GET'])
+def export_wikitoca_xlsx():
+    try:
+        print('[DEBUG] GET /api/wikitoca/entries/export-xlsx chamado')
+        if not OPENPYXL_AVAILABLE:
+            return jsonify({'error': 'Exportação XLSX requer openpyxl instalado'}), 500
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT title, category, tags, content FROM wiki_entries ORDER BY updated_at DESC')
+        rows = c.fetchall()
+        conn.close()
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from io import BytesIO
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Conhecimentos'
+        headers = ['Título', 'Categoria', 'Tags', 'Descrição']
+        ws.append(headers)
+        header_fill = PatternFill(start_color='34D399', end_color='34D399', fill_type='solid')
+        for col_idx, _ in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+        ws.column_dimensions['A'].width = 40
+        ws.column_dimensions['B'].width = 20
+        ws.column_dimensions['C'].width = 30
+        ws.column_dimensions['D'].width = 60
+        for row in rows:
+            ws.append([
+                row['title'] or '',
+                row['category'] or '',
+                row['tags'] or '',
+                row['content'] or ''
+            ])
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        from flask import send_file
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name='wikitoca_conhecimentos.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        print(f'[ERROR] GET /api/wikitoca/entries/export-xlsx: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/wikitoca/entries/template-xlsx', methods=['GET'])
+def wikitoca_template_xlsx():
+    try:
+        print('[DEBUG] GET /api/wikitoca/entries/template-xlsx chamado')
+        if not OPENPYXL_AVAILABLE:
+            return jsonify({'error': 'Template XLSX requer openpyxl instalado'}), 500
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from io import BytesIO
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Conhecimentos'
+        headers = ['Título', 'Categoria', 'Descrição']
+        ws.append(headers)
+        header_fill = PatternFill(start_color='34D399', end_color='34D399', fill_type='solid')
+        for col_idx, _ in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+        ws.column_dimensions['A'].width = 40
+        ws.column_dimensions['B'].width = 20
+        ws.column_dimensions['C'].width = 60
+        ws.append(['Exemplo de título', 'Comercial', 'Descreva aqui o conhecimento a ser registrado.'])
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        from flask import send_file
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name='wikitoca_template.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        print(f'[ERROR] GET /api/wikitoca/entries/template-xlsx: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/wikitoca/entries/import-xlsx', methods=['POST'])
+def import_wikitoca_xlsx():
+    try:
+        print('[DEBUG] POST /api/wikitoca/entries/import-xlsx chamado')
+        if 'file' not in request.files:
+            return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+        file = request.files['file']
+        if not file.filename or not file.filename.lower().endswith('.xlsx'):
+            return jsonify({'error': 'Envie um arquivo .xlsx'}), 400
+        if not OPENPYXL_AVAILABLE:
+            return jsonify({'error': 'Importação XLSX requer openpyxl instalado'}), 500
+        import openpyxl
+        import tempfile, os as _os
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+        try:
+            wb = openpyxl.load_workbook(tmp_path, data_only=True)
+            ws = wb.active
+            rows_data = list(ws.iter_rows(values_only=True))
+        finally:
+            _os.unlink(tmp_path)
+        if not rows_data:
+            return jsonify({'error': 'Arquivo vazio'}), 400
+        # Detectar colunas pelo cabeçalho
+        header = [str(c).strip().lower() if c else '' for c in rows_data[0]]
+        def find_col(names):
+            for name in names:
+                if name in header:
+                    return header.index(name)
+            return None
+        col_title = find_col(['título', 'titulo', 'title'])
+        col_cat = find_col(['categoria', 'category'])
+        col_desc = find_col(['descrição', 'descricao', 'description', 'conteúdo', 'conteudo', 'content'])
+        if col_title is None or col_desc is None:
+            return jsonify({'error': 'Colunas obrigatórias não encontradas. O arquivo deve ter colunas Título e Descrição.'}), 400
+        # Função de geração de tags (mesma lógica do frontend)
+        stopwords = {'a','o','os','as','de','da','do','das','dos','e','é','em','no','na','nos','nas','um','uma','uns','umas','para','por','com','sem','que','se','ao','aos','à','às','ou','como','mais','menos','ja','não','sim'}
+        def generate_tags(title, content):
+            import re
+            text = f'{title or ""} {content or ""}'.lower()
+            words = re.findall(r'[a-záàãâéêíóôõúüç0-9-]{3,}', text)
+            rank = {}
+            for w in words:
+                if w in stopwords or w.isdigit():
+                    continue
+                rank[w] = rank.get(w, 0) + 1
+            sorted_words = sorted(rank.items(), key=lambda x: (-x[1], x[0]))
+            return ', '.join(w for w, _ in sorted_words[:6])
+        conn = get_db()
+        c = conn.cursor()
+        ok = 0
+        fail = 0
+        errors = []
+        for idx, row in enumerate(rows_data[1:], start=2):
+            try:
+                title = str(row[col_title]).strip() if row[col_title] else ''
+                category = str(row[col_cat]).strip() if col_cat is not None and row[col_cat] else ''
+                content = str(row[col_desc]).strip() if row[col_desc] else ''
+                if not title or not content:
+                    fail += 1
+                    errors.append(f'Linha {idx}: título ou descrição vazia')
+                    continue
+                tags = generate_tags(title, content)
+                now = datetime.utcnow().isoformat() + 'Z'
+                c.execute(
+                    'INSERT INTO wiki_entries (title, category, tags, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+                    (title, category, tags, content, now, now)
+                )
+                ok += 1
+            except Exception as row_err:
+                fail += 1
+                errors.append(f'Linha {idx}: {str(row_err)}')
+        conn.commit()
+        conn.close()
+        print(f'[DEBUG] POST /api/wikitoca/entries/import-xlsx: {ok} importados, {fail} erros')
+        return jsonify({'imported': ok, 'failed': fail, 'errors': errors[:10]}), 200
+    except Exception as e:
+        print(f'[ERROR] POST /api/wikitoca/entries/import-xlsx: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 # Servir arquivos estaticos
 
 @app.route('/uploads/accounts/<filename>')
