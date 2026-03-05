@@ -3256,7 +3256,8 @@
             if (icon) icon.textContent = isHidden ? '▾' : '▸';
         }
 
-        async function deleteAutoMappingRun(runId) {
+        async function deleteAutoMappingRun(runId, event) {
+            if (event) event.stopPropagation();
             const confirmed = await openConfirmDialog('Excluir Log', 'Deseja realmente excluir este log do AutoMapping?');
             if (!confirmed) return;
             try {
@@ -3277,6 +3278,7 @@
                 const response = await fetch(`${API_BASE}/automapping/runs?days=20`);
                 const payload = await response.json();
                 const runs = payload.runs || [];
+                autoMappingRunsHistory = runs;
                 if (!runs.length) {
                     container.innerHTML = `
                         <div class="automapping-result-card" style="background:#fff; border-color:#e5e7eb;">
@@ -3295,13 +3297,13 @@
 
                 runs.forEach(run => {
                     const queriesEntries = Object.entries(run.queries || {});
-                    html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:10px;">`;
+                    html += `<div style="border:1px solid #e5e7eb; border-radius:10px; padding:10px; cursor:pointer;" onclick="openExistingAutoMappingRun(${run.id})">`;
                     html += `<div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">`;
-                    html += `<button type="button" onclick="toggleAutoMappingRunDetails(${run.id})" style="background:transparent; border:none; text-align:left; cursor:pointer; flex:1;">`;
+                    html += `<button type="button" onclick="event.stopPropagation(); toggleAutoMappingRunDetails(${run.id})" style="background:transparent; border:none; text-align:left; cursor:pointer; flex:1;">`;
                     html += `<div style="font-size:13px; color:#111827; font-weight:600;"><span id="autoMapRunIcon_${run.id}">▸</span> ${escapeHtml(run.company || '-')} · ${escapeHtml(run.country || '-')} · ${escapeHtml(run.industry || '-')}</div>`;
                     html += `<div style="font-size:11px; color:#6b7280; margin-top:2px;">Execução: ${escapeHtml(run.created_at || '-')} · ${queriesEntries.length} queries</div>`;
                     html += `</button>`;
-                    html += `<button class="btn btn-danger btn-small" onclick="deleteAutoMappingRun(${run.id})" title="Excluir log"><i class="fas fa-trash"></i></button>`;
+                    html += `<button class="btn btn-danger btn-small" onclick="deleteAutoMappingRun(${run.id}, event)" title="Excluir log"><i class="fas fa-trash"></i></button>`;
                     html += `</div>`;
                     html += `<div id="autoMapRunDetails_${run.id}" style="display:none; margin-top:8px;">`;
                     if (!queriesEntries.length) {
@@ -3862,8 +3864,11 @@
 
         let autoMappingState = {
             result: null,
-            runId: null
+            runId: null,
+            abortController: null,
+            requestId: null
         };
+        let autoMappingRunsHistory = [];
 
         function openAutoMappingModal() {
             const html = `
@@ -3897,9 +3902,51 @@
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
-        function closeAutoMappingModal() {
+        async function closeAutoMappingModal() {
+            if (autoMappingState.abortController && autoMappingState.requestId) {
+                await cancelAutoMappingExecution();
+            }
             const modal = document.getElementById('autoMappingModal');
             if (modal) modal.remove();
+        }
+
+        async function cancelAutoMappingExecution() {
+            try {
+                if (autoMappingState.abortController) {
+                    autoMappingState.abortController.abort();
+                }
+
+                if (autoMappingState.requestId) {
+                    await fetch(`${API_BASE}/automapping/cancel`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ request_id: autoMappingState.requestId })
+                    });
+                }
+            } catch (error) {
+                // Ignora erros no cancelamento para não bloquear fechamento do modal
+            } finally {
+                autoMappingState.abortController = null;
+                autoMappingState.requestId = null;
+            }
+        }
+
+        function normalizeAutoMappingKey(company, country, industry) {
+            return [company, country, industry].map(v => (v || '').trim().toLowerCase()).join('|');
+        }
+
+        async function openExistingAutoMappingRun(runId) {
+            try {
+                const response = await fetch(`${API_BASE}/automapping/runs/${runId}`);
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'Falha ao carregar execução');
+                autoMappingState.result = payload.result;
+                autoMappingState.runId = payload.id;
+                renderAutoMappingResultSection();
+                openAutoMappingResultModal();
+            } catch (error) {
+                showError(`Não foi possível abrir o AutoMapping: ${error.message}`);
+            }
         }
 
         function updateAutoMappingProgress(text, percent) {
@@ -3936,12 +3983,30 @@
                 return;
             }
 
+            const inputKey = normalizeAutoMappingKey(clientName, country, businessArea);
+            const existingRun = (autoMappingRunsHistory || []).find(run => normalizeAutoMappingKey(run.company, run.country, run.industry) === inputKey);
+            if (existingRun && !forceRun) {
+                setAutoMappingError('Já existe um AutoMapping com as mesmas características (Cliente, Área de Negócio e País).');
+                const shouldOpen = await openSystemDialog({
+                    title: 'Consulta já existente',
+                    message: 'Essa consulta já foi realizada. Deseja abrir o resultado existente?',
+                    showCancel: true
+                });
+                if (shouldOpen) {
+                    await openExistingAutoMappingRun(existingRun.id);
+                    closeAutoMappingModal();
+                }
+                return;
+            }
+
             if (submitBtn) submitBtn.disabled = true;
 
             try {
                 updateAutoMappingProgress('Buscando evidências...', 25);
 
                 const controller = new AbortController();
+                autoMappingState.abortController = controller;
+                autoMappingState.requestId = `am-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
                 const timeout = setTimeout(() => controller.abort(), 60000);
 
                 const response = await fetch(`${API_BASE}/automapping`, {
@@ -3951,6 +4016,7 @@
                         company: clientName,
                         country,
                         industry: businessArea,
+                        request_id: autoMappingState.requestId,
                         force: forceRun
                     }),
                     signal: controller.signal
@@ -3961,28 +4027,20 @@
 
                 const payload = await response.json();
                 if (!response.ok) {
+                    if (payload.cancelled) {
+                        setAutoMappingError('AutoMapping cancelado pelo usuário.');
+                        return;
+                    }
                     throw new Error(payload.error || 'Falha no AutoMapping');
                 }
 
                 if (payload.already_exists && !forceRun) {
-                    if (submitBtn) submitBtn.disabled = false;
-                    updateAutoMappingProgress('Concluído', 100);
-                    const shouldReuse = await openSystemDialog({
-                        title: 'AutoMapping recente encontrado',
-                        message: 'Já existe um AutoMapping para esses dados nos últimos 20 dias. Deseja ver o resultado existente?',
-                        showCancel: true
-                    });
-
-                    if (shouldReuse) {
-                        autoMappingState.result = payload.result;
-                        autoMappingState.runId = payload.run_id;
-                        renderAutoMappingResultSection();
-                        openAutoMappingResultModal();
-                        closeAutoMappingModal();
-                    } else {
-                        updateAutoMappingProgress('Executando novo AutoMapping...', 35);
-                        return submitAutoMappingForm(true);
-                    }
+                    setAutoMappingError('Já existe um AutoMapping para esses dados. Uma nova busca não foi executada.');
+                    autoMappingState.result = payload.result;
+                    autoMappingState.runId = payload.run_id;
+                    renderAutoMappingResultSection();
+                    openAutoMappingResultModal();
+                    closeAutoMappingModal();
                     return;
                 }
 
@@ -3994,11 +4052,13 @@
                 openAutoMappingResultModal();
             } catch (error) {
                 if (error.name === 'AbortError') {
-                    setAutoMappingError('Tempo limite excedido (60s). Tente novamente.');
+                    setAutoMappingError('AutoMapping cancelado. Nenhuma integração adicional foi executada.');
                 } else {
                     setAutoMappingError(`Não foi possível concluir o AutoMapping: ${error.message}`);
                 }
             } finally {
+                autoMappingState.abortController = null;
+                autoMappingState.requestId = null;
                 if (submitBtn) submitBtn.disabled = false;
             }
         }
