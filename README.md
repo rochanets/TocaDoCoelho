@@ -6,9 +6,9 @@ Sistema de gestão de clientes com interface web local.
 
 ### Fluxo oficial de release (version3)
 
-1. Gere o executável com PyInstaller (inclui runtime Python):
+1. Gere o executável com PyInstaller (inclui runtime Python + binários do FFmpeg via `imageio_ffmpeg`):
    ```bash
-   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico launcher.py
+   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg launcher.py
    ```
 2. Compile o instalador NSIS:
    - Execute `BUILD_INSTALLER.bat`
@@ -19,7 +19,7 @@ Sistema de gestão de clientes com interface web local.
 - Duplo clique em `TocaDoCoelho-1.0.0-Setup.exe`
 - Next → Next → Install
 - Atalho criado na Área de Trabalho/Menu Iniciar
-- Pronto para usar (sem instalar Python via terminal)
+- Pronto para usar (sem instalar Python ou FFmpeg via terminal)
 
 ## 💾 Onde os dados ficam
 
@@ -41,24 +41,23 @@ Na primeira execução (Windows), se o banco novo não existir, o app tenta migr
 
 Uploads também são migrados quando encontrados.
 
-## 📋 Funcionalidades
+## 🧾 Logs e suporte pós-release
 
-✅ Dashboard de clientes  
-✅ Gestão de clientes e atividades  
-✅ Upload de foto  
-✅ Exportação de dados  
-✅ Regras automáticas de status  
+- Log de aplicação: `%AppData%\toca-do-coelho\logs\app.log`
+- O app grava eventos importantes (inicialização, migrações, backup e erros inesperados).
+- Para suporte, peça ao usuário o arquivo `app.log`.
+
+## 💽 Backup automático
+
+- O SQLite é copiado automaticamente para `%AppData%\toca-do-coelho\backups\`
+- Frequência: **a cada 3 dias** (quando o app é aberto e detectar período vencido).
+- Nome do arquivo: `toca-do-coelho-backup-AAAAMMDD-HHMMSS.db`
 
 ## 🛠️ Dependências pesadas (Whisper / FFmpeg)
 
 Para transcrição por voz, o app usa Whisper e precisa de FFmpeg.
 
-Estratégias recomendadas de distribuição:
-
-1. **Pacote completo:** incluir FFmpeg junto no build (mais simples para usuário).
-2. **Opcional guiado:** detectar ausência e exibir instrução guiada de instalação.
-
-Para release comercial, priorize a opção 1.
+Na release atual, a recomendação é **incluir FFmpeg no bundle** (via `--collect-binaries imageio_ffmpeg`) para não exigir instalação manual.
 
 ## 🧪 Troubleshooting rápido
 
@@ -69,7 +68,7 @@ Para release comercial, priorize a opção 1.
 - Verifique permissão de escrita em `%AppData%\toca-do-coelho`.
 
 ### Erro de transcrição
-- Verifique se FFmpeg está disponível no ambiente/bundle.
+- Verifique se o build foi gerado com `--collect-binaries imageio_ffmpeg`.
 
 ## 📝 Versão
 

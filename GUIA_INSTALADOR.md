@@ -12,10 +12,10 @@
 
 ## 🚀 Passo a passo
 
-### 1) Gerar executável (runtime embutido)
+### 1) Gerar executável (runtime embutido + FFmpeg)
 
 ```bash
-pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico launcher.py
+pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg launcher.py
 ```
 
 Saída esperada:
@@ -34,6 +34,7 @@ Saída:
 ✅ Instala em `C:\Program Files\TocaDoCoelho`  
 ✅ Cria atalhos (Desktop/Menu Iniciar)  
 ✅ Não depende de Python instalado no PC do usuário  
+✅ Inclui suporte ao FFmpeg no bundle de build  
 ✅ Registra em Adicionar/Remover Programas  
 ✅ Preserva dados em `%AppData%\toca-do-coelho` ao desinstalar  
 
@@ -41,6 +42,11 @@ Saída:
 
 - Banco e uploads: `%AppData%\toca-do-coelho`
 - Esse diretório **não é removido por padrão** no uninstall.
+
+## 🧾 Logs e backup para suporte
+
+- Logs: `%AppData%\toca-do-coelho\logs\app.log`
+- Backups automáticos: `%AppData%\toca-do-coelho\backups\` (a cada 3 dias)
 
 ## ❓ Problemas comuns
 
@@ -51,4 +57,4 @@ Saída:
 - Instale NSIS e rode o script novamente.
 
 ### App abre mas transcrição falha
-- Verifique se FFmpeg foi incluído no bundle ou instalado no sistema.
+- Verifique se o build foi feito com `--collect-binaries imageio_ffmpeg`.

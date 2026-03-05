@@ -6,6 +6,7 @@ import sys
 import json
 import sqlite3
 import webbrowser
+import logging
 import re
 import zipfile
 import tempfile
@@ -21,6 +22,7 @@ from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
@@ -63,6 +65,11 @@ else:
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / 'toca-do-coelho.db'
+BACKUP_DIR = DATA_DIR / 'backups'
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = DATA_DIR / 'logs'
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / 'app.log'
 UPLOAD_DIR = DATA_DIR / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
@@ -73,6 +80,34 @@ WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
 TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
+
+
+def setup_logging():
+    formatter = logging.Formatter(
+        '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    if not root_logger.handlers:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+    file_handler_exists = any(
+        isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', '') == str(LOG_FILE)
+        for handler in root_logger.handlers
+    )
+    if not file_handler_exists:
+        file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+
+
+setup_logging()
+logger = logging.getLogger('toca-do-coelho')
 
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
@@ -98,6 +133,21 @@ def _is_automapping_cancelled(request_id, consume=False):
 
 
 def configure_ffmpeg_for_whisper():
+    bundled_candidates = []
+
+    if getattr(sys, 'frozen', False):
+        bundled_candidates.append(Path(sys.executable).parent / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'))
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            bundled_candidates.append(Path(meipass) / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'))
+
+    bundled_candidates.append(Path(__file__).resolve().parent / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'))
+
+    for candidate in bundled_candidates:
+        if candidate.exists():
+            os.environ['FFMPEG_BINARY'] = str(candidate)
+            return str(candidate)
+
     ffmpeg_binary = os.environ.get('FFMPEG_BINARY')
     if ffmpeg_binary and Path(ffmpeg_binary).exists():
         return ffmpeg_binary
@@ -116,7 +166,7 @@ def configure_ffmpeg_for_whisper():
             return ffmpeg_imageio
         except Exception as e:
             if TRANSCRIPTION_DEBUG:
-                print(f"[Transcription][DEBUG] Falha ao obter ffmpeg via imageio_ffmpeg: {e}")
+                logger.debug(f"[Transcription] Falha ao obter ffmpeg via imageio_ffmpeg: {e}")
 
     return None
 
@@ -158,7 +208,7 @@ if sys.platform == 'win32' and not DB_PATH.exists():
 
         old_db = legacy_dir / legacy_db_name
         if old_db.exists():
-            print(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
+            logger.info(f'[Database] Migrando banco de dados de {old_db} para {DB_PATH}')
             shutil.copy2(str(old_db), str(DB_PATH))
 
             old_uploads = legacy_dir / 'uploads'
@@ -172,10 +222,10 @@ if sys.platform == 'win32' and not DB_PATH.exists():
                     elif item.is_dir():
                         shutil.copytree(str(item), str(dest))
 
-            print(f'[Database] Migração de {source_label} concluída com sucesso!')
+            logger.info(f'[Database] Migração de {source_label} concluída com sucesso!')
             migrated = True
 
-print(f'[Database] Caminho: {DB_PATH}')
+logger.info(f'[Database] Caminho: {DB_PATH}')
 
 # Inicializar banco de dados
 def init_db():
@@ -500,9 +550,46 @@ def init_db():
         pass
     
     conn.close()
-    print('[Database] Banco de dados inicializado')
+    logger.info('[Database] Banco de dados inicializado')
+
+
+def run_automatic_db_backup(interval_days=3):
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute('SELECT value FROM app_settings WHERE key = ?', ('db_last_backup_at',))
+        row = c.fetchone()
+
+        now = datetime.utcnow()
+        should_backup = True
+
+        if row and row[0]:
+            try:
+                last_backup = datetime.fromisoformat(row[0])
+                should_backup = (now - last_backup) >= timedelta(days=interval_days)
+            except Exception:
+                should_backup = True
+
+        if should_backup and DB_PATH.exists():
+            backup_name = f"toca-do-coelho-backup-{now.strftime('%Y%m%d-%H%M%S')}.db"
+            backup_path = BACKUP_DIR / backup_name
+            shutil.copy2(str(DB_PATH), str(backup_path))
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+                ('db_last_backup_at', now.isoformat())
+            )
+            conn.commit()
+            logger.info(f'[Backup] Backup automático criado em: {backup_path}')
+        else:
+            logger.info('[Backup] Backup automático não necessário neste momento.')
+
+        conn.close()
+    except Exception as e:
+        logger.exception(f'[Backup] Falha ao executar backup automático: {e}')
 
 init_db()
+run_automatic_db_backup(interval_days=3)
 
 # Funcoes auxiliares
 def get_db():
@@ -3975,6 +4062,14 @@ def serve_static(path):
     if path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     return send_from_directory(app.static_folder, path)
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_exception(error):
+    if isinstance(error, HTTPException):
+        return error
+    logger.exception(f'[Unhandled] Erro inesperado: {error}')
+    return jsonify({'error': 'Erro interno inesperado. Consulte os logs para suporte.'}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))

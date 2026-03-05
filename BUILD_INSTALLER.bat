@@ -13,7 +13,7 @@ if not exist "dist\TocaDoCoelho\TocaDoCoelho.exe" (
     echo [ERRO] Build não encontrado!
     echo.
     echo Gere primeiro o executável com PyInstaller:
-    echo   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico launcher.py
+    echo   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg launcher.py
     echo.
     pause
     exit /b 1
