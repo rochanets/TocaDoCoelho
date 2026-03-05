@@ -442,6 +442,29 @@ def init_db():
             c.execute('ALTER TABLE activities ADD COLUMN contact_type TEXT DEFAULT "Outro"')
         if 'information' not in columns:
             c.execute('ALTER TABLE activities ADD COLUMN information TEXT')
+
+        # Garantir schema mínimo do WikiToca para bases antigas/parciais
+        c.execute("PRAGMA table_info(wiki_entries)")
+        wiki_entry_columns = [col[1] for col in c.fetchall()]
+        if 'category' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN category TEXT')
+        if 'tags' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN tags TEXT')
+        if 'created_at' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        if 'updated_at' not in wiki_entry_columns:
+            c.execute('ALTER TABLE wiki_entries ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+
+        c.execute("PRAGMA table_info(wiki_documents)")
+        wiki_doc_columns = [col[1] for col in c.fetchall()]
+        if 'file_ext' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN file_ext TEXT')
+        if 'file_size' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN file_size INTEGER')
+        if 'created_at' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        if 'updated_at' not in wiki_doc_columns:
+            c.execute('ALTER TABLE wiki_documents ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
         conn.commit()
     except:
         pass
@@ -461,6 +484,18 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+def api_error(status, code, message, details=None, hint=None):
+    payload = {
+        'error': message,
+        'error_code': code
+    }
+    if details:
+        payload['details'] = str(details)
+    if hint:
+        payload['hint'] = hint
+    return jsonify(payload), status
 
 
 def parse_currency_to_cents(value):
@@ -2959,7 +2994,13 @@ def get_wikitoca_entries():
         return jsonify(data)
     except Exception as e:
         print(f'[ERROR] GET /api/wikitoca/entries: {e}')
-        return jsonify({'error': str(e)}), 500
+        return api_error(
+            500,
+            'WIKITOCA_ENTRIES_LOAD_FAILED',
+            'Falha ao carregar conhecimentos do WikiToca.',
+            details=e,
+            hint='Verifique no backend se a tabela wiki_entries existe e se possui as colunas esperadas.'
+        )
 
 
 @app.route('/api/wikitoca/entries', methods=['POST'])
@@ -2971,7 +3012,12 @@ def create_wikitoca_entry():
         category = (data.get('category') or '').strip()
         tags = (data.get('tags') or '').strip()
         if not title or not content:
-            return jsonify({'error': 'Título e conteúdo são obrigatórios'}), 400
+            return api_error(
+                400,
+                'WIKITOCA_ENTRY_VALIDATION_ERROR',
+                'Título e conteúdo são obrigatórios para registrar um conhecimento.',
+                hint='Preencha os campos Título e Conteúdo e tente novamente.'
+            )
         suggested = suggest_wiki_tags(title, content)
         merged_tags = merge_tags(tags, suggested)
         conn = get_db(); c = conn.cursor()
@@ -2987,7 +3033,13 @@ def create_wikitoca_entry():
         return jsonify(serialize_wiki_entry(row)), 201
     except Exception as e:
         print(f'[ERROR] POST /api/wikitoca/entries: {e}')
-        return jsonify({'error': str(e)}), 500
+        return api_error(
+            500,
+            'WIKITOCA_ENTRY_CREATE_FAILED',
+            'Não foi possível registrar o conhecimento no WikiToca.',
+            details=e,
+            hint='Verifique no backend se a tabela wiki_entries possui as colunas title, content, category e tags.'
+        )
 
 
 @app.route('/api/wikitoca/entries/<int:entry_id>', methods=['PUT'])
