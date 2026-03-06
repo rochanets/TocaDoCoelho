@@ -12,10 +12,10 @@
 
 ## 🚀 Passo a passo
 
-### 1) Gerar executável (runtime embutido + FFmpeg + Whisper)
+### 1) Gerar executável (runtime embutido + FFmpeg + faster-whisper)
 
 ```bash
-pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg --collect-all whisper launcher.py
+pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 launcher.py
 ```
 
 Saída esperada:
@@ -63,4 +63,4 @@ Saída:
 - Instale NSIS e rode o script novamente.
 
 ### App abre mas transcrição falha
-- Verifique se o build foi feito com `--collect-binaries imageio_ffmpeg --collect-all whisper`.
+- Verifique se o build foi feito com `--collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2`.

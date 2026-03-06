@@ -36,10 +36,10 @@ except ImportError:
     CHARDET_AVAILABLE = False
 
 try:
-    import whisper
+    from faster_whisper import WhisperModel
     WHISPER_AVAILABLE = True
 except ImportError:
-    whisper = None
+    WhisperModel = None
     WHISPER_AVAILABLE = False
 
 try:
@@ -189,7 +189,7 @@ def get_whisper_model():
         return None
     with WHISPER_MODEL_LOCK:
         if WHISPER_MODEL is None:
-            WHISPER_MODEL = whisper.load_model('base')
+            WHISPER_MODEL = WhisperModel('base', device='cpu', compute_type='int8')
     return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
@@ -1316,21 +1316,16 @@ def transcribe_audio():
         print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
-        print('[Transcription][ERROR] Biblioteca whisper indisponível neste ambiente.')
-        return jsonify({'error': 'Biblioteca whisper não encontrada. Instale as dependências novamente.'}), 503
+        print('[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente.')
+        return jsonify({'error': 'Biblioteca faster-whisper não encontrada. Instale as dependências novamente.'}), 503
 
     audio_file = request.files.get('audio')
     if not audio_file:
         return jsonify({'error': 'Arquivo de áudio não enviado.'}), 400
 
     ffmpeg_path = configure_ffmpeg_for_whisper()
-    if not ffmpeg_path:
-        instructions = get_ffmpeg_install_instructions()
-        return jsonify({
-            'error': 'FFmpeg não encontrado para processar áudio.',
-            'install_instructions': instructions,
-            'resolution': 'Instale o FFmpeg e reinicie o aplicativo.'
-        }), 500
+    if TRANSCRIPTION_DEBUG and not ffmpeg_path:
+        print('[Transcription][DEBUG] FFmpeg externo não encontrado; continuando com decoder da stack local.')
 
     suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
     temp_path = None
@@ -1342,11 +1337,11 @@ def transcribe_audio():
         if TRANSCRIPTION_DEBUG:
             print(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
             print(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
-            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path}")
+            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
-        result = model.transcribe(temp_path, language='pt')
-        text = (result.get('text') or '').strip()
+        segments, _ = model.transcribe(temp_path, language='pt')
+        text = ''.join(segment.text for segment in segments).strip()
 
         if TRANSCRIPTION_DEBUG:
             print(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
@@ -1356,7 +1351,7 @@ def transcribe_audio():
         print(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
         if TRANSCRIPTION_DEBUG:
             traceback.print_exc()
-        return jsonify({'error': f'Falha ao transcrever áudio com Whisper: {e}'}), 500
+        return jsonify({'error': f'Falha ao transcrever áudio com faster-whisper: {e}'}), 500
     finally:
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
