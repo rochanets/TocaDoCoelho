@@ -64,9 +64,7 @@ Section "Criar Atalhos" SecShortcuts
         "" \
         "$INSTDIR\coelho_icon_transparent.ico" \
         0 \
-        SW_SHOW \
-        "" \
-        "Abrir Toca do Coelho - Registro de Atividades"
+        SW_SHOWNORMAL
 
     CreateShortCut "$SMPROGRAMS\$StartMenuFolder\Desinstalar.lnk" \
         "$INSTDIR\uninstall.exe"
@@ -78,9 +76,8 @@ Section "Criar Atalhos" SecShortcuts
         "" \
         "$INSTDIR\coelho_icon_transparent.ico" \
         0 \
-        SW_SHOW \
-        "" \
-        "Abrir Toca do Coelho - Registro de Atividades"
+        SW_SHOWNORMAL
+
 SectionEnd
 
 Section "Uninstall"
