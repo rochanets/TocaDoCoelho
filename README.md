@@ -8,7 +8,7 @@ Sistema de gestão de clientes com interface web local.
 
 1. Gere o executável com PyInstaller (inclui runtime Python + binários do FFmpeg via `imageio_ffmpeg`):
    ```bash
-   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all whisper launcher.py
+   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 launcher.py
    ```
 2. Compile o instalador NSIS:
    - Execute `BUILD_INSTALLER.bat`
@@ -65,7 +65,7 @@ Uploads também são migrados quando encontrados.
 
 ## 🛠️ Dependências pesadas (faster-whisper / FFmpeg)
 
-Para transcrição por voz, o app usa faster-whisper (com fallback para openai-whisper) e precisa de suporte de decodificação de áudio.
+Para transcrição por voz, o app usa faster-whisper e precisa de suporte de decodificação de áudio.
 
 Na release atual, a recomendação é **incluir FFmpeg no bundle** (via `--collect-binaries imageio_ffmpeg`) para não exigir instalação manual.
 
@@ -78,7 +78,7 @@ Na release atual, a recomendação é **incluir FFmpeg no bundle** (via `--colle
 - Verifique permissão de escrita em `%AppData%\toca-do-coelho`.
 
 ### Erro de transcrição
-- Verifique se o build foi gerado com os parâmetros `--collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all whisper`.
+- Verifique se o build foi gerado com os parâmetros `--add-data "app.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2`.
 
 ## 📝 Versão
 
