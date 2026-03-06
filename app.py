@@ -35,12 +35,20 @@ try:
 except ImportError:
     CHARDET_AVAILABLE = False
 
-try:
-    from faster_whisper import WhisperModel
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WhisperModel = None
-    WHISPER_AVAILABLE = False
+import importlib
+
+WhisperModel = None
+legacy_whisper = None
+TRANSCRIPTION_BACKEND = None
+if importlib.util.find_spec('faster_whisper'):
+    faster_whisper_module = importlib.import_module('faster_whisper')
+    WhisperModel = faster_whisper_module.WhisperModel
+    TRANSCRIPTION_BACKEND = 'faster-whisper'
+elif importlib.util.find_spec('whisper'):
+    legacy_whisper = importlib.import_module('whisper')
+    TRANSCRIPTION_BACKEND = 'openai-whisper'
+
+WHISPER_AVAILABLE = TRANSCRIPTION_BACKEND is not None
 
 try:
     import imageio_ffmpeg
@@ -109,6 +117,10 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
 
+if WHISPER_AVAILABLE:
+    logger.info(f"[Transcription] Backend carregado: {TRANSCRIPTION_BACKEND}")
+else:
+    logger.warning('[Transcription] Nenhum backend de transcrição disponível (faster-whisper/openai-whisper).')
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
 AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
@@ -189,7 +201,10 @@ def get_whisper_model():
         return None
     with WHISPER_MODEL_LOCK:
         if WHISPER_MODEL is None:
-            WHISPER_MODEL = WhisperModel('base', device='cpu', compute_type='int8')
+            if TRANSCRIPTION_BACKEND == 'faster-whisper':
+                WHISPER_MODEL = WhisperModel('base', device='cpu', compute_type='int8')
+            else:
+                WHISPER_MODEL = legacy_whisper.load_model('base')
     return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
@@ -1316,8 +1331,8 @@ def transcribe_audio():
         print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
-        print('[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente.')
-        return jsonify({'error': 'Biblioteca faster-whisper não encontrada. Instale as dependências novamente.'}), 503
+        print('[Transcription][ERROR] Nenhum backend de transcrição disponível (faster-whisper/openai-whisper).')
+        return jsonify({'error': 'Biblioteca de transcrição não encontrada (faster-whisper/openai-whisper). Rode o INSTALAR.bat novamente.'}), 503
 
     audio_file = request.files.get('audio')
     if not audio_file:
@@ -1340,8 +1355,12 @@ def transcribe_audio():
             print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
-        segments, _ = model.transcribe(temp_path, language='pt')
-        text = ''.join(segment.text for segment in segments).strip()
+        if TRANSCRIPTION_BACKEND == 'faster-whisper':
+            segments, _ = model.transcribe(temp_path, language='pt')
+            text = ''.join(segment.text for segment in segments).strip()
+        else:
+            result = model.transcribe(temp_path, language='pt')
+            text = (result.get('text') or '').strip()
 
         if TRANSCRIPTION_DEBUG:
             print(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
@@ -1351,7 +1370,7 @@ def transcribe_audio():
         print(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
         if TRANSCRIPTION_DEBUG:
             traceback.print_exc()
-        return jsonify({'error': f'Falha ao transcrever áudio com faster-whisper: {e}'}), 500
+        return jsonify({'error': f"Falha ao transcrever áudio ({TRANSCRIPTION_BACKEND or 'sem backend'}): {e}"}), 500
     finally:
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
