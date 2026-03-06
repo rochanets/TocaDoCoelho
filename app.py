@@ -35,12 +35,14 @@ try:
 except ImportError:
     CHARDET_AVAILABLE = False
 
+WHISPER_IMPORT_ERROR = None
 try:
     from faster_whisper import WhisperModel
     WHISPER_AVAILABLE = True
-except ImportError:
+except Exception as e:
     WhisperModel = None
     WHISPER_AVAILABLE = False
+    WHISPER_IMPORT_ERROR = str(e)
 
 TRANSCRIPTION_BACKEND = 'faster-whisper' if WHISPER_AVAILABLE else None
 
@@ -118,7 +120,10 @@ DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').
 if WHISPER_AVAILABLE:
     logger.info('[Transcription] Backend carregado: faster-whisper')
 else:
-    logger.warning('[Transcription] Backend faster-whisper indisponível neste ambiente.')
+    if WHISPER_IMPORT_ERROR:
+        logger.warning(f'[Transcription] Backend faster-whisper indisponível: {WHISPER_IMPORT_ERROR}')
+    else:
+        logger.warning('[Transcription] Backend faster-whisper indisponível neste ambiente.')
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
 AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
