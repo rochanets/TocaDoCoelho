@@ -1416,16 +1416,35 @@
         .autopic-slot-box img { width:100%; height:100%; object-fit:cover; border-radius:8px; }
         /* iToca Chat Styles */
         .itoca-chat-container { margin-top:16px; display:flex; flex-direction:column; gap:0; }
-        .itoca-chat-messages { display:flex; flex-direction:column; gap:12px; max-height:480px; overflow-y:auto; padding:4px 2px; scroll-behavior:smooth; }
+        .itoca-chat-messages { display:flex; flex-direction:column; gap:12px; max-height:480px; overflow-y:auto; padding:4px 2px; scroll-behavior:smooth; justify-content:flex-end; }
         .itoca-msg { display:flex; gap:10px; align-items:flex-start; animation:itocaFadeIn .25s ease; }
         .itoca-msg.user { flex-direction:row-reverse; }
         .itoca-msg-avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; }
-        .itoca-msg.user .itoca-msg-avatar { background:#10b981; color:#fff; }
+        .itoca-msg.user .itoca-msg-avatar { background:#10b981; color:#fff; overflow:hidden; padding:0; }
+        .itoca-msg.user .itoca-msg-avatar img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
+        .itoca-msg.user .itoca-msg-avatar .itoca-avatar-initial { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600; }
         .itoca-msg.assistant .itoca-msg-avatar { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; overflow:hidden; padding:0; }
         .itoca-msg.assistant .itoca-msg-avatar img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
         .itoca-msg-bubble { max-width:82%; padding:10px 14px; border-radius:14px; font-size:14px; line-height:1.55; word-break:break-word; }
         .itoca-msg.user .itoca-msg-bubble { background:#10b981; color:#fff; border-bottom-right-radius:4px; }
-        .itoca-msg.assistant .itoca-msg-bubble { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; border-bottom-left-radius:4px; white-space:pre-wrap; }
+        .itoca-msg.assistant .itoca-msg-bubble { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; border-bottom-left-radius:4px; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown { white-space:normal; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown h1,
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown h2,
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown h3 { margin:8px 0 4px; font-size:14px; font-weight:700; color:#065f46; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown p { margin:4px 0; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown ul,
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown ol { margin:4px 0 4px 18px; padding:0; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown li { margin-bottom:2px; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown strong { font-weight:700; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown em { font-style:italic; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown code { background:#d1fae5; padding:1px 4px; border-radius:3px; font-family:monospace; font-size:12px; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown hr { border:none; border-top:1px solid #bbf7d0; margin:8px 0; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown table { border-collapse:collapse; width:100%; margin:6px 0; font-size:12px; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown th,
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown td { border:1px solid #bbf7d0; padding:4px 8px; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown th { background:#d1fae5; font-weight:700; }
+        .itoca-msg.assistant .itoca-msg-bubble:not(.itoca-markdown) { white-space:pre-wrap; }
         .itoca-msg.assistant .itoca-msg-bubble.needs-refinement { background:#fffbeb; border-color:#fde68a; color:#92400e; }
         .itoca-msg.error .itoca-msg-bubble { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }
         .itoca-msg-meta { margin-top:5px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -1445,7 +1464,7 @@
         .itoca-typing span:nth-child(3) { animation-delay:.4s; }
         @keyframes itocaBounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
         @keyframes itocaFadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
-        .itoca-chat-empty { text-align:center; color:#9ca3af; font-size:13px; padding:32px 0; }
+        .itoca-chat-empty { text-align:center; color:#9ca3af; font-size:13px; padding:10px 0 4px; margin-top:auto; }
         .itoca-chat-empty i { font-size:32px; display:block; margin-bottom:8px; color:#d1fae5; }
         .itoca-answer { display:none; }
         /* Histórico de conversas */
@@ -1572,7 +1591,6 @@
             <div class="itoca-chat-container">
                 <div id="itocaChatMessages" class="itoca-chat-messages">
                     <div class="itoca-chat-empty" id="itocaChatEmpty">
-                        <img src="/images/itoca-avatar.png" alt="iToca" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:block;margin:0 auto 8px;border:2px solid #bbf7d0;">
                         Olá! Sou o iToca. Atualize a base e me faça uma pergunta sobre seus contatos, atividades, agenda ou qualquer dado do sistema.
                     </div>
                 </div>
@@ -5655,18 +5673,41 @@
             if (empty) empty.style.display = 'none';
         }
 
-        function _itocaAppendUserMsg(text) {
+        function _itocaGetUserAvatarHtml() {
+            if (userProfile && userProfile.photo_url) {
+                return `<img src="${userProfile.photo_url}" alt="Você" onerror="this.parentElement.innerHTML='<span class=itoca-avatar-initial>' + (userProfile?.nickname || userProfile?.full_name || 'U').charAt(0).toUpperCase() + '</span>'">`;
+            }
+            const initial = (userProfile?.nickname || userProfile?.full_name || 'U').charAt(0).toUpperCase();
+            return `<span class="itoca-avatar-initial">${initial}</span>`;
+        }
+
+        function _itocaRenderMarkdown(text) {
+            if (typeof marked !== 'undefined') {
+                try {
+                    return marked.parse(text, { breaks: true, gfm: true });
+                } catch(e) {
+                    return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                }
+            }
+            return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        function _itocaIsLongResponse(text) {
+            // Considera longa se tem mais de 120 chars ou já tem markdown
+            return text.length > 120 || /[#*_`\[\]|\n]{2,}/.test(text);
+        }
+
+        function _itocaAppendUserMsg(question) {
             _itocaHideEmpty();
             const container = document.getElementById('itocaChatMessages');
             if (!container) return;
-            const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const escaped = question.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             const div = document.createElement('div');
             div.className = 'itoca-msg user';
             div.innerHTML = `
-                <div class="itoca-msg-avatar"><i class="fas fa-user"></i></div>
+                <div class="itoca-msg-avatar">${_itocaGetUserAvatarHtml()}</div>
                 <div class="itoca-msg-bubble">${escaped}</div>
-            `;
-            container.appendChild(div);
+            `;        container.appendChild(div);
             _itocaScrollToBottom();
         }
 
@@ -5708,12 +5749,18 @@
             const container = document.getElementById('itocaChatMessages');
             if (!container) return;
             const msgId = `itocaMsg${++itocaChatMsgCount}`;
-            const answer = (payload.answer || 'Sem resposta disponível.').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const rawAnswer = payload.answer || 'Sem resposta disponível.';
             const confidence = payload.confidence_percent != null ? payload.confidence_percent : null;
             const needsRefinement = payload.needs_refinement || false;
             const refinementHint = (payload.refinement_hint || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             const sources = payload.sources || [];
             const llmUsed = payload.llm_used || false;
+
+            // Renderiza Markdown em respostas médias/longas ou que já contenham markdown
+            const useMarkdown = _itocaIsLongResponse(rawAnswer);
+            const answerHtml = useMarkdown
+                ? _itocaRenderMarkdown(rawAnswer)
+                : rawAnswer.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
             let metaHtml = '';
             if (confidence !== null && llmUsed) {
@@ -5732,14 +5779,14 @@
                 metaHtml += `<button class="itoca-sources-toggle" onclick="_itocaToggleSources(this)">Ver fontes (${sources.length})</button><ul class="itoca-sources-list" data-count="${sources.length}">${sourcesHtml}</ul>`;
             }
 
-            const bubbleClass = needsRefinement ? 'itoca-msg-bubble needs-refinement' : 'itoca-msg-bubble';
+            const bubbleClass = (needsRefinement ? 'itoca-msg-bubble needs-refinement' : 'itoca-msg-bubble') + (useMarkdown ? ' itoca-markdown' : '');
             const div = document.createElement('div');
             div.className = 'itoca-msg assistant';
             div.id = msgId;
             div.innerHTML = `
                 <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca"></div>
                 <div>
-                    <div class="${bubbleClass}">${answer}</div>
+                    <div class="${bubbleClass}">${answerHtml}</div>
                     ${metaHtml ? `<div class="itoca-msg-meta">${metaHtml}</div>` : ''}
                 </div>
             `;
@@ -5766,7 +5813,6 @@
             if (!container) return;
             container.innerHTML = `
                 <div class="itoca-chat-empty" id="itocaChatEmpty">
-                    <img src="/images/itoca-avatar.png" alt="iToca" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:block;margin:0 auto 8px;border:2px solid #bbf7d0;">
                     Olá! Sou o iToca. Atualize a base e me faça uma pergunta sobre seus contatos, atividades, agenda ou qualquer dado do sistema.
                 </div>
             `;
@@ -7193,5 +7239,7 @@
             loadDashboard();
         });
     </script>
+    <!-- marked.js para renderização de Markdown nas respostas do iToca -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 </body>
 </html>

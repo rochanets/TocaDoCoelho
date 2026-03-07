@@ -937,15 +937,48 @@ def parse_currency_to_cents(value):
 
 ITOCA_EXCLUDED_TABLES = {
     'sqlite_sequence',
-    'app_settings'
+    'app_settings',
+    'itoca_chat_history',
+    'automapping_runs',
+    'status_rules',
+    'job_groupings',
+    'job_grouping_positions',
+    'message_templates',
+    'environment_responses',
 }
 
 
+# Mapa de sinônimos para expansão semântica nas buscas do RAG
+_ITOCA_SYNONYMS = {
+    'cnpj': ['cnpj', 'cadastro nacional', 'pessoa juridica', 'registro empresa', 'inscricao federal'],
+    'cpf': ['cpf', 'cadastro pessoa fisica', 'registro pessoa'],
+    'email': ['email', 'e-mail', 'correio eletronico', 'contato'],
+    'telefone': ['telefone', 'celular', 'fone', 'contato', 'whatsapp'],
+    'agenda': ['agenda', 'compromisso', 'reuniao', 'evento', 'encontro', 'meeting'],
+    'reuniao': ['reuniao', 'meeting', 'encontro', 'compromisso', 'agenda'],
+    'evento': ['evento', 'compromisso', 'reuniao', 'agenda', 'encontro'],
+    'proxima': ['proxima', 'proximo', 'futuro', 'upcoming', 'semana'],
+    'semana': ['semana', 'week', 'proximos dias', 'agenda'],
+    'contato': ['contato', 'cliente', 'pessoa', 'lead'],
+    'empresa': ['empresa', 'companhia', 'organizacao', 'account', 'conta'],
+    'wiki': ['wiki', 'documento', 'conhecimento', 'wikitoca'],
+    'documento': ['documento', 'arquivo', 'pdf', 'doc', 'wiki'],
+    'atividade': ['atividade', 'activity', 'interacao', 'historico'],
+}
+
 def _itoca_tokenize(question):
-    return [
+    base_tokens = [
         token for token in re.findall(r'[a-zA-ZÀ-ÿ0-9_-]{3,}', (question or '').lower())
-        if token not in {'para', 'com', 'sem', 'sobre', 'como', 'qual', 'quais', 'onde', 'quando'}
+        if token not in {'para', 'com', 'sem', 'sobre', 'como', 'qual', 'quais', 'onde', 'quando', 'que', 'uma', 'uns', 'das', 'dos', 'nos', 'nas', 'por', 'foi', 'sao', 'tem', 'ter'}
     ]
+    # Expande com sinônimos semânticos
+    expanded = list(base_tokens)
+    for token in base_tokens:
+        if token in _ITOCA_SYNONYMS:
+            for syn in _ITOCA_SYNONYMS[token]:
+                if syn not in expanded:
+                    expanded.append(syn)
+    return expanded[:20]  # limita para não explodir a query SQL
 
 
 def _itoca_text_columns(cursor, table_name):
@@ -1023,6 +1056,93 @@ def _itoca_search_context(question, limit=18):
                 conn.close()
                 return results
 
+    # Busca dedicada na agenda (commitments + account_renewal_events)
+    try:
+        agenda_tokens = tokens[:8]
+        # Sempre inclui eventos futuros quando a pergunta menciona agenda/evento/semana/próximo
+        agenda_keywords = {'agenda', 'compromisso', 'reuniao', 'evento', 'encontro', 'meeting', 'semana', 'proxima', 'proximo', 'futuro', 'upcoming', 'proximos'}
+        is_agenda_query = any(t in agenda_keywords for t in agenda_tokens)
+        if is_agenda_query:
+            # Retorna todos os eventos futuros (próximos 90 dias)
+            future_limit = (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            cursor.execute('''
+                SELECT cm.id, cm.title, cm.notes, cm.due_date, cm.due_time,
+                       cl.name as client_name, cl.company as client_company
+                FROM commitments cm
+                LEFT JOIN clients cl ON cm.client_id = cl.id
+                WHERE DATE(cm.due_date) >= ?
+                ORDER BY cm.due_date ASC
+                LIMIT 20
+            ''', (today_str,))
+            for row in cursor.fetchall():
+                rd = dict_from_row(row)
+                parts = []
+                if rd.get('title'):
+                    parts.append(f'titulo: {rd["title"]}')
+                if rd.get('due_date'):
+                    try:
+                        dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                        parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                    except Exception:
+                        parts.append(f'data: {rd["due_date"]}')
+                if rd.get('due_time'):
+                    parts.append(f'hora: {rd["due_time"]}')
+                if rd.get('client_name'):
+                    parts.append(f'contato: {rd["client_name"]}')
+                if rd.get('client_company'):
+                    parts.append(f'empresa: {rd["client_company"]}')
+                if rd.get('notes') and rd['notes'] != rd.get('title'):
+                    parts.append(f'notas: {rd["notes"][:200]}')
+                snippet = ' | '.join(parts)
+                if not snippet:
+                    continue
+                fp = f'commitments:{snippet[:160]}'
+                if fp in seen:
+                    continue
+                seen.add(fp)
+                results.append({'table': 'commitments', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+        else:
+            # Busca por tokens no título/notas dos compromissos
+            if agenda_tokens:
+                like_clauses_a = ' OR '.join(['LOWER(cm.title) LIKE ? OR LOWER(cm.notes) LIKE ?' for _ in agenda_tokens[:4]])
+                params_a = []
+                for t in agenda_tokens[:4]:
+                    params_a += [f'%{t}%', f'%{t}%']
+                cursor.execute(f'''
+                    SELECT cm.id, cm.title, cm.notes, cm.due_date, cm.due_time,
+                           cl.name as client_name, cl.company as client_company
+                    FROM commitments cm
+                    LEFT JOIN clients cl ON cm.client_id = cl.id
+                    WHERE {like_clauses_a}
+                    ORDER BY cm.due_date ASC LIMIT 6
+                ''', params_a)
+                for row in cursor.fetchall():
+                    rd = dict_from_row(row)
+                    parts = []
+                    if rd.get('title'):
+                        parts.append(f'titulo: {rd["title"]}')
+                    if rd.get('due_date'):
+                        try:
+                            dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                            parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                        except Exception:
+                            parts.append(f'data: {rd["due_date"]}')
+                    if rd.get('due_time'):
+                        parts.append(f'hora: {rd["due_time"]}')
+                    if rd.get('client_name'):
+                        parts.append(f'contato: {rd["client_name"]}')
+                    snippet = ' | '.join(parts)
+                    if not snippet:
+                        continue
+                    fp = f'commitments:{snippet[:160]}'
+                    if fp in seen:
+                        continue
+                    seen.add(fp)
+                    results.append({'table': 'commitments', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao buscar agenda: {e}')
+
     # Busca adicional em wiki_entries (conteúdo completo)
     try:
         like_clauses = ' OR '.join(['LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(tags) LIKE ?' for _ in tokens[:6]])
@@ -1050,20 +1170,34 @@ def _itoca_search_context(question, limit=18):
     except Exception as e:
         logger.warning(f'[iToca] Erro ao buscar wiki_entries: {e}')
 
-    # Busca adicional em wiki_documents (metadados + texto extraído do snapshot)
+    # Busca adicional em wiki_documents (metadados + busca no texto extraído do arquivo)
     try:
+        # Busca por título/nome do arquivo
         like_clauses_d = ' OR '.join(['LOWER(title) LIKE ? OR LOWER(original_name) LIKE ?' for _ in tokens[:6]])
         params_docs = []
         for t in tokens[:6]:
             params_docs += [f'%{t}%', f'%{t}%']
         cursor.execute(f'SELECT id, title, original_name, file_name, file_ext FROM wiki_documents WHERE {like_clauses_d} LIMIT 4', params_docs)
-        for row in cursor.fetchall():
-            rd = dict_from_row(row)
+        doc_rows_by_title = {row['id']: dict_from_row(row) for row in cursor.fetchall()}
+
+        # Busca também em TODOS os documentos pelo conteúdo extraído (para termos como CNPJ que não estão no título)
+        cursor.execute('SELECT id, title, original_name, file_name, file_ext FROM wiki_documents LIMIT 20')
+        all_doc_rows = {row['id']: dict_from_row(row) for row in cursor.fetchall()}
+        # Mescla: prioriza os encontrados por título, depois verifica os demais pelo conteúdo
+        candidate_docs = {**all_doc_rows, **doc_rows_by_title}  # doc_rows_by_title sobrescreve
+
+        for doc_id, rd in candidate_docs.items():
             file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
             doc_text = ''
             if file_path.exists():
                 doc_text = _itoca_extract_text_from_file(str(file_path))
-            snippet = f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))} | {doc_text[:1500]}' if doc_text else f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))}'
+            # Verifica se algum token aparece no conteúdo extraído
+            doc_text_lower = doc_text.lower()
+            found_in_content = any(t in doc_text_lower for t in tokens[:10])
+            found_by_title = doc_id in doc_rows_by_title
+            if not found_in_content and not found_by_title:
+                continue
+            snippet = f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))} | {doc_text[:2000]}' if doc_text else f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))}'
             fp = f'wiki_documents:{snippet[:160]}'
             if fp in seen:
                 continue
@@ -1073,7 +1207,7 @@ def _itoca_search_context(question, limit=18):
         logger.warning(f'[iToca] Erro ao buscar wiki_documents: {e}')
 
     conn.close()
-    return resultss
+    return results
 
 
 def _itoca_extract_text_from_file(file_path_str):
@@ -1117,6 +1251,88 @@ def _itoca_extract_text_from_file(file_path_str):
     except Exception as e:
         logger.warning(f'[iToca] Erro ao extrair texto de {file_path_str}: {e}')
     return '\n'.join(text_parts)
+
+
+def _itoca_build_agenda_items(conn):
+    """Gera itens da agenda (commitments + account_renewal_events) para o snapshot RAG com contexto rico."""
+    cursor = conn.cursor()
+    items = []
+    today = datetime.now().strftime('%Y-%m-%d')
+    # Compromissos da agenda (próximos 90 dias e últimos 30 dias)
+    try:
+        cursor.execute('''
+            SELECT cm.id, cm.title, cm.notes, cm.due_date, cm.due_time, cm.source_type,
+                   cl.name as client_name, cl.company as client_company
+            FROM commitments cm
+            LEFT JOIN clients cl ON cm.client_id = cl.id
+            ORDER BY cm.due_date ASC
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('due_date'):
+                try:
+                    dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                    parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                except Exception:
+                    parts.append(f'data: {rd["due_date"]}')
+            if rd.get('due_time'):
+                parts.append(f'hora: {rd["due_time"]}')
+            if rd.get('client_name'):
+                parts.append(f'contato: {rd["client_name"]}')
+            if rd.get('client_company'):
+                parts.append(f'empresa: {rd["client_company"]}')
+            if rd.get('notes') and rd['notes'] != rd.get('title'):
+                parts.append(f'notas: {rd["notes"][:300]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({
+                    'table': 'commitments',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': snippet.lower()
+                })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar commitments: {e}')
+
+    # Eventos de renovação de contas
+    try:
+        cursor.execute('''
+            SELECT ev.id, ev.title, ev.due_date, ev.due_time,
+                   ac.name as account_name
+            FROM account_renewal_events ev
+            LEFT JOIN accounts ac ON ev.account_id = ac.id
+            ORDER BY ev.due_date ASC
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('due_date'):
+                try:
+                    dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                    parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                except Exception:
+                    parts.append(f'data: {rd["due_date"]}')
+            if rd.get('due_time'):
+                parts.append(f'hora: {rd["due_time"]}')
+            if rd.get('account_name'):
+                parts.append(f'conta: {rd["account_name"]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({
+                    'table': 'account_renewal_events',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': snippet.lower()
+                })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar account_renewal_events: {e}')
+
+    return items
 
 
 def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
@@ -1209,6 +1425,10 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
                 conn.close()
                 return items
 
+    # Adiciona itens da agenda (commitments + account_renewal_events) com contexto rico
+    agenda_items = _itoca_build_agenda_items(conn)
+    items.extend(agenda_items)
+
     # Adiciona itens do WikiToca (entradas + documentos com extração de texto)
     wiki_items = _itoca_build_wiki_items(conn)
     items.extend(wiki_items)
@@ -1261,14 +1481,36 @@ def _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18):
     return [item for _, item in scored[:max(1, int(limit or 18))]]
 
 
+# Rótulos legíveis por tabela para o contexto do LLM
+_ITOCA_TABLE_LABELS = {
+    'clients': 'Contato/Cliente',
+    'accounts': 'Conta/Empresa',
+    'activities': 'Atividade/Interação',
+    'commitments': 'Evento de Agenda/Compromisso',
+    'account_renewal_events': 'Evento de Renovação de Conta',
+    'account_presences': 'Presença em Conta',
+    'account_main_contacts': 'Contato Principal de Conta',
+    'wiki_entries': 'Entrada de Conhecimento (WikiToca)',
+    'wiki_documents': 'Documento do WikiToca',
+    'environment_cards': 'Card de Mapeamento de Ambiente',
+    'daily_suggestions': 'Sugestão Diária',
+}
+
 def _itoca_compose_context_text(context_rows):
-    """Formata as linhas de contexto em texto estruturado para envio ao LLM."""
+    """Formata as linhas de contexto em texto estruturado e semântico para envio ao LLM."""
     if not context_rows:
         return ''
     lines = []
-    for item in context_rows[:18]:
-        row_id = f"#{item['id']}" if item.get('id') is not None else ''
-        lines.append(f"[{item['table']}{row_id}] {item['snippet']}")
+    lines.append('=== CONTEXTO INTERNO DO SISTEMA TOCA DO COELHO ===')
+    lines.append('(Use SOMENTE estas informações para responder. CNPJ = Cadastro Nacional de Pessoa Jurídica. CPF = Cadastro de Pessoa Física.)')
+    lines.append('')
+    for i, item in enumerate(context_rows[:20], 1):
+        table = item.get('table', '')
+        label = _ITOCA_TABLE_LABELS.get(table, table)
+        row_id = f" (id={item['id']})" if item.get('id') is not None else ''
+        lines.append(f'--- Registro {i}: {label}{row_id} ---')
+        lines.append(item['snippet'])
+        lines.append('')
     return '\n'.join(lines)
 
 
@@ -2568,7 +2810,25 @@ def itoca_ask():
                 'base_ready': False
             }), 409
 
-        context_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18)
+        # Busca híbrida: snapshot em cache + busca direta no banco para agenda e wiki
+        snapshot_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=15)
+        live_rows = _itoca_search_context(question, limit=8)
+
+        # Mescla resultados: prioriza live_rows para agenda/wiki, evita duplicatas
+        seen_keys = set()
+        context_rows = []
+        for item in live_rows:
+            key = f"{item.get('table')}:{item.get('id')}:{str(item.get('snippet',''))[:60]}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                context_rows.append(item)
+        for item in snapshot_rows:
+            key = f"{item.get('table')}:{item.get('id')}:{str(item.get('snippet',''))[:60]}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                context_rows.append(item)
+        context_rows = context_rows[:20]
+
         llm_result = _itoca_call_sai_llm(question, context_rows)
         answer = llm_result.get('answer', '')
         confidence = llm_result.get('confidence_percent', 0)
