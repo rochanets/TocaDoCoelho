@@ -3225,14 +3225,18 @@
                 showError(error.message || 'Falha ao buscar imagens com AutoPic.');
             } finally {
                 if (googleTab && !googleTab.closed) {
+                    let closeAttempts = 0;
                     const closeGoogleTab = () => {
+                        closeAttempts += 1;
                         try {
                             if (!googleTab.closed) googleTab.close();
                         } catch (_) {}
+                        if (googleTab.closed || closeAttempts >= 8) {
+                            clearInterval(closeInterval);
+                        }
                     };
-                    setTimeout(closeGoogleTab, 300);
-                    setTimeout(closeGoogleTab, 1200);
-                    setTimeout(closeGoogleTab, 2500);
+                    const closeInterval = setInterval(closeGoogleTab, 600);
+                    closeGoogleTab();
                 }
             }
         }

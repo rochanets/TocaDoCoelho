@@ -707,8 +707,8 @@ def _extract_bing_image_urls(raw_html):
 def _extract_google_image_urls(raw_html):
     patterns = [
         r'"ou":"(https?://[^"\\]+)"',
-        r'"(https://encrypted-tbn0\\.gstatic\\.com/images\\?q=tbn:[^"\\]+)"',
-        r'"(https://[^"\\]+\\.(?:jpg|jpeg|png|webp))"'
+        r'"(https://encrypted-tbn0\.gstatic\.com/images\?q=tbn:[^"\\]+)"',
+        r'"(https://[^"\\]+\.(?:jpg|jpeg|png|webp))"'
     ]
     urls = []
     for pattern in patterns:
@@ -717,6 +717,7 @@ def _extract_google_image_urls(raw_html):
             if url.startswith('http://') or url.startswith('https://'):
                 urls.append(url)
     return urls
+
 
 def _find_image_candidates_on_web(query, limit=3):
     if not query:
@@ -729,17 +730,26 @@ def _find_image_candidates_on_web(query, limit=3):
     with urllib.request.urlopen(req, timeout=12) as response:
         content = response.read().decode('utf-8', errors='ignore')
 
+    query_tokens = {
+        token for token in re.split(r'\s+', query.lower())
+        if len(token) >= 3
+    }
+
     urls = _extract_google_image_urls(content)
-    results = []
+    filtered = []
+    fallback = []
     seen = set()
     for u in urls:
         if u in seen:
             continue
         seen.add(u)
-        results.append(u)
-        if len(results) >= limit:
-            break
-    return results
+        lowered = u.lower()
+        if any(token in lowered for token in query_tokens):
+            filtered.append(u)
+        else:
+            fallback.append(u)
+
+    return (filtered + fallback)[:max(1, int(limit or 3))]
 
 def _download_remote_image_to_uploads(image_url, prefix='autofind'):
     parsed = urllib.parse.urlparse(image_url)
