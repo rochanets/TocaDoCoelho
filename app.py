@@ -2439,16 +2439,57 @@ def clients_autofind_photo_candidates():
     try:
         name = (request.args.get('name') or '').strip()
         company = (request.args.get('company') or '').strip()
-        query = ' '.join(part for part in [name, company] if part)
-        logger.info(f'[AutoPic] GET /autofind-photo-candidates: name={name!r} company={company!r} query={query!r}')
-        if not query:
+        logger.info(f'[AutoPic] GET /autofind-photo-candidates: name={name!r} company={company!r}')
+
+        if not name and not company:
             logger.warning('[AutoPic] GET /autofind-photo-candidates: nome e empresa vazios, abortando.')
             return jsonify({'error': 'Informe ao menos nome ou empresa.'}), 400
 
-        # Buscar 6 candidatos para ter margem de fallback caso alguma imagem retorne 403
-        candidates = _find_image_candidates_on_web(query, limit=6)
-        logger.info(f'[AutoPic] GET /autofind-photo-candidates: retornando {len(candidates)} candidato(s) para query={query!r}')
-        return jsonify({'query': query, 'candidates': candidates})
+        candidates = []
+        queries_tried = []
+
+        # Estratégia 1 (mais precisa): nome entre aspas + empresa entre aspas
+        # Força o Bing a encontrar páginas que contenham EXATAMENTE o nome e a empresa
+        if name and company:
+            q1 = f'"{name}" "{company}"'
+            queries_tried.append(q1)
+            logger.info(f'[AutoPic] Estratégia 1 (aspas duplas): query={q1!r}')
+            candidates = _find_image_candidates_on_web(q1, limit=6)
+            logger.info(f'[AutoPic] Estratégia 1 retornou {len(candidates)} candidato(s)')
+
+        # Estratégia 2: nome + empresa sem aspas (mais abrangente)
+        # Usada quando a estratégia 1 não encontrou candidatos suficientes
+        if len(candidates) < 3 and name and company:
+            q2 = f'{name} {company}'
+            queries_tried.append(q2)
+            logger.info(f'[AutoPic] Estratégia 2 (sem aspas, nome+empresa): query={q2!r}')
+            extra = _find_image_candidates_on_web(q2, limit=6)
+            logger.info(f'[AutoPic] Estratégia 2 retornou {len(extra)} candidato(s)')
+            # Adicionar apenas candidatos novos (sem duplicar)
+            seen = set(candidates)
+            for u in extra:
+                if u not in seen:
+                    seen.add(u)
+                    candidates.append(u)
+            candidates = candidates[:6]
+
+        # Estratégia 3: apenas nome (último recurso, quando não há empresa ou as anteriores falharam)
+        if len(candidates) < 3:
+            q3 = name or company
+            queries_tried.append(q3)
+            logger.info(f'[AutoPic] Estratégia 3 (apenas nome/empresa): query={q3!r}')
+            extra = _find_image_candidates_on_web(q3, limit=6)
+            logger.info(f'[AutoPic] Estratégia 3 retornou {len(extra)} candidato(s)')
+            seen = set(candidates)
+            for u in extra:
+                if u not in seen:
+                    seen.add(u)
+                    candidates.append(u)
+            candidates = candidates[:6]
+
+        logger.info(f'[AutoPic] Total final: {len(candidates)} candidato(s) após {len(queries_tried)} estratégia(s). '
+                    f'Queries tentadas: {queries_tried}')
+        return jsonify({'query': queries_tried[0] if queries_tried else '', 'candidates': candidates})
     except Exception as e:
         logger.exception(f'[AutoPic] ERRO em GET /autofind-photo-candidates: {e}')
         return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
