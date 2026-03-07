@@ -35,14 +35,12 @@ try:
 except ImportError:
     CHARDET_AVAILABLE = False
 
-try:
-    from faster_whisper import WhisperModel
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WhisperModel = None
-    WHISPER_AVAILABLE = False
+WHISPER_IMPORT_ERROR = None
+WHISPER_IMPORT_ATTEMPTED = False
+WhisperModel = None
+WHISPER_AVAILABLE = True
 
-TRANSCRIPTION_BACKEND = 'faster-whisper' if WHISPER_AVAILABLE else None
+TRANSCRIPTION_BACKEND = 'faster-whisper'
 
 try:
     import imageio_ffmpeg
@@ -111,10 +109,11 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
 
-if WHISPER_AVAILABLE:
-    logger.info('[Transcription] Backend carregado: faster-whisper')
-else:
-    logger.warning('[Transcription] Backend faster-whisper indisponível neste ambiente.')
+APP_VERSION = os.environ.get('TOCA_APP_VERSION', '1.0.0').strip() or '1.0.0'
+DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
+DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
+
+logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
 AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
@@ -190,12 +189,37 @@ def get_ffmpeg_install_instructions():
 
 
 def get_whisper_model():
-    global WHISPER_MODEL
+    global WHISPER_MODEL, WhisperModel, WHISPER_AVAILABLE, WHISPER_IMPORT_ERROR, WHISPER_IMPORT_ATTEMPTED
+
     if not WHISPER_AVAILABLE:
         return None
+
     with WHISPER_MODEL_LOCK:
-        if WHISPER_MODEL is None:
+        if WHISPER_MODEL is not None:
+            return WHISPER_MODEL
+
+        if WhisperModel is None and not WHISPER_IMPORT_ATTEMPTED:
+            WHISPER_IMPORT_ATTEMPTED = True
+            try:
+                from faster_whisper import WhisperModel as _WhisperModel
+                WhisperModel = _WhisperModel
+            except Exception as e:
+                WHISPER_AVAILABLE = False
+                WHISPER_IMPORT_ERROR = str(e)
+                logger.warning(f'[Transcription] Backend faster-whisper indisponível: {WHISPER_IMPORT_ERROR}')
+                return None
+
+        if WhisperModel is None:
+            return None
+
+        try:
             WHISPER_MODEL = WhisperModel('base', device='cpu', compute_type='int8')
+        except Exception as e:
+            WHISPER_AVAILABLE = False
+            WHISPER_IMPORT_ERROR = str(e)
+            logger.warning(f'[Transcription] Falha ao inicializar faster-whisper: {WHISPER_IMPORT_ERROR}')
+            return None
+
     return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
@@ -511,6 +535,8 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'stepfun/step-3.5-flash:free'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_site_url', 'http://localhost'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
     
     conn.commit()
     
@@ -623,6 +649,26 @@ def _load_app_settings_map(keys):
     conn.close()
     return mapping
 
+
+
+
+def _normalize_version(version):
+    normalized = re.sub(r'^[vV]', '', str(version or '').strip())
+    return normalized
+
+
+def _version_key(version):
+    normalized = _normalize_version(version)
+    if not normalized:
+        return tuple()
+    parts = re.split(r'[.+\-]', normalized)
+    parsed = []
+    for part in parts:
+        if part.isdigit():
+            parsed.append((0, int(part)))
+        else:
+            parsed.append((1, part.lower()))
+    return tuple(parsed)
 
 def _resolve_setting(secret_key, env_key):
     try:
@@ -1322,8 +1368,9 @@ def transcribe_audio():
         print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
-        print('[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente.')
-        return jsonify({'error': 'Biblioteca faster-whisper não encontrada. Rode o INSTALAR.bat novamente.'}), 503
+        details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+        print(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
+        return jsonify({'error': 'Biblioteca faster-whisper não está disponível neste ambiente.'}), 503
 
     audio_file = request.files.get('audio')
     if not audio_file:
@@ -1346,6 +1393,9 @@ def transcribe_audio():
             print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
+        if model is None:
+            details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+            return jsonify({'error': f'Backend de transcrição indisponível{details}.'}), 503
         segments, _ = model.transcribe(temp_path, language='pt')
         text = ''.join(segment.text for segment in segments).strip()
 
@@ -1710,6 +1760,108 @@ def save_integrations_config():
         logger.exception(f'[ERROR] PUT /api/config/integrations: {e}')
         return jsonify({'error': str(e)}), 500
 
+
+
+
+@app.route('/api/config/update-source', methods=['GET'])
+def get_update_source_config():
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+        return jsonify({
+            'current_version': APP_VERSION,
+            'github_owner': owner,
+            'github_repo': repo,
+            'configured': bool(owner and repo)
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/update-source: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/update-source', methods=['PUT'])
+def save_update_source_config():
+    try:
+        data = request.get_json() or {}
+        owner = (data.get('github_owner') or '').strip()
+        repo = (data.get('github_repo') or '').strip()
+
+        conn = get_db()
+        c = conn.cursor()
+        updates = [
+            ('update_github_owner', owner),
+            ('update_github_repo', repo)
+        ]
+        for key, value in updates:
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+                (key, value)
+            )
+        conn.commit()
+        conn.close()
+
+        return jsonify({'message': 'Fonte de atualização salva com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] PUT /api/config/update-source: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/check-updates', methods=['GET'])
+def check_updates():
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+
+        if not owner or not repo:
+            return jsonify({
+                'update_available': False,
+                'configured': False,
+                'current_version': APP_VERSION,
+                'message': 'Configure GitHub Owner e Repositório em Configurações para verificar updates.'
+            }), 400
+
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
+        req = urllib.request.Request(api_url, headers={
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'TocaDoCoelho-Updater'
+        })
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+
+        latest_tag = (payload.get('tag_name') or '').strip()
+        latest_version = _normalize_version(latest_tag)
+        current_version = _normalize_version(APP_VERSION)
+
+        if not latest_version:
+            return jsonify({'error': 'Tag da release mais recente está vazia no GitHub.'}), 502
+
+        update_available = _version_key(latest_version) > _version_key(current_version)
+        return jsonify({
+            'configured': True,
+            'github_owner': owner,
+            'github_repo': repo,
+            'current_version': current_version,
+            'latest_version': latest_version,
+            'latest_tag': latest_tag,
+            'update_available': update_available,
+            'release_name': payload.get('name') or latest_tag,
+            'release_notes': payload.get('body') or '',
+            'html_url': payload.get('html_url') or '',
+            'published_at': payload.get('published_at')
+        })
+    except urllib.error.HTTPError as e:
+        logger.exception(f'[ERROR] GET /api/config/check-updates (HTTP): {e}')
+        if e.code == 404:
+            return jsonify({'error': 'Nenhuma release encontrada nesse repositório ou repositório inválido.'}), 404
+        if e.code == 403:
+            return jsonify({'error': 'GitHub API limit atingido temporariamente. Tente novamente mais tarde.'}), 429
+        return jsonify({'error': f'Falha ao consultar GitHub Releases (HTTP {e.code}).'}), 502
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
+        return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
 
 @app.route('/api/config/profile', methods=['POST'])
 def save_profile_config():
