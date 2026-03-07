@@ -18,6 +18,8 @@ import urllib.error
 import urllib.parse
 import html
 import time
+import ssl
+import base64
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -697,7 +699,15 @@ def api_error(status, code, message, details=None, hint=None):
 
 
 def _extract_bing_image_urls(raw_html):
-    matches = re.findall(r'"murl":"(.*?)"', raw_html)
+    """Extrai as URLs originais das imagens do HTML do Bing Images.
+    O Bing codifica os dados de imagem com HTML entities nos atributos data-*,
+    por isso o padrão usa &quot; ao invés de aspas diretas.
+    """
+    # Padrão principal: Bing usa HTML entities nos atributos data-*
+    matches = re.findall(r'&quot;murl&quot;:&quot;(https?://[^&]+)&quot;', raw_html)
+    if not matches:
+        # Fallback: tentar sem HTML entities (caso o Bing mude o formato)
+        matches = re.findall(r'"murl":"(https?://[^"]+)"', raw_html)
     urls = []
     for item in matches:
         url = html.unescape(item).replace('\\/', '/')
@@ -706,62 +716,82 @@ def _extract_bing_image_urls(raw_html):
     return urls
 
 
-def _extract_google_image_urls(raw_html):
-    patterns = [
-        r'"ou":"(https?://[^"\\]+)"',
-        r'"(https://encrypted-tbn0\.gstatic\.com/images\?q=tbn:[^"\\]+)"',
-        r'"(https://[^"\\]+\.(?:jpg|jpeg|png|webp))"'
-    ]
-    urls = []
-    for pattern in patterns:
-        for item in re.findall(pattern, raw_html, re.IGNORECASE):
-            url = html.unescape(item).replace('\\u003d', '=').replace('\\u0026', '&').replace('\\/', '/')
-            if url.startswith('http://') or url.startswith('https://'):
-                urls.append(url)
-    return urls
-
-
 def _find_image_candidates_on_web(query, limit=3):
+    """Busca as primeiras imagens do Bing Images para o query fornecido.
+    Retorna lista de URLs das imagens originais (as primeiras que aparecem na tela).
+    """
     if not query:
         return []
 
-    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-    search_url = f"https://www.google.com/search?tbm=isch&q={urllib.parse.quote(query)}"
-    req = urllib.request.Request(search_url, headers={'User-Agent': user_agent})
+    limit = max(1, int(limit or 3))
+    user_agent = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/124.0.0.0 Safari/537.36'
+    )
+    search_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}&form=HDRSC2&first=1"
 
-    with urllib.request.urlopen(req, timeout=12) as response:
-        content = response.read().decode('utf-8', errors='ignore')
+    # Contexto SSL sem verificação para evitar erros de certificado em ambientes restritos
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
 
-    query_tokens = {
-        token for token in re.split(r'\s+', query.lower())
-        if len(token) >= 3
-    }
+    req = urllib.request.Request(
+        search_url,
+        headers={
+            'User-Agent': user_agent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+    )
 
-    urls = _extract_google_image_urls(content)
-    filtered = []
-    fallback = []
-    seen = set()
-    for u in urls:
-        if u in seen:
-            continue
-        seen.add(u)
-        lowered = u.lower()
-        if any(token in lowered for token in query_tokens):
-            filtered.append(u)
+    import gzip
+    import io
+    with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
+        raw_data = response.read()
+        encoding = response.headers.get('Content-Encoding', '')
+        if encoding == 'gzip':
+            content = gzip.decompress(raw_data).decode('utf-8', errors='ignore')
+        elif encoding == 'br':
+            try:
+                import brotli
+                content = brotli.decompress(raw_data).decode('utf-8', errors='ignore')
+            except Exception:
+                content = raw_data.decode('utf-8', errors='ignore')
         else:
-            fallback.append(u)
+            content = raw_data.decode('utf-8', errors='ignore')
 
-    return (filtered + fallback)[:max(1, int(limit or 3))]
+    urls = _extract_bing_image_urls(content)
+
+    # Remover duplicatas mantendo a ordem (as primeiras são as que aparecem na tela)
+    seen = set()
+    unique_urls = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            unique_urls.append(u)
+
+    return unique_urls[:limit]
+
 
 def _download_remote_image_to_uploads(image_url, prefix='autofind'):
     parsed = urllib.parse.urlparse(image_url)
     if parsed.scheme not in {'http', 'https'}:
         raise ValueError('URL de imagem inválida.')
 
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
     req = urllib.request.Request(image_url, headers={
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+        'Referer': 'https://www.bing.com/',
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
     })
-    with urllib.request.urlopen(req, timeout=15) as response:
+    with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
         content_type = (response.headers.get('Content-Type') or '').lower()
         data = response.read(6 * 1024 * 1024 + 1)
 
@@ -2340,7 +2370,8 @@ def clients_autofind_photo_candidates():
         if not query:
             return jsonify({'error': 'Informe ao menos nome ou empresa.'}), 400
 
-        candidates = _find_image_candidates_on_web(query, limit=3)
+        # Buscar 6 candidatos para ter margem de fallback caso alguma imagem retorne 403
+        candidates = _find_image_candidates_on_web(query, limit=6)
         return jsonify({'query': query, 'candidates': candidates})
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/clients/autofind-photo-candidates: {e}')
@@ -2362,6 +2393,42 @@ def clients_autofind_photo():
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/clients/autofind-photo: {e}')
         return jsonify({'error': f'Erro ao importar imagem selecionada: {e}'}), 500
+
+
+@app.route('/api/clients/autofind-photo-base64', methods=['POST'])
+def clients_autofind_photo_base64():
+    """Recebe uma imagem em base64 (data URL), salva no servidor e retorna a URL local."""
+    try:
+        data = request.get_json() or {}
+        data_url = (data.get('data_url') or '').strip()
+        person_name = (data.get('name') or '').strip() or 'autofind'
+        if not data_url:
+            return jsonify({'error': 'data_url não informada.'}), 400
+
+        # Formato esperado: data:image/jpeg;base64,<dados>
+        if not data_url.startswith('data:image/'):
+            return jsonify({'error': 'Formato de data URL inválido.'}), 400
+
+        header, encoded = data_url.split(',', 1)
+        # Extrair extensão do tipo MIME
+        mime_type = header.split(';')[0].replace('data:', '')
+        ext_map = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif'}
+        ext = ext_map.get(mime_type, '.jpg')
+
+        img_data = base64.b64decode(encoded)
+        if len(img_data) > 6 * 1024 * 1024:
+            return jsonify({'error': 'Imagem muito grande (máximo 6MB).'}), 400
+
+        safe_prefix = secure_filename(person_name) or 'autofind'
+        filename = secure_filename(f"{safe_prefix}-{int(time.time()*1000)}{ext}")
+        path = UPLOAD_DIR / filename
+        with open(path, 'wb') as f:
+            f.write(img_data)
+
+        return jsonify({'photo_url': f'/uploads/{filename}'})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/clients/autofind-photo-base64: {e}')
+        return jsonify({'error': f'Erro ao salvar imagem: {e}'}), 500
 
 
 @app.route('/api/clientes', methods=['POST'])

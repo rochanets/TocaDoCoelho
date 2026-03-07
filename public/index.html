@@ -3181,39 +3181,44 @@
         function renderAutoPicSlots() {
             const el = document.getElementById('clientAutoPicCandidates');
             if (!el) return;
-            const filled = autoPicSlots.filter(Boolean).length;
             el.classList.add('open');
+            const isLoading = autoPicSlots._loading === true;
+            const hasImages = autoPicSlots.some(Boolean);
+
+            if (isLoading) {
+                el.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
+                        <strong style="color:#065f46; font-size:12px;">&#10024; AutoPic — Buscando imagens...</strong>
+                        <button type="button" class="btn btn-secondary btn-small" onclick="clearClientAutoPicCandidates()">Cancelar</button>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px; padding:16px 0; color:#047857;">
+                        <span style="font-size:22px;">&#9203;</span>
+                        <span>Buscando as 3 primeiras imagens automaticamente...</span>
+                    </div>
+                `;
+                return;
+            }
+
             el.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
-                    <strong style="color:#065f46; font-size:12px;">Cole 3 imagens (Ctrl+V) para escolher a foto final</strong>
+                    <strong style="color:#065f46; font-size:12px;">&#10024; AutoPic — Clique na imagem desejada</strong>
                     <button type="button" class="btn btn-secondary btn-small" onclick="clearClientAutoPicCandidates()">Descartar</button>
                 </div>
                 <div class="autopic-candidates-grid" style="align-items:flex-start;">
                     ${[0,1,2].map((idx) => {
                         const data = autoPicSlots[idx];
-                        const activeClass = idx === autoPicActiveSlot ? 'active' : '';
-                        const content = data ? `<img src="${data}" alt="AutoPic ${idx+1}">` : 'Clique e use Ctrl+V';
-                        return `<div class="autopic-slot"><div class="autopic-slot-title">Imagem ${idx+1}</div><div class="autopic-slot-box ${activeClass}" onclick="onAutoPicSlotClick(${idx})">${content}</div></div>`;
+                        const content = data
+                            ? `<img src="${data}" alt="AutoPic ${idx+1}" style="cursor:pointer;" onclick="chooseAutoPicSlot(${idx})">`
+                            : `<div style="display:flex;align-items:center;justify-content:center;height:80px;color:#9ca3af;font-size:12px;">Sem imagem</div>`;
+                        return `<div class="autopic-slot"><div class="autopic-slot-title">Imagem ${idx+1}</div><div class="autopic-slot-box" onclick="${data ? 'chooseAutoPicSlot(' + idx + ')' : ''}">${content}</div></div>`;
                     }).join('')}
                 </div>
-                <small style="display:block; margin-top:8px; color:#047857;">Preenchido: ${filled}/3. Após a 3ª imagem, a aba do Google será fechada automaticamente.</small>
+                <small style="display:block; margin-top:8px; color:#047857;">Clique na imagem que deseja usar como foto do contato.</small>
             `;
         }
 
-        function setAutoPicActiveSlot(index) {
-            autoPicActiveSlot = Math.max(0, Math.min(2, Number(index) || 0));
-            renderAutoPicSlots();
-        }
-
-        function onAutoPicSlotClick(index) {
-            if (autoPicSlots[index]) {
-                chooseAutoPicSlot(index);
-            } else {
-                setAutoPicActiveSlot(index);
-            }
-        }
-
         function applyAutoPicImageFromBlob(blob, slotIndex = null) {
+            // Mantido para compatibilidade com o listener de paste (caso o usuário cole manualmente)
             if (!blob) return;
             let targetSlot = Number.isInteger(slotIndex) ? slotIndex : autoPicActiveSlot;
             if (targetSlot < 0 || targetSlot > 2) targetSlot = 0;
@@ -3222,11 +3227,6 @@
                 autoPicSlots[targetSlot] = e.target.result;
                 if (targetSlot < 2) autoPicActiveSlot = targetSlot + 1;
                 renderAutoPicSlots();
-
-                if (autoPicSlots.every(Boolean)) {
-                    setTimeout(() => { if (autoPicGoogleTab && !autoPicGoogleTab.closed) autoPicGoogleTab.close(); }, 250);
-                    showSuccess('As 3 imagens foram coladas. Escolha uma clicando nela.');
-                }
             };
             reader.readAsDataURL(blob);
         }
@@ -3238,32 +3238,77 @@
             el.innerHTML = '';
             autoPicSlots = [null, null, null];
             autoPicActiveSlot = 0;
-            if (autoPicGoogleTab && !autoPicGoogleTab.closed) {
-                try { autoPicGoogleTab.close(); } catch (_) {}
-            }
             autoPicGoogleTab = null;
         }
 
-        async function selectClientAutoPicImage(imageUrl) {
+        async function chooseAutoPicSlot(index) {
+            const image = autoPicSlots[index];
+            if (!image) return;
+
             const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
+
+            // Mostrar estado de carregamento no slot selecionado
+            document.querySelectorAll('.autopic-slot-box').forEach((box, idx) => {
+                box.classList.toggle('active', idx === index);
+            });
+
             try {
-                const response = await fetch(`${API_BASE}/clients/autofind-photo`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image_url: imageUrl, name })
-                });
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Não foi possível importar a imagem.');
+                let photoUrl = '';
+
+                if (image.startsWith('data:image/')) {
+                    // Imagem em base64 — salvar no servidor via endpoint dedicado
+                    const response = await fetch(`${API_BASE}/clients/autofind-photo-base64`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ data_url: image, name })
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(payload.error || 'Não foi possível salvar a imagem.');
+                    photoUrl = payload.photo_url || '';
+                } else {
+                    // URL externa — baixar e salvar no servidor
+                    // Tentar a URL selecionada; se falhar (ex: 403), tentar candidatos de fallback
+                    const allCandidates = autoPicSlots._allCandidates || [];
+                    const usedUrls = new Set(autoPicSlots.filter(Boolean));
+                    const fallbackUrls = allCandidates.filter(u => !usedUrls.has(u) && u !== image);
+                    
+                    let lastError = null;
+                    let urlsToTry = [image, ...fallbackUrls];
+                    
+                    for (const urlToTry of urlsToTry) {
+                        try {
+                            const response = await fetch(`${API_BASE}/clients/autofind-photo`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ image_url: urlToTry, name })
+                            });
+                            const payload = await response.json().catch(() => ({}));
+                            if (!response.ok) {
+                                lastError = payload.error || 'Não foi possível importar a imagem.';
+                                continue; // tentar próxima URL
+                            }
+                            photoUrl = payload.photo_url || '';
+                            lastError = null;
+                            break; // sucesso!
+                        } catch (e) {
+                            lastError = e.message;
+                        }
+                    }
+                    
+                    if (lastError || !photoUrl) {
+                        throw new Error(lastError || 'Não foi possível importar nenhuma das imagens encontradas.');
+                    }
+                }
 
                 const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
-                if (autofindPhotoUrl) autofindPhotoUrl.value = payload.photo_url || '';
+                if (autofindPhotoUrl) autofindPhotoUrl.value = photoUrl;
 
                 const photoInput = document.getElementById('photoInput');
                 if (photoInput) photoInput.value = '';
 
                 const preview = document.getElementById('photoPreview');
                 if (preview) {
-                    preview.src = payload.photo_url || imageUrl;
+                    preview.src = photoUrl || image;
                     preview.style.display = 'block';
                 }
 
@@ -3271,30 +3316,11 @@
                 if (removePhotoFlag) removePhotoFlag.value = '0';
 
                 clearClientAutoPicCandidates();
-                showSuccess('Foto definida via AutoPic!');
+                showSuccess('Foto definida via AutoPic! Salve o contato para confirmar.');
             } catch (error) {
                 showError(error.message || 'Falha ao usar imagem do AutoPic.');
             }
         }
-
-        function chooseAutoPicSlot(index) {
-            const image = autoPicSlots[index];
-            if (!image) return;
-            const preview = document.getElementById('photoPreview');
-            if (preview) {
-                preview.src = image;
-                preview.style.display = 'block';
-            }
-            const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
-            if (autofindPhotoUrl) autofindPhotoUrl.value = '';
-            const removePhotoFlag = document.getElementById('removePhotoFlag');
-            if (removePhotoFlag) removePhotoFlag.value = '0';
-            showSuccess(`Imagem ${index + 1} selecionada. Salve o contato para concluir.`);
-            document.querySelectorAll('.autopic-slot-box').forEach((box, idx) => {
-                box.classList.toggle('active', idx === index);
-            });
-        }
-
 
         async function openClientAutoPicSearch() {
             const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
@@ -3308,22 +3334,42 @@
                 return;
             }
 
+            // Inicializar slots e mostrar estado de carregamento
             autoPicSlots = [null, null, null];
+            autoPicSlots._loading = true;
             autoPicActiveSlot = 0;
             renderAutoPicSlots();
 
-            const query = `${name} ${company}`.trim();
-            const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
-            autoPicGoogleTab = window.open('', '_blank');
-            if (!autoPicGoogleTab) {
-                await openSystemDialog({
-                    title: 'AutoPic',
-                    message: 'O navegador bloqueou pop-ups. Libere pop-ups para usar o AutoPic.'
+            try {
+                const params = new URLSearchParams({ name, company });
+                const response = await fetch(`${API_BASE}/clients/autofind-photo-candidates?${params}`);
+                const payload = await response.json().catch(() => ({}));
+
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível buscar imagens.');
+
+                const candidates = payload.candidates || [];
+                if (candidates.length === 0) {
+                    clearClientAutoPicCandidates();
+                    await openSystemDialog({
+                        title: 'AutoPic',
+                        message: 'Nenhuma imagem encontrada para este contato. Tente adicionar uma foto manualmente.'
+                    });
+                    return;
+                }
+
+                // Preencher slots com as URLs das imagens encontradas
+                // Armazenar todos os candidatos para fallback (caso alguma imagem retorne 403)
+                autoPicSlots = [null, null, null];
+                autoPicSlots._loading = false;
+                autoPicSlots._allCandidates = candidates; // todos os candidatos para fallback
+                candidates.slice(0, 3).forEach((url, i) => {
+                    autoPicSlots[i] = url;
                 });
-                return;
+                renderAutoPicSlots();
+            } catch (error) {
+                clearClientAutoPicCandidates();
+                showError(error.message || 'Falha ao buscar imagens via AutoPic.');
             }
-            autoPicGoogleTab.location.href = googleImagesUrl;
-            showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) as 3 primeiras imagens nos campos abaixo.');
         }
 
         // Save Client
