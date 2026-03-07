@@ -39,6 +39,20 @@ try:
 except ImportError:
     CHARDET_AVAILABLE = False
 
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    pdfplumber = None
+    PDFPLUMBER_AVAILABLE = False
+
+try:
+    import docx as python_docx
+    PYTHON_DOCX_AVAILABLE = True
+except ImportError:
+    python_docx = None
+    PYTHON_DOCX_AVAILABLE = False
+
 WHISPER_IMPORT_ERROR = None
 WHISPER_IMPORT_ATTEMPTED = False
 WhisperModel = None
@@ -546,7 +560,21 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_template_id', '69ac3c87024adc2d2bdc19f5'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
-    
+
+    # Histórico de conversas do iToca (30 dias)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS itoca_chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+            content TEXT NOT NULL,
+            confidence_percent INTEGER,
+            needs_refinement INTEGER DEFAULT 0,
+            refinement_hint TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     
     # Migração: adicionar colunas se não existirem
@@ -951,38 +979,31 @@ def _itoca_search_context(question, limit=18):
     tokens = _itoca_tokenize(question)
     if not tokens:
         return []
-
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES]
-
     results = []
     seen = set()
     like_values = [f'%{token}%' for token in tokens[:6]]
-
     for table in tables:
         text_columns = _itoca_text_columns(cursor, table)
         if not text_columns:
             continue
-
         search_clauses = []
         params = []
         for col in text_columns[:8]:
             for like_value in like_values:
                 search_clauses.append(f'LOWER(COALESCE("{col}", "")) LIKE ?')
                 params.append(like_value)
-
         if not search_clauses:
             continue
-
         sql = f'SELECT * FROM "{table}" WHERE ' + ' OR '.join(search_clauses) + ' LIMIT 6'
         try:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
         except Exception:
             continue
-
         for row in rows:
             row_dict = dict_from_row(row)
             snippet = _itoca_build_snippet(row_dict)
@@ -1002,8 +1023,158 @@ def _itoca_search_context(question, limit=18):
                 conn.close()
                 return results
 
+    # Busca adicional em wiki_entries (conteúdo completo)
+    try:
+        like_clauses = ' OR '.join(['LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(tags) LIKE ?' for _ in tokens[:6]])
+        params_wiki = []
+        for t in tokens[:6]:
+            params_wiki += [f'%{t}%', f'%{t}%', f'%{t}%']
+        cursor.execute(f'SELECT id, title, category, content, tags FROM wiki_entries WHERE {like_clauses} LIMIT 6', params_wiki)
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('category'):
+                parts.append(f'categoria: {rd["category"]}')
+            if rd.get('content'):
+                parts.append(f'conteudo: {rd["content"][:1500]}')
+            snippet = ' | '.join(parts)
+            if not snippet:
+                continue
+            fp = f'wiki_entries:{snippet[:160]}'
+            if fp in seen:
+                continue
+            seen.add(fp)
+            results.append({'table': 'wiki_entries', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao buscar wiki_entries: {e}')
+
+    # Busca adicional em wiki_documents (metadados + texto extraído do snapshot)
+    try:
+        like_clauses_d = ' OR '.join(['LOWER(title) LIKE ? OR LOWER(original_name) LIKE ?' for _ in tokens[:6]])
+        params_docs = []
+        for t in tokens[:6]:
+            params_docs += [f'%{t}%', f'%{t}%']
+        cursor.execute(f'SELECT id, title, original_name, file_name, file_ext FROM wiki_documents WHERE {like_clauses_d} LIMIT 4', params_docs)
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
+            doc_text = ''
+            if file_path.exists():
+                doc_text = _itoca_extract_text_from_file(str(file_path))
+            snippet = f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))} | {doc_text[:1500]}' if doc_text else f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))}'
+            fp = f'wiki_documents:{snippet[:160]}'
+            if fp in seen:
+                continue
+            seen.add(fp)
+            results.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao buscar wiki_documents: {e}')
+
     conn.close()
-    return results
+    return resultss
+
+
+def _itoca_extract_text_from_file(file_path_str):
+    """Extrai texto de PDF, DOCX ou XLSX para indexação no RAG."""
+    path = Path(file_path_str)
+    ext = path.suffix.lower()
+    text_parts = []
+    try:
+        if ext == '.pdf':
+            if PDFPLUMBER_AVAILABLE:
+                with pdfplumber.open(str(path)) as pdf:
+                    for page in pdf.pages[:30]:  # limita a 30 páginas
+                        page_text = page.extract_text() or ''
+                        if page_text.strip():
+                            text_parts.append(page_text.strip())
+            else:
+                # fallback: pdftotext via subprocess
+                import subprocess
+                result = subprocess.run(['pdftotext', str(path), '-'], capture_output=True, text=True, timeout=15)
+                if result.returncode == 0:
+                    text_parts.append(result.stdout)
+        elif ext == '.docx':
+            if PYTHON_DOCX_AVAILABLE:
+                doc = python_docx.Document(str(path))
+                for para in doc.paragraphs:
+                    if para.text.strip():
+                        text_parts.append(para.text.strip())
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                        if row_text:
+                            text_parts.append(row_text)
+        elif ext in ('.xlsx', '.xls'):
+            if OPENPYXL_AVAILABLE:
+                wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+                for sheet in wb.worksheets:
+                    for row in sheet.iter_rows(values_only=True):
+                        row_text = ' | '.join(str(c) for c in row if c is not None and str(c).strip())
+                        if row_text:
+                            text_parts.append(row_text)
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao extrair texto de {file_path_str}: {e}')
+    return '\n'.join(text_parts)
+
+
+def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
+    """Gera itens do WikiToca (entradas de conhecimento + documentos) para o snapshot RAG."""
+    cursor = conn.cursor()
+    items = []
+
+    # 1. Entradas de conhecimento (wiki_entries)
+    try:
+        cursor.execute('SELECT id, title, category, content, tags FROM wiki_entries ORDER BY updated_at DESC')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('category'):
+                parts.append(f'categoria: {rd["category"]}')
+            if rd.get('tags'):
+                parts.append(f'tags: {rd["tags"]}')
+            if rd.get('content'):
+                parts.append(f'conteudo: {rd["content"][:2000]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({
+                    'table': 'wiki_entries',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': snippet.lower()
+                })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_entries: {e}')
+
+    # 2. Documentos (wiki_documents) — extrai texto do arquivo
+    try:
+        cursor.execute('SELECT id, title, original_name, file_name, file_ext FROM wiki_documents ORDER BY updated_at DESC')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
+            doc_text = ''
+            if file_path.exists():
+                doc_text = _itoca_extract_text_from_file(str(file_path))
+            if not doc_text.strip():
+                # sem conteúdo extraível, indexa apenas metadados
+                doc_text = f'documento: {rd.get("original_name", "")}'
+            # Divide em chunks de max_chars_per_doc para não sobrecarregar o contexto
+            chunks = [doc_text[i:i+max_chars_per_doc] for i in range(0, min(len(doc_text), max_chars_per_doc * 5), max_chars_per_doc)]
+            for idx, chunk in enumerate(chunks):
+                snippet = f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))} | parte {idx+1} | {chunk.strip()[:1500]}'
+                items.append({
+                    'table': 'wiki_documents',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': snippet.lower()
+                })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_documents: {e}')
+
+    return items
 
 
 def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items=6000):
@@ -1037,6 +1208,10 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
             if len(items) >= max_items:
                 conn.close()
                 return items
+
+    # Adiciona itens do WikiToca (entradas + documentos com extração de texto)
+    wiki_items = _itoca_build_wiki_items(conn)
+    items.extend(wiki_items)
 
     conn.close()
     return items
@@ -2382,6 +2557,7 @@ def itoca_ask():
     try:
         data = request.get_json() or {}
         question = (data.get('question') or '').strip()
+        session_id = (data.get('session_id') or '').strip()
         if not question:
             return jsonify({'error': 'Pergunta obrigatória.'}), 400
 
@@ -2394,11 +2570,34 @@ def itoca_ask():
 
         context_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18)
         llm_result = _itoca_call_sai_llm(question, context_rows)
+        answer = llm_result.get('answer', '')
+        confidence = llm_result.get('confidence_percent', 0)
+        needs_ref = llm_result.get('needs_refinement', False)
+        ref_hint = llm_result.get('refinement_hint', '')
+
+        # Salvar no histórico se session_id fornecido
+        if session_id:
+            try:
+                conn_h = get_db()
+                c_h = conn_h.cursor()
+                c_h.execute(
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)' ,
+                    (session_id, 'user', question, '')
+                )
+                c_h.execute(
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, ?, ?, ?)',
+                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint)
+                )
+                conn_h.commit()
+                conn_h.close()
+            except Exception as he:
+                logger.warning(f'[iToca] Erro ao salvar histórico: {he}')
+
         return jsonify({
-            'answer': llm_result.get('answer', ''),
-            'confidence_percent': llm_result.get('confidence_percent', 0),
-            'needs_refinement': llm_result.get('needs_refinement', False),
-            'refinement_hint': llm_result.get('refinement_hint', ''),
+            'answer': answer,
+            'confidence_percent': confidence,
+            'needs_refinement': needs_ref,
+            'refinement_hint': ref_hint,
             'llm_used': llm_result.get('llm_used', False),
             'items_found': len(context_rows),
             'sources': context_rows,
@@ -2408,6 +2607,70 @@ def itoca_ask():
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
         return jsonify({'error': f'Erro ao consultar iToca: {e}'}), 500
+
+
+@app.route('/api/itoca/history', methods=['GET'])
+def itoca_history_list():
+    """Lista sessões de histórico do iToca dos últimos 30 dias."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        # Purga registros com mais de 30 dias
+        c.execute("DELETE FROM itoca_chat_history WHERE created_at < datetime('now', '-30 days')")
+        conn.commit()
+        # Retorna sessões distintas com data e primeira pergunta
+        c.execute('''
+            SELECT session_id,
+                   MIN(created_at) AS started_at,
+                   MAX(created_at) AS last_at,
+                   COUNT(*) AS msg_count,
+                   (SELECT content FROM itoca_chat_history h2
+                    WHERE h2.session_id = h.session_id AND h2.role = 'user'
+                    ORDER BY h2.created_at ASC LIMIT 1) AS first_question
+            FROM itoca_chat_history h
+            GROUP BY session_id
+            ORDER BY last_at DESC
+            LIMIT 60
+        ''')
+        sessions = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(sessions)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/itoca/history: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/itoca/history/<session_id>', methods=['GET'])
+def itoca_history_session(session_id):
+    """Retorna todas as mensagens de uma sessão específica."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'SELECT id, role, content, confidence_percent, needs_refinement, refinement_hint, created_at FROM itoca_chat_history WHERE session_id = ? ORDER BY created_at ASC',
+            (session_id,)
+        )
+        messages = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(messages)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/itoca/history/{session_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/itoca/history/<session_id>', methods=['DELETE'])
+def itoca_history_delete(session_id):
+    """Deleta uma sessão específica do histórico."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM itoca_chat_history WHERE session_id = ?', (session_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Sessão removida do histórico.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] DELETE /api/itoca/history/{session_id}: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/config/profile', methods=['POST'])

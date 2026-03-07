@@ -1421,7 +1421,8 @@
         .itoca-msg.user { flex-direction:row-reverse; }
         .itoca-msg-avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; }
         .itoca-msg.user .itoca-msg-avatar { background:#10b981; color:#fff; }
-        .itoca-msg.assistant .itoca-msg-avatar { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; }
+        .itoca-msg.assistant .itoca-msg-avatar { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; overflow:hidden; padding:0; }
+        .itoca-msg.assistant .itoca-msg-avatar img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
         .itoca-msg-bubble { max-width:82%; padding:10px 14px; border-radius:14px; font-size:14px; line-height:1.55; word-break:break-word; }
         .itoca-msg.user .itoca-msg-bubble { background:#10b981; color:#fff; border-bottom-right-radius:4px; }
         .itoca-msg.assistant .itoca-msg-bubble { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; border-bottom-left-radius:4px; white-space:pre-wrap; }
@@ -1447,6 +1448,26 @@
         .itoca-chat-empty { text-align:center; color:#9ca3af; font-size:13px; padding:32px 0; }
         .itoca-chat-empty i { font-size:32px; display:block; margin-bottom:8px; color:#d1fae5; }
         .itoca-answer { display:none; }
+        /* Histórico de conversas */
+        .itoca-history-section { margin-top:28px; border-top:1px solid #e5e7eb; padding-top:18px; }
+        .itoca-history-section h3 { font-size:14px; font-weight:600; color:#374151; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+        .itoca-history-list { display:flex; flex-direction:column; gap:8px; }
+        .itoca-history-item { background:#f9fafb; border:1px solid #e5e7eb; border-radius:10px; padding:10px 14px; cursor:pointer; transition:background .15s; }
+        .itoca-history-item:hover { background:#f0fdf4; border-color:#bbf7d0; }
+        .itoca-history-item-header { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+        .itoca-history-item-question { font-size:13px; color:#111827; font-weight:500; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .itoca-history-item-date { font-size:11px; color:#9ca3af; flex-shrink:0; }
+        .itoca-history-item-meta { font-size:11px; color:#6b7280; margin-top:3px; }
+        .itoca-history-item-del { background:none; border:none; color:#d1d5db; cursor:pointer; font-size:13px; padding:0 4px; }
+        .itoca-history-item-del:hover { color:#ef4444; }
+        .itoca-history-messages { margin-top:10px; display:none; border-top:1px solid #e5e7eb; padding-top:8px; }
+        .itoca-history-messages.open { display:block; }
+        .itoca-history-msg { margin-bottom:8px; }
+        .itoca-history-msg-role { font-size:11px; font-weight:600; color:#6b7280; margin-bottom:2px; }
+        .itoca-history-msg-role.user { color:#10b981; }
+        .itoca-history-msg-role.assistant { color:#065f46; }
+        .itoca-history-msg-content { font-size:13px; color:#374151; white-space:pre-wrap; }
+        .itoca-history-empty { text-align:center; color:#9ca3af; font-size:13px; padding:16px 0; }
         .wiki-doc-upload-row { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; align-items:flex-start; }
         .wiki-doc-upload-main { display:flex; gap:8px; align-items:center; width:100%; flex-wrap:wrap; }
         .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
@@ -1533,11 +1554,25 @@
                 <p>Seu assistente ligeirinho &mdash; pergunte qualquer coisa sobre os dados do sistema.</p>
             </div>
 
+            <!-- Vídeo em loop -->
+            <div class="iata-center" style="margin-bottom:16px;">
+                <video id="iataVideoPlayer"
+                  autoplay
+                  loop
+                  muted
+                  playsinline
+                  preload="auto"
+                  style="width: 100%; max-width: 220px; height: auto; display: block; border-radius: 12px; margin: 0 auto;"
+                >
+                  <source id="iataVideoSource" src="/videos/TocaVideo.mp4" type="video/mp4" />
+                </video>
+            </div>
+
             <!-- Chat messages area -->
             <div class="itoca-chat-container">
                 <div id="itocaChatMessages" class="itoca-chat-messages">
                     <div class="itoca-chat-empty" id="itocaChatEmpty">
-                        <i class="fas fa-robot"></i>
+                        <img src="/images/itoca-avatar.png" alt="iToca" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:block;margin:0 auto 8px;border:2px solid #bbf7d0;">
                         Olá! Sou o iToca. Atualize a base e me faça uma pergunta sobre seus contatos, atividades, agenda ou qualquer dado do sistema.
                     </div>
                 </div>
@@ -1565,6 +1600,14 @@
 
             <!-- Legacy hidden element (kept for compatibility) -->
             <div id="itocaAnswer" class="itoca-answer" style="display:none;"></div>
+
+            <!-- Histórico de conversas (30 dias) -->
+            <div class="itoca-history-section" id="itocaHistorySection">
+                <h3><i class="fas fa-history"></i> Histórico de Conversas <small style="font-weight:400;color:#9ca3af;font-size:12px;">(30 dias)</small></h3>
+                <div id="itocaHistoryList" class="itoca-history-list">
+                    <div class="itoca-history-empty">Nenhuma conversa registrada ainda.</div>
+                </div>
+            </div>
         </div>
 
 
@@ -2206,11 +2249,17 @@
         let autoPicActiveSlot = 0;
 
         // Tab switching
+        // Rastreia a aba ativa anterior para detectar saída do iToca
+        let _currentTab = 'dashboard';
+
         function switchTab(ev, tabName) {
+            const previousTab = _currentTab;
+
             document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
 
             document.getElementById(tabName).classList.add('active');
+            _currentTab = tabName;
 
             const mainContent = document.querySelector('.main-content');
             if (mainContent) mainContent.classList.toggle('iata-mode', tabName === 'iata');
@@ -2222,8 +2271,17 @@
                 if (btn) btn.classList.add('active');
             }
 
+            // Ao sair do iToca: salva a sessão no histórico e limpa o chat
+            if (previousTab === 'iata' && tabName !== 'iata') {
+                _itocaSaveSessionAndClear();
+            }
+
             if (tabName === 'dashboard') loadDashboard();
-            else if (tabName === 'iata') { /* tela estática */ }
+            else if (tabName === 'iata') {
+                clearITocaChat();
+                loadITocaHistory();
+                loadITocaBaseStatus();
+            }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') loadActivities();
             else if (tabName === 'report') loadReport();
@@ -5545,6 +5603,15 @@
         // iToca Chat
         // =====================================================
         let itocaChatMsgCount = 0;
+        // ID de sessão único por visita ao iToca (gerado ao entrar na aba)
+        let _itocaSessionId = null;
+        let _itocaSessionHasMessages = false;
+
+        function _itocaNewSession() {
+            _itocaSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            _itocaSessionHasMessages = false;
+        }
+        _itocaNewSession(); // cria sessão inicial
 
         async function loadITocaBaseStatus() {
             const label = document.getElementById('itocaBaseUpdatedAt');
@@ -5611,7 +5678,7 @@
             div.className = 'itoca-msg assistant';
             div.id = 'itocaTypingIndicator';
             div.innerHTML = `
-                <div class="itoca-msg-avatar"><i class="fas fa-robot"></i></div>
+                <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca"></div>
                 <div class="itoca-typing"><span></span><span></span><span></span></div>
             `;
             container.appendChild(div);
@@ -5670,7 +5737,7 @@
             div.className = 'itoca-msg assistant';
             div.id = msgId;
             div.innerHTML = `
-                <div class="itoca-msg-avatar"><i class="fas fa-robot"></i></div>
+                <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca"></div>
                 <div>
                     <div class="${bubbleClass}">${answer}</div>
                     ${metaHtml ? `<div class="itoca-msg-meta">${metaHtml}</div>` : ''}
@@ -5699,11 +5766,108 @@
             if (!container) return;
             container.innerHTML = `
                 <div class="itoca-chat-empty" id="itocaChatEmpty">
-                    <i class="fas fa-robot"></i>
+                    <img src="/images/itoca-avatar.png" alt="iToca" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:block;margin:0 auto 8px;border:2px solid #bbf7d0;">
                     Olá! Sou o iToca. Atualize a base e me faça uma pergunta sobre seus contatos, atividades, agenda ou qualquer dado do sistema.
                 </div>
             `;
             itocaChatMsgCount = 0;
+            _itocaNewSession();
+        }
+
+        async function _itocaSaveSessionAndClear() {
+            // Apenas limpa o chat e cria nova sessão; o histórico já foi salvo via API durante as perguntas
+            clearITocaChat();
+        }
+
+        async function loadITocaHistory() {
+            const listEl = document.getElementById('itocaHistoryList');
+            if (!listEl) return;
+            listEl.innerHTML = '<div class="itoca-history-empty">Carregando...</div>';
+            try {
+                const response = await fetch(`${API_BASE}/itoca/history`);
+                const sessions = await response.json().catch(() => []);
+                if (!Array.isArray(sessions) || sessions.length === 0) {
+                    listEl.innerHTML = '<div class="itoca-history-empty">Nenhuma conversa registrada ainda.</div>';
+                    return;
+                }
+                listEl.innerHTML = sessions.map(s => {
+                    const date = s.last_at ? formatDateBr(s.last_at) : '';
+                    const question = (s.first_question || 'Conversa').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                    const msgCount = Math.floor((s.msg_count || 0) / 2);
+                    const sessionId = (s.session_id || '').replace(/"/g,'&quot;');
+                    return `
+                        <div class="itoca-history-item" id="hist_${sessionId}">
+                            <div class="itoca-history-item-header">
+                                <span class="itoca-history-item-question" title="${question}">${question}</span>
+                                <span class="itoca-history-item-date">${date}</span>
+                                <button class="itoca-history-item-del" onclick="deleteITocaSession('${sessionId}', event)" title="Excluir sessão"><i class="fas fa-times"></i></button>
+                            </div>
+                            <div class="itoca-history-item-meta">${msgCount} pergunta${msgCount !== 1 ? 's' : ''}</div>
+                            <div class="itoca-history-messages" id="histMsgs_${sessionId}"></div>
+                        </div>
+                    `;
+                }).join('');
+                // Adiciona click para expandir
+                listEl.querySelectorAll('.itoca-history-item').forEach(item => {
+                    item.addEventListener('click', function(e) {
+                        if (e.target.closest('.itoca-history-item-del')) return;
+                        const sessionId = this.id.replace('hist_', '');
+                        toggleITocaHistorySession(sessionId);
+                    });
+                });
+            } catch (e) {
+                listEl.innerHTML = '<div class="itoca-history-empty">Erro ao carregar histórico.</div>';
+            }
+        }
+
+        async function toggleITocaHistorySession(sessionId) {
+            const msgsEl = document.getElementById(`histMsgs_${sessionId}`);
+            if (!msgsEl) return;
+            if (msgsEl.classList.contains('open')) {
+                msgsEl.classList.remove('open');
+                return;
+            }
+            msgsEl.innerHTML = '<div class="itoca-history-empty">Carregando...</div>';
+            msgsEl.classList.add('open');
+            try {
+                const response = await fetch(`${API_BASE}/itoca/history/${encodeURIComponent(sessionId)}`);
+                const messages = await response.json().catch(() => []);
+                if (!Array.isArray(messages) || messages.length === 0) {
+                    msgsEl.innerHTML = '<div class="itoca-history-empty">Sem mensagens.</div>';
+                    return;
+                }
+                msgsEl.innerHTML = messages.map(m => {
+                    const roleLabel = m.role === 'user' ? 'Você' : 'iToca';
+                    const content = (m.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                    const time = m.created_at ? formatDateBr(m.created_at) : '';
+                    let meta = '';
+                    if (m.role === 'assistant' && m.confidence_percent != null) {
+                        const cls = m.confidence_percent >= 70 ? 'high' : m.confidence_percent >= 40 ? 'medium' : 'low';
+                        meta = `<span class="itoca-confidence ${cls}" style="margin-left:6px;">${m.confidence_percent}%</span>`;
+                    }
+                    return `<div class="itoca-history-msg">
+                        <div class="itoca-history-msg-role ${m.role}">${roleLabel} &middot; ${time}${meta}</div>
+                        <div class="itoca-history-msg-content">${content}</div>
+                    </div>`;
+                }).join('');
+            } catch (e) {
+                msgsEl.innerHTML = '<div class="itoca-history-empty">Erro ao carregar mensagens.</div>';
+            }
+        }
+
+        async function deleteITocaSession(sessionId, event) {
+            if (event) event.stopPropagation();
+            try {
+                await fetch(`${API_BASE}/itoca/history/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+                const item = document.getElementById(`hist_${sessionId}`);
+                if (item) item.remove();
+                const listEl = document.getElementById('itocaHistoryList');
+                if (listEl && !listEl.querySelector('.itoca-history-item')) {
+                    listEl.innerHTML = '<div class="itoca-history-empty">Nenhuma conversa registrada ainda.</div>';
+                }
+            } catch (e) {
+                showError('Erro ao excluir sessão.');
+            }
         }
 
         function handleITocaKeydown(event) {
@@ -5731,10 +5895,11 @@
             const typingEl = _itocaAppendTyping();
 
             try {
+                _itocaSessionHasMessages = true;
                 const response = await fetch(`${API_BASE}/itoca/ask`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ question })
+                    body: JSON.stringify({ question, session_id: _itocaSessionId })
                 });
                 const payload = await response.json().catch(() => ({}));
                 _itocaRemoveTyping();
