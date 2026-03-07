@@ -1416,7 +1416,7 @@
         <nav class="sidebar-nav">
             <button class="nav-item" onclick="switchTab(event, 'iata')">
                 <i class="fas fa-robot"></i>
-                <span>iAta</span>
+                <span>iToca</span>
             </button>
             <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
@@ -1473,8 +1473,8 @@
 
         <div id="iata" class="tab-content">
             <div class="page-header">
-                <h1>iAta</h1>
-                <p>Módulo inteligente para apoio de mensagens e atas.</p>
+                <h1>iToca</h1>
+                <p>Seu assistente ligeirinho.</p>
             </div>
             <div class="iata-center">
                 <video id="iataVideoPlayer"
@@ -2185,7 +2185,13 @@
 
                 if (index !== 0) card.classList.add('settings-collapsed');
                 title.addEventListener('click', () => {
-                    card.classList.toggle('settings-collapsed');
+                    const shouldOpen = card.classList.contains('settings-collapsed');
+                    grid.querySelectorAll('.settings-collapsible').forEach(otherCard => {
+                        otherCard.classList.add('settings-collapsed');
+                    });
+                    if (shouldOpen) {
+                        card.classList.remove('settings-collapsed');
+                    }
                 });
 
                 card.dataset.collapsibleReady = '1';
@@ -3185,7 +3191,12 @@
 
             const query = `${name} ${company}`.trim();
             const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
-            const googleTab = window.open(googleImagesUrl, '_blank');
+            const googleTab = window.open('', '_blank');
+            if (!googleTab) {
+                showError('O navegador bloqueou a abertura do Google Imagens. Libere pop-ups para usar o AutoPic.');
+                return;
+            }
+            googleTab.location.href = googleImagesUrl;
 
             try {
                 const response = await fetch(`${API_BASE}/clients/autofind-photo-candidates?name=${encodeURIComponent(name)}&company=${encodeURIComponent(company)}`);
@@ -3214,9 +3225,14 @@
                 showError(error.message || 'Falha ao buscar imagens com AutoPic.');
             } finally {
                 if (googleTab && !googleTab.closed) {
-                    setTimeout(() => {
-                        try { googleTab.close(); } catch (_) {}
-                    }, 300);
+                    const closeGoogleTab = () => {
+                        try {
+                            if (!googleTab.closed) googleTab.close();
+                        } catch (_) {}
+                    };
+                    setTimeout(closeGoogleTab, 300);
+                    setTimeout(closeGoogleTab, 1200);
+                    setTimeout(closeGoogleTab, 2500);
                 }
             }
         }
@@ -5332,7 +5348,7 @@
             const allTxt = files.every(file => file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt'));
             if (!allTxt) {
                 event.target.value = '';
-                showError('No iAta, apenas anexo de texto (.txt).');
+                showError('No iToca, apenas anexo de texto (.txt).');
             }
             const lbl = document.getElementById('iataAttachmentLabel');
             if (lbl) lbl.classList.toggle('has-file', allTxt && files.length > 0);
