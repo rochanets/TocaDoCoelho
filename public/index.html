@@ -123,6 +123,7 @@
             gap: 14px;
             grid-template-columns: repeat(2, minmax(260px, 1fr));
             max-width: 920px;
+            align-items: start;
         }
 
         .settings-card {
@@ -130,6 +131,8 @@
             border: 1px solid rgba(52, 211, 153, 0.25);
             border-radius: 14px;
             padding: 12px;
+            height: fit-content;
+            align-self: start;
         }
 
         .settings-card h3 {
@@ -1391,6 +1394,27 @@
             background: #fff;
         }
         .autopic-candidate:hover { border-color:#10b981; }
+        .autopic-slot { width: 98px; }
+        .autopic-slot-title { font-size:11px; color:#065f46; margin-bottom:4px; font-weight:600; }
+        .autopic-slot-box {
+            width: 98px;
+            height: 98px;
+            border: 2px dashed #86efac;
+            border-radius: 10px;
+            background: #fff;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            overflow: hidden;
+            color:#4b5563;
+            font-size:11px;
+            text-align:center;
+            padding:6px;
+            cursor:pointer;
+        }
+        .autopic-slot-box.active { border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
+        .autopic-slot-box img { width:100%; height:100%; object-fit:cover; border-radius:8px; }
+        .itoca-answer { margin-top:12px; border:1px solid #bbf7d0; background:#f0fdf4; border-radius:12px; padding:12px; color:#065f46; white-space:pre-wrap; }
         .wiki-doc-upload-row { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; align-items:flex-start; }
         .wiki-doc-upload-main { display:flex; gap:8px; align-items:center; width:100%; flex-wrap:wrap; }
         .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
@@ -1489,7 +1513,8 @@
                 </video>
             </div>
             <div class="iata-input-row">
-                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui, grave uma mensagem ou anexe um arquivo" style="flex:1;"></textarea>
+                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui sua pergunta em linguagem natural" style="flex:1;"></textarea>
+                <button type="button" id="iataAskBtn" class="btn btn-primary" onclick="askIToca()"><i class="fas fa-search"></i> Perguntar</button>
                 <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
                     <i class="fas fa-microphone voice-icon"></i>
                     <span class="voice-anim"><span></span><span></span><span></span></span>
@@ -1498,6 +1523,7 @@
                 <input type="file" id="iataAttachment" class="iata-file-input" accept=".txt,text/plain" multiple onchange="validateIataAttachment(event)">
                 <label for="iataAttachment" id="iataAttachmentLabel" class="iata-file-btn" title="Anexar texto"><i class="fas fa-paperclip"></i></label>
             </div>
+            <div id="itocaAnswer" class="itoca-answer" style="display:none;"></div>
         </div>
 
 
@@ -2119,6 +2145,9 @@
         let positionGroupings = [];
         let _orgMapOpenContext = null; // { company, position } quando aberto pelo + do mapeamento organizacional
         let wikiEntriesSortOrder = "az";
+        let autoPicGoogleTab = null;
+        let autoPicSlots = [null, null, null];
+        let autoPicActiveSlot = 0;
 
         // Tab switching
         function switchTab(ev, tabName) {
@@ -3131,8 +3160,13 @@
                 if (item.type && item.type.startsWith('image/')) {
                     const blob = item.getAsFile();
                     if (blob) {
+                        const autoPicOpen = document.getElementById('clientAutoPicCandidates')?.classList.contains('open');
                         if (accountOpen) setPastedImageToAccountLogo(blob);
-                        else setPastedImageToInput(blob);
+                        else if (autoPicOpen) {
+                            applyAutoPicImageFromBlob(blob);
+                        } else {
+                            setPastedImageToInput(blob);
+                        }
                         showSuccess('Imagem colada com sucesso!');
                         event.preventDefault();
                         break;
@@ -3140,11 +3174,70 @@
                 }
             }
         });
+        function renderAutoPicSlots() {
+            const el = document.getElementById('clientAutoPicCandidates');
+            if (!el) return;
+            const filled = autoPicSlots.filter(Boolean).length;
+            el.classList.add('open');
+            el.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
+                    <strong style="color:#065f46; font-size:12px;">Cole 3 imagens (Ctrl+V) para escolher a foto final</strong>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="clearClientAutoPicCandidates()">Descartar</button>
+                </div>
+                <div class="autopic-candidates-grid" style="align-items:flex-start;">
+                    ${[0,1,2].map((idx) => {
+                        const data = autoPicSlots[idx];
+                        const activeClass = idx === autoPicActiveSlot ? 'active' : '';
+                        const content = data ? `<img src="${data}" alt="AutoPic ${idx+1}">` : 'Clique e use Ctrl+V';
+                        return `<div class="autopic-slot"><div class="autopic-slot-title">Imagem ${idx+1}</div><div class="autopic-slot-box ${activeClass}" onclick="onAutoPicSlotClick(${idx})">${content}</div></div>`;
+                    }).join('')}
+                </div>
+                <small style="display:block; margin-top:8px; color:#047857;">Preenchido: ${filled}/3. Após a 3ª imagem, a aba do Google será fechada automaticamente.</small>
+            `;
+        }
+
+        function setAutoPicActiveSlot(index) {
+            autoPicActiveSlot = Math.max(0, Math.min(2, Number(index) || 0));
+            renderAutoPicSlots();
+        }
+
+        function onAutoPicSlotClick(index) {
+            if (autoPicSlots[index]) {
+                chooseAutoPicSlot(index);
+            } else {
+                setAutoPicActiveSlot(index);
+            }
+        }
+
+        function applyAutoPicImageFromBlob(blob, slotIndex = null) {
+            if (!blob) return;
+            let targetSlot = Number.isInteger(slotIndex) ? slotIndex : autoPicActiveSlot;
+            if (targetSlot < 0 || targetSlot > 2) targetSlot = 0;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                autoPicSlots[targetSlot] = e.target.result;
+                if (targetSlot < 2) autoPicActiveSlot = targetSlot + 1;
+                renderAutoPicSlots();
+
+                if (autoPicSlots.every(Boolean)) {
+                    setTimeout(() => { if (autoPicGoogleTab && !autoPicGoogleTab.closed) autoPicGoogleTab.close(); }, 250);
+                    showSuccess('As 3 imagens foram coladas. Escolha uma clicando nela.');
+                }
+            };
+            reader.readAsDataURL(blob);
+        }
+
         function clearClientAutoPicCandidates() {
             const el = document.getElementById('clientAutoPicCandidates');
             if (!el) return;
             el.classList.remove('open');
             el.innerHTML = '';
+            autoPicSlots = [null, null, null];
+            autoPicActiveSlot = 0;
+            if (autoPicGoogleTab && !autoPicGoogleTab.closed) {
+                try { autoPicGoogleTab.close(); } catch (_) {}
+            }
+            autoPicGoogleTab = null;
         }
 
         async function selectClientAutoPicImage(imageUrl) {
@@ -3180,67 +3273,50 @@
             }
         }
 
-        async function openClientAutoPicSearch() {
-            const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
-            const company = (getClientFieldValue('company') || '').trim();
-
-            if (!name || !company) {
-                showError('Preencha Nome e Empresa antes de usar o AutoPic.');
-                return;
+        function chooseAutoPicSlot(index) {
+            const image = autoPicSlots[index];
+            if (!image) return;
+            const preview = document.getElementById('photoPreview');
+            if (preview) {
+                preview.src = image;
+                preview.style.display = 'block';
             }
-
-            const query = `${name} ${company}`.trim();
-            const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
-            const googleTab = window.open('', '_blank');
-            if (!googleTab) {
-                showError('O navegador bloqueou a abertura do Google Imagens. Libere pop-ups para usar o AutoPic.');
-                return;
-            }
-            googleTab.location.href = googleImagesUrl;
-
-            try {
-                const response = await fetch(`${API_BASE}/clients/autofind-photo-candidates?name=${encodeURIComponent(name)}&company=${encodeURIComponent(company)}`);
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Não foi possível buscar imagens para AutoPic.');
-
-                const candidates = (payload.candidates || []).slice(0, 3);
-                if (!candidates.length) throw new Error('Nenhuma imagem encontrada para AutoPic.');
-
-                const el = document.getElementById('clientAutoPicCandidates');
-                if (!el) return;
-
-                el.classList.add('open');
-                el.innerHTML = `
-                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                        <strong style="color:#065f46; font-size:12px;">Escolha uma foto encontrada no AutoPic</strong>
-                        <button type="button" class="btn btn-secondary btn-small" onclick="clearClientAutoPicCandidates()">Descartar</button>
-                    </div>
-                    <div class="autopic-candidates-grid">
-                        ${candidates.map((url) => `<img src="${url}" class="autopic-candidate" alt="AutoPic" onclick="selectClientAutoPicImage(decodeURIComponent('${encodeURIComponent(url)}'))">`).join('')}
-                    </div>
-                `;
-                showSuccess('AutoPic trouxe 3 opções de foto. Clique para escolher uma.');
-            } catch (error) {
-                clearClientAutoPicCandidates();
-                showError(error.message || 'Falha ao buscar imagens com AutoPic.');
-            } finally {
-                if (googleTab && !googleTab.closed) {
-                    let closeAttempts = 0;
-                    const closeGoogleTab = () => {
-                        closeAttempts += 1;
-                        try {
-                            if (!googleTab.closed) googleTab.close();
-                        } catch (_) {}
-                        if (googleTab.closed || closeAttempts >= 8) {
-                            clearInterval(closeInterval);
-                        }
-                    };
-                    const closeInterval = setInterval(closeGoogleTab, 600);
-                    closeGoogleTab();
-                }
-            }
+            const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
+            if (autofindPhotoUrl) autofindPhotoUrl.value = '';
+            const removePhotoFlag = document.getElementById('removePhotoFlag');
+            if (removePhotoFlag) removePhotoFlag.value = '0';
+            showSuccess(`Imagem ${index + 1} selecionada. Salve o contato para concluir.`);
+            document.querySelectorAll('.autopic-slot-box').forEach((box, idx) => {
+                box.classList.toggle('active', idx === index);
+            });
         }
 
+
+        async function openClientAutoPicSearch() {
+            const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
+            const position = (getClientFieldValue('position') || '').trim();
+
+            if (!name || !position) {
+                showError('Preencha Nome e Cargo antes de usar o AutoPic.');
+                return;
+            }
+
+            autoPicSlots = [null, null, null];
+            autoPicActiveSlot = 0;
+            renderAutoPicSlots();
+
+            const query = `${name} ${position}`.trim();
+            const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
+            autoPicGoogleTab = window.open('', '_blank');
+            if (!autoPicGoogleTab) {
+                showError('O navegador bloqueou pop-ups. Libere pop-ups para usar o AutoPic.');
+                return;
+            }
+            autoPicGoogleTab.location.href = googleImagesUrl;
+            showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) 3 imagens nos campos abaixo.');
+        }
+
+        // Save Client
         // Save Client
         async function saveClient(event) {
             event.preventDefault();
@@ -5345,6 +5421,34 @@
             formData.set('information', information || `${contactType} enviado.`);
             const response = await fetch(`${API_BASE}/atividades`, { method:'POST', body: formData });
             if (response.ok) { showSuccess('Atividade registrada com sucesso!'); await Promise.all([loadActivities(), loadDashboard()]); }
+        }
+
+        async function askIToca() {
+            const question = (document.getElementById('iataText')?.value || '').trim();
+            if (!question) {
+                showError('Digite uma pergunta para o iToca.');
+                return;
+            }
+            const answerEl = document.getElementById('itocaAnswer');
+            if (answerEl) {
+                answerEl.style.display = 'block';
+                answerEl.textContent = 'Consultando base interna...';
+            }
+            try {
+                const response = await fetch(`${API_BASE}/itoca/ask`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ question })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível consultar o iToca.');
+                if (answerEl) {
+                    answerEl.textContent = payload.answer || 'Não encontrei resposta objetiva com os dados atuais.';
+                }
+            } catch (error) {
+                if (answerEl) answerEl.textContent = `Erro: ${error.message}`;
+                showError(error.message || 'Falha ao consultar iToca.');
+            }
         }
 
         function validateIataAttachment(event) {

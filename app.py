@@ -799,6 +799,120 @@ def parse_currency_to_cents(value):
         return int(digits) if digits else None
 
 
+ITOCA_EXCLUDED_TABLES = {
+    'sqlite_sequence',
+    'app_settings'
+}
+
+
+def _itoca_tokenize(question):
+    return [
+        token for token in re.findall(r'[a-zA-ZÀ-ÿ0-9_-]{3,}', (question or '').lower())
+        if token not in {'para', 'com', 'sem', 'sobre', 'como', 'qual', 'quais', 'onde', 'quando'}
+    ]
+
+
+def _itoca_text_columns(cursor, table_name):
+    cursor.execute(f'PRAGMA table_info("{table_name}")')
+    columns = []
+    for row in cursor.fetchall():
+        column_name = row['name']
+        column_type = (row['type'] or '').upper()
+        if any(t in column_type for t in ['CHAR', 'TEXT', 'CLOB']) or column_type == '':
+            columns.append(column_name)
+    return columns
+
+
+def _itoca_build_snippet(row_dict):
+    parts = []
+    for key, value in row_dict.items():
+        if key in {'id', 'created_at', 'updated_at'}:
+            continue
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        parts.append(f'{key}: {text}')
+        if len(parts) >= 4:
+            break
+    return ' | '.join(parts)
+
+
+def _itoca_search_context(question, limit=18):
+    tokens = _itoca_tokenize(question)
+    if not tokens:
+        return []
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES]
+
+    results = []
+    seen = set()
+    like_values = [f'%{token}%' for token in tokens[:6]]
+
+    for table in tables:
+        text_columns = _itoca_text_columns(cursor, table)
+        if not text_columns:
+            continue
+
+        search_clauses = []
+        params = []
+        for col in text_columns[:8]:
+            for like_value in like_values:
+                search_clauses.append(f'LOWER(COALESCE("{col}", "")) LIKE ?')
+                params.append(like_value)
+
+        if not search_clauses:
+            continue
+
+        sql = f'SELECT * FROM "{table}" WHERE ' + ' OR '.join(search_clauses) + ' LIMIT 6'
+        try:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        except Exception:
+            continue
+
+        for row in rows:
+            row_dict = dict_from_row(row)
+            snippet = _itoca_build_snippet(row_dict)
+            if not snippet:
+                continue
+            fingerprint = f"{table}:{snippet[:160]}"
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            results.append({
+                'table': table,
+                'id': row_dict.get('id'),
+                'snippet': snippet
+            })
+            if len(results) >= limit:
+                conn.close()
+                return results
+
+    conn.close()
+    return results
+
+
+def _itoca_compose_answer(question, context_rows):
+    if not context_rows:
+        return (
+            'Não encontrei dados suficientes na base interna para responder com segurança. '            'Tente perguntar com mais detalhes (nome, empresa, cargo, data ou módulo).'
+        )
+
+    lines = [f'Pergunta: {question}', '', 'Encontrei estes dados internos relevantes:']
+    for item in context_rows[:12]:
+        row_id = f"#{item['id']}" if item.get('id') is not None else ''
+        lines.append(f"- [{item['table']}{row_id}] {item['snippet']}")
+
+    lines.append('')
+    lines.append('Resposta baseada somente no sistema acima. Se quiser, refine a pergunta para filtrar melhor.')
+    return '\n'.join(lines)
+
+
 def ensure_account_for_company(cursor, company_name):
     name = (company_name or '').strip()
     if not name:
@@ -1953,6 +2067,26 @@ def check_updates():
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
+
+@app.route('/api/itoca/ask', methods=['POST'])
+def itoca_ask():
+    try:
+        data = request.get_json() or {}
+        question = (data.get('question') or '').strip()
+        if not question:
+            return jsonify({'error': 'Pergunta obrigatória.'}), 400
+
+        context_rows = _itoca_search_context(question, limit=18)
+        answer = _itoca_compose_answer(question, context_rows)
+        return jsonify({
+            'answer': answer,
+            'items_found': len(context_rows),
+            'sources': context_rows
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
+        return jsonify({'error': f'Erro ao consultar iToca: {e}'}), 500
+
 
 @app.route('/api/config/profile', methods=['POST'])
 def save_profile_config():
