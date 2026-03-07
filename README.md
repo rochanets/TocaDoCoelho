@@ -8,7 +8,7 @@ Sistema de gestão de clientes com interface web local.
 
 1. Gere o executável com PyInstaller (inclui runtime Python + binários do FFmpeg via `imageio_ffmpeg`):
    ```bash
-   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 launcher.py
+   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app launcher.py
    ```
 2. Compile o instalador NSIS:
    - Execute `BUILD_INSTALLER.bat`
@@ -31,6 +31,16 @@ Sistema de gestão de clientes com interface web local.
 - A atualização troca os binários em `C:\Program Files\TocaDoCoelho`.
 - O banco SQLite e uploads permanecem em `%AppData%\toca-do-coelho`.
 - A desinstalação **preserva os dados do usuário por padrão**.
+
+## ⬆️ Verificar atualizações pelo GitHub Releases
+
+- Em **Configurações > Ajuda e Atualizações**, os campos já vêm pré-configurados para `rochanets/TocaDoCoelho`.
+- Se você publicar em outro repositório/fork, ajuste:
+  - `GitHub Owner` (usuário ou organização)
+  - `GitHub Repositório`
+- Clique em **Salvar Fonte** e depois em **Verificar atualizações**.
+- O app consulta `https://api.github.com/repos/<owner>/<repo>/releases/latest` e compara a tag mais recente com a versão instalada.
+- Se houver versão nova, o app mostra link para abrir a release no GitHub.
 
 ## 🔄 Migração automática de dados legados
 
@@ -78,7 +88,7 @@ Na release atual, a recomendação é **incluir FFmpeg no bundle** (via `--colle
 - Verifique permissão de escrita em `%AppData%\toca-do-coelho`.
 
 ### Erro de transcrição
-- Verifique se o build foi gerado com os parâmetros `--add-data "app.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2`.
+- Verifique se o build foi gerado com os parâmetros `--add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app`.
 
 ## 📝 Versão
 
