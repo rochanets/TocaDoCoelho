@@ -698,16 +698,26 @@ def api_error(status, code, message, details=None, hint=None):
     return jsonify(payload), status
 
 
-def _extract_bing_image_urls(raw_html):
+def _extract_bing_image_urls(raw_html, log_prefix='[AutoPic]'):
     """Extrai as URLs originais das imagens do HTML do Bing Images.
     O Bing codifica os dados de imagem com HTML entities nos atributos data-*,
     por isso o padrão usa &quot; ao invés de aspas diretas.
     """
     # Padrão principal: Bing usa HTML entities nos atributos data-*
     matches = re.findall(r'&quot;murl&quot;:&quot;(https?://[^&]+)&quot;', raw_html)
+    logger.debug(f'{log_prefix} _extract_bing_image_urls: padrão HTML entities encontrou {len(matches)} resultado(s).')
+
     if not matches:
         # Fallback: tentar sem HTML entities (caso o Bing mude o formato)
         matches = re.findall(r'"murl":"(https?://[^"]+)"', raw_html)
+        logger.debug(f'{log_prefix} _extract_bing_image_urls: padrão aspas diretas (fallback) encontrou {len(matches)} resultado(s).')
+
+    if not matches:
+        logger.warning(f'{log_prefix} _extract_bing_image_urls: NENHUM resultado encontrado com nenhum padrão. '
+                       f'Tamanho do HTML: {len(raw_html)} chars. '
+                       f'Contém "murl": {"murl" in raw_html}. '
+                       f'Primeiros 300 chars: {repr(raw_html[:300])}')
+
     urls = []
     for item in matches:
         url = html.unescape(item).replace('\\/', '/')
@@ -720,7 +730,9 @@ def _find_image_candidates_on_web(query, limit=3):
     """Busca as primeiras imagens do Bing Images para o query fornecido.
     Retorna lista de URLs das imagens originais (as primeiras que aparecem na tela).
     """
+    log_prefix = '[AutoPic]'
     if not query:
+        logger.warning(f'{log_prefix} _find_image_candidates_on_web: query vazio, abortando.')
         return []
 
     limit = max(1, int(limit or 3))
@@ -730,41 +742,78 @@ def _find_image_candidates_on_web(query, limit=3):
         'Chrome/124.0.0.0 Safari/537.36'
     )
     search_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}&form=HDRSC2&first=1"
+    logger.info(f'{log_prefix} Buscando imagens para query="{query}" limit={limit} url={search_url}')
 
     # Contexto SSL sem verificação para evitar erros de certificado em ambientes restritos
     ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
 
+    # Solicitar apenas gzip (não brotli) para evitar dependência do módulo brotli
     req = urllib.request.Request(
         search_url,
         headers={
             'User-Agent': user_agent,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Encoding': 'gzip, deflate',  # sem 'br' para evitar brotli
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
         }
     )
 
     import gzip
-    import io
-    with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
-        raw_data = response.read()
-        encoding = response.headers.get('Content-Encoding', '')
-        if encoding == 'gzip':
-            content = gzip.decompress(raw_data).decode('utf-8', errors='ignore')
-        elif encoding == 'br':
-            try:
-                import brotli
-                content = brotli.decompress(raw_data).decode('utf-8', errors='ignore')
-            except Exception:
-                content = raw_data.decode('utf-8', errors='ignore')
-        else:
-            content = raw_data.decode('utf-8', errors='ignore')
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
+            raw_data = response.read()
+            http_status = response.status
+            encoding = (response.headers.get('Content-Encoding') or '').lower().strip()
+            content_type = (response.headers.get('Content-Type') or '').lower()
+            logger.info(f'{log_prefix} Resposta do Bing: HTTP {http_status}, '
+                        f'Content-Encoding={encoding!r}, Content-Type={content_type!r}, '
+                        f'tamanho bruto={len(raw_data)} bytes')
 
-    urls = _extract_bing_image_urls(content)
+            if encoding == 'gzip':
+                try:
+                    content = gzip.decompress(raw_data).decode('utf-8', errors='ignore')
+                    logger.debug(f'{log_prefix} Descomprimido gzip: {len(content)} chars')
+                except Exception as gz_err:
+                    logger.error(f'{log_prefix} Falha ao descomprimir gzip: {gz_err}. Tentando decodificar direto.')
+                    content = raw_data.decode('utf-8', errors='ignore')
+            elif encoding == 'br':
+                # brotli pode não estar instalado — tentar e logar claramente
+                try:
+                    import brotli
+                    content = brotli.decompress(raw_data).decode('utf-8', errors='ignore')
+                    logger.debug(f'{log_prefix} Descomprimido brotli: {len(content)} chars')
+                except ImportError:
+                    logger.error(f'{log_prefix} ERRO CRÍTICO: O servidor retornou encoding brotli (br) mas o '
+                                 f'módulo "brotli" não está instalado. '
+                                 f'Execute: pip install brotli  (ou adicione ao requirements.txt). '
+                                 f'O AutoPic não conseguirá encontrar imagens até isso ser resolvido.')
+                    return []
+                except Exception as br_err:
+                    logger.error(f'{log_prefix} Falha ao descomprimir brotli: {br_err}. Tentando decodificar direto.')
+                    content = raw_data.decode('utf-8', errors='ignore')
+            elif encoding in ('deflate', ''):
+                content = raw_data.decode('utf-8', errors='ignore')
+                logger.debug(f'{log_prefix} Conteúdo sem compressão: {len(content)} chars')
+            else:
+                logger.warning(f'{log_prefix} Encoding desconhecido "{encoding}", tentando decodificar direto.')
+                content = raw_data.decode('utf-8', errors='ignore')
+
+    except urllib.error.HTTPError as http_err:
+        logger.error(f'{log_prefix} HTTPError ao acessar Bing: {http_err.code} {http_err.reason}')
+        raise
+    except urllib.error.URLError as url_err:
+        logger.error(f'{log_prefix} URLError ao acessar Bing: {url_err.reason}')
+        raise
+    except Exception as e:
+        logger.error(f'{log_prefix} Erro inesperado ao acessar Bing: {type(e).__name__}: {e}')
+        raise
+
+    urls = _extract_bing_image_urls(content, log_prefix=log_prefix)
+    logger.info(f'{log_prefix} Total de URLs extraídas antes de deduplicar: {len(urls)}')
 
     # Remover duplicatas mantendo a ordem (as primeiras são as que aparecem na tela)
     seen = set()
@@ -774,12 +823,18 @@ def _find_image_candidates_on_web(query, limit=3):
             seen.add(u)
             unique_urls.append(u)
 
-    return unique_urls[:limit]
+    result = unique_urls[:limit]
+    logger.info(f'{log_prefix} Retornando {len(result)} candidato(s) para query="{query}": {result}')
+    return result
 
 
 def _download_remote_image_to_uploads(image_url, prefix='autofind'):
+    log_prefix = '[AutoPic]'
+    logger.info(f'{log_prefix} Download de imagem: url={image_url[:120]!r} prefix={prefix!r}')
+
     parsed = urllib.parse.urlparse(image_url)
     if parsed.scheme not in {'http', 'https'}:
+        logger.error(f'{log_prefix} URL inválida (scheme={parsed.scheme!r}): {image_url[:120]}')
         raise ValueError('URL de imagem inválida.')
 
     ssl_ctx = ssl.create_default_context()
@@ -791,13 +846,30 @@ def _download_remote_image_to_uploads(image_url, prefix='autofind'):
         'Referer': 'https://www.bing.com/',
         'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
     })
-    with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
-        content_type = (response.headers.get('Content-Type') or '').lower()
-        data = response.read(6 * 1024 * 1024 + 1)
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
+            http_status = response.status
+            content_type = (response.headers.get('Content-Type') or '').lower()
+            data = response.read(6 * 1024 * 1024 + 1)
+            logger.info(f'{log_prefix} Download concluído: HTTP {http_status}, '
+                        f'Content-Type={content_type!r}, tamanho={len(data)} bytes')
+    except urllib.error.HTTPError as http_err:
+        logger.error(f'{log_prefix} HTTPError ao baixar imagem {image_url[:120]!r}: '
+                     f'{http_err.code} {http_err.reason}')
+        raise
+    except urllib.error.URLError as url_err:
+        logger.error(f'{log_prefix} URLError ao baixar imagem {image_url[:120]!r}: {url_err.reason}')
+        raise
+    except Exception as e:
+        logger.error(f'{log_prefix} Erro inesperado ao baixar imagem {image_url[:120]!r}: '
+                     f'{type(e).__name__}: {e}')
+        raise
 
     if len(data) > 6 * 1024 * 1024:
+        logger.warning(f'{log_prefix} Imagem muito grande: {len(data)} bytes (máx 6MB)')
         raise ValueError('Imagem muito grande (máximo 6MB).')
     if not content_type.startswith('image/'):
+        logger.error(f'{log_prefix} Content-Type inválido: {content_type!r} para url={image_url[:120]!r}')
         raise ValueError('A URL selecionada não retornou uma imagem válida.')
 
     ext = '.jpg'
@@ -812,6 +884,7 @@ def _download_remote_image_to_uploads(image_url, prefix='autofind'):
     path = UPLOAD_DIR / filename
     with open(path, 'wb') as f:
         f.write(data)
+    logger.info(f'{log_prefix} Imagem salva em: {path}')
     return f'/uploads/{filename}'
 
 
@@ -2367,14 +2440,17 @@ def clients_autofind_photo_candidates():
         name = (request.args.get('name') or '').strip()
         company = (request.args.get('company') or '').strip()
         query = ' '.join(part for part in [name, company] if part)
+        logger.info(f'[AutoPic] GET /autofind-photo-candidates: name={name!r} company={company!r} query={query!r}')
         if not query:
+            logger.warning('[AutoPic] GET /autofind-photo-candidates: nome e empresa vazios, abortando.')
             return jsonify({'error': 'Informe ao menos nome ou empresa.'}), 400
 
         # Buscar 6 candidatos para ter margem de fallback caso alguma imagem retorne 403
         candidates = _find_image_candidates_on_web(query, limit=6)
+        logger.info(f'[AutoPic] GET /autofind-photo-candidates: retornando {len(candidates)} candidato(s) para query={query!r}')
         return jsonify({'query': query, 'candidates': candidates})
     except Exception as e:
-        logger.exception(f'[ERROR] GET /api/clients/autofind-photo-candidates: {e}')
+        logger.exception(f'[AutoPic] ERRO em GET /autofind-photo-candidates: {e}')
         return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
 
 
@@ -2384,14 +2460,16 @@ def clients_autofind_photo():
         data = request.get_json() or {}
         image_url = (data.get('image_url') or '').strip()
         person_name = (data.get('name') or '').strip() or 'autofind'
+        logger.info(f'[AutoPic] POST /autofind-photo: person_name={person_name!r} image_url={image_url[:120]!r}')
         if not image_url:
             return jsonify({'error': 'URL da imagem não informada.'}), 400
 
         safe_prefix = secure_filename(person_name) or 'autofind'
         photo_url = _download_remote_image_to_uploads(image_url, prefix=safe_prefix)
+        logger.info(f'[AutoPic] POST /autofind-photo: imagem salva com sucesso em {photo_url!r}')
         return jsonify({'photo_url': photo_url})
     except Exception as e:
-        logger.exception(f'[ERROR] POST /api/clients/autofind-photo: {e}')
+        logger.exception(f'[AutoPic] ERRO em POST /autofind-photo: {type(e).__name__}: {e}')
         return jsonify({'error': f'Erro ao importar imagem selecionada: {e}'}), 500
 
 
