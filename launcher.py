@@ -33,12 +33,12 @@ DB_PATH = DATA_DIR / 'toca-do-coelho.db'
 
 # Modo servidor interno para evitar loop de subprocesso no bundle PyInstaller.
 # No modo frozen, sys.executable aponta para o próprio TocaDoCoelho.exe.
-# Se chamarmos [sys.executable, app.py], o launcher reinicia em cascata.
+# Aqui importamos o módulo app diretamente (sem runpy) para que o PyInstaller
+# colete as dependências do app no build.
 if '--serve' in sys.argv:
-    APP_PY = APP_DIR / "app.py"
-    if not APP_PY.exists():
-        raise FileNotFoundError(f"app.py não encontrado em: {APP_PY}")
-    runpy.run_path(str(APP_PY), run_name='__main__')
+    import app as app_module
+    port = int(os.environ.get('PORT', '3000'))
+    app_module.app.run(host='localhost', port=port, debug=False, use_reloader=False)
     sys.exit(0)
 
 # Criar diretório de dados se não existir

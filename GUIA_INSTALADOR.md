@@ -15,7 +15,7 @@
 ### 1) Gerar executável (runtime embutido + FFmpeg + faster-whisper)
 
 ```bash
-pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 launcher.py
+pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app launcher.py
 ```
 
 Saída esperada:
@@ -63,5 +63,5 @@ Saída:
 - Instale NSIS e rode o script novamente.
 
 ### App abre mas transcrição falha
-- Verifique se o build foi feito com `--add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2`.
+- Verifique se o build foi feito com `--add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app`.
 - Confirme que as dependências foram instaladas com `pip install -r requirements.txt` antes do build.
