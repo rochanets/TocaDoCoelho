@@ -67,18 +67,19 @@ server_process = subprocess.Popen(
     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
 )
 
-print(f"[✓] Servidor iniciado (PID: {server_process.pid})")
+print(f"[OK] Servidor iniciado (PID: {server_process.pid})")
 print()
 
 # Aguardar servidor estar pronto
 print("[INFO] Aguardando servidor ficar pronto...")
-max_attempts = 60
+startup_timeout_seconds = int(os.environ.get('TOCA_STARTUP_TIMEOUT_SECONDS', '60'))
+max_attempts = max(20, startup_timeout_seconds * 2)
 attempt = 0
 
 while attempt < max_attempts:
     # Verificar se o processo morreu antes de responder
     if server_process.poll() is not None:
-        print(f"[✗] Servidor encerrou antes de responder! Código: {server_process.returncode}")
+        print(f"[ERRO] Servidor encerrou antes de responder! Código: {server_process.returncode}")
         print(f"[INFO] Verifique o log em: {LOG_PATH}")
         input("Pressione ENTER para fechar...")
         sys.exit(1)
@@ -86,7 +87,7 @@ while attempt < max_attempts:
     try:
         response = requests.get('http://localhost:3000/', timeout=1)
         if response.status_code == 200:
-            print("[✓] Servidor pronto!")
+            print("[OK] Servidor pronto!")
             break
     except Exception:
         pass
@@ -95,7 +96,7 @@ while attempt < max_attempts:
     attempt += 1
 
 if attempt >= max_attempts:
-    print("[✗] Servidor não respondeu a tempo!")
+    print(f"[ERRO] Servidor não respondeu a tempo! (timeout: {startup_timeout_seconds}s)")
     print(f"[INFO] Verifique o log em: {LOG_PATH}")
     server_process.terminate()
     input("Pressione ENTER para fechar...")
@@ -106,7 +107,7 @@ print()
 # Abrir navegador
 print("[INFO] Abrindo navegador...")
 webbrowser.open('http://localhost:3000')
-print("[✓] Navegador aberto!")
+print("[OK] Navegador aberto!")
 print()
 
 print("=" * 60)
@@ -120,7 +121,7 @@ try:
     while True:
         time.sleep(1)
         if server_process.poll() is not None:
-            print("[✗] Servidor encerrou inesperadamente!")
+            print("[ERRO] Servidor encerrou inesperadamente!")
             print(f"[INFO] Verifique o log em: {LOG_PATH}")
             input("Pressione ENTER para fechar...")
             break
@@ -129,4 +130,4 @@ except KeyboardInterrupt:
     print("[INFO] Encerrando servidor...")
     server_process.terminate()
     server_process.wait(timeout=5)
-    print("[✓] Servidor encerrado!")
+    print("[OK] Servidor encerrado!")
