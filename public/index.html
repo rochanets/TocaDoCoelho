@@ -3294,10 +3294,13 @@
 
         async function openClientAutoPicSearch() {
             const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
-            const position = (getClientFieldValue('position') || '').trim();
+            const company = (getClientFieldValue('company') || '').trim();
 
-            if (!name || !position) {
-                showError('Preencha Nome e Cargo antes de usar o AutoPic.');
+            if (!name || !company) {
+                await openSystemDialog({
+                    title: 'AutoPic',
+                    message: 'Preencha Nome e Empresa antes de usar o AutoPic.'
+                });
                 return;
             }
 
@@ -3305,15 +3308,45 @@
             autoPicActiveSlot = 0;
             renderAutoPicSlots();
 
-            const query = `${name} ${position}`.trim();
+            const query = `${name} ${company}`.trim();
             const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
             autoPicGoogleTab = window.open('', '_blank');
             if (!autoPicGoogleTab) {
-                showError('O navegador bloqueou pop-ups. Libere pop-ups para usar o AutoPic.');
+                await openSystemDialog({
+                    title: 'AutoPic',
+                    message: 'O navegador bloqueou pop-ups. Libere pop-ups para usar o AutoPic.'
+                });
                 return;
             }
             autoPicGoogleTab.location.href = googleImagesUrl;
-            showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) 3 imagens nos campos abaixo.');
+
+            try {
+                const response = await fetch(`${API_BASE}/clients/autofind-photo-candidates?name=${encodeURIComponent(name)}&company=${encodeURIComponent(company)}`);
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível buscar imagens automáticas do AutoPic.');
+
+                const candidates = (payload.candidates || []).slice(0, 3);
+                if (!candidates.length) {
+                    showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) 3 imagens nos campos abaixo.');
+                    return;
+                }
+
+                candidates.forEach((url, idx) => {
+                    autoPicSlots[idx] = url;
+                });
+                autoPicActiveSlot = Math.min(candidates.length, 2);
+                renderAutoPicSlots();
+                showSuccess('AutoPic preencheu até 3 sugestões. Clique em uma para escolher ou substitua com Ctrl+V.');
+
+                if (candidates.length >= 3 && autoPicGoogleTab && !autoPicGoogleTab.closed) {
+                    setTimeout(() => {
+                        try { autoPicGoogleTab.close(); } catch (_) {}
+                    }, 500);
+                }
+            } catch (error) {
+                showError(error.message || 'Falha ao carregar sugestões do AutoPic.');
+                showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) 3 imagens nos campos abaixo.');
+            }
         }
 
         // Save Client
