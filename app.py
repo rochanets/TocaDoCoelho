@@ -704,30 +704,51 @@ def _extract_bing_image_urls(raw_html):
     return urls
 
 
+def _extract_google_image_urls(raw_html):
+    patterns = [
+        r'"(https://encrypted-tbn0\.gstatic\.com/images\?q=tbn:[^"\\]+)"',
+        r'"(https://[^"\\]+\.(?:jpg|jpeg|png|webp))"'
+    ]
+    urls = []
+    for pattern in patterns:
+        for item in re.findall(pattern, raw_html, re.IGNORECASE):
+            url = html.unescape(item).replace('\u003d', '=').replace('\u0026', '&').replace('\\/', '/')
+            if url.startswith('http://') or url.startswith('https://'):
+                urls.append(url)
+    return urls
+
+
 def _find_image_candidates_on_web(query, limit=3):
     if not query:
         return []
 
-    search_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}&form=HDRSC2&first=1&tsc=ImageBasicHover"
-    req = urllib.request.Request(search_url, headers={
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-    })
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+    search_urls = [
+        f"https://www.google.com/search?tbm=isch&q={urllib.parse.quote(query)}",
+        f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}&form=HDRSC2&first=1&tsc=ImageBasicHover"
+    ]
 
-    with urllib.request.urlopen(req, timeout=12) as response:
-        content = response.read().decode('utf-8', errors='ignore')
-
-    urls = _extract_bing_image_urls(content)
-    unique = []
+    results = []
     seen = set()
-    for u in urls:
-        if u in seen:
-            continue
-        seen.add(u)
-        unique.append(u)
-        if len(unique) >= limit:
-            break
-    return unique
 
+    for search_url in search_urls:
+        req = urllib.request.Request(search_url, headers={'User-Agent': user_agent})
+        try:
+            with urllib.request.urlopen(req, timeout=12) as response:
+                content = response.read().decode('utf-8', errors='ignore')
+        except Exception:
+            continue
+
+        urls = _extract_google_image_urls(content) if 'google.' in search_url else _extract_bing_image_urls(content)
+        for u in urls:
+            if u in seen:
+                continue
+            seen.add(u)
+            results.append(u)
+            if len(results) >= limit:
+                return results
+
+    return results
 
 def _download_remote_image_to_uploads(image_url, prefix='autofind'):
     parsed = urllib.parse.urlparse(image_url)
