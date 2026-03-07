@@ -1767,6 +1767,28 @@
                 </section>
 
                 <section class="settings-card">
+                    <h3>Ajuda e Atualizações</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
+                    <form id="updateSourceForm" onsubmit="saveUpdateSourceConfig(event)">
+                        <div class="form-group">
+                            <label>GitHub Owner</label>
+                            <input type="text" id="updateGithubOwner" placeholder="seu-usuario-ou-org" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>GitHub Repositório</label>
+                            <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
+                        </div>
+                        <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
+                            <button type="button" class="btn btn-primary btn-small" onclick="checkForUpdates()"><i class="fas fa-cloud-download-alt"></i> Verificar atualizações</button>
+                        </div>
+                    </form>
+                    <div id="updateCheckResult" style="margin-top:12px; color:#4b5563; font-size:13px;"></div>
+                </section>
+
+
+                <section class="settings-card">
                     <h3>MSG Padrão</h3>
                     <form onsubmit="saveMessageTemplate(event)">
                         <input type="hidden" id="templateId">
@@ -2024,6 +2046,12 @@
             openrouter_site_url: 'http://localhost',
             openrouter_app_name: 'TocaDoCoelho'
         };
+        let updateSourceConfig = {
+            current_version: '1.0.0',
+            github_owner: '',
+            github_repo: '',
+            configured: false
+        };
         let cachedPositions = [];
         let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
@@ -2061,13 +2089,18 @@
         }
 
         async function loadSettings() {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig()]);
             renderSettings();
         }
 
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
+        }
+
+        async function loadUpdateSourceConfig() {
+            const response = await fetch(`${API_BASE}/config/update-source`);
+            if (response.ok) updateSourceConfig = await response.json();
         }
 
         async function loadStatusConfig() {
@@ -2129,6 +2162,12 @@
             document.getElementById('openrouterKeyStatus').textContent = integrationConfig?.openrouter_configured
                 ? `Configurada (${integrationConfig?.openrouter_key_preview || '***'})`
                 : 'Não configurada';
+
+            document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
+            document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
+            document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '1.0.0'}`;
+            const updateResult = document.getElementById('updateCheckResult');
+            if (updateResult) updateResult.textContent = '';
         }
 
         async function saveIntegrationConfig(event) {
@@ -2154,6 +2193,65 @@
             } else {
                 const result = await response.json().catch(() => ({}));
                 showError(result.error || 'Erro ao salvar integrações');
+            }
+        }
+
+        async function saveUpdateSourceConfig(event) {
+            event.preventDefault();
+            const payload = {
+                github_owner: document.getElementById('updateGithubOwner').value.trim(),
+                github_repo: document.getElementById('updateGithubRepo').value.trim()
+            };
+
+            const response = await fetch(`${API_BASE}/config/update-source`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+                showSuccess('Fonte de atualização salva!');
+                await loadUpdateSourceConfig();
+                renderSettings();
+            } else {
+                const result = await response.json().catch(() => ({}));
+                showError(result.error || 'Erro ao salvar fonte de atualização');
+            }
+        }
+
+        async function checkForUpdates() {
+            const container = document.getElementById('updateCheckResult');
+            if (container) container.textContent = 'Verificando releases no GitHub...';
+
+            try {
+                const response = await fetch(`${API_BASE}/config/check-updates`);
+                const result = await response.json().catch(() => ({}));
+
+                if (!response.ok) {
+                    const errorMsg = result.error || result.message || 'Falha ao verificar atualizações.';
+                    if (container) container.textContent = errorMsg;
+                    showError(errorMsg);
+                    return;
+                }
+
+                if (result.update_available) {
+                    const releaseUrl = result.html_url || '';
+                    const releaseLinkHtml = releaseUrl
+                        ? ` <a href="${releaseUrl}" target="_blank" rel="noopener noreferrer">Abrir release</a>`
+                        : '';
+                    if (container) {
+                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}`;
+                    }
+                    showSuccess(`Nova versão disponível: ${result.latest_version}`);
+                } else {
+                    if (container) {
+                        container.textContent = `Você já está na versão mais recente (${result.current_version || ''}).`;
+                    }
+                    showSuccess('Você já está na versão mais recente.');
+                }
+            } catch (error) {
+                if (container) container.textContent = 'Erro ao verificar atualizações.';
+                showError('Erro ao verificar atualizações.');
             }
         }
 
