@@ -36,15 +36,11 @@ except ImportError:
     CHARDET_AVAILABLE = False
 
 WHISPER_IMPORT_ERROR = None
-try:
-    from faster_whisper import WhisperModel
-    WHISPER_AVAILABLE = True
-except Exception as e:
-    WhisperModel = None
-    WHISPER_AVAILABLE = False
-    WHISPER_IMPORT_ERROR = str(e)
+WHISPER_IMPORT_ATTEMPTED = False
+WhisperModel = None
+WHISPER_AVAILABLE = True
 
-TRANSCRIPTION_BACKEND = 'faster-whisper' if WHISPER_AVAILABLE else None
+TRANSCRIPTION_BACKEND = 'faster-whisper'
 
 try:
     import imageio_ffmpeg
@@ -117,13 +113,7 @@ APP_VERSION = os.environ.get('TOCA_APP_VERSION', '1.0.0').strip() or '1.0.0'
 DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
 
-if WHISPER_AVAILABLE:
-    logger.info('[Transcription] Backend carregado: faster-whisper')
-else:
-    if WHISPER_IMPORT_ERROR:
-        logger.warning(f'[Transcription] Backend faster-whisper indisponível: {WHISPER_IMPORT_ERROR}')
-    else:
-        logger.warning('[Transcription] Backend faster-whisper indisponível neste ambiente.')
+logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
 AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
@@ -199,12 +189,37 @@ def get_ffmpeg_install_instructions():
 
 
 def get_whisper_model():
-    global WHISPER_MODEL
+    global WHISPER_MODEL, WhisperModel, WHISPER_AVAILABLE, WHISPER_IMPORT_ERROR, WHISPER_IMPORT_ATTEMPTED
+
     if not WHISPER_AVAILABLE:
         return None
+
     with WHISPER_MODEL_LOCK:
-        if WHISPER_MODEL is None:
+        if WHISPER_MODEL is not None:
+            return WHISPER_MODEL
+
+        if WhisperModel is None and not WHISPER_IMPORT_ATTEMPTED:
+            WHISPER_IMPORT_ATTEMPTED = True
+            try:
+                from faster_whisper import WhisperModel as _WhisperModel
+                WhisperModel = _WhisperModel
+            except Exception as e:
+                WHISPER_AVAILABLE = False
+                WHISPER_IMPORT_ERROR = str(e)
+                logger.warning(f'[Transcription] Backend faster-whisper indisponível: {WHISPER_IMPORT_ERROR}')
+                return None
+
+        if WhisperModel is None:
+            return None
+
+        try:
             WHISPER_MODEL = WhisperModel('base', device='cpu', compute_type='int8')
+        except Exception as e:
+            WHISPER_AVAILABLE = False
+            WHISPER_IMPORT_ERROR = str(e)
+            logger.warning(f'[Transcription] Falha ao inicializar faster-whisper: {WHISPER_IMPORT_ERROR}')
+            return None
+
     return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
@@ -1353,8 +1368,9 @@ def transcribe_audio():
         print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
-        print('[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente.')
-        return jsonify({'error': 'Biblioteca faster-whisper não encontrada. Rode o INSTALAR.bat novamente.'}), 503
+        details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+        print(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
+        return jsonify({'error': 'Biblioteca faster-whisper não está disponível neste ambiente.'}), 503
 
     audio_file = request.files.get('audio')
     if not audio_file:
@@ -1377,6 +1393,9 @@ def transcribe_audio():
             print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
+        if model is None:
+            details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+            return jsonify({'error': f'Backend de transcrição indisponível{details}.'}), 503
         segments, _ = model.transcribe(temp_path, language='pt')
         text = ''.join(segment.text for segment in segments).strip()
 

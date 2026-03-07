@@ -72,7 +72,8 @@ print()
 
 # Aguardar servidor estar pronto
 print("[INFO] Aguardando servidor ficar pronto...")
-max_attempts = 60
+startup_timeout_seconds = int(os.environ.get('TOCA_STARTUP_TIMEOUT_SECONDS', '60'))
+max_attempts = max(20, startup_timeout_seconds * 2)
 attempt = 0
 
 while attempt < max_attempts:
@@ -95,7 +96,7 @@ while attempt < max_attempts:
     attempt += 1
 
 if attempt >= max_attempts:
-    print("[ERRO] Servidor não respondeu a tempo!")
+    print(f"[ERRO] Servidor não respondeu a tempo! (timeout: {startup_timeout_seconds}s)")
     print(f"[INFO] Verifique o log em: {LOG_PATH}")
     server_process.terminate()
     input("Pressione ENTER para fechar...")
