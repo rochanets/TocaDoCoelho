@@ -543,6 +543,9 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_template_id', '69ac3c87024adc2d2bdc19f5'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     
     conn.commit()
     
@@ -1083,20 +1086,96 @@ def _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18):
     return [item for _, item in scored[:max(1, int(limit or 18))]]
 
 
-def _itoca_compose_answer(question, context_rows):
+def _itoca_compose_context_text(context_rows):
+    """Formata as linhas de contexto em texto estruturado para envio ao LLM."""
     if not context_rows:
-        return (
-            'Não encontrei dados suficientes na base interna para responder com segurança. '            'Tente perguntar com mais detalhes (nome, empresa, cargo, data ou módulo).'
-        )
-
-    lines = [f'Pergunta: {question}', '', 'Encontrei estes dados internos relevantes:']
-    for item in context_rows[:12]:
+        return ''
+    lines = []
+    for item in context_rows[:18]:
         row_id = f"#{item['id']}" if item.get('id') is not None else ''
-        lines.append(f"- [{item['table']}{row_id}] {item['snippet']}")
-
-    lines.append('')
-    lines.append('Resposta baseada somente no sistema acima. Se quiser, refine a pergunta para filtrar melhor.')
+        lines.append(f"[{item['table']}{row_id}] {item['snippet']}")
     return '\n'.join(lines)
+
+
+def _itoca_call_sai_llm(question, context_rows):
+    """Chama a API SAI LLM com a pergunta e o contexto. Retorna dict com answer, confidence_percent, needs_refinement, refinement_hint."""
+    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
+    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+    template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    context_text = _itoca_compose_context_text(context_rows)
+
+    if not api_key:
+        # Fallback sem LLM: retorna resposta estruturada básica
+        if not context_rows:
+            return {
+                'answer': 'Não encontrei dados suficientes na base interna para responder com segurança. Tente perguntar com mais detalhes (nome, empresa, cargo, data ou módulo).',
+                'confidence_percent': 0,
+                'needs_refinement': True,
+                'refinement_hint': 'Forneça mais detalhes como nome, empresa, cargo ou data.',
+                'llm_used': False
+            }
+        answer_lines = [f'Encontrei {len(context_rows)} registro(s) relevante(s):']
+        for item in context_rows[:8]:
+            row_id = f"#{item['id']}" if item.get('id') is not None else ''
+            answer_lines.append(f"• [{item['table']}{row_id}] {item['snippet']}")
+        answer_lines.append('')
+        answer_lines.append('Configure a chave da API SAI em Configurações > Integrações para respostas em linguagem natural.')
+        return {
+            'answer': '\n'.join(answer_lines),
+            'confidence_percent': 50,
+            'needs_refinement': False,
+            'refinement_hint': '',
+            'llm_used': False
+        }
+
+    url = f'{base_url}/api/templates/{template_id}/execute'
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Api-Key': api_key
+    }
+    payload = {
+        'inputs': {
+            'question': question,
+            'context_sources': context_text if context_text else 'Nenhum dado encontrado na base interna para esta pergunta.'
+        }
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        headers=headers,
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode('utf-8')
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+        logger.error(f'[iToca][SAI] HTTPError {getattr(e, "code", None)}: {detail[:400]}')
+        raise RuntimeError(f'Erro na API SAI (HTTP {getattr(e, "code", None)}): {detail[:200]}')
+    except Exception as e:
+        logger.error(f'[iToca][SAI] Erro de conexão: {e}')
+        raise RuntimeError(f'Falha ao conectar com a API SAI: {str(e)}')
+
+    parsed = _extract_json_object_from_text(raw)
+    if not parsed or not isinstance(parsed, dict):
+        # Tenta usar o texto bruto como resposta
+        return {
+            'answer': raw.strip() or 'Não foi possível interpretar a resposta do assistente.',
+            'confidence_percent': 50,
+            'needs_refinement': False,
+            'refinement_hint': '',
+            'llm_used': True
+        }
+
+    return {
+        'answer': (parsed.get('answer') or '').strip() or 'Sem resposta disponível.',
+        'confidence_percent': max(0, min(100, int(parsed.get('confidence_percent') or 0))),
+        'needs_refinement': bool(parsed.get('needs_refinement')),
+        'refinement_hint': (parsed.get('refinement_hint') or '').strip(),
+        'llm_used': True
+    }
 
 
 def ensure_account_for_company(cursor, company_name):
@@ -2090,7 +2169,10 @@ def get_integrations_config():
             'openrouter_api_key',
             'openrouter_model',
             'openrouter_site_url',
-            'openrouter_app_name'
+            'openrouter_app_name',
+            'itoca_sai_api_key',
+            'itoca_sai_template_id',
+            'itoca_sai_base_url'
         ])
 
         tavily_key = (settings_map.get('tavily_api_key') or '').strip() or (os.environ.get('TAVILY_API_KEY', '') or '').strip()
@@ -2098,6 +2180,9 @@ def get_integrations_config():
         model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
         site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
         app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        itoca_sai_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+        itoca_sai_template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+        itoca_sai_base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
         return jsonify({
             'tavily_configured': bool(tavily_key),
@@ -2106,7 +2191,11 @@ def get_integrations_config():
             'openrouter_key_preview': openrouter_key[:9] + '...' if openrouter_key else '',
             'openrouter_model': model,
             'openrouter_site_url': site_url,
-            'openrouter_app_name': app_name
+            'openrouter_app_name': app_name,
+            'itoca_sai_configured': bool(itoca_sai_key),
+            'itoca_sai_key_preview': itoca_sai_key[:6] + '...' if itoca_sai_key else '',
+            'itoca_sai_template_id': itoca_sai_template_id,
+            'itoca_sai_base_url': itoca_sai_base_url
         })
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/integrations: {e}')
@@ -2122,6 +2211,9 @@ def save_integrations_config():
         openrouter_model = (data.get('openrouter_model') or '').strip() or 'stepfun/step-3.5-flash:free'
         openrouter_site_url = (data.get('openrouter_site_url') or '').strip() or 'http://localhost'
         openrouter_app_name = (data.get('openrouter_app_name') or '').strip() or 'TocaDoCoelho'
+        itoca_sai_api_key = (data.get('itoca_sai_api_key') or '').strip()
+        itoca_sai_template_id = (data.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+        itoca_sai_base_url = (data.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
         if openrouter_api_key:
             key_ok, key_msg = _validate_openrouter_api_key(openrouter_api_key)
@@ -2135,7 +2227,10 @@ def save_integrations_config():
             ('openrouter_api_key', openrouter_api_key),
             ('openrouter_model', openrouter_model),
             ('openrouter_site_url', openrouter_site_url),
-            ('openrouter_app_name', openrouter_app_name)
+            ('openrouter_app_name', openrouter_app_name),
+            ('itoca_sai_api_key', itoca_sai_api_key),
+            ('itoca_sai_template_id', itoca_sai_template_id),
+            ('itoca_sai_base_url', itoca_sai_base_url)
         ]
         for key, value in updates:
             c.execute(
@@ -2298,9 +2393,13 @@ def itoca_ask():
             }), 409
 
         context_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18)
-        answer = _itoca_compose_answer(question, context_rows)
+        llm_result = _itoca_call_sai_llm(question, context_rows)
         return jsonify({
-            'answer': answer,
+            'answer': llm_result.get('answer', ''),
+            'confidence_percent': llm_result.get('confidence_percent', 0),
+            'needs_refinement': llm_result.get('needs_refinement', False),
+            'refinement_hint': llm_result.get('refinement_hint', ''),
+            'llm_used': llm_result.get('llm_used', False),
             'items_found': len(context_rows),
             'sources': context_rows,
             'base_updated_at': updated_at,

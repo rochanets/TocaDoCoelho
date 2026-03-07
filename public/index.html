@@ -1414,7 +1414,39 @@
         }
         .autopic-slot-box.active { border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
         .autopic-slot-box img { width:100%; height:100%; object-fit:cover; border-radius:8px; }
-        .itoca-answer { margin-top:12px; border:1px solid #bbf7d0; background:#f0fdf4; border-radius:12px; padding:12px; color:#065f46; white-space:pre-wrap; }
+        /* iToca Chat Styles */
+        .itoca-chat-container { margin-top:16px; display:flex; flex-direction:column; gap:0; }
+        .itoca-chat-messages { display:flex; flex-direction:column; gap:12px; max-height:480px; overflow-y:auto; padding:4px 2px; scroll-behavior:smooth; }
+        .itoca-msg { display:flex; gap:10px; align-items:flex-start; animation:itocaFadeIn .25s ease; }
+        .itoca-msg.user { flex-direction:row-reverse; }
+        .itoca-msg-avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; }
+        .itoca-msg.user .itoca-msg-avatar { background:#10b981; color:#fff; }
+        .itoca-msg.assistant .itoca-msg-avatar { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; }
+        .itoca-msg-bubble { max-width:82%; padding:10px 14px; border-radius:14px; font-size:14px; line-height:1.55; word-break:break-word; }
+        .itoca-msg.user .itoca-msg-bubble { background:#10b981; color:#fff; border-bottom-right-radius:4px; }
+        .itoca-msg.assistant .itoca-msg-bubble { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; border-bottom-left-radius:4px; white-space:pre-wrap; }
+        .itoca-msg.assistant .itoca-msg-bubble.needs-refinement { background:#fffbeb; border-color:#fde68a; color:#92400e; }
+        .itoca-msg.error .itoca-msg-bubble { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }
+        .itoca-msg-meta { margin-top:5px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+        .itoca-confidence { font-size:11px; padding:2px 7px; border-radius:10px; font-weight:600; }
+        .itoca-confidence.high { background:#d1fae5; color:#065f46; }
+        .itoca-confidence.medium { background:#fef3c7; color:#92400e; }
+        .itoca-confidence.low { background:#fee2e2; color:#991b1b; }
+        .itoca-refinement-hint { font-size:12px; color:#6b7280; font-style:italic; }
+        .itoca-sources-toggle { font-size:11px; color:#6b7280; cursor:pointer; text-decoration:underline; background:none; border:none; padding:0; }
+        .itoca-sources-toggle:hover { color:#10b981; }
+        .itoca-sources-list { margin-top:6px; font-size:11px; color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 10px; display:none; }
+        .itoca-sources-list.open { display:block; }
+        .itoca-sources-list li { list-style:disc; margin-left:14px; margin-bottom:2px; }
+        .itoca-typing { display:flex; align-items:center; gap:5px; padding:10px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; border-bottom-left-radius:4px; }
+        .itoca-typing span { width:7px; height:7px; background:#10b981; border-radius:50%; animation:itocaBounce 1.2s infinite; }
+        .itoca-typing span:nth-child(2) { animation-delay:.2s; }
+        .itoca-typing span:nth-child(3) { animation-delay:.4s; }
+        @keyframes itocaBounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
+        @keyframes itocaFadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+        .itoca-chat-empty { text-align:center; color:#9ca3af; font-size:13px; padding:32px 0; }
+        .itoca-chat-empty i { font-size:32px; display:block; margin-bottom:8px; color:#d1fae5; }
+        .itoca-answer { display:none; }
         .wiki-doc-upload-row { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; align-items:flex-start; }
         .wiki-doc-upload-main { display:flex; gap:8px; align-items:center; width:100%; flex-wrap:wrap; }
         .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
@@ -1498,23 +1530,23 @@
         <div id="iata" class="tab-content">
             <div class="page-header">
                 <h1>iToca</h1>
-                <p>Seu assistente ligeirinho.</p>
+                <p>Seu assistente ligeirinho &mdash; pergunte qualquer coisa sobre os dados do sistema.</p>
             </div>
-            <div class="iata-center">
-                <video id="iataVideoPlayer"
-                  autoplay
-                  loop
-                  muted
-                  playsinline
-                  preload="auto"
-                  style="width: 100%; max-width: 300px; height: auto; display: block; border-radius: 12px; margin: 0 auto;"
-                >
-                  <source id="iataVideoSource" src="/videos/TocaVideo.mp4" type="video/mp4" />
-                </video>
+
+            <!-- Chat messages area -->
+            <div class="itoca-chat-container">
+                <div id="itocaChatMessages" class="itoca-chat-messages">
+                    <div class="itoca-chat-empty" id="itocaChatEmpty">
+                        <i class="fas fa-robot"></i>
+                        Olá! Sou o iToca. Atualize a base e me faça uma pergunta sobre seus contatos, atividades, agenda ou qualquer dado do sistema.
+                    </div>
+                </div>
             </div>
-            <div class="iata-input-row">
-                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui sua pergunta em linguagem natural" style="flex:1;"></textarea>
-                <button type="button" id="iataAskBtn" class="btn btn-primary" onclick="askIToca()"><i class="fas fa-search"></i> Perguntar</button>
+
+            <!-- Input row -->
+            <div class="iata-input-row" style="margin-top:14px;">
+                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui sua pergunta em linguagem natural" style="flex:1;" onkeydown="handleITocaKeydown(event)"></textarea>
+                <button type="button" id="iataAskBtn" class="btn btn-primary" onclick="askIToca()"><i class="fas fa-paper-plane"></i> Enviar</button>
                 <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
                     <i class="fas fa-microphone voice-icon"></i>
                     <span class="voice-anim"><span></span><span></span><span></span></span>
@@ -1523,10 +1555,15 @@
                 <input type="file" id="iataAttachment" class="iata-file-input" accept=".txt,text/plain" multiple onchange="validateIataAttachment(event)">
                 <label for="iataAttachment" id="iataAttachmentLabel" class="iata-file-btn" title="Anexar texto"><i class="fas fa-paperclip"></i></label>
             </div>
+
+            <!-- Base controls -->
             <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                 <button type="button" class="btn btn-auto-mapping btn-small" onclick="updateITocaBase()"><span class="ai-star-icon">✦</span> Base Update</button>
+                <button type="button" class="btn btn-secondary btn-small" onclick="clearITocaChat()" title="Limpar histórico do chat"><i class="fas fa-trash-alt"></i> Limpar chat</button>
                 <small id="itocaBaseUpdatedAt" style="color:#4b5563; font-size:12px;">Base não atualizada.</small>
             </div>
+
+            <!-- Legacy hidden element (kept for compatibility) -->
             <div id="itocaAnswer" class="itoca-answer" style="display:none;"></div>
         </div>
 
@@ -1828,7 +1865,7 @@
 
                 <section class="settings-card">
                     <h3>Integrações de API</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Configure as chaves do usuário final para busca (Tavily) e LLM (OpenRouter).</p>
+                    <p style="margin-bottom:12px; color:#4b5563;">Configure as chaves do usuário final para busca (Tavily), LLM (OpenRouter) e o assistente iToca (SAI).</p>
                     <form id="integrationConfigForm" onsubmit="saveIntegrationConfig(event)">
                         <div class="form-group">
                             <label>Tavily API Key</label>
@@ -1851,6 +1888,21 @@
                         <div class="form-group">
                             <label>Nome da Aplicação (OpenRouter)</label>
                             <input type="text" id="openrouterAppName" placeholder="TocaDoCoelho">
+                        </div>
+                        <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;">
+                        <p style="margin-bottom:10px; color:#4b5563; font-size:13px;"><strong>iToca &mdash; Assistente IA (SAI)</strong><br>Configure a integração com o LLM da empresa para respostas em linguagem natural.</p>
+                        <div class="form-group">
+                            <label>iToca SAI API Key</label>
+                            <input type="password" id="itocaSaiApiKey" placeholder="Chave da API SAI" autocomplete="off">
+                            <small id="itocaSaiKeyStatus" style="color:#6b7280;"></small>
+                        </div>
+                        <div class="form-group">
+                            <label>iToca SAI Template ID</label>
+                            <input type="text" id="itocaSaiTemplateId" placeholder="69ac3c87024adc2d2bdc19f5">
+                        </div>
+                        <div class="form-group">
+                            <label>iToca SAI Base URL</label>
+                            <input type="text" id="itocaSaiBaseUrl" placeholder="https://sai-library.saiapplications.com">
                         </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar Integrações</button>
                     </form>
@@ -2300,6 +2352,13 @@
             document.getElementById('openrouterKeyStatus').textContent = integrationConfig?.openrouter_configured
                 ? `Configurada (${integrationConfig?.openrouter_key_preview || '***'})`
                 : 'Não configurada';
+            // iToca SAI fields
+            document.getElementById('itocaSaiApiKey').value = '';
+            document.getElementById('itocaSaiTemplateId').value = integrationConfig?.itoca_sai_template_id || '69ac3c87024adc2d2bdc19f5';
+            document.getElementById('itocaSaiBaseUrl').value = integrationConfig?.itoca_sai_base_url || 'https://sai-library.saiapplications.com';
+            document.getElementById('itocaSaiKeyStatus').textContent = integrationConfig?.itoca_sai_configured
+                ? `Configurada (${integrationConfig?.itoca_sai_key_preview || '***'})`
+                : 'Não configurada';
 
             document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
             document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
@@ -2315,7 +2374,10 @@
                 openrouter_api_key: document.getElementById('openrouterApiKey').value.trim(),
                 openrouter_model: document.getElementById('openrouterModel').value.trim(),
                 openrouter_site_url: document.getElementById('openrouterSiteUrl').value.trim(),
-                openrouter_app_name: document.getElementById('openrouterAppName').value.trim()
+                openrouter_app_name: document.getElementById('openrouterAppName').value.trim(),
+                itoca_sai_api_key: document.getElementById('itocaSaiApiKey').value.trim(),
+                itoca_sai_template_id: document.getElementById('itocaSaiTemplateId').value.trim(),
+                itoca_sai_base_url: document.getElementById('itocaSaiBaseUrl').value.trim()
             };
 
             const response = await fetch(`${API_BASE}/config/integrations`, {
@@ -5479,6 +5541,11 @@
             if (response.ok) { showSuccess('Atividade registrada com sucesso!'); await Promise.all([loadActivities(), loadDashboard()]); }
         }
 
+        // =====================================================
+        // iToca Chat
+        // =====================================================
+        let itocaChatMsgCount = 0;
+
         async function loadITocaBaseStatus() {
             const label = document.getElementById('itocaBaseUpdatedAt');
             if (!label) return;
@@ -5490,7 +5557,7 @@
                     label.textContent = 'Base não atualizada.';
                     return;
                 }
-                label.textContent = `Último update da base: ${formatDateBr(payload.updated_at)}`;
+                label.textContent = `Último update: ${formatDateBr(payload.updated_at)} — ${payload.items_count} registros`;
             } catch (error) {
                 label.textContent = 'Base iToca indisponível.';
             }
@@ -5511,17 +5578,158 @@
             }
         }
 
+        function _itocaScrollToBottom() {
+            const container = document.getElementById('itocaChatMessages');
+            if (container) container.scrollTop = container.scrollHeight;
+        }
+
+        function _itocaHideEmpty() {
+            const empty = document.getElementById('itocaChatEmpty');
+            if (empty) empty.style.display = 'none';
+        }
+
+        function _itocaAppendUserMsg(text) {
+            _itocaHideEmpty();
+            const container = document.getElementById('itocaChatMessages');
+            if (!container) return;
+            const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const div = document.createElement('div');
+            div.className = 'itoca-msg user';
+            div.innerHTML = `
+                <div class="itoca-msg-avatar"><i class="fas fa-user"></i></div>
+                <div class="itoca-msg-bubble">${escaped}</div>
+            `;
+            container.appendChild(div);
+            _itocaScrollToBottom();
+        }
+
+        function _itocaAppendTyping() {
+            _itocaHideEmpty();
+            const container = document.getElementById('itocaChatMessages');
+            if (!container) return null;
+            const div = document.createElement('div');
+            div.className = 'itoca-msg assistant';
+            div.id = 'itocaTypingIndicator';
+            div.innerHTML = `
+                <div class="itoca-msg-avatar"><i class="fas fa-robot"></i></div>
+                <div class="itoca-typing"><span></span><span></span><span></span></div>
+            `;
+            container.appendChild(div);
+            _itocaScrollToBottom();
+            return div;
+        }
+
+        function _itocaRemoveTyping() {
+            const el = document.getElementById('itocaTypingIndicator');
+            if (el) el.remove();
+        }
+
+        function _itocaConfidenceClass(pct) {
+            if (pct >= 70) return 'high';
+            if (pct >= 40) return 'medium';
+            return 'low';
+        }
+
+        function _itocaToggleSources(btn) {
+            const list = btn.nextElementSibling;
+            if (!list) return;
+            list.classList.toggle('open');
+            btn.textContent = list.classList.contains('open') ? 'Ocultar fontes' : `Ver fontes (${list.dataset.count})`;
+        }
+
+        function _itocaAppendAssistantMsg(payload) {
+            const container = document.getElementById('itocaChatMessages');
+            if (!container) return;
+            const msgId = `itocaMsg${++itocaChatMsgCount}`;
+            const answer = (payload.answer || 'Sem resposta disponível.').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const confidence = payload.confidence_percent != null ? payload.confidence_percent : null;
+            const needsRefinement = payload.needs_refinement || false;
+            const refinementHint = (payload.refinement_hint || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const sources = payload.sources || [];
+            const llmUsed = payload.llm_used || false;
+
+            let metaHtml = '';
+            if (confidence !== null && llmUsed) {
+                const cls = _itocaConfidenceClass(confidence);
+                metaHtml += `<span class="itoca-confidence ${cls}">${confidence}% confiança</span>`;
+            }
+            if (needsRefinement && refinementHint) {
+                metaHtml += `<span class="itoca-refinement-hint"><i class="fas fa-lightbulb"></i> ${refinementHint}</span>`;
+            }
+            if (sources.length > 0) {
+                const sourcesHtml = sources.map(s => {
+                    const rowId = s.id != null ? `#${s.id}` : '';
+                    const snippet = (s.snippet || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                    return `<li>[${(s.table||'').replace(/&/g,'&amp;')}${rowId}] ${snippet}</li>`;
+                }).join('');
+                metaHtml += `<button class="itoca-sources-toggle" onclick="_itocaToggleSources(this)">Ver fontes (${sources.length})</button><ul class="itoca-sources-list" data-count="${sources.length}">${sourcesHtml}</ul>`;
+            }
+
+            const bubbleClass = needsRefinement ? 'itoca-msg-bubble needs-refinement' : 'itoca-msg-bubble';
+            const div = document.createElement('div');
+            div.className = 'itoca-msg assistant';
+            div.id = msgId;
+            div.innerHTML = `
+                <div class="itoca-msg-avatar"><i class="fas fa-robot"></i></div>
+                <div>
+                    <div class="${bubbleClass}">${answer}</div>
+                    ${metaHtml ? `<div class="itoca-msg-meta">${metaHtml}</div>` : ''}
+                </div>
+            `;
+            container.appendChild(div);
+            _itocaScrollToBottom();
+        }
+
+        function _itocaAppendErrorMsg(message) {
+            const container = document.getElementById('itocaChatMessages');
+            if (!container) return;
+            const escaped = (message || 'Erro desconhecido.').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const div = document.createElement('div');
+            div.className = 'itoca-msg error';
+            div.innerHTML = `
+                <div class="itoca-msg-avatar" style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;"><i class="fas fa-exclamation-triangle"></i></div>
+                <div class="itoca-msg-bubble">${escaped}</div>
+            `;
+            container.appendChild(div);
+            _itocaScrollToBottom();
+        }
+
+        function clearITocaChat() {
+            const container = document.getElementById('itocaChatMessages');
+            if (!container) return;
+            container.innerHTML = `
+                <div class="itoca-chat-empty" id="itocaChatEmpty">
+                    <i class="fas fa-robot"></i>
+                    Olá! Sou o iToca. Atualize a base e me faça uma pergunta sobre seus contatos, atividades, agenda ou qualquer dado do sistema.
+                </div>
+            `;
+            itocaChatMsgCount = 0;
+        }
+
+        function handleITocaKeydown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                askIToca();
+            }
+        }
+
         async function askIToca() {
-            const question = (document.getElementById('iataText')?.value || '').trim();
+            const textarea = document.getElementById('iataText');
+            const question = (textarea?.value || '').trim();
             if (!question) {
                 showError('Digite uma pergunta para o iToca.');
                 return;
             }
-            const answerEl = document.getElementById('itocaAnswer');
-            if (answerEl) {
-                answerEl.style.display = 'block';
-                answerEl.textContent = 'Consultando base interna...';
-            }
+
+            // Disable input while processing
+            const askBtn = document.getElementById('iataAskBtn');
+            if (askBtn) askBtn.disabled = true;
+            if (textarea) textarea.disabled = true;
+
+            _itocaAppendUserMsg(question);
+            if (textarea) textarea.value = '';
+            const typingEl = _itocaAppendTyping();
+
             try {
                 const response = await fetch(`${API_BASE}/itoca/ask`, {
                     method: 'POST',
@@ -5529,17 +5737,30 @@
                     body: JSON.stringify({ question })
                 });
                 const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Não foi possível consultar o iToca.');
-                if (answerEl) {
-                    answerEl.textContent = payload.answer || 'Não encontrei resposta objetiva com os dados atuais.';
+                _itocaRemoveTyping();
+
+                if (!response.ok) {
+                    const errMsg = payload.error || 'Não foi possível consultar o iToca.';
+                    if (payload.base_ready === false) {
+                        _itocaAppendErrorMsg('⚠️ ' + errMsg);
+                    } else {
+                        _itocaAppendErrorMsg(errMsg);
+                    }
+                    showError(errMsg);
+                } else {
+                    _itocaAppendAssistantMsg(payload);
                     if (payload.base_updated_at) {
                         const label = document.getElementById('itocaBaseUpdatedAt');
-                        if (label) label.textContent = `Último update da base: ${formatDateBr(payload.base_updated_at)}`;
+                        if (label) label.textContent = `Último update: ${formatDateBr(payload.base_updated_at)}`;
                     }
                 }
             } catch (error) {
-                if (answerEl) answerEl.textContent = `Erro: ${error.message}`;
+                _itocaRemoveTyping();
+                _itocaAppendErrorMsg(error.message || 'Falha ao consultar iToca.');
                 showError(error.message || 'Falha ao consultar iToca.');
+            } finally {
+                if (askBtn) askBtn.disabled = false;
+                if (textarea) { textarea.disabled = false; textarea.focus(); }
             }
         }
 
