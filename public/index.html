@@ -1911,7 +1911,7 @@
                 <div class="form-group">
                     <label>Foto</label>
                     <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)" style="display:none;">
-                    <div style="display:flex; gap:8px; flex-wrap:wrap;"><label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label><button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientAutoPicModal()"><span class="ai-star-icon">✦</span> AutoPic</button></div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;"><label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label><button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientAutoPicSearch()"><span class="ai-star-icon">✦</span> AutoPic</button></div>
                     <small style="display:block; margin-top:6px; color:#059669;">Dica: você pode colar imagem com Ctrl+V aqui.</small>
                     <img id="photoPreview" class="photo-preview" style="display:none;">
                     <input type="hidden" id="removePhotoFlag" name="remove_photo" value="0">
@@ -1926,22 +1926,6 @@
             </form>
         </div>
     </div>
-
-    <div id="clientAutoPicModal" class="modal" onclick="if(event.target===this) closeClientAutoPicModal()">
-        <div class="modal-content" style="max-width:760px;">
-            <div class="modal-header">
-                <h2>AutoPic - Escolher foto do contato</h2>
-                <button class="modal-close" onclick="closeClientAutoPicModal()">×</button>
-            </div>
-            <p style="color:#4b5563; margin-bottom:12px;">Vamos buscar imagens com o nome + empresa e mostrar as 3 primeiras.</p>
-            <div id="clientAutoPicStatus" style="font-size:13px; color:#6b7280; margin-bottom:10px;"></div>
-            <div id="clientAutoPicResults" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px;"></div>
-            <div class="modal-footer" style="margin-top:14px;">
-                <button type="button" class="btn btn-secondary" onclick="closeClientAutoPicModal()">Fechar</button>
-            </div>
-        </div>
-    </div>
-
 
     <div id="targetAccountModal" class="modal">
         <div class="modal-content" style="max-width:520px;">
@@ -2077,7 +2061,6 @@
         let positionGroupings = [];
         let _orgMapOpenContext = null; // { company, position } quando aberto pelo + do mapeamento organizacional
         let wikiEntriesSortOrder = "az";
-        let clientAutoPicCandidates = [];
 
         // Tab switching
         function switchTab(ev, tabName) {
@@ -3051,88 +3034,19 @@
                 }
             }
         });
-
-
-        async function openClientAutoPicModal() {
+        function openClientAutoPicSearch() {
             const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
-            const company = getClientFieldValue('company') || (document.querySelector('#clientForm [name="company"]')?.value || '').trim();
-            if (!name && !company) {
-                showError('Preencha ao menos o nome ou empresa antes de usar o AutoPic.');
+            const company = (getClientFieldValue('company') || '').trim();
+
+            if (!name || !company) {
+                showError('Preencha Nome e Empresa antes de usar o AutoPic.');
                 return;
             }
 
-            const modal = document.getElementById('clientAutoPicModal');
-            const statusEl = document.getElementById('clientAutoPicStatus');
-            const resultsEl = document.getElementById('clientAutoPicResults');
-            if (!modal || !statusEl || !resultsEl) return;
-
-            modal.classList.add('active');
-            statusEl.textContent = 'Buscando imagens na web...';
-            resultsEl.innerHTML = '';
-
-            try {
-                const url = `${API_BASE}/clients/autofind-photo-candidates?name=${encodeURIComponent(name)}&company=${encodeURIComponent(company)}`;
-                const response = await fetch(url);
-                const data = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(data.error || 'Falha ao buscar imagens');
-
-                clientAutoPicCandidates = data.candidates || [];
-                if (!clientAutoPicCandidates.length) {
-                    statusEl.textContent = 'Nenhuma imagem encontrada para esse contato.';
-                    return;
-                }
-
-                statusEl.textContent = 'Selecione a foto correta do contato:';
-                resultsEl.innerHTML = clientAutoPicCandidates.map((imgUrl, idx) => `
-                    <button type="button" onclick="selectClientAutoPicImage(${idx})" style="border:1px solid #d1fae5; background:#fff; border-radius:10px; padding:6px; cursor:pointer; text-align:left;">
-                        <img src="${escapeHtml(imgUrl)}" style="width:100%; height:180px; object-fit:cover; border-radius:8px; display:block;">
-                        <div style="margin-top:6px; color:#065f46; font-size:12px;">Usar esta foto</div>
-                    </button>
-                `).join('');
-            } catch (error) {
-                statusEl.textContent = error.message;
-                showError(error.message);
-            }
-        }
-
-        function closeClientAutoPicModal() {
-            const modal = document.getElementById('clientAutoPicModal');
-            if (modal) modal.classList.remove('active');
-        }
-
-        async function selectClientAutoPicImage(index) {
-            const imageUrl = clientAutoPicCandidates[index];
-            if (!imageUrl) return;
-            const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
-            const statusEl = document.getElementById('clientAutoPicStatus');
-            if (statusEl) statusEl.textContent = 'Importando imagem selecionada...';
-
-            try {
-                const response = await fetch(`${API_BASE}/clients/autofind-photo`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image_url: imageUrl, name })
-                });
-                const data = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(data.error || 'Falha ao importar imagem');
-
-                const hidden = document.getElementById('autofindPhotoUrl');
-                if (hidden) hidden.value = data.photo_url || '';
-                const photoInput = document.getElementById('photoInput');
-                if (photoInput) photoInput.value = '';
-                const preview = document.getElementById('photoPreview');
-                if (preview && data.photo_url) {
-                    preview.src = data.photo_url;
-                    preview.style.display = 'block';
-                }
-                const removePhotoFlag = document.getElementById('removePhotoFlag');
-                if (removePhotoFlag) removePhotoFlag.value = '0';
-                showSuccess('Foto definida com AutoPic!');
-                closeClientAutoPicModal();
-            } catch (error) {
-                if (statusEl) statusEl.textContent = error.message;
-                showError(error.message);
-            }
+            const query = `${name} ${company}`.trim();
+            const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
+            window.open(googleImagesUrl, '_blank', 'noopener,noreferrer');
+            showSuccess('Abrimos o Google Imagens para você escolher a foto do contato.');
         }
 
         // Save Client
