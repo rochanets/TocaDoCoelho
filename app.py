@@ -15,6 +15,8 @@ import traceback
 import shutil
 import urllib.request
 import urllib.error
+import urllib.parse
+import html
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,14 +37,12 @@ try:
 except ImportError:
     CHARDET_AVAILABLE = False
 
-try:
-    from faster_whisper import WhisperModel
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WhisperModel = None
-    WHISPER_AVAILABLE = False
+WHISPER_IMPORT_ERROR = None
+WHISPER_IMPORT_ATTEMPTED = False
+WhisperModel = None
+WHISPER_AVAILABLE = True
 
-TRANSCRIPTION_BACKEND = 'faster-whisper' if WHISPER_AVAILABLE else None
+TRANSCRIPTION_BACKEND = 'faster-whisper'
 
 try:
     import imageio_ffmpeg
@@ -111,10 +111,11 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
 
-if WHISPER_AVAILABLE:
-    logger.info('[Transcription] Backend carregado: faster-whisper')
-else:
-    logger.warning('[Transcription] Backend faster-whisper indisponível neste ambiente.')
+APP_VERSION = os.environ.get('TOCA_APP_VERSION', '1.0.0').strip() or '1.0.0'
+DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
+DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
+
+logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
 AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
@@ -190,12 +191,37 @@ def get_ffmpeg_install_instructions():
 
 
 def get_whisper_model():
-    global WHISPER_MODEL
+    global WHISPER_MODEL, WhisperModel, WHISPER_AVAILABLE, WHISPER_IMPORT_ERROR, WHISPER_IMPORT_ATTEMPTED
+
     if not WHISPER_AVAILABLE:
         return None
+
     with WHISPER_MODEL_LOCK:
-        if WHISPER_MODEL is None:
+        if WHISPER_MODEL is not None:
+            return WHISPER_MODEL
+
+        if WhisperModel is None and not WHISPER_IMPORT_ATTEMPTED:
+            WHISPER_IMPORT_ATTEMPTED = True
+            try:
+                from faster_whisper import WhisperModel as _WhisperModel
+                WhisperModel = _WhisperModel
+            except Exception as e:
+                WHISPER_AVAILABLE = False
+                WHISPER_IMPORT_ERROR = str(e)
+                logger.warning(f'[Transcription] Backend faster-whisper indisponível: {WHISPER_IMPORT_ERROR}')
+                return None
+
+        if WhisperModel is None:
+            return None
+
+        try:
             WHISPER_MODEL = WhisperModel('base', device='cpu', compute_type='int8')
+        except Exception as e:
+            WHISPER_AVAILABLE = False
+            WHISPER_IMPORT_ERROR = str(e)
+            logger.warning(f'[Transcription] Falha ao inicializar faster-whisper: {WHISPER_IMPORT_ERROR}')
+            return None
+
     return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
@@ -511,6 +537,8 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'stepfun/step-3.5-flash:free'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_site_url', 'http://localhost'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
     
     conn.commit()
     
@@ -624,6 +652,26 @@ def _load_app_settings_map(keys):
     return mapping
 
 
+
+
+def _normalize_version(version):
+    normalized = re.sub(r'^[vV]', '', str(version or '').strip())
+    return normalized
+
+
+def _version_key(version):
+    normalized = _normalize_version(version)
+    if not normalized:
+        return tuple()
+    parts = re.split(r'[.+\-]', normalized)
+    parsed = []
+    for part in parts:
+        if part.isdigit():
+            parsed.append((0, int(part)))
+        else:
+            parsed.append((1, part.lower()))
+    return tuple(parsed)
+
 def _resolve_setting(secret_key, env_key):
     try:
         db_value = (_load_app_settings_map([secret_key]).get(secret_key) or '').strip()
@@ -644,6 +692,73 @@ def api_error(status, code, message, details=None, hint=None):
     if hint:
         payload['hint'] = hint
     return jsonify(payload), status
+
+
+def _extract_bing_image_urls(raw_html):
+    matches = re.findall(r'"murl":"(.*?)"', raw_html)
+    urls = []
+    for item in matches:
+        url = html.unescape(item).replace('\\/', '/')
+        if url.startswith('http://') or url.startswith('https://'):
+            urls.append(url)
+    return urls
+
+
+def _find_image_candidates_on_web(query, limit=3):
+    if not query:
+        return []
+
+    search_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}&form=HDRSC2&first=1&tsc=ImageBasicHover"
+    req = urllib.request.Request(search_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+    })
+
+    with urllib.request.urlopen(req, timeout=12) as response:
+        content = response.read().decode('utf-8', errors='ignore')
+
+    urls = _extract_bing_image_urls(content)
+    unique = []
+    seen = set()
+    for u in urls:
+        if u in seen:
+            continue
+        seen.add(u)
+        unique.append(u)
+        if len(unique) >= limit:
+            break
+    return unique
+
+
+def _download_remote_image_to_uploads(image_url, prefix='autofind'):
+    parsed = urllib.parse.urlparse(image_url)
+    if parsed.scheme not in {'http', 'https'}:
+        raise ValueError('URL de imagem inválida.')
+
+    req = urllib.request.Request(image_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+    })
+    with urllib.request.urlopen(req, timeout=15) as response:
+        content_type = (response.headers.get('Content-Type') or '').lower()
+        data = response.read(6 * 1024 * 1024 + 1)
+
+    if len(data) > 6 * 1024 * 1024:
+        raise ValueError('Imagem muito grande (máximo 6MB).')
+    if not content_type.startswith('image/'):
+        raise ValueError('A URL selecionada não retornou uma imagem válida.')
+
+    ext = '.jpg'
+    if 'png' in content_type:
+        ext = '.png'
+    elif 'webp' in content_type:
+        ext = '.webp'
+    elif 'gif' in content_type:
+        ext = '.gif'
+
+    filename = secure_filename(f"{prefix}-{int(time.time()*1000)}{ext}")
+    path = UPLOAD_DIR / filename
+    with open(path, 'wb') as f:
+        f.write(data)
+    return f'/uploads/{filename}'
 
 
 def parse_currency_to_cents(value):
@@ -1322,8 +1437,9 @@ def transcribe_audio():
         print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
-        print('[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente.')
-        return jsonify({'error': 'Biblioteca faster-whisper não encontrada. Rode o INSTALAR.bat novamente.'}), 503
+        details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+        print(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
+        return jsonify({'error': 'Biblioteca faster-whisper não está disponível neste ambiente.'}), 503
 
     audio_file = request.files.get('audio')
     if not audio_file:
@@ -1346,6 +1462,9 @@ def transcribe_audio():
             print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
+        if model is None:
+            details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+            return jsonify({'error': f'Backend de transcrição indisponível{details}.'}), 503
         segments, _ = model.transcribe(temp_path, language='pt')
         text = ''.join(segment.text for segment in segments).strip()
 
@@ -1711,6 +1830,108 @@ def save_integrations_config():
         return jsonify({'error': str(e)}), 500
 
 
+
+
+@app.route('/api/config/update-source', methods=['GET'])
+def get_update_source_config():
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+        return jsonify({
+            'current_version': APP_VERSION,
+            'github_owner': owner,
+            'github_repo': repo,
+            'configured': bool(owner and repo)
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/update-source: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/update-source', methods=['PUT'])
+def save_update_source_config():
+    try:
+        data = request.get_json() or {}
+        owner = (data.get('github_owner') or '').strip()
+        repo = (data.get('github_repo') or '').strip()
+
+        conn = get_db()
+        c = conn.cursor()
+        updates = [
+            ('update_github_owner', owner),
+            ('update_github_repo', repo)
+        ]
+        for key, value in updates:
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+                (key, value)
+            )
+        conn.commit()
+        conn.close()
+
+        return jsonify({'message': 'Fonte de atualização salva com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] PUT /api/config/update-source: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/check-updates', methods=['GET'])
+def check_updates():
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+
+        if not owner or not repo:
+            return jsonify({
+                'update_available': False,
+                'configured': False,
+                'current_version': APP_VERSION,
+                'message': 'Configure GitHub Owner e Repositório em Configurações para verificar updates.'
+            }), 400
+
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
+        req = urllib.request.Request(api_url, headers={
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'TocaDoCoelho-Updater'
+        })
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+
+        latest_tag = (payload.get('tag_name') or '').strip()
+        latest_version = _normalize_version(latest_tag)
+        current_version = _normalize_version(APP_VERSION)
+
+        if not latest_version:
+            return jsonify({'error': 'Tag da release mais recente está vazia no GitHub.'}), 502
+
+        update_available = _version_key(latest_version) > _version_key(current_version)
+        return jsonify({
+            'configured': True,
+            'github_owner': owner,
+            'github_repo': repo,
+            'current_version': current_version,
+            'latest_version': latest_version,
+            'latest_tag': latest_tag,
+            'update_available': update_available,
+            'release_name': payload.get('name') or latest_tag,
+            'release_notes': payload.get('body') or '',
+            'html_url': payload.get('html_url') or '',
+            'published_at': payload.get('published_at')
+        })
+    except urllib.error.HTTPError as e:
+        logger.exception(f'[ERROR] GET /api/config/check-updates (HTTP): {e}')
+        if e.code == 404:
+            return jsonify({'error': 'Nenhuma release encontrada nesse repositório ou repositório inválido.'}), 404
+        if e.code == 403:
+            return jsonify({'error': 'GitHub API limit atingido temporariamente. Tente novamente mais tarde.'}), 429
+        return jsonify({'error': f'Falha ao consultar GitHub Releases (HTTP {e.code}).'}), 502
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
+        return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
+
 @app.route('/api/config/profile', methods=['POST'])
 def save_profile_config():
     try:
@@ -1834,6 +2055,39 @@ def check_duplicate_client():
         print(f'[ERROR] POST /api/clients/check-duplicate: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/clients/autofind-photo-candidates', methods=['GET'])
+def clients_autofind_photo_candidates():
+    try:
+        name = (request.args.get('name') or '').strip()
+        company = (request.args.get('company') or '').strip()
+        query = ' '.join(part for part in [name, company] if part)
+        if not query:
+            return jsonify({'error': 'Informe ao menos nome ou empresa.'}), 400
+
+        candidates = _find_image_candidates_on_web(query, limit=3)
+        return jsonify({'query': query, 'candidates': candidates})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/clients/autofind-photo-candidates: {e}')
+        return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
+
+
+@app.route('/api/clients/autofind-photo', methods=['POST'])
+def clients_autofind_photo():
+    try:
+        data = request.get_json() or {}
+        image_url = (data.get('image_url') or '').strip()
+        person_name = (data.get('name') or '').strip() or 'autofind'
+        if not image_url:
+            return jsonify({'error': 'URL da imagem não informada.'}), 400
+
+        safe_prefix = secure_filename(person_name) or 'autofind'
+        photo_url = _download_remote_image_to_uploads(image_url, prefix=safe_prefix)
+        return jsonify({'photo_url': photo_url})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/clients/autofind-photo: {e}')
+        return jsonify({'error': f'Erro ao importar imagem selecionada: {e}'}), 500
+
+
 @app.route('/api/clientes', methods=['POST'])
 def create_cliente():
     return create_client()
@@ -1855,6 +2109,7 @@ def create_client():
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         force_create = request.form.get('force_create') in ('1', 'true', 'on')
+        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -1880,7 +2135,7 @@ def create_client():
                 if existing:
                     return jsonify({'error': 'Possível duplicidade encontrada', 'duplicate': existing}), 409
 
-        photo_url = None
+        photo_url = autofind_photo_url or None
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
@@ -1924,6 +2179,7 @@ def update_client(client_id):
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         remove_photo = request.form.get('remove_photo', '0') == '1'
+        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         
         if not name or not company or not position:
@@ -1939,7 +2195,7 @@ def update_client(client_id):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         
-        photo_url = None if remove_photo else client['photo_url']
+        photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
