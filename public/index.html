@@ -1852,6 +1852,11 @@
                             <label>Nome da Aplicação (OpenRouter)</label>
                             <input type="text" id="openrouterAppName" placeholder="TocaDoCoelho">
                         </div>
+                        <div class="form-group">
+                            <label>Prompt do iToca (LLM)</label>
+                            <textarea id="itocaLlmPrompt" rows="8" placeholder="Defina aqui o prompt de sistema do iToca..."></textarea>
+                            <small style="color:#6b7280;">Use este prompt para controlar o tom, regras e formato da resposta do iToca.</small>
+                        </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar Integrações</button>
                     </form>
                 </section>
@@ -2135,7 +2140,8 @@
             openrouter_key_preview: '',
             openrouter_model: 'stepfun/step-3.5-flash:free',
             openrouter_site_url: 'http://localhost',
-            openrouter_app_name: 'TocaDoCoelho'
+            openrouter_app_name: 'TocaDoCoelho',
+            itoca_llm_prompt: ''
         };
         let updateSourceConfig = {
             current_version: '1.0.0',
@@ -2294,6 +2300,7 @@
             document.getElementById('openrouterModel').value = integrationConfig?.openrouter_model || 'stepfun/step-3.5-flash:free';
             document.getElementById('openrouterSiteUrl').value = integrationConfig?.openrouter_site_url || 'http://localhost';
             document.getElementById('openrouterAppName').value = integrationConfig?.openrouter_app_name || 'TocaDoCoelho';
+            document.getElementById('itocaLlmPrompt').value = integrationConfig?.itoca_llm_prompt || '';
             document.getElementById('tavilyKeyStatus').textContent = integrationConfig?.tavily_configured
                 ? `Configurada (${integrationConfig?.tavily_key_preview || '***'})`
                 : 'Não configurada';
@@ -2315,7 +2322,8 @@
                 openrouter_api_key: document.getElementById('openrouterApiKey').value.trim(),
                 openrouter_model: document.getElementById('openrouterModel').value.trim(),
                 openrouter_site_url: document.getElementById('openrouterSiteUrl').value.trim(),
-                openrouter_app_name: document.getElementById('openrouterAppName').value.trim()
+                openrouter_app_name: document.getElementById('openrouterAppName').value.trim(),
+                itoca_llm_prompt: document.getElementById('itocaLlmPrompt').value.trim()
             };
 
             const response = await fetch(`${API_BASE}/config/integrations`, {

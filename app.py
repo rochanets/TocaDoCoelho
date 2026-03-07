@@ -537,6 +537,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'stepfun/step-3.5-flash:free'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_site_url', 'http://localhost'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_llm_prompt', ITOCA_DEFAULT_LLM_PROMPT))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
@@ -806,6 +807,43 @@ ITOCA_EXCLUDED_TABLES = {
     'app_settings'
 }
 
+ITOCA_DEFAULT_LLM_PROMPT = (
+    'Você é o iToca, assistente interno do Toca do Coelho. '\
+    'Responda em português do Brasil com tom profissional, claro e natural. '\
+    'Use SOMENTE as evidências fornecidas no contexto interno; não invente dados. '\
+    'ENTRADAS QUE VOCÊ RECEBERÁ NO USER MESSAGE: '\
+    '1) question: string com a pergunta do usuário final; '\
+    '2) context_sources: lista de objetos com {table, id, snippet}, contendo evidências internas recuperadas. '\
+    'COMO INTERPRETAR: priorize snippets com maior aderência semântica à pergunta; trate table/id apenas como referência da fonte. '\
+    'Se não houver evidência suficiente, diga explicitamente que não é possível concluir e peça refinamento da pergunta. '\
+    'Retorne APENAS JSON válido com este formato exato: '\
+    '{"answer":"texto final único para o usuário","confidence_percent":0,"needs_refinement":false,"refinement_hint":""}. '\
+    'REGRAS: answer deve ser resposta única e amigável, sem listas técnicas nem debug; '\
+    'confidence_percent deve ser inteiro de 0 a 100; '\
+    'needs_refinement deve ser true quando faltarem dados; refinement_hint deve orientar a próxima pergunta objetiva.'
+)
+
+
+ITOCA_LEGACY_DEFAULT_LLM_PROMPT = (
+    'Você é o iToca, assistente interno do Toca do Coelho. '
+    'Responda em português do Brasil com tom profissional, claro e natural. '
+    'Use SOMENTE as evidências fornecidas no contexto interno; não invente dados. '
+    'Quando não houver evidência suficiente, diga explicitamente que não é possível concluir e peça um refinamento da pergunta. '
+    'Retorne APENAS JSON válido com este formato exato: '
+    '{"answer":"texto final único para o usuário","confidence_percent":0,"needs_refinement":false,"refinement_hint":""}. '
+    'Regras: answer deve ser uma resposta única e amigável, sem listas de debug; confidence_percent deve ser inteiro 0-100; '
+    'needs_refinement deve ser true quando faltarem dados; refinement_hint deve orientar próxima pergunta objetiva.'
+)
+
+
+def _resolve_itoca_prompt(prompt_value):
+    prompt = (prompt_value or '').strip()
+    if not prompt:
+        return ITOCA_DEFAULT_LLM_PROMPT
+    if prompt == ITOCA_LEGACY_DEFAULT_LLM_PROMPT:
+        return ITOCA_DEFAULT_LLM_PROMPT
+    return prompt
+
 
 def _itoca_tokenize(question):
     return [
@@ -994,6 +1032,104 @@ def _itoca_compose_answer(question, context_rows):
     lines.append('')
     lines.append('Resposta baseada somente no sistema acima. Se quiser, refine a pergunta para filtrar melhor.')
     return '\n'.join(lines)
+
+
+def _itoca_compose_llm_answer(question, context_rows):
+    if not context_rows:
+        return None, {'provider': 'openrouter', 'reason': 'empty_context'}
+
+    settings_map = _load_app_settings_map([
+        'openrouter_model',
+        'openrouter_site_url',
+        'openrouter_app_name',
+        'itoca_llm_prompt'
+    ])
+
+    api_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if not api_key:
+        return None, {'provider': 'openrouter', 'reason': 'missing_api_key'}
+
+    key_ok, _ = _validate_openrouter_api_key(api_key)
+    if not key_ok:
+        return None, {'provider': 'openrouter', 'reason': 'invalid_api_key'}
+
+    model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    system_prompt = _resolve_itoca_prompt(settings_map.get('itoca_llm_prompt'))
+
+    trimmed_sources = []
+    for item in context_rows[:10]:
+        trimmed_sources.append({
+            'table': item.get('table'),
+            'id': item.get('id'),
+            'snippet': (item.get('snippet') or '')[:420]
+        })
+
+    user_payload = {
+        'question': question,
+        'context_sources': trimmed_sources
+    }
+
+    user_content = (
+        'ENTRADAS (JSON):\n'
+        f"{json.dumps(user_payload, ensure_ascii=False)}\n\n"
+        'INSTRUÇÃO: leia as entradas acima e devolva somente o JSON final no formato solicitado no system prompt.'
+    )
+
+    request_payload = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_content}
+        ],
+        'temperature': 0.2
+    }
+
+    req = urllib.request.Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=json.dumps(request_payload).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+            'HTTP-Referer': site_url,
+            'X-Title': app_name
+        },
+        method='POST'
+    )
+
+    with urllib.request.urlopen(req, timeout=40) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+
+    choices = data.get('choices') or []
+    content = ((choices[0] or {}).get('message') or {}).get('content') if choices else ''
+    if isinstance(content, list):
+        raw_text = ''.join([part.get('text', '') for part in content if isinstance(part, dict)])
+    else:
+        raw_text = str(content or '')
+
+    parsed = _extract_json_object_from_text(raw_text) if raw_text else None
+    if not isinstance(parsed, dict):
+        return None, {'provider': 'openrouter', 'model': model, 'reason': 'invalid_json'}
+
+    answer = (parsed.get('answer') or '').strip()
+    if not answer:
+        return None, {'provider': 'openrouter', 'model': model, 'reason': 'empty_answer'}
+
+    confidence_raw = parsed.get('confidence_percent')
+    try:
+        confidence = max(0, min(100, int(confidence_raw)))
+    except Exception:
+        confidence = None
+
+    llm_meta = {
+        'provider': 'openrouter',
+        'model': model,
+        'confidence_percent': confidence,
+        'needs_refinement': bool(parsed.get('needs_refinement')),
+        'refinement_hint': (parsed.get('refinement_hint') or '').strip()
+    }
+    return answer, llm_meta
 
 
 def ensure_account_for_company(cursor, company_name):
@@ -1987,7 +2123,8 @@ def get_integrations_config():
             'openrouter_api_key',
             'openrouter_model',
             'openrouter_site_url',
-            'openrouter_app_name'
+            'openrouter_app_name',
+            'itoca_llm_prompt'
         ])
 
         tavily_key = (settings_map.get('tavily_api_key') or '').strip() or (os.environ.get('TAVILY_API_KEY', '') or '').strip()
@@ -1995,6 +2132,7 @@ def get_integrations_config():
         model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
         site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
         app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        itoca_llm_prompt = _resolve_itoca_prompt(settings_map.get('itoca_llm_prompt'))
 
         return jsonify({
             'tavily_configured': bool(tavily_key),
@@ -2003,7 +2141,8 @@ def get_integrations_config():
             'openrouter_key_preview': openrouter_key[:9] + '...' if openrouter_key else '',
             'openrouter_model': model,
             'openrouter_site_url': site_url,
-            'openrouter_app_name': app_name
+            'openrouter_app_name': app_name,
+            'itoca_llm_prompt': itoca_llm_prompt
         })
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/integrations: {e}')
@@ -2019,6 +2158,7 @@ def save_integrations_config():
         openrouter_model = (data.get('openrouter_model') or '').strip() or 'stepfun/step-3.5-flash:free'
         openrouter_site_url = (data.get('openrouter_site_url') or '').strip() or 'http://localhost'
         openrouter_app_name = (data.get('openrouter_app_name') or '').strip() or 'TocaDoCoelho'
+        itoca_llm_prompt = _resolve_itoca_prompt(data.get('itoca_llm_prompt'))
 
         if openrouter_api_key:
             key_ok, key_msg = _validate_openrouter_api_key(openrouter_api_key)
@@ -2032,7 +2172,8 @@ def save_integrations_config():
             ('openrouter_api_key', openrouter_api_key),
             ('openrouter_model', openrouter_model),
             ('openrouter_site_url', openrouter_site_url),
-            ('openrouter_app_name', openrouter_app_name)
+            ('openrouter_app_name', openrouter_app_name),
+            ('itoca_llm_prompt', itoca_llm_prompt)
         ]
         for key, value in updates:
             c.execute(
@@ -2195,13 +2336,27 @@ def itoca_ask():
             }), 409
 
         context_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18)
-        answer = _itoca_compose_answer(question, context_rows)
+        llm_answer = None
+        llm_meta = {}
+        try:
+            llm_answer, llm_meta = _itoca_compose_llm_answer(question, context_rows)
+        except Exception as llm_error:
+            logger.warning(f'[iToca][LLM] Falha no uso do OpenRouter: {llm_error}')
+            llm_meta = {
+                'provider': 'openrouter',
+                'reason': 'llm_exception',
+                'error': str(llm_error)
+            }
+
+        answer = llm_answer or _itoca_compose_answer(question, context_rows)
         return jsonify({
             'answer': answer,
             'items_found': len(context_rows),
             'sources': context_rows,
             'base_updated_at': updated_at,
-            'base_ready': True
+            'base_ready': True,
+            'llm_used': bool(llm_answer),
+            'llm_meta': llm_meta
         })
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
