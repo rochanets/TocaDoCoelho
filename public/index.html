@@ -123,6 +123,7 @@
             gap: 14px;
             grid-template-columns: repeat(2, minmax(260px, 1fr));
             max-width: 920px;
+            align-items: start;
         }
 
         .settings-card {
@@ -130,11 +131,40 @@
             border: 1px solid rgba(52, 211, 153, 0.25);
             border-radius: 14px;
             padding: 12px;
+            height: fit-content;
+            align-self: start;
         }
 
         .settings-card h3 {
             color: #047857;
             margin-bottom: 12px;
+        }
+
+        .settings-collapsible .settings-card-title {
+            margin: 0;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 17px;
+        }
+
+        .settings-collapsible .settings-card-title::after {
+            content: '▾';
+            font-size: 12px;
+            transition: transform 0.2s ease;
+        }
+
+        .settings-collapsible.settings-collapsed .settings-card-title::after {
+            transform: rotate(-90deg);
+        }
+
+        .settings-card-body {
+            margin-top: 12px;
+        }
+
+        .settings-collapsible.settings-collapsed .settings-card-body {
+            display: none;
         }
 
         .status-label {
@@ -1331,6 +1361,60 @@
         .wiki-import-export { display:flex; gap:6px; }
         .wiki-search-input:focus { outline:none; border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
         .wiki-action-btn { border-radius:10px; }
+        .wiki-sort-toggle {
+            border: 1px solid #86efac;
+            background: #ecfdf5;
+            color: #065f46;
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            min-width: 60px;
+        }
+        .wiki-sort-toggle:hover { background:#d1fae5; }
+
+        .autopic-candidates {
+            display: none;
+            margin-top: 10px;
+            border: 1px dashed #86efac;
+            border-radius: 10px;
+            padding: 10px;
+            background: #f0fdf4;
+        }
+        .autopic-candidates.open { display:block; }
+        .autopic-candidates-grid { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+        .autopic-candidate {
+            width: 90px;
+            height: 90px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            background: #fff;
+        }
+        .autopic-candidate:hover { border-color:#10b981; }
+        .autopic-slot { width: 98px; }
+        .autopic-slot-title { font-size:11px; color:#065f46; margin-bottom:4px; font-weight:600; }
+        .autopic-slot-box {
+            width: 98px;
+            height: 98px;
+            border: 2px dashed #86efac;
+            border-radius: 10px;
+            background: #fff;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            overflow: hidden;
+            color:#4b5563;
+            font-size:11px;
+            text-align:center;
+            padding:6px;
+            cursor:pointer;
+        }
+        .autopic-slot-box.active { border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
+        .autopic-slot-box img { width:100%; height:100%; object-fit:cover; border-radius:8px; }
+        .itoca-answer { margin-top:12px; border:1px solid #bbf7d0; background:#f0fdf4; border-radius:12px; padding:12px; color:#065f46; white-space:pre-wrap; }
         .wiki-doc-upload-row { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; align-items:flex-start; }
         .wiki-doc-upload-main { display:flex; gap:8px; align-items:center; width:100%; flex-wrap:wrap; }
         .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
@@ -1356,7 +1440,7 @@
         <nav class="sidebar-nav">
             <button class="nav-item" onclick="switchTab(event, 'iata')">
                 <i class="fas fa-robot"></i>
-                <span>iAta</span>
+                <span>iToca</span>
             </button>
             <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
@@ -1413,8 +1497,8 @@
 
         <div id="iata" class="tab-content">
             <div class="page-header">
-                <h1>iAta</h1>
-                <p>Módulo inteligente para apoio de mensagens e atas.</p>
+                <h1>iToca</h1>
+                <p>Seu assistente ligeirinho.</p>
             </div>
             <div class="iata-center">
                 <video id="iataVideoPlayer"
@@ -1429,7 +1513,8 @@
                 </video>
             </div>
             <div class="iata-input-row">
-                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui, grave uma mensagem ou anexe um arquivo" style="flex:1;"></textarea>
+                <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui sua pergunta em linguagem natural" style="flex:1;"></textarea>
+                <button type="button" id="iataAskBtn" class="btn btn-primary" onclick="askIToca()"><i class="fas fa-search"></i> Perguntar</button>
                 <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
                     <i class="fas fa-microphone voice-icon"></i>
                     <span class="voice-anim"><span></span><span></span><span></span></span>
@@ -1438,6 +1523,11 @@
                 <input type="file" id="iataAttachment" class="iata-file-input" accept=".txt,text/plain" multiple onchange="validateIataAttachment(event)">
                 <label for="iataAttachment" id="iataAttachmentLabel" class="iata-file-btn" title="Anexar texto"><i class="fas fa-paperclip"></i></label>
             </div>
+            <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-auto-mapping btn-small" onclick="updateITocaBase()"><span class="ai-star-icon">✦</span> Base Update</button>
+                <small id="itocaBaseUpdatedAt" style="color:#4b5563; font-size:12px;">Base não atualizada.</small>
+            </div>
+            <div id="itocaAnswer" class="itoca-answer" style="display:none;"></div>
         </div>
 
 
@@ -1462,7 +1552,8 @@
                 <section class="wiki-card">
                     <div class="wiki-section-header">
                         <h3 class="wiki-section-title">Conhecimentos registrados</h3>
-                        <div style="display:flex; gap:6px; align-items:center;">
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                            <button id="wikiSortToggleBtn" type="button" class="wiki-sort-toggle" onclick="toggleWikiEntriesSort()">A-Z</button>
                             <div class="wiki-import-export">
                                 <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiEntries()" title="Exportar conhecimentos"><i class="fas fa-file-export"></i> Exportar</button>
                                 <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiImportModal()" title="Importar conhecimentos"><i class="fas fa-file-import"></i> Importar</button>
@@ -1476,8 +1567,7 @@
                     <h3 style="color:#047857; margin-bottom:12px;">Documentos (PDF, Excel, Word)</h3>
                     <div class="wiki-doc-upload-row">
                         <div class="wiki-doc-upload-main">
-                            <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1;">
-                            <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
+                                                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
                             <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
                         </div>
                         <span id="wikiFileName" class="wiki-file-name"></span>
@@ -1767,6 +1857,28 @@
                 </section>
 
                 <section class="settings-card">
+                    <h3>Ajuda e Atualizações</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
+                    <form id="updateSourceForm" onsubmit="saveUpdateSourceConfig(event)">
+                        <div class="form-group">
+                            <label>GitHub Owner</label>
+                            <input type="text" id="updateGithubOwner" placeholder="seu-usuario-ou-org" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>GitHub Repositório</label>
+                            <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
+                        </div>
+                        <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
+                            <button type="button" class="btn btn-primary btn-small" onclick="checkForUpdates()"><i class="fas fa-cloud-download-alt"></i> Verificar atualizações</button>
+                        </div>
+                    </form>
+                    <div id="updateCheckResult" style="margin-top:12px; color:#4b5563; font-size:13px;"></div>
+                </section>
+
+
+                <section class="settings-card">
                     <h3>MSG Padrão</h3>
                     <form onsubmit="saveMessageTemplate(event)">
                         <input type="hidden" id="templateId">
@@ -1886,10 +1998,12 @@
                 <div class="form-group">
                     <label>Foto</label>
                     <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)" style="display:none;">
-                    <label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;"><label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label><button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientAutoPicSearch()"><span class="ai-star-icon">✦</span> AutoPic</button></div>
                     <small style="display:block; margin-top:6px; color:#059669;">Dica: você pode colar imagem com Ctrl+V aqui.</small>
                     <img id="photoPreview" class="photo-preview" style="display:none;">
                     <input type="hidden" id="removePhotoFlag" name="remove_photo" value="0">
+                    <input type="hidden" id="autofindPhotoUrl" name="autofind_photo_url" value="">
+                    <div id="clientAutoPicCandidates" class="autopic-candidates"></div>
                     <button type="button" id="removePhotoBtn" class="btn btn-danger btn-small" style="display:none; margin-top:10px;" onclick="toggleRemovePhoto()"><i class="fas fa-trash"></i> Excluir foto atual</button>
                     <small id="removePhotoHelp" style="display:none; margin-top:6px; color:#b91c1c;">A foto atual será removida ao salvar.</small>
                 </div>
@@ -1900,7 +2014,6 @@
             </form>
         </div>
     </div>
-
 
     <div id="targetAccountModal" class="modal">
         <div class="modal-content" style="max-width:520px;">
@@ -2024,11 +2137,21 @@
             openrouter_site_url: 'http://localhost',
             openrouter_app_name: 'TocaDoCoelho'
         };
+        let updateSourceConfig = {
+            current_version: '1.0.0',
+            github_owner: '',
+            github_repo: '',
+            configured: false
+        };
         let cachedPositions = [];
         let currentGroupModalContext = null;
         let selectedCompanyForActivity = '';
         let positionGroupings = [];
         let _orgMapOpenContext = null; // { company, position } quando aberto pelo + do mapeamento organizacional
+        let wikiEntriesSortOrder = "az";
+        let autoPicGoogleTab = null;
+        let autoPicSlots = [null, null, null];
+        let autoPicActiveSlot = 0;
 
         // Tab switching
         function switchTab(ev, tabName) {
@@ -2061,13 +2184,61 @@
         }
 
         async function loadSettings() {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig()]);
+            setupSettingsCards();
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig()]);
             renderSettings();
+        }
+
+        function setupSettingsCards() {
+            const grid = document.querySelector('#configuracoes .settings-grid');
+            if (!grid) return;
+
+            const userCard = Array.from(grid.querySelectorAll('.settings-card')).find(card => {
+                const title = card.querySelector('h3');
+                return title && title.textContent.trim() === 'Cadastro do Usuário';
+            });
+            if (userCard && grid.firstElementChild !== userCard) {
+                grid.insertBefore(userCard, grid.firstElementChild);
+            }
+
+            grid.querySelectorAll('.settings-card').forEach((card, index) => {
+                if (card.dataset.collapsibleReady === '1') return;
+                const title = card.querySelector('h3');
+                if (!title) return;
+
+                card.classList.add('settings-collapsible');
+                title.classList.add('settings-card-title');
+
+                const body = document.createElement('div');
+                body.className = 'settings-card-body';
+                while (title.nextSibling) {
+                    body.appendChild(title.nextSibling);
+                }
+                card.appendChild(body);
+
+                if (index !== 0) card.classList.add('settings-collapsed');
+                title.addEventListener('click', () => {
+                    const shouldOpen = card.classList.contains('settings-collapsed');
+                    grid.querySelectorAll('.settings-collapsible').forEach(otherCard => {
+                        otherCard.classList.add('settings-collapsed');
+                    });
+                    if (shouldOpen) {
+                        card.classList.remove('settings-collapsed');
+                    }
+                });
+
+                card.dataset.collapsibleReady = '1';
+            });
         }
 
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
+        }
+
+        async function loadUpdateSourceConfig() {
+            const response = await fetch(`${API_BASE}/config/update-source`);
+            if (response.ok) updateSourceConfig = await response.json();
         }
 
         async function loadStatusConfig() {
@@ -2129,6 +2300,12 @@
             document.getElementById('openrouterKeyStatus').textContent = integrationConfig?.openrouter_configured
                 ? `Configurada (${integrationConfig?.openrouter_key_preview || '***'})`
                 : 'Não configurada';
+
+            document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
+            document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
+            document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '1.0.0'}`;
+            const updateResult = document.getElementById('updateCheckResult');
+            if (updateResult) updateResult.textContent = '';
         }
 
         async function saveIntegrationConfig(event) {
@@ -2154,6 +2331,65 @@
             } else {
                 const result = await response.json().catch(() => ({}));
                 showError(result.error || 'Erro ao salvar integrações');
+            }
+        }
+
+        async function saveUpdateSourceConfig(event) {
+            event.preventDefault();
+            const payload = {
+                github_owner: document.getElementById('updateGithubOwner').value.trim(),
+                github_repo: document.getElementById('updateGithubRepo').value.trim()
+            };
+
+            const response = await fetch(`${API_BASE}/config/update-source`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+                showSuccess('Fonte de atualização salva!');
+                await loadUpdateSourceConfig();
+                renderSettings();
+            } else {
+                const result = await response.json().catch(() => ({}));
+                showError(result.error || 'Erro ao salvar fonte de atualização');
+            }
+        }
+
+        async function checkForUpdates() {
+            const container = document.getElementById('updateCheckResult');
+            if (container) container.textContent = 'Verificando releases no GitHub...';
+
+            try {
+                const response = await fetch(`${API_BASE}/config/check-updates`);
+                const result = await response.json().catch(() => ({}));
+
+                if (!response.ok) {
+                    const errorMsg = result.error || result.message || 'Falha ao verificar atualizações.';
+                    if (container) container.textContent = errorMsg;
+                    showError(errorMsg);
+                    return;
+                }
+
+                if (result.update_available) {
+                    const releaseUrl = result.html_url || '';
+                    const releaseLinkHtml = releaseUrl
+                        ? ` <a href="${releaseUrl}" target="_blank" rel="noopener noreferrer">Abrir release</a>`
+                        : '';
+                    if (container) {
+                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}`;
+                    }
+                    showSuccess(`Nova versão disponível: ${result.latest_version}`);
+                } else {
+                    if (container) {
+                        container.textContent = `Você já está na versão mais recente (${result.current_version || ''}).`;
+                    }
+                    showSuccess('Você já está na versão mais recente.');
+                }
+            } catch (error) {
+                if (container) container.textContent = 'Erro ao verificar atualizações.';
+                showError('Erro ao verificar atualizações.');
             }
         }
 
@@ -2634,6 +2870,9 @@
             if (photoInput) {
                 photoInput.value = '';
             }
+            const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
+            if (autofindPhotoUrl) autofindPhotoUrl.value = '';
+            clearClientAutoPicCandidates();
 
             if (photoPreview) {
                 photoPreview.removeAttribute('src');
@@ -2867,6 +3106,9 @@
                 reader.onload = (e) => {
                     document.getElementById('photoPreview').src = e.target.result;
                     document.getElementById('photoPreview').style.display = 'block';
+                const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
+                if (autofindPhotoUrl) autofindPhotoUrl.value = '';
+                clearClientAutoPicCandidates();
                     const removePhotoFlag = document.getElementById('removePhotoFlag');
                     const removePhotoHelp = document.getElementById('removePhotoHelp');
                     if (removePhotoFlag) removePhotoFlag.value = '0';
@@ -2903,6 +3145,9 @@
             reader.onload = (e) => {
                 document.getElementById('photoPreview').src = e.target.result;
                 document.getElementById('photoPreview').style.display = 'block';
+                const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
+                if (autofindPhotoUrl) autofindPhotoUrl.value = '';
+                clearClientAutoPicCandidates();
             };
             reader.readAsDataURL(file);
         }
@@ -2919,8 +3164,13 @@
                 if (item.type && item.type.startsWith('image/')) {
                     const blob = item.getAsFile();
                     if (blob) {
+                        const autoPicOpen = document.getElementById('clientAutoPicCandidates')?.classList.contains('open');
                         if (accountOpen) setPastedImageToAccountLogo(blob);
-                        else setPastedImageToInput(blob);
+                        else if (autoPicOpen) {
+                            applyAutoPicImageFromBlob(blob);
+                        } else {
+                            setPastedImageToInput(blob);
+                        }
                         showSuccess('Imagem colada com sucesso!');
                         event.preventDefault();
                         break;
@@ -2928,6 +3178,153 @@
                 }
             }
         });
+        function renderAutoPicSlots() {
+            const el = document.getElementById('clientAutoPicCandidates');
+            if (!el) return;
+            const filled = autoPicSlots.filter(Boolean).length;
+            el.classList.add('open');
+            el.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
+                    <strong style="color:#065f46; font-size:12px;">Cole 3 imagens (Ctrl+V) para escolher a foto final</strong>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="clearClientAutoPicCandidates()">Descartar</button>
+                </div>
+                <div class="autopic-candidates-grid" style="align-items:flex-start;">
+                    ${[0,1,2].map((idx) => {
+                        const data = autoPicSlots[idx];
+                        const activeClass = idx === autoPicActiveSlot ? 'active' : '';
+                        const content = data ? `<img src="${data}" alt="AutoPic ${idx+1}">` : 'Clique e use Ctrl+V';
+                        return `<div class="autopic-slot"><div class="autopic-slot-title">Imagem ${idx+1}</div><div class="autopic-slot-box ${activeClass}" onclick="onAutoPicSlotClick(${idx})">${content}</div></div>`;
+                    }).join('')}
+                </div>
+                <small style="display:block; margin-top:8px; color:#047857;">Preenchido: ${filled}/3. Após a 3ª imagem, a aba do Google será fechada automaticamente.</small>
+            `;
+        }
+
+        function setAutoPicActiveSlot(index) {
+            autoPicActiveSlot = Math.max(0, Math.min(2, Number(index) || 0));
+            renderAutoPicSlots();
+        }
+
+        function onAutoPicSlotClick(index) {
+            if (autoPicSlots[index]) {
+                chooseAutoPicSlot(index);
+            } else {
+                setAutoPicActiveSlot(index);
+            }
+        }
+
+        function applyAutoPicImageFromBlob(blob, slotIndex = null) {
+            if (!blob) return;
+            let targetSlot = Number.isInteger(slotIndex) ? slotIndex : autoPicActiveSlot;
+            if (targetSlot < 0 || targetSlot > 2) targetSlot = 0;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                autoPicSlots[targetSlot] = e.target.result;
+                if (targetSlot < 2) autoPicActiveSlot = targetSlot + 1;
+                renderAutoPicSlots();
+
+                if (autoPicSlots.every(Boolean)) {
+                    setTimeout(() => { if (autoPicGoogleTab && !autoPicGoogleTab.closed) autoPicGoogleTab.close(); }, 250);
+                    showSuccess('As 3 imagens foram coladas. Escolha uma clicando nela.');
+                }
+            };
+            reader.readAsDataURL(blob);
+        }
+
+        function clearClientAutoPicCandidates() {
+            const el = document.getElementById('clientAutoPicCandidates');
+            if (!el) return;
+            el.classList.remove('open');
+            el.innerHTML = '';
+            autoPicSlots = [null, null, null];
+            autoPicActiveSlot = 0;
+            if (autoPicGoogleTab && !autoPicGoogleTab.closed) {
+                try { autoPicGoogleTab.close(); } catch (_) {}
+            }
+            autoPicGoogleTab = null;
+        }
+
+        async function selectClientAutoPicImage(imageUrl) {
+            const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
+            try {
+                const response = await fetch(`${API_BASE}/clients/autofind-photo`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image_url: imageUrl, name })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível importar a imagem.');
+
+                const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
+                if (autofindPhotoUrl) autofindPhotoUrl.value = payload.photo_url || '';
+
+                const photoInput = document.getElementById('photoInput');
+                if (photoInput) photoInput.value = '';
+
+                const preview = document.getElementById('photoPreview');
+                if (preview) {
+                    preview.src = payload.photo_url || imageUrl;
+                    preview.style.display = 'block';
+                }
+
+                const removePhotoFlag = document.getElementById('removePhotoFlag');
+                if (removePhotoFlag) removePhotoFlag.value = '0';
+
+                clearClientAutoPicCandidates();
+                showSuccess('Foto definida via AutoPic!');
+            } catch (error) {
+                showError(error.message || 'Falha ao usar imagem do AutoPic.');
+            }
+        }
+
+        function chooseAutoPicSlot(index) {
+            const image = autoPicSlots[index];
+            if (!image) return;
+            const preview = document.getElementById('photoPreview');
+            if (preview) {
+                preview.src = image;
+                preview.style.display = 'block';
+            }
+            const autofindPhotoUrl = document.getElementById('autofindPhotoUrl');
+            if (autofindPhotoUrl) autofindPhotoUrl.value = '';
+            const removePhotoFlag = document.getElementById('removePhotoFlag');
+            if (removePhotoFlag) removePhotoFlag.value = '0';
+            showSuccess(`Imagem ${index + 1} selecionada. Salve o contato para concluir.`);
+            document.querySelectorAll('.autopic-slot-box').forEach((box, idx) => {
+                box.classList.toggle('active', idx === index);
+            });
+        }
+
+
+        async function openClientAutoPicSearch() {
+            const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
+            const company = (getClientFieldValue('company') || '').trim();
+
+            if (!name || !company) {
+                await openSystemDialog({
+                    title: 'AutoPic',
+                    message: 'Preencha Nome e Empresa antes de usar o AutoPic.'
+                });
+                return;
+            }
+
+            autoPicSlots = [null, null, null];
+            autoPicActiveSlot = 0;
+            renderAutoPicSlots();
+
+            const query = `${name} ${company}`.trim();
+            const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
+            autoPicGoogleTab = window.open('', '_blank');
+            if (!autoPicGoogleTab) {
+                await openSystemDialog({
+                    title: 'AutoPic',
+                    message: 'O navegador bloqueou pop-ups. Libere pop-ups para usar o AutoPic.'
+                });
+                return;
+            }
+            autoPicGoogleTab.location.href = googleImagesUrl;
+            showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) as 3 primeiras imagens nos campos abaixo.');
+        }
 
         // Save Client
         async function saveClient(event) {
@@ -5035,12 +5432,76 @@
             if (response.ok) { showSuccess('Atividade registrada com sucesso!'); await Promise.all([loadActivities(), loadDashboard()]); }
         }
 
+        async function loadITocaBaseStatus() {
+            const label = document.getElementById('itocaBaseUpdatedAt');
+            if (!label) return;
+            try {
+                const response = await fetch(`${API_BASE}/itoca/base-status`);
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Falha ao consultar base iToca.');
+                if (!payload.has_base) {
+                    label.textContent = 'Base não atualizada.';
+                    return;
+                }
+                label.textContent = `Último update da base: ${formatDateBr(payload.updated_at)}`;
+            } catch (error) {
+                label.textContent = 'Base iToca indisponível.';
+            }
+        }
+
+        async function updateITocaBase() {
+            const label = document.getElementById('itocaBaseUpdatedAt');
+            if (label) label.textContent = 'Atualizando base...';
+            try {
+                const response = await fetch(`${API_BASE}/itoca/base-update`, { method: 'POST' });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível atualizar a base iToca.');
+                showSuccess(payload.message || 'Base iToca atualizada.');
+                await loadITocaBaseStatus();
+            } catch (error) {
+                showError(error.message || 'Falha no update da base iToca.');
+                if (label) label.textContent = 'Base não atualizada.';
+            }
+        }
+
+        async function askIToca() {
+            const question = (document.getElementById('iataText')?.value || '').trim();
+            if (!question) {
+                showError('Digite uma pergunta para o iToca.');
+                return;
+            }
+            const answerEl = document.getElementById('itocaAnswer');
+            if (answerEl) {
+                answerEl.style.display = 'block';
+                answerEl.textContent = 'Consultando base interna...';
+            }
+            try {
+                const response = await fetch(`${API_BASE}/itoca/ask`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ question })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível consultar o iToca.');
+                if (answerEl) {
+                    answerEl.textContent = payload.answer || 'Não encontrei resposta objetiva com os dados atuais.';
+                    if (payload.base_updated_at) {
+                        const label = document.getElementById('itocaBaseUpdatedAt');
+                        if (label) label.textContent = `Último update da base: ${formatDateBr(payload.base_updated_at)}`;
+                    }
+                }
+            } catch (error) {
+                if (answerEl) answerEl.textContent = `Erro: ${error.message}`;
+                showError(error.message || 'Falha ao consultar iToca.');
+            }
+        }
+
         function validateIataAttachment(event) {
             const files = Array.from(event.target.files || []);
             const allTxt = files.every(file => file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt'));
             if (!allTxt) {
                 event.target.value = '';
-                showError('No iAta, apenas anexo de texto (.txt).');
+                showError('No iToca, apenas anexo de texto (.txt).');
             }
             const lbl = document.getElementById('iataAttachmentLabel');
             if (lbl) lbl.classList.toggle('has-file', allTxt && files.length > 0);
@@ -5698,22 +6159,10 @@
             if (!client || !client.email) return openMissingContactModal();
             let html = `<div class="modal active" id="emailDraftModal" onclick="if(event.target === this) closeEmailDraftModal()">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div class="form-group"><label>Copiar chefe?</label><select id="copyBossSelect"><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','emailDraftBody')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
-        }
-
-        async function getBossEmailForDraft() {
-            try {
-                const response = await fetch(`${API_BASE}/config/profile`, { headers: { Accept: 'application/json' } });
-                if (!response.ok) return '';
-                const profile = await response.json();
-                userProfile = profile || userProfile;
-                return (profile?.boss_email || '').trim();
-            } catch (_) {
-                return (userProfile?.boss_email || '').trim();
-            }
         }
 
         openOutlookDraft = async function(clientId) {
@@ -5722,11 +6171,7 @@
 
             const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
             const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
-            const copyBoss = (document.getElementById('copyBossSelect')?.value || 'nao') === 'sim';
-            const cc = copyBoss ? await getBossEmailForDraft() : '';
-            if (copyBoss && !cc) {
-                showError('Não foi possível localizar o e-mail do chefe no seu perfil. Atualize em Configurações > Meu Cadastro.');
-            }
+            const cc = '';
 
             const queryParts = [
                 `to=${encodeURIComponent(client.email)}`,
@@ -5960,7 +6405,7 @@
         async function loadWikiTocaData() {
             const query = (document.getElementById('wikiSearchInput')?.value || '').trim();
             const params = query ? `?q=${encodeURIComponent(query)}` : '';
-            const results = await Promise.allSettled([loadWikiEntries(params), loadWikiDocuments(params)]);
+            const results = await Promise.allSettled([loadWikiEntries(params), loadWikiDocuments()]);
             const failed = results.some(result => result.status === 'rejected');
             if (failed) {
                 showError('Não foi possível atualizar todos os dados do WikiToca. Tente novamente.');
@@ -6005,6 +6450,13 @@
                 return;
             }
             wikiEntries = await response.json();
+            updateWikiSortButtonLabel();
+            wikiEntries = [...wikiEntries].sort((a, b) => {
+                const at = (a.title || "").toLowerCase();
+                const bt = (b.title || "").toLowerCase();
+                if (wikiEntriesSortOrder === "za") return bt.localeCompare(at, "pt-BR");
+                return at.localeCompare(bt, "pt-BR");
+            });
             if (!wikiEntries.length) {
                 el.innerHTML = '<p style="color:#6b7280;">Nenhum conhecimento registrado ainda.</p>';
                 return;
@@ -6025,13 +6477,13 @@
             `).join('');
         }
 
-        async function loadWikiDocuments(params = '') {
+        async function loadWikiDocuments() {
             const el = document.getElementById('wikiDocumentsList');
             if (!el) return;
-            let response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
+            let response = await fetch(`${API_BASE}/wikitoca/documents`);
             if (!response.ok) {
                 await new Promise(resolve => setTimeout(resolve, 250));
-                response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
+                response = await fetch(`${API_BASE}/wikitoca/documents`);
             }
             if (!response.ok) {
                 const err = await response.json().catch(() => ({}));
@@ -6126,18 +6578,16 @@
 
         async function uploadWikiDocument() {
             const fileInput = document.getElementById('wikiDocumentFile');
-            const titleInput = document.getElementById('wikiDocumentTitle');
             const files = Array.from(fileInput?.files || []);
             if (!files.length) return showError('Selecione ao menos um arquivo para upload.');
             const formData = new FormData();
             files.forEach((file) => formData.append('files', file));
-            formData.append('title', (titleInput?.value || '').trim());
+            formData.append('title', '');
             const response = await fetch(`${API_BASE}/wikitoca/documents`, { method: 'POST', body: formData });
             if (!response.ok) {
                 const err = await response.json().catch(() => ({}));
                 return showError(err.error || 'Falha ao enviar documento(s).');
             }
-            if (titleInput) titleInput.value = '';
             if (fileInput) fileInput.value = '';
             const fileName = document.getElementById('wikiFileName');
             if (fileName) fileName.textContent = '';
@@ -6191,6 +6641,18 @@
             const suggested = suggestTagsFromKnowledge(title, content);
             const merged = [...new Set([...current, ...suggested])].slice(0, 10);
             tagsInput.value = merged.join(', ');
+        }
+
+        function updateWikiSortButtonLabel() {
+            const sortBtn = document.getElementById('wikiSortToggleBtn');
+            if (!sortBtn) return;
+            sortBtn.textContent = wikiEntriesSortOrder === 'za' ? 'Z-A' : 'A-Z';
+        }
+
+        function toggleWikiEntriesSort() {
+            wikiEntriesSortOrder = wikiEntriesSortOrder === 'az' ? 'za' : 'az';
+            updateWikiSortButtonLabel();
+            loadWikiEntries();
         }
 
         function clearWikiSearch() {
@@ -6281,7 +6743,7 @@
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadITocaBaseStatus()]);
             const wikiSearchInput = document.getElementById('wikiSearchInput');
             if (wikiSearchInput) {
                 wikiSearchInput.addEventListener('keydown', (event) => {
