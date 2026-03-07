@@ -1523,6 +1523,10 @@
                 <input type="file" id="iataAttachment" class="iata-file-input" accept=".txt,text/plain" multiple onchange="validateIataAttachment(event)">
                 <label for="iataAttachment" id="iataAttachmentLabel" class="iata-file-btn" title="Anexar texto"><i class="fas fa-paperclip"></i></label>
             </div>
+            <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-auto-mapping btn-small" onclick="updateITocaBase()"><span class="ai-star-icon">✦</span> Base Update</button>
+                <small id="itocaBaseUpdatedAt" style="color:#4b5563; font-size:12px;">Base não atualizada.</small>
+            </div>
             <div id="itocaAnswer" class="itoca-answer" style="display:none;"></div>
         </div>
 
@@ -3319,34 +3323,7 @@
                 return;
             }
             autoPicGoogleTab.location.href = googleImagesUrl;
-
-            try {
-                const response = await fetch(`${API_BASE}/clients/autofind-photo-candidates?name=${encodeURIComponent(name)}&company=${encodeURIComponent(company)}`);
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Não foi possível buscar imagens automáticas do AutoPic.');
-
-                const candidates = (payload.candidates || []).slice(0, 3);
-                if (!candidates.length) {
-                    showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) 3 imagens nos campos abaixo.');
-                    return;
-                }
-
-                candidates.forEach((url, idx) => {
-                    autoPicSlots[idx] = url;
-                });
-                autoPicActiveSlot = Math.min(candidates.length, 2);
-                renderAutoPicSlots();
-                showSuccess('AutoPic preencheu até 3 sugestões. Clique em uma para escolher ou substitua com Ctrl+V.');
-
-                if (candidates.length >= 3 && autoPicGoogleTab && !autoPicGoogleTab.closed) {
-                    setTimeout(() => {
-                        try { autoPicGoogleTab.close(); } catch (_) {}
-                    }, 500);
-                }
-            } catch (error) {
-                showError(error.message || 'Falha ao carregar sugestões do AutoPic.');
-                showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) 3 imagens nos campos abaixo.');
-            }
+            showSuccess('Google Imagens aberto. Copie e cole (Ctrl+V) as 3 primeiras imagens nos campos abaixo.');
         }
 
         // Save Client
@@ -5456,6 +5433,38 @@
             if (response.ok) { showSuccess('Atividade registrada com sucesso!'); await Promise.all([loadActivities(), loadDashboard()]); }
         }
 
+        async function loadITocaBaseStatus() {
+            const label = document.getElementById('itocaBaseUpdatedAt');
+            if (!label) return;
+            try {
+                const response = await fetch(`${API_BASE}/itoca/base-status`);
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Falha ao consultar base iToca.');
+                if (!payload.has_base) {
+                    label.textContent = 'Base não atualizada.';
+                    return;
+                }
+                label.textContent = `Último update da base: ${formatDateBr(payload.updated_at)}`;
+            } catch (error) {
+                label.textContent = 'Base iToca indisponível.';
+            }
+        }
+
+        async function updateITocaBase() {
+            const label = document.getElementById('itocaBaseUpdatedAt');
+            if (label) label.textContent = 'Atualizando base...';
+            try {
+                const response = await fetch(`${API_BASE}/itoca/base-update`, { method: 'POST' });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível atualizar a base iToca.');
+                showSuccess(payload.message || 'Base iToca atualizada.');
+                await loadITocaBaseStatus();
+            } catch (error) {
+                showError(error.message || 'Falha no update da base iToca.');
+                if (label) label.textContent = 'Base não atualizada.';
+            }
+        }
+
         async function askIToca() {
             const question = (document.getElementById('iataText')?.value || '').trim();
             if (!question) {
@@ -5477,6 +5486,10 @@
                 if (!response.ok) throw new Error(payload.error || 'Não foi possível consultar o iToca.');
                 if (answerEl) {
                     answerEl.textContent = payload.answer || 'Não encontrei resposta objetiva com os dados atuais.';
+                    if (payload.base_updated_at) {
+                        const label = document.getElementById('itocaBaseUpdatedAt');
+                        if (label) label.textContent = `Último update da base: ${formatDateBr(payload.base_updated_at)}`;
+                    }
                 }
             } catch (error) {
                 if (answerEl) answerEl.textContent = `Erro: ${error.message}`;
@@ -6731,7 +6744,7 @@
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadITocaBaseStatus()]);
             const wikiSearchInput = document.getElementById('wikiSearchInput');
             if (wikiSearchInput) {
                 wikiSearchInput.addEventListener('keydown', (event) => {

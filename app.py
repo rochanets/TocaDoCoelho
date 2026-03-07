@@ -539,6 +539,8 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
     
     conn.commit()
     
@@ -887,7 +889,8 @@ def _itoca_search_context(question, limit=18):
             results.append({
                 'table': table,
                 'id': row_dict.get('id'),
-                'snippet': snippet
+                'snippet': snippet,
+                'search_text': snippet.lower()
             })
             if len(results) >= limit:
                 conn.close()
@@ -895,6 +898,86 @@ def _itoca_search_context(question, limit=18):
 
     conn.close()
     return results
+
+
+def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items=6000):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES][:max_tables]
+
+    items = []
+    for table in tables:
+        text_columns = _itoca_text_columns(cursor, table)
+        if not text_columns:
+            continue
+        try:
+            cursor.execute(f'SELECT * FROM "{table}" LIMIT {int(max_rows_per_table)}')
+            rows = cursor.fetchall()
+        except Exception:
+            continue
+
+        for row in rows:
+            row_dict = dict_from_row(row)
+            snippet = _itoca_build_snippet(row_dict)
+            if not snippet:
+                continue
+            items.append({
+                'table': table,
+                'id': row_dict.get('id'),
+                'snippet': snippet,
+                'search_text': snippet.lower()
+            })
+            if len(items) >= max_items:
+                conn.close()
+                return items
+
+    conn.close()
+    return items
+
+
+def _itoca_update_cached_base():
+    snapshot_items = _itoca_build_base_snapshot()
+    updated_at = datetime.now().isoformat(timespec='seconds')
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (json.dumps(snapshot_items, ensure_ascii=False), 'itoca_base_snapshot'))
+    c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (updated_at, 'itoca_base_updated_at'))
+    conn.commit()
+    conn.close()
+    return {'items': snapshot_items, 'updated_at': updated_at}
+
+
+def _itoca_get_cached_base():
+    settings_map = _load_app_settings_map(['itoca_base_snapshot', 'itoca_base_updated_at'])
+    raw_snapshot = (settings_map.get('itoca_base_snapshot') or '').strip()
+    updated_at = (settings_map.get('itoca_base_updated_at') or '').strip()
+    if not raw_snapshot:
+        return [], updated_at
+    try:
+        snapshot = json.loads(raw_snapshot)
+    except Exception:
+        snapshot = []
+    return snapshot if isinstance(snapshot, list) else [], updated_at
+
+
+def _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18):
+    tokens = _itoca_tokenize(question)
+    if not tokens or not snapshot_items:
+        return []
+
+    scored = []
+    for item in snapshot_items:
+        haystack = str(item.get('search_text') or item.get('snippet') or '').lower()
+        if not haystack:
+            continue
+        score = sum(1 for token in tokens if token in haystack)
+        if score <= 0:
+            continue
+        scored.append((score, item))
+
+    scored.sort(key=lambda x: (-x[0], str(x[1].get('table') or ''), str(x[1].get('id') or '')))
+    return [item for _, item in scored[:max(1, int(limit or 18))]]
 
 
 def _itoca_compose_answer(question, context_rows):
@@ -2068,6 +2151,34 @@ def check_updates():
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
 
+@app.route('/api/itoca/base-status', methods=['GET'])
+def itoca_base_status():
+    try:
+        snapshot_items, updated_at = _itoca_get_cached_base()
+        return jsonify({
+            'has_base': len(snapshot_items) > 0,
+            'items_count': len(snapshot_items),
+            'updated_at': updated_at
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/itoca/base-status: {e}')
+        return jsonify({'error': f'Erro ao consultar status da base iToca: {e}'}), 500
+
+
+@app.route('/api/itoca/base-update', methods=['POST'])
+def itoca_base_update():
+    try:
+        result = _itoca_update_cached_base()
+        return jsonify({
+            'message': 'Base iToca atualizada com sucesso.',
+            'items_count': len(result['items']),
+            'updated_at': result['updated_at']
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/itoca/base-update: {e}')
+        return jsonify({'error': f'Erro ao atualizar base iToca: {e}'}), 500
+
+
 @app.route('/api/itoca/ask', methods=['POST'])
 def itoca_ask():
     try:
@@ -2076,12 +2187,21 @@ def itoca_ask():
         if not question:
             return jsonify({'error': 'Pergunta obrigatória.'}), 400
 
-        context_rows = _itoca_search_context(question, limit=18)
+        snapshot_items, updated_at = _itoca_get_cached_base()
+        if not snapshot_items:
+            return jsonify({
+                'error': 'Base iToca ainda não foi atualizada. Clique em "Base Update" antes da primeira pergunta.',
+                'base_ready': False
+            }), 409
+
+        context_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18)
         answer = _itoca_compose_answer(question, context_rows)
         return jsonify({
             'answer': answer,
             'items_found': len(context_rows),
-            'sources': context_rows
+            'sources': context_rows,
+            'base_updated_at': updated_at,
+            'base_ready': True
         })
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
