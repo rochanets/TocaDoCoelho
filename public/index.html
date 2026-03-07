@@ -1480,8 +1480,7 @@
                     <h3 style="color:#047857; margin-bottom:12px;">Documentos (PDF, Excel, Word)</h3>
                     <div class="wiki-doc-upload-row">
                         <div class="wiki-doc-upload-main">
-                            <input id="wikiDocumentTitle" class="wiki-search-input" placeholder="Título do documento" style="flex:1;">
-                            <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
+                                                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
                             <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
                         </div>
                         <span id="wikiFileName" class="wiki-file-name"></span>
@@ -1912,7 +1911,7 @@
                 <div class="form-group">
                     <label>Foto</label>
                     <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)" style="display:none;">
-                    <div style="display:flex; gap:8px; flex-wrap:wrap;"><label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label><button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientAutoFindModal()"><span class="ai-star-icon">✦</span> AutoFind</button></div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;"><label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label><button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientAutoPicModal()"><span class="ai-star-icon">✦</span> AutoPic</button></div>
                     <small style="display:block; margin-top:6px; color:#059669;">Dica: você pode colar imagem com Ctrl+V aqui.</small>
                     <img id="photoPreview" class="photo-preview" style="display:none;">
                     <input type="hidden" id="removePhotoFlag" name="remove_photo" value="0">
@@ -1928,17 +1927,17 @@
         </div>
     </div>
 
-    <div id="clientAutoFindModal" class="modal" onclick="if(event.target===this) closeClientAutoFindModal()">
+    <div id="clientAutoPicModal" class="modal" onclick="if(event.target===this) closeClientAutoPicModal()">
         <div class="modal-content" style="max-width:760px;">
             <div class="modal-header">
-                <h2>AutoFind - Escolher foto do contato</h2>
-                <button class="modal-close" onclick="closeClientAutoFindModal()">×</button>
+                <h2>AutoPic - Escolher foto do contato</h2>
+                <button class="modal-close" onclick="closeClientAutoPicModal()">×</button>
             </div>
             <p style="color:#4b5563; margin-bottom:12px;">Vamos buscar imagens com o nome + empresa e mostrar as 3 primeiras.</p>
-            <div id="clientAutoFindStatus" style="font-size:13px; color:#6b7280; margin-bottom:10px;"></div>
-            <div id="clientAutoFindResults" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px;"></div>
+            <div id="clientAutoPicStatus" style="font-size:13px; color:#6b7280; margin-bottom:10px;"></div>
+            <div id="clientAutoPicResults" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px;"></div>
             <div class="modal-footer" style="margin-top:14px;">
-                <button type="button" class="btn btn-secondary" onclick="closeClientAutoFindModal()">Fechar</button>
+                <button type="button" class="btn btn-secondary" onclick="closeClientAutoPicModal()">Fechar</button>
             </div>
         </div>
     </div>
@@ -2078,7 +2077,7 @@
         let positionGroupings = [];
         let _orgMapOpenContext = null; // { company, position } quando aberto pelo + do mapeamento organizacional
         let wikiEntriesSortOrder = "az";
-        let clientAutoFindCandidates = [];
+        let clientAutoPicCandidates = [];
 
         // Tab switching
         function switchTab(ev, tabName) {
@@ -3054,17 +3053,17 @@
         });
 
 
-        async function openClientAutoFindModal() {
+        async function openClientAutoPicModal() {
             const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
             const company = getClientFieldValue('company') || (document.querySelector('#clientForm [name="company"]')?.value || '').trim();
             if (!name && !company) {
-                showError('Preencha ao menos o nome ou empresa antes de usar o AutoFind.');
+                showError('Preencha ao menos o nome ou empresa antes de usar o AutoPic.');
                 return;
             }
 
-            const modal = document.getElementById('clientAutoFindModal');
-            const statusEl = document.getElementById('clientAutoFindStatus');
-            const resultsEl = document.getElementById('clientAutoFindResults');
+            const modal = document.getElementById('clientAutoPicModal');
+            const statusEl = document.getElementById('clientAutoPicStatus');
+            const resultsEl = document.getElementById('clientAutoPicResults');
             if (!modal || !statusEl || !resultsEl) return;
 
             modal.classList.add('active');
@@ -3077,15 +3076,15 @@
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.error || 'Falha ao buscar imagens');
 
-                clientAutoFindCandidates = data.candidates || [];
-                if (!clientAutoFindCandidates.length) {
+                clientAutoPicCandidates = data.candidates || [];
+                if (!clientAutoPicCandidates.length) {
                     statusEl.textContent = 'Nenhuma imagem encontrada para esse contato.';
                     return;
                 }
 
                 statusEl.textContent = 'Selecione a foto correta do contato:';
-                resultsEl.innerHTML = clientAutoFindCandidates.map((imgUrl, idx) => `
-                    <button type="button" onclick="selectClientAutoFindImage(${idx})" style="border:1px solid #d1fae5; background:#fff; border-radius:10px; padding:6px; cursor:pointer; text-align:left;">
+                resultsEl.innerHTML = clientAutoPicCandidates.map((imgUrl, idx) => `
+                    <button type="button" onclick="selectClientAutoPicImage(${idx})" style="border:1px solid #d1fae5; background:#fff; border-radius:10px; padding:6px; cursor:pointer; text-align:left;">
                         <img src="${escapeHtml(imgUrl)}" style="width:100%; height:180px; object-fit:cover; border-radius:8px; display:block;">
                         <div style="margin-top:6px; color:#065f46; font-size:12px;">Usar esta foto</div>
                     </button>
@@ -3096,16 +3095,16 @@
             }
         }
 
-        function closeClientAutoFindModal() {
-            const modal = document.getElementById('clientAutoFindModal');
+        function closeClientAutoPicModal() {
+            const modal = document.getElementById('clientAutoPicModal');
             if (modal) modal.classList.remove('active');
         }
 
-        async function selectClientAutoFindImage(index) {
-            const imageUrl = clientAutoFindCandidates[index];
+        async function selectClientAutoPicImage(index) {
+            const imageUrl = clientAutoPicCandidates[index];
             if (!imageUrl) return;
             const name = (document.querySelector('#clientForm [name="name"]')?.value || '').trim();
-            const statusEl = document.getElementById('clientAutoFindStatus');
+            const statusEl = document.getElementById('clientAutoPicStatus');
             if (statusEl) statusEl.textContent = 'Importando imagem selecionada...';
 
             try {
@@ -3128,8 +3127,8 @@
                 }
                 const removePhotoFlag = document.getElementById('removePhotoFlag');
                 if (removePhotoFlag) removePhotoFlag.value = '0';
-                showSuccess('Foto definida com AutoFind!');
-                closeClientAutoFindModal();
+                showSuccess('Foto definida com AutoPic!');
+                closeClientAutoPicModal();
             } catch (error) {
                 if (statusEl) statusEl.textContent = error.message;
                 showError(error.message);
@@ -6325,18 +6324,16 @@
 
         async function uploadWikiDocument() {
             const fileInput = document.getElementById('wikiDocumentFile');
-            const titleInput = document.getElementById('wikiDocumentTitle');
             const files = Array.from(fileInput?.files || []);
             if (!files.length) return showError('Selecione ao menos um arquivo para upload.');
             const formData = new FormData();
             files.forEach((file) => formData.append('files', file));
-            formData.append('title', (titleInput?.value || '').trim());
+            formData.append('title', '');
             const response = await fetch(`${API_BASE}/wikitoca/documents`, { method: 'POST', body: formData });
             if (!response.ok) {
                 const err = await response.json().catch(() => ({}));
                 return showError(err.error || 'Falha ao enviar documento(s).');
             }
-            if (titleInput) titleInput.value = '';
             if (fileInput) fileInput.value = '';
             const fileName = document.getElementById('wikiFileName');
             if (fileName) fileName.textContent = '';
