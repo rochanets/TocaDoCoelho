@@ -15,6 +15,8 @@ import traceback
 import shutil
 import urllib.request
 import urllib.error
+import urllib.parse
+import html
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -690,6 +692,85 @@ def api_error(status, code, message, details=None, hint=None):
     if hint:
         payload['hint'] = hint
     return jsonify(payload), status
+
+
+def _extract_bing_image_urls(raw_html):
+    matches = re.findall(r'"murl":"(.*?)"', raw_html)
+    urls = []
+    for item in matches:
+        url = html.unescape(item).replace('\\/', '/')
+        if url.startswith('http://') or url.startswith('https://'):
+            urls.append(url)
+    return urls
+
+
+def _extract_google_image_urls(raw_html):
+    patterns = [
+        r'"ou":"(https?://[^"\\]+)"',
+        r'"(https://encrypted-tbn0\\.gstatic\\.com/images\\?q=tbn:[^"\\]+)"',
+        r'"(https://[^"\\]+\\.(?:jpg|jpeg|png|webp))"'
+    ]
+    urls = []
+    for pattern in patterns:
+        for item in re.findall(pattern, raw_html, re.IGNORECASE):
+            url = html.unescape(item).replace('\\u003d', '=').replace('\\u0026', '&').replace('\\/', '/')
+            if url.startswith('http://') or url.startswith('https://'):
+                urls.append(url)
+    return urls
+
+def _find_image_candidates_on_web(query, limit=3):
+    if not query:
+        return []
+
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+    search_url = f"https://www.google.com/search?tbm=isch&q={urllib.parse.quote(query)}"
+    req = urllib.request.Request(search_url, headers={'User-Agent': user_agent})
+
+    with urllib.request.urlopen(req, timeout=12) as response:
+        content = response.read().decode('utf-8', errors='ignore')
+
+    urls = _extract_google_image_urls(content)
+    results = []
+    seen = set()
+    for u in urls:
+        if u in seen:
+            continue
+        seen.add(u)
+        results.append(u)
+        if len(results) >= limit:
+            break
+    return results
+
+def _download_remote_image_to_uploads(image_url, prefix='autofind'):
+    parsed = urllib.parse.urlparse(image_url)
+    if parsed.scheme not in {'http', 'https'}:
+        raise ValueError('URL de imagem inválida.')
+
+    req = urllib.request.Request(image_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+    })
+    with urllib.request.urlopen(req, timeout=15) as response:
+        content_type = (response.headers.get('Content-Type') or '').lower()
+        data = response.read(6 * 1024 * 1024 + 1)
+
+    if len(data) > 6 * 1024 * 1024:
+        raise ValueError('Imagem muito grande (máximo 6MB).')
+    if not content_type.startswith('image/'):
+        raise ValueError('A URL selecionada não retornou uma imagem válida.')
+
+    ext = '.jpg'
+    if 'png' in content_type:
+        ext = '.png'
+    elif 'webp' in content_type:
+        ext = '.webp'
+    elif 'gif' in content_type:
+        ext = '.gif'
+
+    filename = secure_filename(f"{prefix}-{int(time.time()*1000)}{ext}")
+    path = UPLOAD_DIR / filename
+    with open(path, 'wb') as f:
+        f.write(data)
+    return f'/uploads/{filename}'
 
 
 def parse_currency_to_cents(value):
@@ -1986,6 +2067,39 @@ def check_duplicate_client():
         print(f'[ERROR] POST /api/clients/check-duplicate: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/clients/autofind-photo-candidates', methods=['GET'])
+def clients_autofind_photo_candidates():
+    try:
+        name = (request.args.get('name') or '').strip()
+        company = (request.args.get('company') or '').strip()
+        query = ' '.join(part for part in [name, company] if part)
+        if not query:
+            return jsonify({'error': 'Informe ao menos nome ou empresa.'}), 400
+
+        candidates = _find_image_candidates_on_web(query, limit=3)
+        return jsonify({'query': query, 'candidates': candidates})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/clients/autofind-photo-candidates: {e}')
+        return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
+
+
+@app.route('/api/clients/autofind-photo', methods=['POST'])
+def clients_autofind_photo():
+    try:
+        data = request.get_json() or {}
+        image_url = (data.get('image_url') or '').strip()
+        person_name = (data.get('name') or '').strip() or 'autofind'
+        if not image_url:
+            return jsonify({'error': 'URL da imagem não informada.'}), 400
+
+        safe_prefix = secure_filename(person_name) or 'autofind'
+        photo_url = _download_remote_image_to_uploads(image_url, prefix=safe_prefix)
+        return jsonify({'photo_url': photo_url})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/clients/autofind-photo: {e}')
+        return jsonify({'error': f'Erro ao importar imagem selecionada: {e}'}), 500
+
+
 @app.route('/api/clientes', methods=['POST'])
 def create_cliente():
     return create_client()
@@ -2007,6 +2121,7 @@ def create_client():
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         force_create = request.form.get('force_create') in ('1', 'true', 'on')
+        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -2032,7 +2147,7 @@ def create_client():
                 if existing:
                     return jsonify({'error': 'Possível duplicidade encontrada', 'duplicate': existing}), 409
 
-        photo_url = None
+        photo_url = autofind_photo_url or None
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
@@ -2076,6 +2191,7 @@ def update_client(client_id):
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         remove_photo = request.form.get('remove_photo', '0') == '1'
+        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         
         if not name or not company or not position:
@@ -2091,7 +2207,7 @@ def update_client(client_id):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         
-        photo_url = None if remove_photo else client['photo_url']
+        photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
