@@ -1197,7 +1197,15 @@ def _itoca_search_context(question, limit=18):
             found_by_title = doc_id in doc_rows_by_title
             if not found_in_content and not found_by_title:
                 continue
-            snippet = f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))} | {doc_text[:2000]}' if doc_text else f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))}'
+            doc_title = rd.get('title') or rd.get('original_name', '')
+            doc_ext = rd.get('file_ext', '')
+            if doc_text.strip():
+                snippet = f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | conteudo: {doc_text[:3000]}'
+            else:
+                snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
+                           f'AVISO: conteúdo não extraído automaticamente. '
+                           f'Documento "{rd.get("original_name", "")}" existe no WikiToca. '
+                           f'Instale pdfplumber (pip install pdfplumber) para habilitar leitura de PDFs.')
             fp = f'wiki_documents:{snippet[:160]}'
             if fp in seen:
                 continue
@@ -1211,46 +1219,95 @@ def _itoca_search_context(question, limit=18):
 
 
 def _itoca_extract_text_from_file(file_path_str):
-    """Extrai texto de PDF, DOCX ou XLSX para indexação no RAG."""
+    """Extrai texto de PDF, DOCX ou XLSX para indexação no RAG.
+    Usa múltiplos fallbacks para garantir extração mesmo sem bibliotecas opcionais.
+    """
     path = Path(file_path_str)
+    if not path.exists():
+        logger.warning(f'[iToca] Arquivo não encontrado: {file_path_str}')
+        return ''
     ext = path.suffix.lower()
     text_parts = []
     try:
         if ext == '.pdf':
+            extracted = False
+            # Tentativa 1: pdfplumber
             if PDFPLUMBER_AVAILABLE:
-                with pdfplumber.open(str(path)) as pdf:
-                    for page in pdf.pages[:30]:  # limita a 30 páginas
-                        page_text = page.extract_text() or ''
-                        if page_text.strip():
-                            text_parts.append(page_text.strip())
-            else:
-                # fallback: pdftotext via subprocess
-                import subprocess
-                result = subprocess.run(['pdftotext', str(path), '-'], capture_output=True, text=True, timeout=15)
-                if result.returncode == 0:
-                    text_parts.append(result.stdout)
-        elif ext == '.docx':
+                try:
+                    with pdfplumber.open(str(path)) as pdf:
+                        for page in pdf.pages[:30]:
+                            page_text = page.extract_text() or ''
+                            if page_text.strip():
+                                text_parts.append(page_text.strip())
+                    extracted = bool(text_parts)
+                except Exception as e1:
+                    logger.warning(f'[iToca] pdfplumber falhou em {path.name}: {e1}')
+            # Tentativa 2: pdftotext (poppler-utils, disponível no Windows e Linux)
+            if not extracted:
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ['pdftotext', '-enc', 'UTF-8', str(path), '-'],
+                        capture_output=True, timeout=20
+                    )
+                    if result.returncode == 0 and result.stdout:
+                        decoded = result.stdout.decode('utf-8', errors='replace')
+                        if decoded.strip():
+                            text_parts.append(decoded)
+                            extracted = True
+                except Exception as e2:
+                    logger.warning(f'[iToca] pdftotext falhou em {path.name}: {e2}')
+            # Tentativa 3: pdf2image + pytesseract (OCR) - apenas se disponível
+            if not extracted:
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ['pdftotext', str(path), '-'],
+                        capture_output=True, text=True, timeout=20
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        text_parts.append(result.stdout)
+                        extracted = True
+                except Exception:
+                    pass
+        elif ext in ('.docx', '.doc'):
             if PYTHON_DOCX_AVAILABLE:
-                doc = python_docx.Document(str(path))
-                for para in doc.paragraphs:
-                    if para.text.strip():
-                        text_parts.append(para.text.strip())
-                for table in doc.tables:
-                    for row in table.rows:
-                        row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                        if row_text:
-                            text_parts.append(row_text)
+                try:
+                    doc = python_docx.Document(str(path))
+                    for para in doc.paragraphs:
+                        if para.text.strip():
+                            text_parts.append(para.text.strip())
+                    for table in doc.tables:
+                        for row in table.rows:
+                            row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                            if row_text:
+                                text_parts.append(row_text)
+                except Exception as e3:
+                    logger.warning(f'[iToca] python-docx falhou em {path.name}: {e3}')
         elif ext in ('.xlsx', '.xls'):
             if OPENPYXL_AVAILABLE:
-                wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
-                for sheet in wb.worksheets:
-                    for row in sheet.iter_rows(values_only=True):
-                        row_text = ' | '.join(str(c) for c in row if c is not None and str(c).strip())
-                        if row_text:
-                            text_parts.append(row_text)
+                try:
+                    wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+                    for sheet in wb.worksheets:
+                        for row in sheet.iter_rows(values_only=True):
+                            row_text = ' | '.join(str(c) for c in row if c is not None and str(c).strip())
+                            if row_text:
+                                text_parts.append(row_text)
+                except Exception as e4:
+                    logger.warning(f'[iToca] openpyxl falhou em {path.name}: {e4}')
+        elif ext == '.txt':
+            try:
+                text_parts.append(path.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                pass
     except Exception as e:
-        logger.warning(f'[iToca] Erro ao extrair texto de {file_path_str}: {e}')
-    return '\n'.join(text_parts)
+        logger.warning(f'[iToca] Erro geral ao extrair texto de {file_path_str}: {e}')
+    result_text = '\n'.join(text_parts)
+    if result_text:
+        logger.info(f'[iToca] Extraiu {len(result_text)} chars de {path.name}')
+    else:
+        logger.warning(f'[iToca] Não foi possível extrair texto de {path.name} (ext={ext}, pdfplumber={PDFPLUMBER_AVAILABLE}, docx={PYTHON_DOCX_AVAILABLE})')
+    return result_text
 
 
 def _itoca_build_agenda_items(conn):
@@ -1374,19 +1431,36 @@ def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
             doc_text = ''
             if file_path.exists():
                 doc_text = _itoca_extract_text_from_file(str(file_path))
+
+            doc_title = rd.get('title') or rd.get('original_name', '')
+            doc_ext = rd.get('file_ext', '')
+
             if not doc_text.strip():
-                # sem conteúdo extraível, indexa apenas metadados
-                doc_text = f'documento: {rd.get("original_name", "")}'
-            # Divide em chunks de max_chars_per_doc para não sobrecarregar o contexto
-            chunks = [doc_text[i:i+max_chars_per_doc] for i in range(0, min(len(doc_text), max_chars_per_doc * 5), max_chars_per_doc)]
-            for idx, chunk in enumerate(chunks):
-                snippet = f'[WikiToca Doc] titulo: {rd.get("title", rd.get("original_name", ""))} | parte {idx+1} | {chunk.strip()[:1500]}'
+                # Sem conteúdo extraível: indexa metadados com nota ao LLM
+                snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
+                           f'AVISO: conteúdo do arquivo não pôde ser extraído automaticamente. '
+                           f'O documento existe no sistema com o nome "{rd.get("original_name", "")}". '
+                           f'Se o usuário perguntar sobre informações que possam estar neste documento, '
+                           f'informe que o documento existe mas o conteúdo não está disponível para leitura automática.')
                 items.append({
                     'table': 'wiki_documents',
                     'id': rd.get('id'),
                     'snippet': snippet,
-                    'search_text': snippet.lower()
+                    'search_text': (doc_title + ' ' + rd.get('original_name', '')).lower()
                 })
+            else:
+                # Divide em chunks de max_chars_per_doc para não sobrecarregar o contexto
+                max_total = max_chars_per_doc * 5
+                chunks = [doc_text[i:i+max_chars_per_doc] for i in range(0, min(len(doc_text), max_total), max_chars_per_doc)]
+                for idx, chunk in enumerate(chunks):
+                    chunk_label = f'parte {idx+1}' if len(chunks) > 1 else 'conteúdo'
+                    snippet = f'[WikiToca Doc] titulo: {doc_title} | {chunk_label} | {chunk.strip()[:3000]}'
+                    items.append({
+                        'table': 'wiki_documents',
+                        'id': rd.get('id'),
+                        'snippet': snippet,
+                        'search_text': snippet.lower()
+                    })
     except Exception as e:
         logger.warning(f'[iToca] Erro ao indexar wiki_documents: {e}')
 
