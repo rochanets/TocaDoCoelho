@@ -1611,9 +1611,19 @@
 
             <!-- Base controls -->
             <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-auto-mapping btn-small" onclick="updateITocaBase()"><span class="ai-star-icon">✦</span> Base Update</button>
+                <button type="button" class="btn btn-auto-mapping btn-small" id="itocaBaseUpdateBtn" onclick="updateITocaBase()"><span class="ai-star-icon">✶</span> Base Update</button>
                 <button type="button" class="btn btn-secondary btn-small" onclick="clearITocaChat()" title="Limpar histórico do chat"><i class="fas fa-trash-alt"></i> Limpar chat</button>
                 <small id="itocaBaseUpdatedAt" style="color:#4b5563; font-size:12px;">Base não atualizada.</small>
+            </div>
+            <!-- Barra de progresso do Base Update -->
+            <div id="itocaProgressContainer" style="display:none; margin-top:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                    <span id="itocaProgressMsg" style="font-size:12px; color:#6b7280;">Iniciando indexação...</span>
+                    <span id="itocaProgressPct" style="font-size:12px; font-weight:600; color:#3b82f6;">0%</span>
+                </div>
+                <div style="background:#e5e7eb; border-radius:8px; height:10px; overflow:hidden;">
+                    <div id="itocaProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg,#3b82f6,#8b5cf6); border-radius:8px; transition:width 0.4s ease;"></div>
+                </div>
             </div>
 
             <!-- Legacy hidden element (kept for compatibility) -->
@@ -5650,16 +5660,74 @@
 
         async function updateITocaBase() {
             const label = document.getElementById('itocaBaseUpdatedAt');
-            if (label) label.textContent = 'Atualizando base...';
+            const btn = document.getElementById('itocaBaseUpdateBtn');
+            const progressContainer = document.getElementById('itocaProgressContainer');
+            const progressBar = document.getElementById('itocaProgressBar');
+            const progressMsg = document.getElementById('itocaProgressMsg');
+            const progressPct = document.getElementById('itocaProgressPct');
+
+            // Mostrar barra de progresso e desabilitar botão
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+            if (label) label.textContent = 'Indexando...';
+            if (progressContainer) progressContainer.style.display = 'block';
+            if (progressBar) progressBar.style.width = '0%';
+            if (progressMsg) progressMsg.textContent = 'Iniciando indexação...';
+            if (progressPct) progressPct.textContent = '0%';
+
+            function setProgress(pct, msg) {
+                if (progressBar) progressBar.style.width = pct + '%';
+                if (progressPct) progressPct.textContent = pct + '%';
+                if (progressMsg) progressMsg.textContent = msg || '';
+            }
+
             try {
-                const response = await fetch(`${API_BASE}/itoca/base-update`, { method: 'POST' });
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Não foi possível atualizar a base iToca.');
-                showSuccess(payload.message || 'Base iToca atualizada.');
-                await loadITocaBaseStatus();
+                const response = await fetch(`${API_BASE}/itoca/base-update`, {
+                    method: 'POST',
+                    headers: { 'Accept': 'text/event-stream' }
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error || 'Falha ao iniciar indexação.');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // guarda linha incompleta
+                    for (const line of lines) {
+                        if (!line.startsWith('data:')) continue;
+                        try {
+                            const evt = JSON.parse(line.slice(5).trim());
+                            if (evt.type === 'done') {
+                                setProgress(100, evt.message || 'Concluído!');
+                                showSuccess(evt.message || 'Base iToca atualizada.');
+                                if (label) label.textContent = `Último update: ${formatDateBr(evt.updated_at)} — ${evt.items_count} registros`;
+                                setTimeout(() => {
+                                    if (progressContainer) progressContainer.style.display = 'none';
+                                }, 3000);
+                            } else if (evt.type === 'error') {
+                                throw new Error(evt.message || 'Erro na indexação.');
+                            } else if (evt.percent !== undefined) {
+                                setProgress(evt.percent, evt.message);
+                            }
+                        } catch (parseErr) {
+                            // linha malformada, ignorar
+                        }
+                    }
+                }
             } catch (error) {
                 showError(error.message || 'Falha no update da base iToca.');
                 if (label) label.textContent = 'Base não atualizada.';
+                if (progressContainer) progressContainer.style.display = 'none';
+            } finally {
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
             }
         }
 

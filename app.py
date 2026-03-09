@@ -23,7 +23,7 @@ import base64
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
@@ -52,6 +52,20 @@ try:
 except ImportError:
     python_docx = None
     PYTHON_DOCX_AVAILABLE = False
+
+try:
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
+except ImportError:
+    pytesseract = None
+    PYTESSERACT_AVAILABLE = False
+
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    convert_from_path = None
+    PDF2IMAGE_AVAILABLE = False
 
 WHISPER_IMPORT_ERROR = None
 WHISPER_IMPORT_ATTEMPTED = False
@@ -1218,9 +1232,34 @@ def _itoca_search_context(question, limit=18):
     return results
 
 
+def _itoca_find_tesseract_cmd():
+    """Localiza o binário do tesseract no sistema (Windows/Linux/Mac)."""
+    import subprocess
+    # Tenta no PATH primeiro
+    try:
+        result = subprocess.run(['tesseract', '--version'], capture_output=True, timeout=5)
+        if result.returncode == 0:
+            return 'tesseract'
+    except Exception:
+        pass
+    # Caminhos comuns no Windows
+    windows_paths = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+        r'C:\Users\{}\AppData\Local\Tesseract-OCR\tesseract.exe'.format(os.environ.get('USERNAME', '')),
+    ]
+    for p in windows_paths:
+        if Path(p).exists():
+            return p
+    return None
+
+
 def _itoca_extract_text_from_file(file_path_str):
     """Extrai texto de PDF, DOCX ou XLSX para indexação no RAG.
-    Usa múltiplos fallbacks para garantir extração mesmo sem bibliotecas opcionais.
+    Estratégia para PDFs:
+      1. pdfplumber (texto digital)
+      2. pdftotext via subprocess (poppler, Windows/Linux)
+      3. OCR com pdf2image + pytesseract (PDFs escaneados/imagens)
     """
     path = Path(file_path_str)
     if not path.exists():
@@ -1231,7 +1270,8 @@ def _itoca_extract_text_from_file(file_path_str):
     try:
         if ext == '.pdf':
             extracted = False
-            # Tentativa 1: pdfplumber
+
+            # --- Tentativa 1: pdfplumber (PDFs com texto digital) ---
             if PDFPLUMBER_AVAILABLE:
                 try:
                     with pdfplumber.open(str(path)) as pdf:
@@ -1242,12 +1282,25 @@ def _itoca_extract_text_from_file(file_path_str):
                     extracted = bool(text_parts)
                 except Exception as e1:
                     logger.warning(f'[iToca] pdfplumber falhou em {path.name}: {e1}')
-            # Tentativa 2: pdftotext (poppler-utils, disponível no Windows e Linux)
+
+            # --- Tentativa 2: pdftotext (poppler-utils) ---
             if not extracted:
                 try:
                     import subprocess
+                    # Tenta localizar pdftotext no Windows e Linux
+                    pdftotext_cmd = 'pdftotext'
+                    if sys.platform == 'win32':
+                        win_poppler_paths = [
+                            r'C:\poppler\bin\pdftotext.exe',
+                            r'C:\Program Files\poppler\bin\pdftotext.exe',
+                            r'C:\Program Files (x86)\poppler\bin\pdftotext.exe',
+                        ]
+                        for wp in win_poppler_paths:
+                            if Path(wp).exists():
+                                pdftotext_cmd = wp
+                                break
                     result = subprocess.run(
-                        ['pdftotext', '-enc', 'UTF-8', str(path), '-'],
+                        [pdftotext_cmd, '-enc', 'UTF-8', str(path), '-'],
                         capture_output=True, timeout=20
                     )
                     if result.returncode == 0 and result.stdout:
@@ -1256,20 +1309,33 @@ def _itoca_extract_text_from_file(file_path_str):
                             text_parts.append(decoded)
                             extracted = True
                 except Exception as e2:
-                    logger.warning(f'[iToca] pdftotext falhou em {path.name}: {e2}')
-            # Tentativa 3: pdf2image + pytesseract (OCR) - apenas se disponível
+                    logger.debug(f'[iToca] pdftotext não disponível para {path.name}: {e2}')
+
+            # --- Tentativa 3: OCR com pdf2image + pytesseract (PDFs escaneados) ---
+            if not extracted and PDF2IMAGE_AVAILABLE and PYTESSERACT_AVAILABLE:
+                tess_cmd = _itoca_find_tesseract_cmd()
+                if tess_cmd:
+                    try:
+                        pytesseract.pytesseract.tesseract_cmd = tess_cmd
+                        images = convert_from_path(str(path), dpi=200, first_page=1, last_page=15)
+                        ocr_parts = []
+                        for img in images:
+                            ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                            if ocr_text.strip():
+                                ocr_parts.append(ocr_text.strip())
+                        if ocr_parts:
+                            text_parts.extend(ocr_parts)
+                            extracted = True
+                            logger.info(f'[iToca] OCR extraiu texto de {path.name} ({len(images)} páginas)')
+                    except Exception as e3:
+                        logger.warning(f'[iToca] OCR falhou em {path.name}: {e3}')
+                else:
+                    logger.info(f'[iToca] Tesseract não encontrado. Instale em https://github.com/UB-Mannheim/tesseract/wiki para OCR de PDFs escaneados.')
+
             if not extracted:
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ['pdftotext', str(path), '-'],
-                        capture_output=True, text=True, timeout=20
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        text_parts.append(result.stdout)
-                        extracted = True
-                except Exception:
-                    pass
+                logger.warning(f'[iToca] Não foi possível extrair texto de {path.name} '
+                               f'(pdfplumber={PDFPLUMBER_AVAILABLE}, ocr={PDF2IMAGE_AVAILABLE and PYTESSERACT_AVAILABLE})')
+
         elif ext in ('.docx', '.doc'):
             if PYTHON_DOCX_AVAILABLE:
                 try:
@@ -1282,8 +1348,9 @@ def _itoca_extract_text_from_file(file_path_str):
                             row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
                             if row_text:
                                 text_parts.append(row_text)
-                except Exception as e3:
-                    logger.warning(f'[iToca] python-docx falhou em {path.name}: {e3}')
+                except Exception as e4:
+                    logger.warning(f'[iToca] python-docx falhou em {path.name}: {e4}')
+
         elif ext in ('.xlsx', '.xls'):
             if OPENPYXL_AVAILABLE:
                 try:
@@ -1293,20 +1360,21 @@ def _itoca_extract_text_from_file(file_path_str):
                             row_text = ' | '.join(str(c) for c in row if c is not None and str(c).strip())
                             if row_text:
                                 text_parts.append(row_text)
-                except Exception as e4:
-                    logger.warning(f'[iToca] openpyxl falhou em {path.name}: {e4}')
+                except Exception as e5:
+                    logger.warning(f'[iToca] openpyxl falhou em {path.name}: {e5}')
+
         elif ext == '.txt':
             try:
                 text_parts.append(path.read_text(encoding='utf-8', errors='replace'))
             except Exception:
                 pass
+
     except Exception as e:
         logger.warning(f'[iToca] Erro geral ao extrair texto de {file_path_str}: {e}')
+
     result_text = '\n'.join(text_parts)
     if result_text:
         logger.info(f'[iToca] Extraiu {len(result_text)} chars de {path.name}')
-    else:
-        logger.warning(f'[iToca] Não foi possível extrair texto de {path.name} (ext={ext}, pdfplumber={PDFPLUMBER_AVAILABLE}, docx={PYTHON_DOCX_AVAILABLE})')
     return result_text
 
 
@@ -1467,14 +1535,21 @@ def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
     return items
 
 
-def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items=6000):
+def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items=6000, progress_cb=None):
+    """Constrói o snapshot RAG. progress_cb(percent, message) é chamado durante o processo."""
+    def _progress(pct, msg):
+        if progress_cb:
+            progress_cb(pct, msg)
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES][:max_tables]
 
+    _progress(5, f'Lendo {len(tables)} tabelas do banco de dados...')
     items = []
-    for table in tables:
+    total_tables = max(len(tables), 1)
+    for t_idx, table in enumerate(tables):
         text_columns = _itoca_text_columns(cursor, table)
         if not text_columns:
             continue
@@ -1497,22 +1572,80 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
             })
             if len(items) >= max_items:
                 conn.close()
+                _progress(100, f'Concluído: {len(items)} registros indexados.')
                 return items
 
-    # Adiciona itens da agenda (commitments + account_renewal_events) com contexto rico
+        pct_tables = 5 + int((t_idx + 1) / total_tables * 40)  # 5% a 45%
+        _progress(pct_tables, f'Tabela {table} indexada ({t_idx+1}/{total_tables})...')
+
+    # Agenda
+    _progress(50, 'Indexando agenda e compromissos...')
     agenda_items = _itoca_build_agenda_items(conn)
     items.extend(agenda_items)
+    _progress(60, f'{len(agenda_items)} eventos de agenda indexados.')
 
-    # Adiciona itens do WikiToca (entradas + documentos com extração de texto)
-    wiki_items = _itoca_build_wiki_items(conn)
-    items.extend(wiki_items)
+    # WikiToca — mais demorado por causa da extração de PDF
+    _progress(65, 'Indexando WikiToca (entradas de conhecimento)...')
+    conn2 = get_db()
+    cursor2 = conn2.cursor()
+    wiki_entry_items = []
+    try:
+        cursor2.execute('SELECT id, title, category, content, tags FROM wiki_entries ORDER BY updated_at DESC')
+        for row in cursor2.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'): parts.append(f'titulo: {rd["title"]}')
+            if rd.get('category'): parts.append(f'categoria: {rd["category"]}')
+            if rd.get('tags'): parts.append(f'tags: {rd["tags"]}')
+            if rd.get('content'): parts.append(f'conteudo: {rd["content"][:2000]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                wiki_entry_items.append({'table': 'wiki_entries', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_entries: {e}')
+    items.extend(wiki_entry_items)
+    _progress(70, f'{len(wiki_entry_items)} entradas WikiToca indexadas. Processando documentos...')
+
+    # Documentos WikiToca com extração de texto (pode ser lento por OCR)
+    wiki_doc_items = []
+    try:
+        cursor2.execute('SELECT id, title, original_name, file_name, file_ext FROM wiki_documents ORDER BY updated_at DESC')
+        all_docs = cursor2.fetchall()
+        total_docs = max(len(all_docs), 1)
+        for d_idx, row in enumerate(all_docs):
+            rd = dict_from_row(row)
+            doc_title = rd.get('title') or rd.get('original_name', '')
+            doc_ext = rd.get('file_ext', '')
+            file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
+            doc_text = ''
+            pct_docs = 70 + int((d_idx + 1) / total_docs * 25)  # 70% a 95%
+            _progress(pct_docs, f'Processando documento {d_idx+1}/{total_docs}: {doc_title[:40]}...')
+            if file_path.exists():
+                doc_text = _itoca_extract_text_from_file(str(file_path))
+            if not doc_text.strip():
+                snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
+                           f'AVISO: conteúdo não extraído automaticamente. '
+                           f'Documento "{rd.get("original_name", "")}" existe no WikiToca.')
+                wiki_doc_items.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': (doc_title + ' ' + rd.get('original_name', '')).lower()})
+            else:
+                max_total = 8000 * 5
+                chunks = [doc_text[i:i+8000] for i in range(0, min(len(doc_text), max_total), 8000)]
+                for idx, chunk in enumerate(chunks):
+                    chunk_label = f'parte {idx+1}' if len(chunks) > 1 else 'conteúdo'
+                    snippet = f'[WikiToca Doc] titulo: {doc_title} | {chunk_label} | {chunk.strip()[:3000]}'
+                    wiki_doc_items.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_documents: {e}')
+    conn2.close()
+    items.extend(wiki_doc_items)
 
     conn.close()
+    _progress(100, f'Concluído! {len(items)} registros indexados no total.')
     return items
 
 
-def _itoca_update_cached_base():
-    snapshot_items = _itoca_build_base_snapshot()
+def _itoca_update_cached_base(progress_cb=None):
+    snapshot_items = _itoca_build_base_snapshot(progress_cb=progress_cb)
     updated_at = datetime.now().isoformat(timespec='seconds')
     conn = get_db()
     c = conn.cursor()
@@ -2856,16 +2989,74 @@ def itoca_base_status():
 
 @app.route('/api/itoca/base-update', methods=['POST'])
 def itoca_base_update():
-    try:
-        result = _itoca_update_cached_base()
-        return jsonify({
-            'message': 'Base iToca atualizada com sucesso.',
-            'items_count': len(result['items']),
-            'updated_at': result['updated_at']
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/itoca/base-update: {e}')
-        return jsonify({'error': f'Erro ao atualizar base iToca: {e}'}), 500
+    """Inicia a atualização da base iToca e retorna progresso via SSE (Server-Sent Events).
+    O cliente pode usar EventSource ou fetch com streaming para acompanhar o progresso.
+    Ao concluir, envia evento 'done' com o resultado final.
+    """
+    def generate():
+        try:
+            def on_progress(pct, msg):
+                data = json.dumps({'percent': pct, 'message': msg}, ensure_ascii=False)
+                yield f'data: {data}\n\n'
+
+            # Usamos uma fila para passar eventos da thread de progresso
+            import queue
+            q = queue.Queue()
+
+            def progress_cb(pct, msg):
+                q.put({'type': 'progress', 'percent': pct, 'message': msg})
+
+            result_holder = {}
+            error_holder = {}
+
+            def run_update():
+                try:
+                    result = _itoca_update_cached_base(progress_cb=progress_cb)
+                    result_holder['result'] = result
+                except Exception as ex:
+                    error_holder['error'] = str(ex)
+                finally:
+                    q.put({'type': 'done'})
+
+            t = threading.Thread(target=run_update, daemon=True)
+            t.start()
+
+            while True:
+                try:
+                    evt = q.get(timeout=120)
+                except Exception:
+                    yield f'data: {json.dumps({"type":"error","message":"Timeout aguardando indexação."}, ensure_ascii=False)}\n\n'
+                    break
+                if evt['type'] == 'progress':
+                    payload = json.dumps({'percent': evt['percent'], 'message': evt['message']}, ensure_ascii=False)
+                    yield f'data: {payload}\n\n'
+                elif evt['type'] == 'done':
+                    if error_holder:
+                        payload = json.dumps({'type': 'error', 'message': error_holder['error']}, ensure_ascii=False)
+                    else:
+                        r = result_holder.get('result', {})
+                        payload = json.dumps({
+                            'type': 'done',
+                            'message': 'Base iToca atualizada com sucesso.',
+                            'items_count': len(r.get('items', [])),
+                            'updated_at': r.get('updated_at', '')
+                        }, ensure_ascii=False)
+                    yield f'data: {payload}\n\n'
+                    break
+        except GeneratorExit:
+            pass
+        except Exception as ex:
+            yield f'data: {json.dumps({"type":"error","message":str(ex)}, ensure_ascii=False)}\n\n'
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        }
+    )
 
 
 @app.route('/api/itoca/ask', methods=['POST'])
