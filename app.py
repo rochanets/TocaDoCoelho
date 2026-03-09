@@ -15,11 +15,15 @@ import traceback
 import shutil
 import urllib.request
 import urllib.error
+import urllib.parse
+import html
 import time
+import ssl
+import base64
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
@@ -36,11 +40,39 @@ except ImportError:
     CHARDET_AVAILABLE = False
 
 try:
-    import whisper
-    WHISPER_AVAILABLE = True
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
 except ImportError:
-    whisper = None
-    WHISPER_AVAILABLE = False
+    pdfplumber = None
+    PDFPLUMBER_AVAILABLE = False
+
+try:
+    import docx as python_docx
+    PYTHON_DOCX_AVAILABLE = True
+except ImportError:
+    python_docx = None
+    PYTHON_DOCX_AVAILABLE = False
+
+try:
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
+except ImportError:
+    pytesseract = None
+    PYTESSERACT_AVAILABLE = False
+
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    convert_from_path = None
+    PDF2IMAGE_AVAILABLE = False
+
+WHISPER_IMPORT_ERROR = None
+WHISPER_IMPORT_ATTEMPTED = False
+WhisperModel = None
+WHISPER_AVAILABLE = True
+
+TRANSCRIPTION_BACKEND = 'faster-whisper'
 
 try:
     import imageio_ffmpeg
@@ -109,6 +141,11 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
 
+APP_VERSION = os.environ.get('TOCA_APP_VERSION', '1.0.0').strip() or '1.0.0'
+DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
+DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
+
+logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
 AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
@@ -184,12 +221,37 @@ def get_ffmpeg_install_instructions():
 
 
 def get_whisper_model():
-    global WHISPER_MODEL
+    global WHISPER_MODEL, WhisperModel, WHISPER_AVAILABLE, WHISPER_IMPORT_ERROR, WHISPER_IMPORT_ATTEMPTED
+
     if not WHISPER_AVAILABLE:
         return None
+
     with WHISPER_MODEL_LOCK:
-        if WHISPER_MODEL is None:
-            WHISPER_MODEL = whisper.load_model('base')
+        if WHISPER_MODEL is not None:
+            return WHISPER_MODEL
+
+        if WhisperModel is None and not WHISPER_IMPORT_ATTEMPTED:
+            WHISPER_IMPORT_ATTEMPTED = True
+            try:
+                from faster_whisper import WhisperModel as _WhisperModel
+                WhisperModel = _WhisperModel
+            except Exception as e:
+                WHISPER_AVAILABLE = False
+                WHISPER_IMPORT_ERROR = str(e)
+                logger.warning(f'[Transcription] Backend faster-whisper indisponível: {WHISPER_IMPORT_ERROR}')
+                return None
+
+        if WhisperModel is None:
+            return None
+
+        try:
+            WHISPER_MODEL = WhisperModel('base', device='cpu', compute_type='int8')
+        except Exception as e:
+            WHISPER_AVAILABLE = False
+            WHISPER_IMPORT_ERROR = str(e)
+            logger.warning(f'[Transcription] Falha ao inicializar faster-whisper: {WHISPER_IMPORT_ERROR}')
+            return None
+
     return WHISPER_MODEL
 
 # Migração automática do banco de dados antigo
@@ -505,7 +567,28 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_model', 'stepfun/step-3.5-flash:free'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_site_url', 'http://localhost'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
-    
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_template_id', '69ac3c87024adc2d2bdc19f5'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
+
+    # Histórico de conversas do iToca (30 dias)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS itoca_chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+            content TEXT NOT NULL,
+            confidence_percent INTEGER,
+            needs_refinement INTEGER DEFAULT 0,
+            refinement_hint TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     
     # Migração: adicionar colunas se não existirem
@@ -618,6 +701,26 @@ def _load_app_settings_map(keys):
     return mapping
 
 
+
+
+def _normalize_version(version):
+    normalized = re.sub(r'^[vV]', '', str(version or '').strip())
+    return normalized
+
+
+def _version_key(version):
+    normalized = _normalize_version(version)
+    if not normalized:
+        return tuple()
+    parts = re.split(r'[.+\-]', normalized)
+    parsed = []
+    for part in parts:
+        if part.isdigit():
+            parsed.append((0, int(part)))
+        else:
+            parsed.append((1, part.lower()))
+    return tuple(parsed)
+
 def _resolve_setting(secret_key, env_key):
     try:
         db_value = (_load_app_settings_map([secret_key]).get(secret_key) or '').strip()
@@ -640,6 +743,196 @@ def api_error(status, code, message, details=None, hint=None):
     return jsonify(payload), status
 
 
+def _extract_bing_image_urls(raw_html, log_prefix='[AutoPic]'):
+    """Extrai as URLs originais das imagens do HTML do Bing Images.
+    O Bing codifica os dados de imagem com HTML entities nos atributos data-*,
+    por isso o padrão usa &quot; ao invés de aspas diretas.
+    """
+    # Padrão principal: Bing usa HTML entities nos atributos data-*
+    matches = re.findall(r'&quot;murl&quot;:&quot;(https?://[^&]+)&quot;', raw_html)
+    logger.debug(f'{log_prefix} _extract_bing_image_urls: padrão HTML entities encontrou {len(matches)} resultado(s).')
+
+    if not matches:
+        # Fallback: tentar sem HTML entities (caso o Bing mude o formato)
+        matches = re.findall(r'"murl":"(https?://[^"]+)"', raw_html)
+        logger.debug(f'{log_prefix} _extract_bing_image_urls: padrão aspas diretas (fallback) encontrou {len(matches)} resultado(s).')
+
+    if not matches:
+        logger.warning(f'{log_prefix} _extract_bing_image_urls: NENHUM resultado encontrado com nenhum padrão. '
+                       f'Tamanho do HTML: {len(raw_html)} chars. '
+                       f'Contém "murl": {"murl" in raw_html}. '
+                       f'Primeiros 300 chars: {repr(raw_html[:300])}')
+
+    urls = []
+    for item in matches:
+        url = html.unescape(item).replace('\\/', '/')
+        if url.startswith('http://') or url.startswith('https://'):
+            urls.append(url)
+    return urls
+
+
+def _find_image_candidates_on_web(query, limit=3):
+    """Busca as primeiras imagens do Bing Images para o query fornecido.
+    Retorna lista de URLs das imagens originais (as primeiras que aparecem na tela).
+    """
+    log_prefix = '[AutoPic]'
+    if not query:
+        logger.warning(f'{log_prefix} _find_image_candidates_on_web: query vazio, abortando.')
+        return []
+
+    limit = max(1, int(limit or 3))
+    user_agent = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/124.0.0.0 Safari/537.36'
+    )
+    search_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}&form=HDRSC2&first=1"
+    logger.info(f'{log_prefix} Buscando imagens para query="{query}" limit={limit} url={search_url}')
+
+    # Contexto SSL sem verificação para evitar erros de certificado em ambientes restritos
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    # Solicitar apenas gzip (não brotli) para evitar dependência do módulo brotli
+    req = urllib.request.Request(
+        search_url,
+        headers={
+            'User-Agent': user_agent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate',  # sem 'br' para evitar brotli
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+    )
+
+    import gzip
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
+            raw_data = response.read()
+            http_status = response.status
+            encoding = (response.headers.get('Content-Encoding') or '').lower().strip()
+            content_type = (response.headers.get('Content-Type') or '').lower()
+            logger.info(f'{log_prefix} Resposta do Bing: HTTP {http_status}, '
+                        f'Content-Encoding={encoding!r}, Content-Type={content_type!r}, '
+                        f'tamanho bruto={len(raw_data)} bytes')
+
+            if encoding == 'gzip':
+                try:
+                    content = gzip.decompress(raw_data).decode('utf-8', errors='ignore')
+                    logger.debug(f'{log_prefix} Descomprimido gzip: {len(content)} chars')
+                except Exception as gz_err:
+                    logger.error(f'{log_prefix} Falha ao descomprimir gzip: {gz_err}. Tentando decodificar direto.')
+                    content = raw_data.decode('utf-8', errors='ignore')
+            elif encoding == 'br':
+                # brotli pode não estar instalado — tentar e logar claramente
+                try:
+                    import brotli
+                    content = brotli.decompress(raw_data).decode('utf-8', errors='ignore')
+                    logger.debug(f'{log_prefix} Descomprimido brotli: {len(content)} chars')
+                except ImportError:
+                    logger.error(f'{log_prefix} ERRO CRÍTICO: O servidor retornou encoding brotli (br) mas o '
+                                 f'módulo "brotli" não está instalado. '
+                                 f'Execute: pip install brotli  (ou adicione ao requirements.txt). '
+                                 f'O AutoPic não conseguirá encontrar imagens até isso ser resolvido.')
+                    return []
+                except Exception as br_err:
+                    logger.error(f'{log_prefix} Falha ao descomprimir brotli: {br_err}. Tentando decodificar direto.')
+                    content = raw_data.decode('utf-8', errors='ignore')
+            elif encoding in ('deflate', ''):
+                content = raw_data.decode('utf-8', errors='ignore')
+                logger.debug(f'{log_prefix} Conteúdo sem compressão: {len(content)} chars')
+            else:
+                logger.warning(f'{log_prefix} Encoding desconhecido "{encoding}", tentando decodificar direto.')
+                content = raw_data.decode('utf-8', errors='ignore')
+
+    except urllib.error.HTTPError as http_err:
+        logger.error(f'{log_prefix} HTTPError ao acessar Bing: {http_err.code} {http_err.reason}')
+        raise
+    except urllib.error.URLError as url_err:
+        logger.error(f'{log_prefix} URLError ao acessar Bing: {url_err.reason}')
+        raise
+    except Exception as e:
+        logger.error(f'{log_prefix} Erro inesperado ao acessar Bing: {type(e).__name__}: {e}')
+        raise
+
+    urls = _extract_bing_image_urls(content, log_prefix=log_prefix)
+    logger.info(f'{log_prefix} Total de URLs extraídas antes de deduplicar: {len(urls)}')
+
+    # Remover duplicatas mantendo a ordem (as primeiras são as que aparecem na tela)
+    seen = set()
+    unique_urls = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            unique_urls.append(u)
+
+    result = unique_urls[:limit]
+    logger.info(f'{log_prefix} Retornando {len(result)} candidato(s) para query="{query}": {result}')
+    return result
+
+
+def _download_remote_image_to_uploads(image_url, prefix='autofind'):
+    log_prefix = '[AutoPic]'
+    logger.info(f'{log_prefix} Download de imagem: url={image_url[:120]!r} prefix={prefix!r}')
+
+    parsed = urllib.parse.urlparse(image_url)
+    if parsed.scheme not in {'http', 'https'}:
+        logger.error(f'{log_prefix} URL inválida (scheme={parsed.scheme!r}): {image_url[:120]}')
+        raise ValueError('URL de imagem inválida.')
+
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    req = urllib.request.Request(image_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+        'Referer': 'https://www.bing.com/',
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
+            http_status = response.status
+            content_type = (response.headers.get('Content-Type') or '').lower()
+            data = response.read(6 * 1024 * 1024 + 1)
+            logger.info(f'{log_prefix} Download concluído: HTTP {http_status}, '
+                        f'Content-Type={content_type!r}, tamanho={len(data)} bytes')
+    except urllib.error.HTTPError as http_err:
+        logger.error(f'{log_prefix} HTTPError ao baixar imagem {image_url[:120]!r}: '
+                     f'{http_err.code} {http_err.reason}')
+        raise
+    except urllib.error.URLError as url_err:
+        logger.error(f'{log_prefix} URLError ao baixar imagem {image_url[:120]!r}: {url_err.reason}')
+        raise
+    except Exception as e:
+        logger.error(f'{log_prefix} Erro inesperado ao baixar imagem {image_url[:120]!r}: '
+                     f'{type(e).__name__}: {e}')
+        raise
+
+    if len(data) > 6 * 1024 * 1024:
+        logger.warning(f'{log_prefix} Imagem muito grande: {len(data)} bytes (máx 6MB)')
+        raise ValueError('Imagem muito grande (máximo 6MB).')
+    if not content_type.startswith('image/'):
+        logger.error(f'{log_prefix} Content-Type inválido: {content_type!r} para url={image_url[:120]!r}')
+        raise ValueError('A URL selecionada não retornou uma imagem válida.')
+
+    ext = '.jpg'
+    if 'png' in content_type:
+        ext = '.png'
+    elif 'webp' in content_type:
+        ext = '.webp'
+    elif 'gif' in content_type:
+        ext = '.gif'
+
+    filename = secure_filename(f"{prefix}-{int(time.time()*1000)}{ext}")
+    path = UPLOAD_DIR / filename
+    with open(path, 'wb') as f:
+        f.write(data)
+    logger.info(f'{log_prefix} Imagem salva em: {path}')
+    return f'/uploads/{filename}'
+
+
 def parse_currency_to_cents(value):
     if value is None:
         return None
@@ -654,6 +947,889 @@ def parse_currency_to_cents(value):
     except Exception:
         digits = re.sub(r'\D', '', str(value))
         return int(digits) if digits else None
+
+
+ITOCA_EXCLUDED_TABLES = {
+    'sqlite_sequence',
+    'app_settings',
+    'itoca_chat_history',
+    'automapping_runs',
+    'status_rules',
+    'job_groupings',
+    'job_grouping_positions',
+    'message_templates',
+    'environment_responses',
+}
+
+
+# Mapa de sinônimos para expansão semântica nas buscas do RAG
+_ITOCA_SYNONYMS = {
+    'cnpj': ['cnpj', 'cadastro nacional', 'pessoa juridica', 'registro empresa', 'inscricao federal'],
+    'cpf': ['cpf', 'cadastro pessoa fisica', 'registro pessoa'],
+    'email': ['email', 'e-mail', 'correio eletronico', 'contato'],
+    'telefone': ['telefone', 'celular', 'fone', 'contato', 'whatsapp'],
+    'agenda': ['agenda', 'compromisso', 'reuniao', 'evento', 'encontro', 'meeting'],
+    'reuniao': ['reuniao', 'meeting', 'encontro', 'compromisso', 'agenda'],
+    'evento': ['evento', 'compromisso', 'reuniao', 'agenda', 'encontro'],
+    'proxima': ['proxima', 'proximo', 'futuro', 'upcoming', 'semana'],
+    'semana': ['semana', 'week', 'proximos dias', 'agenda'],
+    'contato': ['contato', 'cliente', 'pessoa', 'lead'],
+    'empresa': ['empresa', 'companhia', 'organizacao', 'account', 'conta'],
+    'wiki': ['wiki', 'documento', 'conhecimento', 'wikitoca'],
+    'documento': ['documento', 'arquivo', 'pdf', 'doc', 'wiki'],
+    'atividade': ['atividade', 'activity', 'interacao', 'historico'],
+}
+
+def _itoca_tokenize(question):
+    base_tokens = [
+        token for token in re.findall(r'[a-zA-ZÀ-ÿ0-9_-]{3,}', (question or '').lower())
+        if token not in {'para', 'com', 'sem', 'sobre', 'como', 'qual', 'quais', 'onde', 'quando', 'que', 'uma', 'uns', 'das', 'dos', 'nos', 'nas', 'por', 'foi', 'sao', 'tem', 'ter'}
+    ]
+    # Expande com sinônimos semânticos
+    expanded = list(base_tokens)
+    for token in base_tokens:
+        if token in _ITOCA_SYNONYMS:
+            for syn in _ITOCA_SYNONYMS[token]:
+                if syn not in expanded:
+                    expanded.append(syn)
+    return expanded[:20]  # limita para não explodir a query SQL
+
+
+def _itoca_text_columns(cursor, table_name):
+    cursor.execute(f'PRAGMA table_info("{table_name}")')
+    columns = []
+    for row in cursor.fetchall():
+        column_name = row['name']
+        column_type = (row['type'] or '').upper()
+        if any(t in column_type for t in ['CHAR', 'TEXT', 'CLOB']) or column_type == '':
+            columns.append(column_name)
+    return columns
+
+
+def _itoca_build_snippet(row_dict):
+    parts = []
+    for key, value in row_dict.items():
+        if key in {'id', 'created_at', 'updated_at'}:
+            continue
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        parts.append(f'{key}: {text}')
+        if len(parts) >= 4:
+            break
+    return ' | '.join(parts)
+
+
+def _itoca_search_context(question, limit=18):
+    tokens = _itoca_tokenize(question)
+    if not tokens:
+        return []
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES]
+    results = []
+    seen = set()
+    like_values = [f'%{token}%' for token in tokens[:6]]
+    for table in tables:
+        text_columns = _itoca_text_columns(cursor, table)
+        if not text_columns:
+            continue
+        search_clauses = []
+        params = []
+        for col in text_columns[:8]:
+            for like_value in like_values:
+                search_clauses.append(f'LOWER(COALESCE("{col}", "")) LIKE ?')
+                params.append(like_value)
+        if not search_clauses:
+            continue
+        sql = f'SELECT * FROM "{table}" WHERE ' + ' OR '.join(search_clauses) + ' LIMIT 6'
+        try:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        except Exception:
+            continue
+        for row in rows:
+            row_dict = dict_from_row(row)
+            snippet = _itoca_build_snippet(row_dict)
+            if not snippet:
+                continue
+            fingerprint = f"{table}:{snippet[:160]}"
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            results.append({
+                'table': table,
+                'id': row_dict.get('id'),
+                'snippet': snippet,
+                'search_text': snippet.lower()
+            })
+            if len(results) >= limit:
+                conn.close()
+                return results
+
+    # Busca dedicada na agenda (commitments + account_renewal_events)
+    try:
+        agenda_tokens = tokens[:8]
+        # Sempre inclui eventos futuros quando a pergunta menciona agenda/evento/semana/próximo
+        agenda_keywords = {'agenda', 'compromisso', 'reuniao', 'evento', 'encontro', 'meeting', 'semana', 'proxima', 'proximo', 'futuro', 'upcoming', 'proximos'}
+        is_agenda_query = any(t in agenda_keywords for t in agenda_tokens)
+        if is_agenda_query:
+            # Retorna todos os eventos futuros (próximos 90 dias)
+            future_limit = (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            cursor.execute('''
+                SELECT cm.id, cm.title, cm.notes, cm.due_date, cm.due_time,
+                       cl.name as client_name, cl.company as client_company
+                FROM commitments cm
+                LEFT JOIN clients cl ON cm.client_id = cl.id
+                WHERE DATE(cm.due_date) >= ?
+                ORDER BY cm.due_date ASC
+                LIMIT 20
+            ''', (today_str,))
+            for row in cursor.fetchall():
+                rd = dict_from_row(row)
+                parts = []
+                if rd.get('title'):
+                    parts.append(f'titulo: {rd["title"]}')
+                if rd.get('due_date'):
+                    try:
+                        dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                        parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                    except Exception:
+                        parts.append(f'data: {rd["due_date"]}')
+                if rd.get('due_time'):
+                    parts.append(f'hora: {rd["due_time"]}')
+                if rd.get('client_name'):
+                    parts.append(f'contato: {rd["client_name"]}')
+                if rd.get('client_company'):
+                    parts.append(f'empresa: {rd["client_company"]}')
+                if rd.get('notes') and rd['notes'] != rd.get('title'):
+                    parts.append(f'notas: {rd["notes"][:200]}')
+                snippet = ' | '.join(parts)
+                if not snippet:
+                    continue
+                fp = f'commitments:{snippet[:160]}'
+                if fp in seen:
+                    continue
+                seen.add(fp)
+                results.append({'table': 'commitments', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+        else:
+            # Busca por tokens no título/notas dos compromissos
+            if agenda_tokens:
+                like_clauses_a = ' OR '.join(['LOWER(cm.title) LIKE ? OR LOWER(cm.notes) LIKE ?' for _ in agenda_tokens[:4]])
+                params_a = []
+                for t in agenda_tokens[:4]:
+                    params_a += [f'%{t}%', f'%{t}%']
+                cursor.execute(f'''
+                    SELECT cm.id, cm.title, cm.notes, cm.due_date, cm.due_time,
+                           cl.name as client_name, cl.company as client_company
+                    FROM commitments cm
+                    LEFT JOIN clients cl ON cm.client_id = cl.id
+                    WHERE {like_clauses_a}
+                    ORDER BY cm.due_date ASC LIMIT 6
+                ''', params_a)
+                for row in cursor.fetchall():
+                    rd = dict_from_row(row)
+                    parts = []
+                    if rd.get('title'):
+                        parts.append(f'titulo: {rd["title"]}')
+                    if rd.get('due_date'):
+                        try:
+                            dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                            parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                        except Exception:
+                            parts.append(f'data: {rd["due_date"]}')
+                    if rd.get('due_time'):
+                        parts.append(f'hora: {rd["due_time"]}')
+                    if rd.get('client_name'):
+                        parts.append(f'contato: {rd["client_name"]}')
+                    snippet = ' | '.join(parts)
+                    if not snippet:
+                        continue
+                    fp = f'commitments:{snippet[:160]}'
+                    if fp in seen:
+                        continue
+                    seen.add(fp)
+                    results.append({'table': 'commitments', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao buscar agenda: {e}')
+
+    # Busca adicional em wiki_entries (conteúdo completo)
+    try:
+        like_clauses = ' OR '.join(['LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(tags) LIKE ?' for _ in tokens[:6]])
+        params_wiki = []
+        for t in tokens[:6]:
+            params_wiki += [f'%{t}%', f'%{t}%', f'%{t}%']
+        cursor.execute(f'SELECT id, title, category, content, tags FROM wiki_entries WHERE {like_clauses} LIMIT 6', params_wiki)
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('category'):
+                parts.append(f'categoria: {rd["category"]}')
+            if rd.get('content'):
+                parts.append(f'conteudo: {rd["content"][:1500]}')
+            snippet = ' | '.join(parts)
+            if not snippet:
+                continue
+            fp = f'wiki_entries:{snippet[:160]}'
+            if fp in seen:
+                continue
+            seen.add(fp)
+            results.append({'table': 'wiki_entries', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao buscar wiki_entries: {e}')
+
+    # Busca adicional em wiki_documents (metadados + busca no texto extraído do arquivo)
+    try:
+        # Busca por título/nome do arquivo
+        like_clauses_d = ' OR '.join(['LOWER(title) LIKE ? OR LOWER(original_name) LIKE ?' for _ in tokens[:6]])
+        params_docs = []
+        for t in tokens[:6]:
+            params_docs += [f'%{t}%', f'%{t}%']
+        cursor.execute(f'SELECT id, title, original_name, file_name, file_ext FROM wiki_documents WHERE {like_clauses_d} LIMIT 4', params_docs)
+        doc_rows_by_title = {row['id']: dict_from_row(row) for row in cursor.fetchall()}
+
+        # Busca também em TODOS os documentos pelo conteúdo extraído (para termos como CNPJ que não estão no título)
+        cursor.execute('SELECT id, title, original_name, file_name, file_ext FROM wiki_documents LIMIT 20')
+        all_doc_rows = {row['id']: dict_from_row(row) for row in cursor.fetchall()}
+        # Mescla: prioriza os encontrados por título, depois verifica os demais pelo conteúdo
+        candidate_docs = {**all_doc_rows, **doc_rows_by_title}  # doc_rows_by_title sobrescreve
+
+        for doc_id, rd in candidate_docs.items():
+            file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
+            doc_text = ''
+            if file_path.exists():
+                doc_text = _itoca_extract_text_from_file(str(file_path))
+            # Verifica se algum token aparece no conteúdo extraído
+            doc_text_lower = doc_text.lower()
+            found_in_content = any(t in doc_text_lower for t in tokens[:10])
+            found_by_title = doc_id in doc_rows_by_title
+            if not found_in_content and not found_by_title:
+                continue
+            doc_title = rd.get('title') or rd.get('original_name', '')
+            doc_ext = rd.get('file_ext', '')
+            if doc_text.strip():
+                snippet = f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | conteudo: {doc_text[:3000]}'
+            else:
+                snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
+                           f'AVISO: conteúdo não extraído automaticamente. '
+                           f'Documento "{rd.get("original_name", "")}" existe no WikiToca. '
+                           f'Instale pdfplumber (pip install pdfplumber) para habilitar leitura de PDFs.')
+            fp = f'wiki_documents:{snippet[:160]}'
+            if fp in seen:
+                continue
+            seen.add(fp)
+            results.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao buscar wiki_documents: {e}')
+
+    conn.close()
+    return results
+
+
+def _itoca_find_tesseract_cmd():
+    """Localiza o binário do tesseract no sistema.
+    Ordem de busca:
+      1. Diretório do próprio executável (bundled com o Toca do Coelho via NSIS)
+      2. PATH do sistema
+      3. Caminhos padrão do Windows
+    """
+    import subprocess
+
+    # 1. Bundled junto ao executável do Toca do Coelho
+    #    Quando empacotado com PyInstaller, sys.executable aponta para TocaDoCoelho.exe
+    #    O installer.nsi instala o Tesseract em $INSTDIR\tesseract\
+    bundled_candidates = []
+    exe_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+    bundled_candidates.append(exe_dir / 'tesseract' / 'tesseract.exe')
+    # PyInstaller _MEIPASS
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        bundled_candidates.append(Path(meipass) / 'tesseract' / 'tesseract.exe')
+    # Diretório pai (caso o app.py esteja em subpasta)
+    bundled_candidates.append(Path(__file__).resolve().parent / 'tesseract' / 'tesseract.exe')
+    for candidate in bundled_candidates:
+        if candidate.exists():
+            # Configura TESSDATA_PREFIX para o tessdata bundled
+            tessdata_dir = candidate.parent / 'tessdata'
+            if tessdata_dir.exists():
+                os.environ['TESSDATA_PREFIX'] = str(tessdata_dir)
+            return str(candidate)
+
+    # 2. PATH do sistema
+    try:
+        result = subprocess.run(['tesseract', '--version'], capture_output=True, timeout=5)
+        if result.returncode == 0:
+            return 'tesseract'
+    except Exception:
+        pass
+
+    # 3. Caminhos padrão do Windows
+    if sys.platform == 'win32':
+        windows_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+            r'C:\Users\{}\AppData\Local\Tesseract-OCR\tesseract.exe'.format(os.environ.get('USERNAME', '')),
+            r'C:\TocaDoCoelho\tesseract\tesseract.exe',
+        ]
+        for p in windows_paths:
+            if Path(p).exists():
+                return p
+
+    return None
+
+
+def _itoca_extract_text_from_file(file_path_str):
+    """Extrai texto de PDF, DOCX ou XLSX para indexação no RAG.
+    Estratégia para PDFs:
+      1. pdfplumber (texto digital)
+      2. pdftotext via subprocess (poppler, Windows/Linux)
+      3. OCR com pdf2image + pytesseract (PDFs escaneados/imagens)
+    """
+    path = Path(file_path_str)
+    if not path.exists():
+        logger.warning(f'[iToca] Arquivo não encontrado: {file_path_str}')
+        return ''
+    ext = path.suffix.lower()
+    text_parts = []
+    try:
+        if ext == '.pdf':
+            extracted = False
+
+            # --- Tentativa 1: pdfplumber (PDFs com texto digital) ---
+            if PDFPLUMBER_AVAILABLE:
+                try:
+                    with pdfplumber.open(str(path)) as pdf:
+                        for page in pdf.pages[:30]:
+                            page_text = page.extract_text() or ''
+                            if page_text.strip():
+                                text_parts.append(page_text.strip())
+                    extracted = bool(text_parts)
+                except Exception as e1:
+                    logger.warning(f'[iToca] pdfplumber falhou em {path.name}: {e1}')
+
+            # --- Tentativa 2: pdftotext (poppler-utils) ---
+            if not extracted:
+                try:
+                    import subprocess
+                    # Tenta localizar pdftotext no Windows e Linux
+                    pdftotext_cmd = 'pdftotext'
+                    if sys.platform == 'win32':
+                        win_poppler_paths = [
+                            r'C:\poppler\bin\pdftotext.exe',
+                            r'C:\Program Files\poppler\bin\pdftotext.exe',
+                            r'C:\Program Files (x86)\poppler\bin\pdftotext.exe',
+                        ]
+                        for wp in win_poppler_paths:
+                            if Path(wp).exists():
+                                pdftotext_cmd = wp
+                                break
+                    result = subprocess.run(
+                        [pdftotext_cmd, '-enc', 'UTF-8', str(path), '-'],
+                        capture_output=True, timeout=20
+                    )
+                    if result.returncode == 0 and result.stdout:
+                        decoded = result.stdout.decode('utf-8', errors='replace')
+                        if decoded.strip():
+                            text_parts.append(decoded)
+                            extracted = True
+                except Exception as e2:
+                    logger.debug(f'[iToca] pdftotext não disponível para {path.name}: {e2}')
+
+            # --- Tentativa 3: OCR com pdf2image + pytesseract (PDFs escaneados) ---
+            if not extracted and PDF2IMAGE_AVAILABLE and PYTESSERACT_AVAILABLE:
+                tess_cmd = _itoca_find_tesseract_cmd()
+                if tess_cmd:
+                    try:
+                        pytesseract.pytesseract.tesseract_cmd = tess_cmd
+                        images = convert_from_path(str(path), dpi=200, first_page=1, last_page=15)
+                        ocr_parts = []
+                        for img in images:
+                            ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                            if ocr_text.strip():
+                                ocr_parts.append(ocr_text.strip())
+                        if ocr_parts:
+                            text_parts.extend(ocr_parts)
+                            extracted = True
+                            logger.info(f'[iToca] OCR extraiu texto de {path.name} ({len(images)} páginas)')
+                    except Exception as e3:
+                        logger.warning(f'[iToca] OCR falhou em {path.name}: {e3}')
+                else:
+                    logger.info(f'[iToca] Tesseract não encontrado. Instale em https://github.com/UB-Mannheim/tesseract/wiki para OCR de PDFs escaneados.')
+
+            if not extracted:
+                logger.warning(f'[iToca] Não foi possível extrair texto de {path.name} '
+                               f'(pdfplumber={PDFPLUMBER_AVAILABLE}, ocr={PDF2IMAGE_AVAILABLE and PYTESSERACT_AVAILABLE})')
+
+        elif ext in ('.docx', '.doc'):
+            if PYTHON_DOCX_AVAILABLE:
+                try:
+                    doc = python_docx.Document(str(path))
+                    for para in doc.paragraphs:
+                        if para.text.strip():
+                            text_parts.append(para.text.strip())
+                    for table in doc.tables:
+                        for row in table.rows:
+                            row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                            if row_text:
+                                text_parts.append(row_text)
+                except Exception as e4:
+                    logger.warning(f'[iToca] python-docx falhou em {path.name}: {e4}')
+
+        elif ext in ('.xlsx', '.xls'):
+            if OPENPYXL_AVAILABLE:
+                try:
+                    wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+                    for sheet in wb.worksheets:
+                        for row in sheet.iter_rows(values_only=True):
+                            row_text = ' | '.join(str(c) for c in row if c is not None and str(c).strip())
+                            if row_text:
+                                text_parts.append(row_text)
+                except Exception as e5:
+                    logger.warning(f'[iToca] openpyxl falhou em {path.name}: {e5}')
+
+        elif ext == '.txt':
+            try:
+                text_parts.append(path.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.warning(f'[iToca] Erro geral ao extrair texto de {file_path_str}: {e}')
+
+    result_text = '\n'.join(text_parts)
+    if result_text:
+        logger.info(f'[iToca] Extraiu {len(result_text)} chars de {path.name}')
+    return result_text
+
+
+def _itoca_build_agenda_items(conn):
+    """Gera itens da agenda (commitments + account_renewal_events) para o snapshot RAG com contexto rico."""
+    cursor = conn.cursor()
+    items = []
+    today = datetime.now().strftime('%Y-%m-%d')
+    # Compromissos da agenda (próximos 90 dias e últimos 30 dias)
+    try:
+        cursor.execute('''
+            SELECT cm.id, cm.title, cm.notes, cm.due_date, cm.due_time, cm.source_type,
+                   cl.name as client_name, cl.company as client_company
+            FROM commitments cm
+            LEFT JOIN clients cl ON cm.client_id = cl.id
+            ORDER BY cm.due_date ASC
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('due_date'):
+                try:
+                    dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                    parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                except Exception:
+                    parts.append(f'data: {rd["due_date"]}')
+            if rd.get('due_time'):
+                parts.append(f'hora: {rd["due_time"]}')
+            if rd.get('client_name'):
+                parts.append(f'contato: {rd["client_name"]}')
+            if rd.get('client_company'):
+                parts.append(f'empresa: {rd["client_company"]}')
+            if rd.get('notes') and rd['notes'] != rd.get('title'):
+                parts.append(f'notas: {rd["notes"][:300]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({
+                    'table': 'commitments',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': snippet.lower()
+                })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar commitments: {e}')
+
+    # Eventos de renovação de contas
+    try:
+        cursor.execute('''
+            SELECT ev.id, ev.title, ev.due_date, ev.due_time,
+                   ac.name as account_name
+            FROM account_renewal_events ev
+            LEFT JOIN accounts ac ON ev.account_id = ac.id
+            ORDER BY ev.due_date ASC
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('due_date'):
+                try:
+                    dt = datetime.strptime(rd['due_date'][:10], '%Y-%m-%d')
+                    parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                except Exception:
+                    parts.append(f'data: {rd["due_date"]}')
+            if rd.get('due_time'):
+                parts.append(f'hora: {rd["due_time"]}')
+            if rd.get('account_name'):
+                parts.append(f'conta: {rd["account_name"]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({
+                    'table': 'account_renewal_events',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': snippet.lower()
+                })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar account_renewal_events: {e}')
+
+    return items
+
+
+def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
+    """Gera itens do WikiToca (entradas de conhecimento + documentos) para o snapshot RAG."""
+    cursor = conn.cursor()
+    items = []
+
+    # 1. Entradas de conhecimento (wiki_entries)
+    try:
+        cursor.execute('SELECT id, title, category, content, tags FROM wiki_entries ORDER BY updated_at DESC')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('category'):
+                parts.append(f'categoria: {rd["category"]}')
+            if rd.get('tags'):
+                parts.append(f'tags: {rd["tags"]}')
+            if rd.get('content'):
+                parts.append(f'conteudo: {rd["content"][:2000]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({
+                    'table': 'wiki_entries',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': snippet.lower()
+                })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_entries: {e}')
+
+    # 2. Documentos (wiki_documents) — extrai texto do arquivo
+    try:
+        cursor.execute('SELECT id, title, original_name, file_name, file_ext FROM wiki_documents ORDER BY updated_at DESC')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
+            doc_text = ''
+            if file_path.exists():
+                doc_text = _itoca_extract_text_from_file(str(file_path))
+
+            doc_title = rd.get('title') or rd.get('original_name', '')
+            doc_ext = rd.get('file_ext', '')
+
+            if not doc_text.strip():
+                # Sem conteúdo extraível: indexa metadados com nota ao LLM
+                snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
+                           f'AVISO: conteúdo do arquivo não pôde ser extraído automaticamente. '
+                           f'O documento existe no sistema com o nome "{rd.get("original_name", "")}". '
+                           f'Se o usuário perguntar sobre informações que possam estar neste documento, '
+                           f'informe que o documento existe mas o conteúdo não está disponível para leitura automática.')
+                items.append({
+                    'table': 'wiki_documents',
+                    'id': rd.get('id'),
+                    'snippet': snippet,
+                    'search_text': (doc_title + ' ' + rd.get('original_name', '')).lower()
+                })
+            else:
+                # Divide em chunks de max_chars_per_doc para não sobrecarregar o contexto
+                max_total = max_chars_per_doc * 5
+                chunks = [doc_text[i:i+max_chars_per_doc] for i in range(0, min(len(doc_text), max_total), max_chars_per_doc)]
+                for idx, chunk in enumerate(chunks):
+                    chunk_label = f'parte {idx+1}' if len(chunks) > 1 else 'conteúdo'
+                    snippet = f'[WikiToca Doc] titulo: {doc_title} | {chunk_label} | {chunk.strip()[:3000]}'
+                    items.append({
+                        'table': 'wiki_documents',
+                        'id': rd.get('id'),
+                        'snippet': snippet,
+                        'search_text': snippet.lower()
+                    })
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_documents: {e}')
+
+    return items
+
+
+def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items=6000, progress_cb=None):
+    """Constrói o snapshot RAG. progress_cb(percent, message) é chamado durante o processo."""
+    def _progress(pct, msg):
+        if progress_cb:
+            progress_cb(pct, msg)
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES][:max_tables]
+
+    _progress(5, f'Lendo {len(tables)} tabelas do banco de dados...')
+    items = []
+    total_tables = max(len(tables), 1)
+    for t_idx, table in enumerate(tables):
+        text_columns = _itoca_text_columns(cursor, table)
+        if not text_columns:
+            continue
+        try:
+            cursor.execute(f'SELECT * FROM "{table}" LIMIT {int(max_rows_per_table)}')
+            rows = cursor.fetchall()
+        except Exception:
+            continue
+
+        for row in rows:
+            row_dict = dict_from_row(row)
+            snippet = _itoca_build_snippet(row_dict)
+            if not snippet:
+                continue
+            items.append({
+                'table': table,
+                'id': row_dict.get('id'),
+                'snippet': snippet,
+                'search_text': snippet.lower()
+            })
+            if len(items) >= max_items:
+                conn.close()
+                _progress(100, f'Concluído: {len(items)} registros indexados.')
+                return items
+
+        pct_tables = 5 + int((t_idx + 1) / total_tables * 40)  # 5% a 45%
+        _progress(pct_tables, f'Tabela {table} indexada ({t_idx+1}/{total_tables})...')
+
+    # Agenda
+    _progress(50, 'Indexando agenda e compromissos...')
+    agenda_items = _itoca_build_agenda_items(conn)
+    items.extend(agenda_items)
+    _progress(60, f'{len(agenda_items)} eventos de agenda indexados.')
+
+    # WikiToca — mais demorado por causa da extração de PDF
+    _progress(65, 'Indexando WikiToca (entradas de conhecimento)...')
+    conn2 = get_db()
+    cursor2 = conn2.cursor()
+    wiki_entry_items = []
+    try:
+        cursor2.execute('SELECT id, title, category, content, tags FROM wiki_entries ORDER BY updated_at DESC')
+        for row in cursor2.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'): parts.append(f'titulo: {rd["title"]}')
+            if rd.get('category'): parts.append(f'categoria: {rd["category"]}')
+            if rd.get('tags'): parts.append(f'tags: {rd["tags"]}')
+            if rd.get('content'): parts.append(f'conteudo: {rd["content"][:2000]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                wiki_entry_items.append({'table': 'wiki_entries', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_entries: {e}')
+    items.extend(wiki_entry_items)
+    _progress(70, f'{len(wiki_entry_items)} entradas WikiToca indexadas. Processando documentos...')
+
+    # Documentos WikiToca com extração de texto (pode ser lento por OCR)
+    wiki_doc_items = []
+    try:
+        cursor2.execute('SELECT id, title, original_name, file_name, file_ext FROM wiki_documents ORDER BY updated_at DESC')
+        all_docs = cursor2.fetchall()
+        total_docs = max(len(all_docs), 1)
+        for d_idx, row in enumerate(all_docs):
+            rd = dict_from_row(row)
+            doc_title = rd.get('title') or rd.get('original_name', '')
+            doc_ext = rd.get('file_ext', '')
+            file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
+            doc_text = ''
+            pct_docs = 70 + int((d_idx + 1) / total_docs * 25)  # 70% a 95%
+            _progress(pct_docs, f'Processando documento {d_idx+1}/{total_docs}: {doc_title[:40]}...')
+            if file_path.exists():
+                doc_text = _itoca_extract_text_from_file(str(file_path))
+            if not doc_text.strip():
+                snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
+                           f'AVISO: conteúdo não extraído automaticamente. '
+                           f'Documento "{rd.get("original_name", "")}" existe no WikiToca.')
+                wiki_doc_items.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': (doc_title + ' ' + rd.get('original_name', '')).lower()})
+            else:
+                max_total = 8000 * 5
+                chunks = [doc_text[i:i+8000] for i in range(0, min(len(doc_text), max_total), 8000)]
+                for idx, chunk in enumerate(chunks):
+                    chunk_label = f'parte {idx+1}' if len(chunks) > 1 else 'conteúdo'
+                    snippet = f'[WikiToca Doc] titulo: {doc_title} | {chunk_label} | {chunk.strip()[:3000]}'
+                    wiki_doc_items.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar wiki_documents: {e}')
+    conn2.close()
+    items.extend(wiki_doc_items)
+
+    conn.close()
+    _progress(100, f'Concluído! {len(items)} registros indexados no total.')
+    return items
+
+
+def _itoca_update_cached_base(progress_cb=None):
+    snapshot_items = _itoca_build_base_snapshot(progress_cb=progress_cb)
+    updated_at = datetime.now().isoformat(timespec='seconds')
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (json.dumps(snapshot_items, ensure_ascii=False), 'itoca_base_snapshot'))
+    c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (updated_at, 'itoca_base_updated_at'))
+    conn.commit()
+    conn.close()
+    return {'items': snapshot_items, 'updated_at': updated_at}
+
+
+def _itoca_get_cached_base():
+    settings_map = _load_app_settings_map(['itoca_base_snapshot', 'itoca_base_updated_at'])
+    raw_snapshot = (settings_map.get('itoca_base_snapshot') or '').strip()
+    updated_at = (settings_map.get('itoca_base_updated_at') or '').strip()
+    if not raw_snapshot:
+        return [], updated_at
+    try:
+        snapshot = json.loads(raw_snapshot)
+    except Exception:
+        snapshot = []
+    return snapshot if isinstance(snapshot, list) else [], updated_at
+
+
+def _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18):
+    tokens = _itoca_tokenize(question)
+    if not tokens or not snapshot_items:
+        return []
+
+    scored = []
+    for item in snapshot_items:
+        haystack = str(item.get('search_text') or item.get('snippet') or '').lower()
+        if not haystack:
+            continue
+        score = sum(1 for token in tokens if token in haystack)
+        if score <= 0:
+            continue
+        scored.append((score, item))
+
+    scored.sort(key=lambda x: (-x[0], str(x[1].get('table') or ''), str(x[1].get('id') or '')))
+    return [item for _, item in scored[:max(1, int(limit or 18))]]
+
+
+# Rótulos legíveis por tabela para o contexto do LLM
+_ITOCA_TABLE_LABELS = {
+    'clients': 'Contato/Cliente',
+    'accounts': 'Conta/Empresa',
+    'activities': 'Atividade/Interação',
+    'commitments': 'Evento de Agenda/Compromisso',
+    'account_renewal_events': 'Evento de Renovação de Conta',
+    'account_presences': 'Presença em Conta',
+    'account_main_contacts': 'Contato Principal de Conta',
+    'wiki_entries': 'Entrada de Conhecimento (WikiToca)',
+    'wiki_documents': 'Documento do WikiToca',
+    'environment_cards': 'Card de Mapeamento de Ambiente',
+    'daily_suggestions': 'Sugestão Diária',
+}
+
+def _itoca_compose_context_text(context_rows):
+    """Formata as linhas de contexto em texto estruturado e semântico para envio ao LLM."""
+    if not context_rows:
+        return ''
+    lines = []
+    lines.append('=== CONTEXTO INTERNO DO SISTEMA TOCA DO COELHO ===')
+    lines.append('(Use SOMENTE estas informações para responder. CNPJ = Cadastro Nacional de Pessoa Jurídica. CPF = Cadastro de Pessoa Física.)')
+    lines.append('')
+    for i, item in enumerate(context_rows[:20], 1):
+        table = item.get('table', '')
+        label = _ITOCA_TABLE_LABELS.get(table, table)
+        row_id = f" (id={item['id']})" if item.get('id') is not None else ''
+        lines.append(f'--- Registro {i}: {label}{row_id} ---')
+        lines.append(item['snippet'])
+        lines.append('')
+    return '\n'.join(lines)
+
+
+def _itoca_call_sai_llm(question, context_rows):
+    """Chama a API SAI LLM com a pergunta e o contexto. Retorna dict com answer, confidence_percent, needs_refinement, refinement_hint."""
+    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
+    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+    template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    context_text = _itoca_compose_context_text(context_rows)
+
+    if not api_key:
+        # Fallback sem LLM: retorna resposta estruturada básica
+        if not context_rows:
+            return {
+                'answer': 'Não encontrei dados suficientes na base interna para responder com segurança. Tente perguntar com mais detalhes (nome, empresa, cargo, data ou módulo).',
+                'confidence_percent': 0,
+                'needs_refinement': True,
+                'refinement_hint': 'Forneça mais detalhes como nome, empresa, cargo ou data.',
+                'llm_used': False
+            }
+        answer_lines = [f'Encontrei {len(context_rows)} registro(s) relevante(s):']
+        for item in context_rows[:8]:
+            row_id = f"#{item['id']}" if item.get('id') is not None else ''
+            answer_lines.append(f"• [{item['table']}{row_id}] {item['snippet']}")
+        answer_lines.append('')
+        answer_lines.append('Configure a chave da API SAI em Configurações > Integrações para respostas em linguagem natural.')
+        return {
+            'answer': '\n'.join(answer_lines),
+            'confidence_percent': 50,
+            'needs_refinement': False,
+            'refinement_hint': '',
+            'llm_used': False
+        }
+
+    url = f'{base_url}/api/templates/{template_id}/execute'
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Api-Key': api_key
+    }
+    payload = {
+        'inputs': {
+            'question': question,
+            'context_sources': context_text if context_text else 'Nenhum dado encontrado na base interna para esta pergunta.'
+        }
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        headers=headers,
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode('utf-8')
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+        logger.error(f'[iToca][SAI] HTTPError {getattr(e, "code", None)}: {detail[:400]}')
+        raise RuntimeError(f'Erro na API SAI (HTTP {getattr(e, "code", None)}): {detail[:200]}')
+    except Exception as e:
+        logger.error(f'[iToca][SAI] Erro de conexão: {e}')
+        raise RuntimeError(f'Falha ao conectar com a API SAI: {str(e)}')
+
+    parsed = _extract_json_object_from_text(raw)
+    if not parsed or not isinstance(parsed, dict):
+        # Tenta usar o texto bruto como resposta
+        return {
+            'answer': raw.strip() or 'Não foi possível interpretar a resposta do assistente.',
+            'confidence_percent': 50,
+            'needs_refinement': False,
+            'refinement_hint': '',
+            'llm_used': True
+        }
+
+    return {
+        'answer': (parsed.get('answer') or '').strip() or 'Sem resposta disponível.',
+        'confidence_percent': max(0, min(100, int(parsed.get('confidence_percent') or 0))),
+        'needs_refinement': bool(parsed.get('needs_refinement')),
+        'refinement_hint': (parsed.get('refinement_hint') or '').strip(),
+        'llm_used': True
+    }
 
 
 def ensure_account_for_company(cursor, company_name):
@@ -1316,21 +2492,17 @@ def transcribe_audio():
         print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
-        print('[Transcription][ERROR] Biblioteca whisper indisponível neste ambiente.')
-        return jsonify({'error': 'Biblioteca whisper não encontrada. Instale as dependências novamente.'}), 503
+        details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+        print(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
+        return jsonify({'error': 'Biblioteca faster-whisper não está disponível neste ambiente.'}), 503
 
     audio_file = request.files.get('audio')
     if not audio_file:
         return jsonify({'error': 'Arquivo de áudio não enviado.'}), 400
 
     ffmpeg_path = configure_ffmpeg_for_whisper()
-    if not ffmpeg_path:
-        instructions = get_ffmpeg_install_instructions()
-        return jsonify({
-            'error': 'FFmpeg não encontrado para processar áudio.',
-            'install_instructions': instructions,
-            'resolution': 'Instale o FFmpeg e reinicie o aplicativo.'
-        }), 500
+    if TRANSCRIPTION_DEBUG and not ffmpeg_path:
+        print('[Transcription][DEBUG] FFmpeg externo não encontrado; continuando com decoder da stack local.')
 
     suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
     temp_path = None
@@ -1342,11 +2514,14 @@ def transcribe_audio():
         if TRANSCRIPTION_DEBUG:
             print(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
             print(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
-            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path}")
+            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
-        result = model.transcribe(temp_path, language='pt')
-        text = (result.get('text') or '').strip()
+        if model is None:
+            details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
+            return jsonify({'error': f'Backend de transcrição indisponível{details}.'}), 503
+        segments, _ = model.transcribe(temp_path, language='pt')
+        text = ''.join(segment.text for segment in segments).strip()
 
         if TRANSCRIPTION_DEBUG:
             print(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
@@ -1356,7 +2531,7 @@ def transcribe_audio():
         print(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
         if TRANSCRIPTION_DEBUG:
             traceback.print_exc()
-        return jsonify({'error': f'Falha ao transcrever áudio com Whisper: {e}'}), 500
+        return jsonify({'error': f'Falha ao transcrever áudio com faster-whisper: {e}'}), 500
     finally:
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
@@ -1648,7 +2823,10 @@ def get_integrations_config():
             'openrouter_api_key',
             'openrouter_model',
             'openrouter_site_url',
-            'openrouter_app_name'
+            'openrouter_app_name',
+            'itoca_sai_api_key',
+            'itoca_sai_template_id',
+            'itoca_sai_base_url'
         ])
 
         tavily_key = (settings_map.get('tavily_api_key') or '').strip() or (os.environ.get('TAVILY_API_KEY', '') or '').strip()
@@ -1656,6 +2834,9 @@ def get_integrations_config():
         model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
         site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
         app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        itoca_sai_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+        itoca_sai_template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+        itoca_sai_base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
         return jsonify({
             'tavily_configured': bool(tavily_key),
@@ -1664,7 +2845,11 @@ def get_integrations_config():
             'openrouter_key_preview': openrouter_key[:9] + '...' if openrouter_key else '',
             'openrouter_model': model,
             'openrouter_site_url': site_url,
-            'openrouter_app_name': app_name
+            'openrouter_app_name': app_name,
+            'itoca_sai_configured': bool(itoca_sai_key),
+            'itoca_sai_key_preview': itoca_sai_key[:6] + '...' if itoca_sai_key else '',
+            'itoca_sai_template_id': itoca_sai_template_id,
+            'itoca_sai_base_url': itoca_sai_base_url
         })
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/integrations: {e}')
@@ -1680,6 +2865,9 @@ def save_integrations_config():
         openrouter_model = (data.get('openrouter_model') or '').strip() or 'stepfun/step-3.5-flash:free'
         openrouter_site_url = (data.get('openrouter_site_url') or '').strip() or 'http://localhost'
         openrouter_app_name = (data.get('openrouter_app_name') or '').strip() or 'TocaDoCoelho'
+        itoca_sai_api_key = (data.get('itoca_sai_api_key') or '').strip()
+        itoca_sai_template_id = (data.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+        itoca_sai_base_url = (data.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
         if openrouter_api_key:
             key_ok, key_msg = _validate_openrouter_api_key(openrouter_api_key)
@@ -1693,7 +2881,10 @@ def save_integrations_config():
             ('openrouter_api_key', openrouter_api_key),
             ('openrouter_model', openrouter_model),
             ('openrouter_site_url', openrouter_site_url),
-            ('openrouter_app_name', openrouter_app_name)
+            ('openrouter_app_name', openrouter_app_name),
+            ('itoca_sai_api_key', itoca_sai_api_key),
+            ('itoca_sai_template_id', itoca_sai_template_id),
+            ('itoca_sai_base_url', itoca_sai_base_url)
         ]
         for key, value in updates:
             c.execute(
@@ -1707,6 +2898,333 @@ def save_integrations_config():
         return jsonify({'message': 'Integrações salvas com sucesso.'})
     except Exception as e:
         logger.exception(f'[ERROR] PUT /api/config/integrations: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+
+
+@app.route('/api/config/update-source', methods=['GET'])
+def get_update_source_config():
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+        return jsonify({
+            'current_version': APP_VERSION,
+            'github_owner': owner,
+            'github_repo': repo,
+            'configured': bool(owner and repo)
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/update-source: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/update-source', methods=['PUT'])
+def save_update_source_config():
+    try:
+        data = request.get_json() or {}
+        owner = (data.get('github_owner') or '').strip()
+        repo = (data.get('github_repo') or '').strip()
+
+        conn = get_db()
+        c = conn.cursor()
+        updates = [
+            ('update_github_owner', owner),
+            ('update_github_repo', repo)
+        ]
+        for key, value in updates:
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+                (key, value)
+            )
+        conn.commit()
+        conn.close()
+
+        return jsonify({'message': 'Fonte de atualização salva com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] PUT /api/config/update-source: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/check-updates', methods=['GET'])
+def check_updates():
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+
+        if not owner or not repo:
+            return jsonify({
+                'update_available': False,
+                'configured': False,
+                'current_version': APP_VERSION,
+                'message': 'Configure GitHub Owner e Repositório em Configurações para verificar updates.'
+            }), 400
+
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
+        req = urllib.request.Request(api_url, headers={
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'TocaDoCoelho-Updater'
+        })
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+
+        latest_tag = (payload.get('tag_name') or '').strip()
+        latest_version = _normalize_version(latest_tag)
+        current_version = _normalize_version(APP_VERSION)
+
+        if not latest_version:
+            return jsonify({'error': 'Tag da release mais recente está vazia no GitHub.'}), 502
+
+        update_available = _version_key(latest_version) > _version_key(current_version)
+        return jsonify({
+            'configured': True,
+            'github_owner': owner,
+            'github_repo': repo,
+            'current_version': current_version,
+            'latest_version': latest_version,
+            'latest_tag': latest_tag,
+            'update_available': update_available,
+            'release_name': payload.get('name') or latest_tag,
+            'release_notes': payload.get('body') or '',
+            'html_url': payload.get('html_url') or '',
+            'published_at': payload.get('published_at')
+        })
+    except urllib.error.HTTPError as e:
+        logger.exception(f'[ERROR] GET /api/config/check-updates (HTTP): {e}')
+        if e.code == 404:
+            return jsonify({'error': 'Nenhuma release encontrada nesse repositório ou repositório inválido.'}), 404
+        if e.code == 403:
+            return jsonify({'error': 'GitHub API limit atingido temporariamente. Tente novamente mais tarde.'}), 429
+        return jsonify({'error': f'Falha ao consultar GitHub Releases (HTTP {e.code}).'}), 502
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
+        return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
+
+@app.route('/api/itoca/base-status', methods=['GET'])
+def itoca_base_status():
+    try:
+        snapshot_items, updated_at = _itoca_get_cached_base()
+        return jsonify({
+            'has_base': len(snapshot_items) > 0,
+            'items_count': len(snapshot_items),
+            'updated_at': updated_at
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/itoca/base-status: {e}')
+        return jsonify({'error': f'Erro ao consultar status da base iToca: {e}'}), 500
+
+
+@app.route('/api/itoca/base-update', methods=['POST'])
+def itoca_base_update():
+    """Inicia a atualização da base iToca e retorna progresso via SSE (Server-Sent Events).
+    O cliente pode usar EventSource ou fetch com streaming para acompanhar o progresso.
+    Ao concluir, envia evento 'done' com o resultado final.
+    """
+    def generate():
+        try:
+            def on_progress(pct, msg):
+                data = json.dumps({'percent': pct, 'message': msg}, ensure_ascii=False)
+                yield f'data: {data}\n\n'
+
+            # Usamos uma fila para passar eventos da thread de progresso
+            import queue
+            q = queue.Queue()
+
+            def progress_cb(pct, msg):
+                q.put({'type': 'progress', 'percent': pct, 'message': msg})
+
+            result_holder = {}
+            error_holder = {}
+
+            def run_update():
+                try:
+                    result = _itoca_update_cached_base(progress_cb=progress_cb)
+                    result_holder['result'] = result
+                except Exception as ex:
+                    error_holder['error'] = str(ex)
+                finally:
+                    q.put({'type': 'done'})
+
+            t = threading.Thread(target=run_update, daemon=True)
+            t.start()
+
+            while True:
+                try:
+                    evt = q.get(timeout=120)
+                except Exception:
+                    yield f'data: {json.dumps({"type":"error","message":"Timeout aguardando indexação."}, ensure_ascii=False)}\n\n'
+                    break
+                if evt['type'] == 'progress':
+                    payload = json.dumps({'percent': evt['percent'], 'message': evt['message']}, ensure_ascii=False)
+                    yield f'data: {payload}\n\n'
+                elif evt['type'] == 'done':
+                    if error_holder:
+                        payload = json.dumps({'type': 'error', 'message': error_holder['error']}, ensure_ascii=False)
+                    else:
+                        r = result_holder.get('result', {})
+                        payload = json.dumps({
+                            'type': 'done',
+                            'message': 'Base iToca atualizada com sucesso.',
+                            'items_count': len(r.get('items', [])),
+                            'updated_at': r.get('updated_at', '')
+                        }, ensure_ascii=False)
+                    yield f'data: {payload}\n\n'
+                    break
+        except GeneratorExit:
+            pass
+        except Exception as ex:
+            yield f'data: {json.dumps({"type":"error","message":str(ex)}, ensure_ascii=False)}\n\n'
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        }
+    )
+
+
+@app.route('/api/itoca/ask', methods=['POST'])
+def itoca_ask():
+    try:
+        data = request.get_json() or {}
+        question = (data.get('question') or '').strip()
+        session_id = (data.get('session_id') or '').strip()
+        if not question:
+            return jsonify({'error': 'Pergunta obrigatória.'}), 400
+
+        snapshot_items, updated_at = _itoca_get_cached_base()
+        if not snapshot_items:
+            return jsonify({
+                'error': 'Base iToca ainda não foi atualizada. Clique em "Base Update" antes da primeira pergunta.',
+                'base_ready': False
+            }), 409
+
+        # Busca híbrida: snapshot em cache + busca direta no banco para agenda e wiki
+        snapshot_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=15)
+        live_rows = _itoca_search_context(question, limit=8)
+
+        # Mescla resultados: prioriza live_rows para agenda/wiki, evita duplicatas
+        seen_keys = set()
+        context_rows = []
+        for item in live_rows:
+            key = f"{item.get('table')}:{item.get('id')}:{str(item.get('snippet',''))[:60]}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                context_rows.append(item)
+        for item in snapshot_rows:
+            key = f"{item.get('table')}:{item.get('id')}:{str(item.get('snippet',''))[:60]}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                context_rows.append(item)
+        context_rows = context_rows[:20]
+
+        llm_result = _itoca_call_sai_llm(question, context_rows)
+        answer = llm_result.get('answer', '')
+        confidence = llm_result.get('confidence_percent', 0)
+        needs_ref = llm_result.get('needs_refinement', False)
+        ref_hint = llm_result.get('refinement_hint', '')
+
+        # Salvar no histórico se session_id fornecido
+        if session_id:
+            try:
+                conn_h = get_db()
+                c_h = conn_h.cursor()
+                c_h.execute(
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)' ,
+                    (session_id, 'user', question, '')
+                )
+                c_h.execute(
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, ?, ?, ?)',
+                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint)
+                )
+                conn_h.commit()
+                conn_h.close()
+            except Exception as he:
+                logger.warning(f'[iToca] Erro ao salvar histórico: {he}')
+
+        return jsonify({
+            'answer': answer,
+            'confidence_percent': confidence,
+            'needs_refinement': needs_ref,
+            'refinement_hint': ref_hint,
+            'llm_used': llm_result.get('llm_used', False),
+            'items_found': len(context_rows),
+            'sources': context_rows,
+            'base_updated_at': updated_at,
+            'base_ready': True
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
+        return jsonify({'error': f'Erro ao consultar iToca: {e}'}), 500
+
+
+@app.route('/api/itoca/history', methods=['GET'])
+def itoca_history_list():
+    """Lista sessões de histórico do iToca dos últimos 30 dias."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        # Purga registros com mais de 30 dias
+        c.execute("DELETE FROM itoca_chat_history WHERE created_at < datetime('now', '-30 days')")
+        conn.commit()
+        # Retorna sessões distintas com data e primeira pergunta
+        c.execute('''
+            SELECT session_id,
+                   MIN(created_at) AS started_at,
+                   MAX(created_at) AS last_at,
+                   COUNT(*) AS msg_count,
+                   (SELECT content FROM itoca_chat_history h2
+                    WHERE h2.session_id = h.session_id AND h2.role = 'user'
+                    ORDER BY h2.created_at ASC LIMIT 1) AS first_question
+            FROM itoca_chat_history h
+            GROUP BY session_id
+            ORDER BY last_at DESC
+            LIMIT 60
+        ''')
+        sessions = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(sessions)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/itoca/history: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/itoca/history/<session_id>', methods=['GET'])
+def itoca_history_session(session_id):
+    """Retorna todas as mensagens de uma sessão específica."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'SELECT id, role, content, confidence_percent, needs_refinement, refinement_hint, created_at FROM itoca_chat_history WHERE session_id = ? ORDER BY created_at ASC',
+            (session_id,)
+        )
+        messages = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(messages)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/itoca/history/{session_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/itoca/history/<session_id>', methods=['DELETE'])
+def itoca_history_delete(session_id):
+    """Deleta uma sessão específica do histórico."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM itoca_chat_history WHERE session_id = ?', (session_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Sessão removida do histórico.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] DELETE /api/itoca/history/{session_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -1833,6 +3351,122 @@ def check_duplicate_client():
         print(f'[ERROR] POST /api/clients/check-duplicate: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/clients/autofind-photo-candidates', methods=['GET'])
+def clients_autofind_photo_candidates():
+    try:
+        name = (request.args.get('name') or '').strip()
+        company = (request.args.get('company') or '').strip()
+        logger.info(f'[AutoPic] GET /autofind-photo-candidates: name={name!r} company={company!r}')
+
+        if not name and not company:
+            logger.warning('[AutoPic] GET /autofind-photo-candidates: nome e empresa vazios, abortando.')
+            return jsonify({'error': 'Informe ao menos nome ou empresa.'}), 400
+
+        candidates = []
+        queries_tried = []
+
+        # Estratégia 1 (mais precisa): nome entre aspas + empresa entre aspas
+        # Força o Bing a encontrar páginas que contenham EXATAMENTE o nome e a empresa
+        if name and company:
+            q1 = f'"{name}" "{company}"'
+            queries_tried.append(q1)
+            logger.info(f'[AutoPic] Estratégia 1 (aspas duplas): query={q1!r}')
+            candidates = _find_image_candidates_on_web(q1, limit=6)
+            logger.info(f'[AutoPic] Estratégia 1 retornou {len(candidates)} candidato(s)')
+
+        # Estratégia 2: nome + empresa sem aspas (mais abrangente)
+        # Usada quando a estratégia 1 não encontrou candidatos suficientes
+        if len(candidates) < 3 and name and company:
+            q2 = f'{name} {company}'
+            queries_tried.append(q2)
+            logger.info(f'[AutoPic] Estratégia 2 (sem aspas, nome+empresa): query={q2!r}')
+            extra = _find_image_candidates_on_web(q2, limit=6)
+            logger.info(f'[AutoPic] Estratégia 2 retornou {len(extra)} candidato(s)')
+            # Adicionar apenas candidatos novos (sem duplicar)
+            seen = set(candidates)
+            for u in extra:
+                if u not in seen:
+                    seen.add(u)
+                    candidates.append(u)
+            candidates = candidates[:6]
+
+        # Estratégia 3: apenas nome (último recurso, quando não há empresa ou as anteriores falharam)
+        if len(candidates) < 3:
+            q3 = name or company
+            queries_tried.append(q3)
+            logger.info(f'[AutoPic] Estratégia 3 (apenas nome/empresa): query={q3!r}')
+            extra = _find_image_candidates_on_web(q3, limit=6)
+            logger.info(f'[AutoPic] Estratégia 3 retornou {len(extra)} candidato(s)')
+            seen = set(candidates)
+            for u in extra:
+                if u not in seen:
+                    seen.add(u)
+                    candidates.append(u)
+            candidates = candidates[:6]
+
+        logger.info(f'[AutoPic] Total final: {len(candidates)} candidato(s) após {len(queries_tried)} estratégia(s). '
+                    f'Queries tentadas: {queries_tried}')
+        return jsonify({'query': queries_tried[0] if queries_tried else '', 'candidates': candidates})
+    except Exception as e:
+        logger.exception(f'[AutoPic] ERRO em GET /autofind-photo-candidates: {e}')
+        return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
+
+
+@app.route('/api/clients/autofind-photo', methods=['POST'])
+def clients_autofind_photo():
+    try:
+        data = request.get_json() or {}
+        image_url = (data.get('image_url') or '').strip()
+        person_name = (data.get('name') or '').strip() or 'autofind'
+        logger.info(f'[AutoPic] POST /autofind-photo: person_name={person_name!r} image_url={image_url[:120]!r}')
+        if not image_url:
+            return jsonify({'error': 'URL da imagem não informada.'}), 400
+
+        safe_prefix = secure_filename(person_name) or 'autofind'
+        photo_url = _download_remote_image_to_uploads(image_url, prefix=safe_prefix)
+        logger.info(f'[AutoPic] POST /autofind-photo: imagem salva com sucesso em {photo_url!r}')
+        return jsonify({'photo_url': photo_url})
+    except Exception as e:
+        logger.exception(f'[AutoPic] ERRO em POST /autofind-photo: {type(e).__name__}: {e}')
+        return jsonify({'error': f'Erro ao importar imagem selecionada: {e}'}), 500
+
+
+@app.route('/api/clients/autofind-photo-base64', methods=['POST'])
+def clients_autofind_photo_base64():
+    """Recebe uma imagem em base64 (data URL), salva no servidor e retorna a URL local."""
+    try:
+        data = request.get_json() or {}
+        data_url = (data.get('data_url') or '').strip()
+        person_name = (data.get('name') or '').strip() or 'autofind'
+        if not data_url:
+            return jsonify({'error': 'data_url não informada.'}), 400
+
+        # Formato esperado: data:image/jpeg;base64,<dados>
+        if not data_url.startswith('data:image/'):
+            return jsonify({'error': 'Formato de data URL inválido.'}), 400
+
+        header, encoded = data_url.split(',', 1)
+        # Extrair extensão do tipo MIME
+        mime_type = header.split(';')[0].replace('data:', '')
+        ext_map = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif'}
+        ext = ext_map.get(mime_type, '.jpg')
+
+        img_data = base64.b64decode(encoded)
+        if len(img_data) > 6 * 1024 * 1024:
+            return jsonify({'error': 'Imagem muito grande (máximo 6MB).'}), 400
+
+        safe_prefix = secure_filename(person_name) or 'autofind'
+        filename = secure_filename(f"{safe_prefix}-{int(time.time()*1000)}{ext}")
+        path = UPLOAD_DIR / filename
+        with open(path, 'wb') as f:
+            f.write(img_data)
+
+        return jsonify({'photo_url': f'/uploads/{filename}'})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/clients/autofind-photo-base64: {e}')
+        return jsonify({'error': f'Erro ao salvar imagem: {e}'}), 500
+
+
 @app.route('/api/clientes', methods=['POST'])
 def create_cliente():
     return create_client()
@@ -1854,6 +3488,7 @@ def create_client():
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         force_create = request.form.get('force_create') in ('1', 'true', 'on')
+        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -1879,7 +3514,7 @@ def create_client():
                 if existing:
                     return jsonify({'error': 'Possível duplicidade encontrada', 'duplicate': existing}), 409
 
-        photo_url = None
+        photo_url = autofind_photo_url or None
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
@@ -1923,6 +3558,7 @@ def update_client(client_id):
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         remove_photo = request.form.get('remove_photo', '0') == '1'
+        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
         
         if not name or not company or not position:
@@ -1938,7 +3574,7 @@ def update_client(client_id):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         
-        photo_url = None if remove_photo else client['photo_url']
+        photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:

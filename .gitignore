@@ -1,0 +1,30 @@
+# Ambiente virtual Python
+.venv/
+venv/
+env/
+
+# Artefatos gerados pelo PyInstaller
+build/
+dist/
+*.spec
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Banco de dados local
+*.db
+
+# Logs
+*.log
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+
+# Ferramentas de build (baixadas automaticamente pelo BUILD_INSTALLER.bat)
+tools/
+
+# Instalador gerado
+TocaDoCoelho-*-Setup.exe
