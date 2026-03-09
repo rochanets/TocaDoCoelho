@@ -8,7 +8,7 @@ Sistema de gestão de clientes com interface web local.
 
 1. Gere o executável com PyInstaller (inclui runtime Python + binários do FFmpeg via `imageio_ffmpeg`):
    ```bash
-   pyinstaller --noconfirm --onedir --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app launcher.py
+   pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app launcher.py
    ```
 2. Compile o instalador NSIS:
    - Execute `BUILD_INSTALLER.bat`
