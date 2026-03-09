@@ -584,13 +584,15 @@ def init_db():
             ('Backlog', 1, 1, 0),
             ('Em Andamento', 2, 1, 0),
             ('Hold', 3, 1, 0),
-            ('Finalizado', 4, 1, 1),
+            ('Done', 4, 1, 1),
             ('Descartado', 5, 1, 1)
         ]
         c.executemany(
             'INSERT INTO kanban_columns (title, display_order, is_system, is_locked) VALUES (?, ?, ?, ?)',
             default_columns
         )
+
+    c.execute("UPDATE kanban_columns SET title = 'Done', updated_at = CURRENT_TIMESTAMP WHERE lower(title) = 'finalizado'")
     
     # Adicionar coluna last_activity_date à tabela clients se não existir
     c.execute("PRAGMA table_info(clients)")
@@ -1815,10 +1817,11 @@ def infer_kanban_tag(description):
     if found_tags:
         return ' | '.join(found_tags)
 
-    tokens = re.findall(r"[a-zA-ZÀ-ÿ]{4,}", text)
+    tokens = re.findall(r"[a-zA-ZÀ-ÿ]{3,}", text)
     stopwords = {
         'para', 'com', 'sobre', 'entre', 'pelos', 'pelas', 'isso', 'essa', 'esse', 'dele', 'dela',
-        'card', 'tarefa', 'atividade', 'fazer', 'será', 'está', 'mais', 'muito', 'pouco'
+        'card', 'tarefa', 'atividade', 'fazer', 'sera', 'será', 'esta', 'está', 'mais', 'muito', 'pouco',
+        'uma', 'uns', 'das', 'dos', 'que', 'por', 'sem'
     }
     keywords = []
     for token in tokens:
@@ -1828,9 +1831,14 @@ def infer_kanban_tag(description):
         label = tk.capitalize()
         if label not in keywords:
             keywords.append(label)
-        if len(keywords) >= 3:
+        if len(keywords) >= 4:
             break
-    return ' | '.join(keywords) if keywords else 'Semântica'
+    if keywords:
+        return ' | '.join(keywords)
+
+    raw_tokens = [t.strip().capitalize() for t in re.findall(r"[a-zA-ZÀ-ÿ]{2,}", text) if t.strip()]
+    raw_tokens = [t for t in raw_tokens if t.lower() not in stopwords][:3]
+    return ' | '.join(raw_tokens) if raw_tokens else ''
 
 def _itoca_compose_context_text(context_rows):
     """Formata as linhas de contexto em texto estruturado e semântico para envio ao LLM."""
