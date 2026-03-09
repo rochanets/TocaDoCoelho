@@ -1233,24 +1233,54 @@ def _itoca_search_context(question, limit=18):
 
 
 def _itoca_find_tesseract_cmd():
-    """Localiza o binário do tesseract no sistema (Windows/Linux/Mac)."""
+    """Localiza o binário do tesseract no sistema.
+    Ordem de busca:
+      1. Diretório do próprio executável (bundled com o Toca do Coelho via NSIS)
+      2. PATH do sistema
+      3. Caminhos padrão do Windows
+    """
     import subprocess
-    # Tenta no PATH primeiro
+
+    # 1. Bundled junto ao executável do Toca do Coelho
+    #    Quando empacotado com PyInstaller, sys.executable aponta para TocaDoCoelho.exe
+    #    O installer.nsi instala o Tesseract em $INSTDIR\tesseract\
+    bundled_candidates = []
+    exe_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+    bundled_candidates.append(exe_dir / 'tesseract' / 'tesseract.exe')
+    # PyInstaller _MEIPASS
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        bundled_candidates.append(Path(meipass) / 'tesseract' / 'tesseract.exe')
+    # Diretório pai (caso o app.py esteja em subpasta)
+    bundled_candidates.append(Path(__file__).resolve().parent / 'tesseract' / 'tesseract.exe')
+    for candidate in bundled_candidates:
+        if candidate.exists():
+            # Configura TESSDATA_PREFIX para o tessdata bundled
+            tessdata_dir = candidate.parent / 'tessdata'
+            if tessdata_dir.exists():
+                os.environ['TESSDATA_PREFIX'] = str(tessdata_dir)
+            return str(candidate)
+
+    # 2. PATH do sistema
     try:
         result = subprocess.run(['tesseract', '--version'], capture_output=True, timeout=5)
         if result.returncode == 0:
             return 'tesseract'
     except Exception:
         pass
-    # Caminhos comuns no Windows
-    windows_paths = [
-        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-        r'C:\Users\{}\AppData\Local\Tesseract-OCR\tesseract.exe'.format(os.environ.get('USERNAME', '')),
-    ]
-    for p in windows_paths:
-        if Path(p).exists():
-            return p
+
+    # 3. Caminhos padrão do Windows
+    if sys.platform == 'win32':
+        windows_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+            r'C:\Users\{}\AppData\Local\Tesseract-OCR\tesseract.exe'.format(os.environ.get('USERNAME', '')),
+            r'C:\TocaDoCoelho\tesseract\tesseract.exe',
+        ]
+        for p in windows_paths:
+            if Path(p).exists():
+                return p
+
     return None
 
 

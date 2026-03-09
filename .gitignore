@@ -22,3 +22,9 @@ __pycache__/
 # Arquivos de sistema
 .DS_Store
 Thumbs.db
+
+# Ferramentas de build (baixadas automaticamente pelo BUILD_INSTALLER.bat)
+tools/
+
+# Instalador gerado
+TocaDoCoelho-*-Setup.exe
