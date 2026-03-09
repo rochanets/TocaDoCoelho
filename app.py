@@ -517,6 +517,14 @@ def init_db():
         FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL,
         FOREIGN KEY(contact_id) REFERENCES clients(id) ON DELETE SET NULL
     )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS kanban_card_activities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(card_id) REFERENCES kanban_cards(id) ON DELETE CASCADE
+    )''')
     
     # Tabela de sugestões diárias
     c.execute('''CREATE TABLE IF NOT EXISTS daily_suggestions (
@@ -1789,17 +1797,40 @@ def infer_kanban_tag(description):
     text = (description or '').strip().lower()
     if not text:
         return ''
+
     tag_rules = [
-        ('Comercial', ['proposta', 'orcamento', 'negoci', 'cliente', 'venda', 'pipeline']),
-        ('Técnico', ['api', 'erro', 'sistema', 'infra', 'deploy', 'integracao', 'bug']),
-        ('Financeiro', ['fatur', 'pagamento', 'custo', 'contrato', 'budget']),
-        ('Relacionamento', ['reuniao', 'follow-up', 'contato', 'alinhamento', 'feedback']),
+        ('Comercial', ['proposta', 'orcamento', 'negoci', 'cliente', 'venda', 'pipeline', 'lead']),
+        ('Técnico', ['api', 'erro', 'sistema', 'infra', 'deploy', 'integracao', 'bug', 'arquitetura']),
+        ('Financeiro', ['fatur', 'pagamento', 'custo', 'contrato', 'budget', 'receita']),
+        ('Relacionamento', ['reuniao', 'follow-up', 'contato', 'alinhamento', 'feedback', 'stakeholder']),
+        ('Produto', ['produto', 'feature', 'roadmap', 'release', 'sprint']),
         ('Prioridade Alta', ['urgente', 'critico', 'hoje', 'bloqueio'])
     ]
+
+    found_tags = []
     for tag, keywords in tag_rules:
         if any(keyword in text for keyword in keywords):
-            return tag
-    return 'Geral'
+            found_tags.append(tag)
+
+    if found_tags:
+        return ' | '.join(found_tags)
+
+    tokens = re.findall(r"[a-zA-ZÀ-ÿ]{4,}", text)
+    stopwords = {
+        'para', 'com', 'sobre', 'entre', 'pelos', 'pelas', 'isso', 'essa', 'esse', 'dele', 'dela',
+        'card', 'tarefa', 'atividade', 'fazer', 'será', 'está', 'mais', 'muito', 'pouco'
+    }
+    keywords = []
+    for token in tokens:
+        tk = token.strip().lower()
+        if tk in stopwords:
+            continue
+        label = tk.capitalize()
+        if label not in keywords:
+            keywords.append(label)
+        if len(keywords) >= 3:
+            break
+    return ' | '.join(keywords) if keywords else 'Semântica'
 
 def _itoca_compose_context_text(context_rows):
     """Formata as linhas de contexto em texto estruturado e semântico para envio ao LLM."""
@@ -4580,8 +4611,6 @@ def create_kanban_card():
         tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
         account_id = data.get('account_id')
         contact_id = data.get('contact_id')
-        activity = (data.get('activity') or '').strip()
-
         if not title or not description:
             return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
 
@@ -4597,9 +4626,9 @@ def create_kanban_card():
         c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (first_column_id,))
         next_order = (c.fetchone()[0] or 0) + 1
 
-        c.execute('''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, activity, column_id, display_order)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (title, description, tag, account_id, contact_id, activity, first_column_id, next_order))
+        c.execute('''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, column_id, display_order)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                  (title, description, tag, account_id, contact_id, first_column_id, next_order))
         conn.commit()
         new_id = c.lastrowid
         conn.close()
@@ -4618,22 +4647,71 @@ def update_kanban_card(card_id):
         tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
         account_id = data.get('account_id')
         contact_id = data.get('contact_id')
-        activity = (data.get('activity') or '').strip()
-
         if not title or not description:
             return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
 
         conn = get_db()
         c = conn.cursor()
         c.execute('''UPDATE kanban_cards
-                     SET title = ?, description = ?, tag = ?, account_id = ?, contact_id = ?, activity = ?, updated_at = CURRENT_TIMESTAMP
+                     SET title = ?, description = ?, tag = ?, account_id = ?, contact_id = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (title, description, tag, account_id, contact_id, activity, card_id))
+                  (title, description, tag, account_id, contact_id, card_id))
         conn.commit()
         conn.close()
         return jsonify({'message': 'Card atualizado com sucesso'})
     except Exception as e:
         print(f'[ERROR] PUT /api/kanban/cards/{card_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards/<int:card_id>', methods=['GET'])
+def get_kanban_card(card_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT kb.*, kc.title as column_title,
+                            acc.name AS account_name, acc.logo_url AS account_logo_url,
+                            cl.name AS contact_name, cl.photo_url AS contact_photo_url, cl.position AS contact_position
+                     FROM kanban_cards kb
+                     JOIN kanban_columns kc ON kc.id = kb.column_id
+                     LEFT JOIN accounts acc ON acc.id = kb.account_id
+                     LEFT JOIN clients cl ON cl.id = kb.contact_id
+                     WHERE kb.id = ?''', (card_id,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
+        card = dict_from_row(row)
+        c.execute('SELECT id, content, created_at FROM kanban_card_activities WHERE card_id = ? ORDER BY created_at DESC, id DESC', (card_id,))
+        card['activities'] = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(card)
+    except Exception as e:
+        print(f'[ERROR] GET /api/kanban/cards/{card_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards/<int:card_id>/activities', methods=['POST'])
+def add_kanban_card_activity(card_id):
+    try:
+        content = (request.json.get('content') or '').strip()
+        if not content:
+            return jsonify({'error': 'Atividade é obrigatória'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
+        c.execute('INSERT INTO kanban_card_activities (card_id, content) VALUES (?, ?)', (card_id, content))
+        conn.commit()
+        new_id = c.lastrowid
+        c.execute('SELECT id, content, created_at FROM kanban_card_activities WHERE id = ?', (new_id,))
+        created = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify({'message': 'Atividade adicionada', 'activity': created}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/kanban/cards/{card_id}/activities: {e}')
         return jsonify({'error': str(e)}), 500
 
 
