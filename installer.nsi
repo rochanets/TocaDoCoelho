@@ -35,6 +35,22 @@ Section "Instalar Toca do Coelho" SecApp
     File "README.md"
     File "coelho_icon_transparent.ico"
 
+    ; -------------------------------------------------------
+    ; Tesseract OCR - Instalação silenciosa e automática
+    ; O instalador do Tesseract (UB-Mannheim) deve estar em:
+    ;   tools\tesseract-ocr-w64-setup.exe
+    ; Gerado pelo script BUILD_INSTALLER.bat antes do empacotamento
+    ; -------------------------------------------------------
+    IfFileExists "$EXEDIR\tools\tesseract-ocr-w64-setup.exe" 0 SkipTesseract
+        DetailPrint "Instalando Tesseract OCR (reconhecimento de texto em documentos)..."
+        ; /VERYSILENT = sem janelas
+        ; /NORESTART  = não reinicia o PC
+        ; /DIR        = instala dentro da pasta do Toca do Coelho
+        ; /COMPONENTS = instala apenas o core + idiomas PT e EN
+        ExecWait '"$EXEDIR\tools\tesseract-ocr-w64-setup.exe" /VERYSILENT /NORESTART /DIR="$INSTDIR\tesseract" /COMPONENTS="tesseract,por,eng"'
+        DetailPrint "Tesseract OCR instalado com sucesso."
+    SkipTesseract:
+
     ; Criar diretório de dados do usuário
     CreateDirectory "$APPDATA\toca-do-coelho"
 

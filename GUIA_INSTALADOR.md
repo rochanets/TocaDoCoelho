@@ -37,6 +37,30 @@ Saída:
 ✅ Inclui suporte ao FFmpeg no bundle de build  
 ✅ Registra em Adicionar/Remover Programas  
 ✅ Preserva dados em `%AppData%\toca-do-coelho` ao desinstalar  
+✅ **Instala o Tesseract OCR automaticamente** (leitura de PDFs escaneados no iToca)  
+
+## 🔍 Tesseract OCR — Bundling automático
+
+O `BUILD_INSTALLER.bat` baixa automaticamente o instalador do Tesseract (~48 MB) na primeira vez que é executado e o armazena em `tools\tesseract-ocr-w64-setup.exe`.
+
+Durante a instalação do Toca do Coelho, o Tesseract é instalado **silenciosamente** (sem janelas, sem interação do usuário) em `$INSTDIR\tesseract\`, com suporte aos idiomas **Português** e **Inglês**.
+
+O `app.py` detecta o Tesseract automaticamente nesta ordem:
+1. `$INSTDIR\tesseract\tesseract.exe` (bundled — prioridade máxima)
+2. PATH do sistema
+3. `C:\Program Files\Tesseract-OCR\tesseract.exe` (instalação padrão)
+
+**Documentos suportados pelo módulo iToca:**
+
+| Tipo | Método |
+|---|---|
+| PDF com texto digital | `pdfplumber` (sem OCR) |
+| PDF escaneado / digitalizado | OCR via Tesseract |
+| DOCX (Word) | `python-docx` |
+| XLSX (Excel) | `openpyxl` |
+| TXT | leitura direta |
+
+> A pasta `tools\` está no `.gitignore` — o instalador do Tesseract não é commitado no repositório.
 
 ## 💾 Dados do usuário
 
