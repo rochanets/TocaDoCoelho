@@ -19,6 +19,34 @@ def _get_chrome_user_data_dir():
         return os.path.expanduser('~/.config/google-chrome')
 
 
+def _find_input_by_label(page, label_text):
+    """Encontra um input procurando pelo texto do label associado."""
+    try:
+        # Procurar por label com o texto exato ou parcial
+        label = page.locator('label', has_text=label_text).first
+        if label.count() > 0:
+            # Tentar obter o input associado via aria-labelledby ou for
+            label_id = label.get_attribute('id')
+            if label_id:
+                input_elem = page.locator(f'input[aria-labelledby="{label_id}"]').first
+                if input_elem.count() > 0:
+                    return input_elem
+            
+            # Tentar encontrar o input mais próximo (parent/sibling)
+            input_elem = label.locator('..').locator('input').first
+            if input_elem.count() > 0:
+                return input_elem
+            
+            # Tentar encontrar input no próximo elemento irmão
+            input_elem = label.locator('~ input').first
+            if input_elem.count() > 0:
+                return input_elem
+        
+        return None
+    except Exception as e:
+        return None
+
+
 def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headful: bool, screenshots_dir: Path, logger: logging.Logger):
     """
     Executa a automação do formulário Microsoft Forms usando Playwright.
@@ -92,8 +120,8 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
                     page.reload()
                     continue
                 
-                # Verificar se chegou no formulário - procurar por qualquer combobox
-                if page.locator('[role="combobox"]').count() > 0:
+                # Verificar se chegou no formulário - procurar por qualquer input
+                if page.locator('input[type="text"]').count() > 0:
                     step('Login concluído. Formulário carregado com sucesso.')
                     break
                 
@@ -109,7 +137,7 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
 
         # Aguardar o formulário estar pronto
         try:
-            page.wait_for_selector('[role="combobox"]', timeout=30000)
+            page.wait_for_selector('input[type="text"]', timeout=30000)
         except Exception as e:
             logger.warning(f'[AutoToca] Timeout aguardando formulário: {e}')
 
@@ -120,39 +148,49 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         try:
             step('Preenchendo campo 1 (Empresa Stefanini).')
             combobox = page.locator('[role="combobox"]').first
-            combobox.click()
-            time.sleep(0.5)
-            # Procurar pela opção STEFANINI
-            option = page.locator('[role="option"]', has_text='STEFANINI CONSULTORIA').first
-            if option.count() > 0:
-                option.click()
-                step('Campo 1 preenchido com sucesso.')
+            if combobox.count() > 0:
+                combobox.click()
+                time.sleep(0.5)
+                # Procurar pela opção STEFANINI
+                option = page.locator('[role="option"]', has_text='STEFANINI CONSULTORIA').first
+                if option.count() > 0:
+                    option.click()
+                    step('Campo 1 preenchido com sucesso.')
+                else:
+                    step('Aviso: Opção STEFANINI não encontrada no dropdown.')
             else:
-                step('Aviso: Opção STEFANINI não encontrada no dropdown.')
+                step('Aviso: Combobox não encontrado.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 1: {e}')
             step(f'Erro ao preencher campo 1: {str(e)[:100]}')
 
-        # Campo 2: Razão Social (text input)
+        # Campo 2: Razão Social - Parte Contrária
         try:
-            step('Preenchendo campo 2 (Razão Social).')
-            inputs = page.locator('input[type="text"]')
-            if inputs.count() > 0:
-                inputs.nth(0).fill(payload['contaSelecionada'])
-                step('Campo 2 preenchido com sucesso.')
+            step('Preenchendo campo 2 (Razão Social - Parte Contrária).')
+            # Procurar pelo texto exato do label
+            input_field = page.locator('input[type="text"]', has_text='Insira sua resposta').first
+            if input_field.count() > 0:
+                input_field.fill(payload['contaSelecionada'])
+                step(f'Campo 2 preenchido com: {payload["contaSelecionada"]}')
             else:
-                step('Aviso: Campo de texto para Razão Social não encontrado.')
+                # Fallback: usar o primeiro input de texto após o combobox
+                inputs = page.locator('input[type="text"]')
+                if inputs.count() > 0:
+                    inputs.nth(0).fill(payload['contaSelecionada'])
+                    step(f'Campo 2 preenchido com: {payload["contaSelecionada"]} (fallback)')
+                else:
+                    step('Aviso: Campo de texto para Razão Social não encontrado.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 2: {e}')
             step(f'Erro ao preencher campo 2: {str(e)[:100]}')
 
-        # Campo 3: Endereço (text input)
+        # Campo 3: Endereço Atualizado - Parte Contrária
         try:
-            step('Preenchendo campo 3 (Endereço).')
+            step('Preenchendo campo 3 (Endereço Atualizado - Parte Contrária).')
             inputs = page.locator('input[type="text"]')
             if inputs.count() > 1:
                 inputs.nth(1).fill(payload['enderecoFinalConfirmado'])
-                step('Campo 3 preenchido com sucesso.')
+                step(f'Campo 3 preenchido com: {payload["enderecoFinalConfirmado"]}')
             else:
                 step('Aviso: Campo de texto para Endereço não encontrado.')
         except Exception as e:
@@ -162,42 +200,37 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         # Campo 4: Minuta própria Stefanini (radio button)
         try:
             step('Preenchendo campo 4 (Minuta própria Stefanini).')
-            radio = page.locator(f'input[type="radio"][value="{payload["tipoMinuta"]}"]').first
-            if radio.count() > 0:
-                radio.check()
-                step('Campo 4 preenchido com sucesso.')
+            # Procurar pelo texto exato da opção
+            label = page.locator('label', has_text=payload['tipoMinuta']).first
+            if label.count() > 0:
+                label.click()
+                step(f'Campo 4 preenchido com: {payload["tipoMinuta"]}')
             else:
-                # Tentar encontrar pelo texto do label
-                label = page.locator('label', has_text=payload['tipoMinuta']).first
-                if label.count() > 0:
-                    label.click()
-                    step('Campo 4 preenchido com sucesso (via label).')
-                else:
-                    step(f'Aviso: Opção "{payload["tipoMinuta"]}" não encontrada.')
+                step(f'Aviso: Opção "{payload["tipoMinuta"]}" não encontrada.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 4: {e}')
             step(f'Erro ao preencher campo 4: {str(e)[:100]}')
 
-        # Campo 5: Número contrato Salesforce (text input)
+        # Campo 5: Número contrato Salesforce
         try:
             step('Preenchendo campo 5 (Número Contrato Salesforce).')
             inputs = page.locator('input[type="text"]')
             if inputs.count() > 2:
                 inputs.nth(2).fill(payload['numeroContratoSalesforce'])
-                step('Campo 5 preenchido com sucesso.')
+                step(f'Campo 5 preenchido com: {payload["numeroContratoSalesforce"]}')
             else:
                 step('Aviso: Campo de texto para Salesforce não encontrado.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 5: {e}')
             step(f'Erro ao preencher campo 5: {str(e)[:100]}')
 
-        # Campo 6: Data assinatura (date input)
+        # Campo 6: Data assinatura
         try:
             step('Preenchendo campo 6 (Data assinatura).')
             date_input = page.locator('input[type="date"]').first
             if date_input.count() > 0:
                 date_input.fill(payload['dataAssinaturaContratoOriginal'])
-                step('Campo 6 preenchido com sucesso.')
+                step(f'Campo 6 preenchido com: {payload["dataAssinaturaContratoOriginal"]}')
             else:
                 step('Aviso: Campo de data não encontrado.')
         except Exception as e:
@@ -256,18 +289,12 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         try:
             step('Campo 10 (Haverá reajuste de valores).')
             reajuste_value = payload.get('haveraReajusteValores', 'Não')
-            radio = page.locator(f'input[type="radio"][value="{reajuste_value}"]')
-            if radio.count() > 0:
-                radio.first.check()
-                step(f'Campo 10 preenchido com "{reajuste_value}" com sucesso.')
+            label = page.locator('label', has_text=reajuste_value).first
+            if label.count() > 0:
+                label.click()
+                step(f'Campo 10 preenchido com: {reajuste_value}')
             else:
-                # Tentar encontrar pelo texto do label
-                label = page.locator('label', has_text=reajuste_value)
-                if label.count() > 0:
-                    label.first.click()
-                    step(f'Campo 10 preenchido com "{reajuste_value}" com sucesso (via label).')
-                else:
-                    step(f'Aviso: Opção "{reajuste_value}" não encontrada para reajuste.')
+                step(f'Aviso: Opção "{reajuste_value}" não encontrada para reajuste.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 10: {e}')
             step(f'Erro ao preencher campo 10: {str(e)[:100]}')
