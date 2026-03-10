@@ -1,8 +1,70 @@
 import json
 import logging
 import time
+import os
+import subprocess
+import platform
 from datetime import datetime
 from pathlib import Path
+
+
+def _get_chrome_user_data_dir():
+    """Obtém o diretório de dados do usuário do Chrome (perfil padrão)."""
+    system = platform.system()
+    
+    if system == 'Windows':
+        return os.path.expanduser(r'~\AppData\Local\Google\Chrome\User Data')
+    elif system == 'Darwin':  # macOS
+        return os.path.expanduser('~/Library/Application Support/Google/Chrome')
+    else:  # Linux
+        return os.path.expanduser('~/.config/google-chrome')
+
+
+def _get_chrome_executable():
+    """Obtém o caminho do executável do Chrome."""
+    system = platform.system()
+    
+    if system == 'Windows':
+        possible_paths = [
+            r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+            r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+            os.path.expanduser(r'~\AppData\Local\Google\Chrome\Application\chrome.exe'),
+        ]
+    elif system == 'Darwin':  # macOS
+        possible_paths = [
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        ]
+    else:  # Linux
+        possible_paths = [
+            '/usr/bin/google-chrome',
+            '/usr/bin/chromium-browser',
+            '/snap/bin/chromium',
+        ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    
+    return 'google-chrome'  # Fallback
+
+
+def _try_connect_to_existing_chrome(logger):
+    """Tenta se conectar a uma instância do Chrome já aberta via depuração remota."""
+    try:
+        from playwright.sync_api import sync_playwright
+        
+        # Tentar conectar via WebSocket de depuração remota (porta padrão 9222)
+        p = sync_playwright().start()
+        try:
+            browser = p.chromium.connect_over_cdp('http://localhost:9222')
+            logger.info('[AutoToca] Conectado a instância de Chrome existente via depuração remota.')
+            return browser, p
+        except Exception as e:
+            logger.warning(f'[AutoToca] Não foi possível conectar via depuração remota: {e}')
+            return None, p
+    except Exception as e:
+        logger.warning(f'[AutoToca] Erro ao tentar conexão remota: {e}')
+        return None, None
 
 
 def _resolve_form_context(page):
@@ -33,8 +95,46 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         execution_log.append(line)
         logger.info('[AutoToca][ChamadoJuridico] %s', message)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(channel='chrome', headless=not headful)
+    browser = None
+    context = None
+    page = None
+    p = None
+    connected_to_existing = False
+
+    try:
+        # Tentar conectar a uma instância existente primeiro
+        if headful:
+            step('Tentando conectar a instância de Chrome existente...')
+            browser, p = _try_connect_to_existing_chrome(logger)
+            if browser:
+                connected_to_existing = True
+                step('Conectado a Chrome existente com sucesso.')
+            else:
+                step('Nenhuma instância existente encontrada. Iniciando nova instância com perfil do usuário.')
+                p = sync_playwright().start()
+
+        if not browser:
+            # Se não conseguiu conectar, lançar com o perfil do usuário
+            user_data_dir = _get_chrome_user_data_dir()
+            chrome_executable = _get_chrome_executable()
+            
+            launch_args = {
+                'channel': 'chrome',
+                'headless': not headful,
+            }
+            
+            # Se headful e temos um diretório de dados, usar o perfil do usuário
+            if headful and os.path.exists(user_data_dir):
+                launch_args['args'] = [
+                    f'--user-data-dir={user_data_dir}',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                ]
+                step(f'Usando perfil do Chrome: {user_data_dir}')
+            
+            browser = p.chromium.launch(**launch_args)
+
+        # Criar contexto e página
         context = browser.new_context()
         page = context.new_page()
 
@@ -190,10 +290,32 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
             if headful:
                 step('Aguardando ação do usuário (janela permanecerá aberta)...')
 
-        if not headful:
-            context.close()
-            browser.close()
-        # Se headful, deixar a janela aberta para o usuário interagir
+        # Não fechar o navegador se foi conectado a uma instância existente
+        if not connected_to_existing and not headful:
+            if context:
+                context.close()
+            if browser:
+                browser.close()
+        # Se headful ou conectado a existente, deixar aberto
+
+    except Exception as e:
+        logger.exception(f'[AutoToca] Erro geral na automação: {e}')
+        step(f'Erro geral: {str(e)[:200]}')
+        # Tentar fechar recursos em caso de erro
+        try:
+            if context:
+                context.close()
+            if browser and not connected_to_existing:
+                browser.close()
+        except:
+            pass
+    finally:
+        # Fechar playwright se foi iniciado
+        if p:
+            try:
+                p.stop()
+            except:
+                pass
 
     (screenshots_dir / 'execution-log.json').write_text(
         json.dumps({'created_at': datetime.now().isoformat(), 'steps': execution_log}, ensure_ascii=False, indent=2),
