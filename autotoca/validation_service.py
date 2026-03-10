@@ -16,7 +16,6 @@ def validate_aditivo_payload(payload: dict, generic_contrato_file: str, generic_
         'contaSelecionada',
         'enderecoFinalConfirmado',
         'numeroContratoSalesforce',
-        'dataAssinaturaContratoOriginal',
     ]
     for field in required_text_fields:
         if not (data.get(field) or '').strip():
@@ -25,16 +24,12 @@ def validate_aditivo_payload(payload: dict, generic_contrato_file: str, generic_
     if data.get('tipoMinuta') not in VALID_TIPO_MINUTA:
         errors.append('tipoMinuta inválido.')
 
-    if data.get('contratoOriginalModo') == 'upload_usuario':
-        if not data.get('arquivosContratoOriginal'):
-            errors.append('É obrigatório anexar arquivo no campo 8 (Contrato original).')
-    else:
+    # Contrato Original: se não houver upload, usa o genérico
+    if not data.get('arquivosContratoOriginal'):
         data['arquivosContratoOriginal'] = [generic_contrato_file]
 
-    if data.get('clienteEncaminhouMinuta') == 'Sim':
-        if not data.get('arquivosMinutaCliente'):
-            errors.append('Cliente encaminhou minuta = Sim exige upload do arquivo (campo 9).')
-    else:
+    # Minuta do Cliente: se não houver upload, usa o genérico
+    if not data.get('arquivosMinutaCliente'):
         data['arquivosMinutaCliente'] = [generic_minuta_file]
 
     for file_field in ('arquivosAditivosAnteriores', 'arquivosContratoOriginal', 'arquivosMinutaCliente'):

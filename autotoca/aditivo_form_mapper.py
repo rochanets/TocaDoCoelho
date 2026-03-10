@@ -23,7 +23,8 @@ def map_aditivo_input(payload: dict) -> dict:
         'haveraReajusteValores': (data.get('haveraReajusteValores') or 'Não').strip(),
     }
 
-    if mapped['dataContratoModo'] == 'nao_se_aplica':
+    # Se a data estiver vazia, coloca a data de hoje
+    if not mapped['dataAssinaturaContratoOriginal']:
         mapped['dataAssinaturaContratoOriginal'] = datetime.now().strftime('%d/%m/%Y')
 
     return mapped

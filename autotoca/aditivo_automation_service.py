@@ -71,11 +71,15 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
             page.get_by_label('Enviar cópia de todos os aditivos anteriores assinados por ambas partes').set_input_files(payload['arquivosAditivosAnteriores'])
 
         step('Upload campo 8 (Contrato original).')
-        page.get_by_label('Enviar cópia do Contrato original assinado por ambas partes').set_input_files(payload['arquivosContratoOriginal'])
+        if payload.get('arquivosContratoOriginal'):
+            page.get_by_label('Enviar cópia do Contrato original assinado por ambas partes').set_input_files(payload['arquivosContratoOriginal'])
 
         step('Campo 9 (Minuta para validação).')
-        page.get_by_role('radio', name=payload['clienteEncaminhouMinuta']).check()
-        page.get_by_label('Cliente encaminhou minuta para validação? Se sim, encaminhar documento').set_input_files(payload['arquivosMinutaCliente'])
+        # Determina se o cliente encaminhou minuta baseado na presença de arquivos (que não sejam o genérico)
+        # No entanto, a lógica de negócio agora diz que se não subir, usa o genérico.
+        # Vamos apenas preencher o arquivo se ele existir no payload.
+        if payload.get('arquivosMinutaCliente'):
+            page.get_by_label('Cliente encaminhou minuta para validação? Se sim, encaminhar documento').set_input_files(payload['arquivosMinutaCliente'])
 
         step('Campo 10 (Reajuste de valores).')
         page.get_by_role('radio', name=payload['haveraReajusteValores']).check()

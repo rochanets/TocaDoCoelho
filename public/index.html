@@ -1955,32 +1955,46 @@
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
                     <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px;">
                         <div class="form-group"><label>Conta</label><select id="autotocaConta" required></select></div>
-                        <div class="form-group" id="autotocaContaOutroWrap" style="display:none;"><label>Outra conta</label><input id="autotocaContaOutro" type="text" placeholder="Digite a razão social"></div>
+                        <div class="form-group" id="autotocaContaOutroWrap" style="display:none;"><label>Outra conta (Razão Social)</label><input id="autotocaContaOutro" type="text" placeholder="Digite a razão social"></div>
 
                         <div class="form-group"><label>Tipo de minuta</label><select id="autotocaTipoMinuta" required><option>Minuta padrão Stefanini - sem ajustes</option><option>Minuta padrão Stefanini - com ajustes do cliente</option><option>Minuta enviada pelo cliente (anexar no item 8)</option></select></div>
                         <div class="form-group"><label>Número contrato Salesforce</label><input id="autotocaContratoSF" type="text" required></div>
 
-                        <div class="form-group"><label>Data Assinatura</label><input id="autotocaDataAssinatura" type="text" placeholder="dd/MM/yyyy ou Não se aplica" required></div>
+                        <div class="form-group"><label>Data Assinatura</label><input id="autotocaDataAssinatura" type="text" placeholder="Vazio = Hoje (dd/MM/yyyy)"></div>
                         <div class="form-group"><label>Haverá reajuste de valores?</label><select id="autotocaReajuste"><option>Sim</option><option selected>Não</option></select></div>
 
-                        <div class="form-group"><label>Contrato Original (campo 8)</label><select id="autotocaContratoOriginalModo" onchange="toggleAutoTocaUploads()"><option value="upload_usuario">Upload de arquivo</option><option value="nao_se_aplica">Não se aplica</option></select></div>
-                        <div class="form-group" id="autotocaArquivos8Wrap"><label>Contrato Original</label><input id="autotocaArquivos8" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos8')"></div>
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Contrato Original (campo 8)</label>
+                            <div style="display:flex; gap:12px; align-items:center;">
+                                <input id="autotocaArquivos8" type="file" onchange="uploadAutoTocaFiles(this,'arquivos8')" style="flex:1;">
+                                <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; margin:0; white-space:nowrap;">
+                                    <input type="checkbox" id="autotocaContratoOriginalNaoAplica" onchange="toggleAutoTocaContratoOriginal()"> Não se aplica
+                                </label>
+                            </div>
+                        </div>
 
                         <div class="form-group"><label>Aditivos anteriores</label><input id="autotocaArquivos7" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos7')"></div>
-                        <div class="form-group"><label>Minuta do Cliente (opcional)</label><input id="autotocaArquivos9" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos9')"></div>
-
-                        <div class="form-group"><label>Cliente encaminhou minuta?</label><select id="autotocaClienteMinuta"><option>Sim</option><option selected>Não</option></select></div>
+                        <div class="form-group"><label>Minuta do Cliente (opcional)</label><input id="autotocaArquivos9" type="file" onchange="uploadAutoTocaFiles(this,'arquivos9')"></div>
                     </div>
 
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-                        <button type="button" class="btn btn-secondary" onclick="buscarEnderecoAutoToca()"><i class="fas fa-location-dot"></i> Buscar endereço da Sede</button>
+                    <div class="form-group" style="margin-top:10px;">
+                        <label style="display:flex; justify-content:space-between; align-items:center;">
+                            Endereço
+                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca()" style="padding:4px 10px; font-size:12px;">
+                                <span class="ai-star-icon">✦</span> Buscar Sede
+                            </button>
+                        </label>
+                        <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
+                        <input type="hidden" id="autotocaEnderecoSugerido">
+                        <input type="hidden" id="autotocaEnderecoFonte">
                     </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
-                        <div class="form-group"><label>Endereço sugerido</label><textarea id="autotocaEnderecoSugerido" rows="2"></textarea></div>
-                        <div class="form-group"><label>Fonte do endereço</label><input id="autotocaEnderecoFonte" type="text"></div>
+
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;">
+                        <button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()"><i class="fas fa-list-check"></i> Gerar resumo</button>
+                        <button class="btn btn-auto-mapping" type="submit" style="flex:1; justify-content:center;">
+                            <span class="ai-star-icon">✦</span> Executar Automação
+                        </button>
                     </div>
-                    <div class="form-group"><label>Endereço final confirmado</label><textarea id="autotocaEnderecoFinal" rows="2" required></textarea></div>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap;"><button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()"><i class="fas fa-list-check"></i> Gerar resumo</button><button class="btn btn-primary" type="submit"><i class="fas fa-play"></i> Executar automação</button></div>
                 </form>
                 <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
             </div>
@@ -2601,12 +2615,14 @@
             const select = document.getElementById('autotocaConta');
             if (response.ok && select) {
                 const list = await response.json();
-                select.innerHTML = list.map(a => `<option value="${escapeHtml(a.name)}">${escapeHtml(a.name)}</option>`).join('');
+                const options = list.map(a => `<option value="${escapeHtml(a.name)}">${escapeHtml(a.name)}</option>`);
+                options.push('<option value="OUTRO">OUTROS</option>');
+                select.innerHTML = options.join('');
                 select.onchange = () => {
                     document.getElementById('autotocaContaOutroWrap').style.display = select.value === 'OUTRO' ? 'block' : 'none';
                 };
             }
-            toggleAutoTocaUploads();
+            toggleAutoTocaContratoOriginal();
         }
 
         function toggleAutoTocaAutomation(key) {
@@ -2614,15 +2630,20 @@
             if (!el) return;
             el.style.display = el.style.display === 'none' ? 'block' : 'none';
             if (el.style.display === 'block') {
-                toggleAutoTocaUploads();
+                toggleAutoTocaContratoOriginal();
             }
         }
 
-        function toggleAutoTocaUploads() {
-            const modo = document.getElementById('autotocaContratoOriginalModo')?.value;
-            const wrap = document.getElementById('autotocaArquivos8Wrap');
-            if (!wrap) return;
-            wrap.style.display = modo === 'upload_usuario' ? 'block' : 'none';
+        function toggleAutoTocaContratoOriginal() {
+            const isNaoAplica = document.getElementById('autotocaContratoOriginalNaoAplica')?.checked;
+            const input = document.getElementById('autotocaArquivos8');
+            if (input) {
+                input.disabled = isNaoAplica;
+                if (isNaoAplica) {
+                    input.value = '';
+                    autoTocaUploadedFiles.arquivos8 = [];
+                }
+            }
         }
 
         async function uploadAutoTocaFiles(input, bucket) {
@@ -2649,17 +2670,34 @@
                 ? document.getElementById('autotocaContaOutro').value.trim()
                 : document.getElementById('autotocaConta').value;
             if (!conta) return showError('Informe a conta para buscar endereço.');
-            const response = await fetch(`${API_BASE}/autotoca/address-suggestion`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account_name: conta })
-            });
-            const data = await response.json();
-            if (!response.ok) return showError(data.error || 'Falha na busca de endereço.');
-            document.getElementById('autotocaEnderecoSugerido').value = data.suggested_address || '';
-            document.getElementById('autotocaEnderecoFonte').value = data.source || '';
-            if (!document.getElementById('autotocaEnderecoFinal').value) {
+            
+            const btn = event?.currentTarget || document.querySelector('button[onclick="buscarEnderecoAutoToca()"]');
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Buscando...';
+
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/address-suggestion`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account_name: conta })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Falha na busca');
+                
                 document.getElementById('autotocaEnderecoFinal').value = data.suggested_address || '';
+                document.getElementById('autotocaEnderecoSugerido').value = data.suggested_address || '';
+                document.getElementById('autotocaEnderecoFonte').value = data.source || '';
+                
+                if (data.suggested_address) {
+                    showSuccess('Endereço localizado com sucesso!');
+                } else {
+                    showInfo('Não encontrei um endereço exato. Por favor, preencha manualmente.');
+                }
+            } catch (e) {
+                showError(e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
             }
-            showSuccess(data.suggested_address ? 'Endereço sugerido carregado.' : 'Não encontrei endereço confiável. Preencha manualmente.');
         }
 
         function buildAutoTocaPayload() {
@@ -2668,7 +2706,7 @@
                 : document.getElementById('autotocaConta').value;
 
             const dataAssinaturaRaw = (document.getElementById('autotocaDataAssinatura').value || '').trim();
-            const naoSeAplica = dataAssinaturaRaw.toLowerCase() === 'não se aplica' || dataAssinaturaRaw.toLowerCase() === 'nao se aplica';
+            const contratoOriginalNaoAplica = document.getElementById('autotocaContratoOriginalNaoAplica')?.checked;
 
             return {
                 contaSelecionada: conta,
@@ -2677,37 +2715,50 @@
                 enderecoFinalConfirmado: document.getElementById('autotocaEnderecoFinal').value,
                 tipoMinuta: document.getElementById('autotocaTipoMinuta').value,
                 numeroContratoSalesforce: document.getElementById('autotocaContratoSF').value,
-                dataContratoModo: naoSeAplica ? 'nao_se_aplica' : 'informada',
-                dataAssinaturaContratoOriginal: naoSeAplica ? '' : dataAssinaturaRaw,
+                dataContratoModo: 'informada',
+                dataAssinaturaContratoOriginal: dataAssinaturaRaw,
                 arquivosAditivosAnteriores: autoTocaUploadedFiles.arquivos7,
-                contratoOriginalModo: document.getElementById('autotocaContratoOriginalModo').value,
+                contratoOriginalModo: contratoOriginalNaoAplica ? 'nao_se_aplica' : 'upload_usuario',
                 arquivosContratoOriginal: autoTocaUploadedFiles.arquivos8,
-                clienteEncaminhouMinuta: document.getElementById('autotocaClienteMinuta').value,
+                clienteEncaminhouMinuta: autoTocaUploadedFiles.arquivos9.length > 0 ? 'Sim' : 'Não',
                 arquivosMinutaCliente: autoTocaUploadedFiles.arquivos9,
                 haveraReajusteValores: document.getElementById('autotocaReajuste').value,
             };
         }
 
-        function _buildResumoText(payload) {
-            return [
-                `Conta: ${payload.contaSelecionada || '-'}`,
-                `Endereço final: ${payload.enderecoFinalConfirmado || '-'}`,
-                `Minuta: ${payload.tipoMinuta || '-'}`,
-                `Contrato Salesforce: ${payload.numeroContratoSalesforce || '-'}`,
-                `Data assinatura: ${payload.dataContratoModo === 'nao_se_aplica' ? 'Não se aplica (preenchimento automático na execução)' : (payload.dataAssinaturaContratoOriginal || '-')}`,
-                `Contrato original: ${payload.contratoOriginalModo === 'nao_se_aplica' ? 'Não se aplica (arquivo genérico)' : `${(payload.arquivosContratoOriginal || []).length} arquivo(s)`}`,
-                `Aditivos anteriores: ${(payload.arquivosAditivosAnteriores || []).length} arquivo(s)`,
-                `Minuta do cliente: ${(payload.arquivosMinutaCliente || []).length} arquivo(s)`,
-                `Cliente encaminhou minuta?: ${payload.clienteEncaminhouMinuta}`,
-                `Haverá reajuste?: ${payload.haveraReajusteValores}`,
-            ].join('\n');
+        function _buildResumoMarkdown(payload) {
+            const dataAssinatura = payload.dataAssinaturaContratoOriginal || 'Hoje (Automático)';
+            const contratoOriginal = payload.contratoOriginalModo === 'nao_se_aplica' 
+                ? '📄 Arquivo Genérico (Não se aplica)' 
+                : (payload.arquivosContratoOriginal.length > 0 ? `✅ ${payload.arquivosContratoOriginal.length} arquivo(s) enviado(s)` : '⚠️ Nenhum arquivo (será usado genérico)');
+            
+            const minutaCliente = payload.arquivosMinutaCliente.length > 0 
+                ? `✅ ${payload.arquivosMinutaCliente.length} arquivo(s) enviado(s)` 
+                : '📄 Arquivo Genérico (Padrão)';
+
+            return `
+### 📝 Resumo da Requisição Jurídica
+
+*   **🏢 Conta:** ${payload.contaSelecionada || 'Não informada'}
+*   **📍 Endereço:** ${payload.enderecoFinalConfirmado || 'Não informado'}
+*   **📄 Tipo de Minuta:** ${payload.tipoMinuta}
+*   **🔢 Contrato Salesforce:** ${payload.numeroContratoSalesforce || 'Não informado'}
+*   **📅 Data Assinatura:** ${dataAssinatura}
+*   **📑 Contrato Original:** ${contratoOriginal}
+*   **📎 Aditivos Anteriores:** ${payload.arquivosAditivosAnteriores.length} arquivo(s)
+*   **📝 Minuta do Cliente:** ${minutaCliente}
+*   **🔄 Reajuste:** ${payload.haveraReajusteValores}
+
+---
+*Pronto para executar a automação!* 🚀
+            `.trim();
         }
 
         async function gerarResumoAutoToca() {
             const payload = buildAutoTocaPayload();
             await openSystemDialog({
-                title: 'Resumo da automação',
-                message: _buildResumoText(payload),
+                title: 'Resumo da Automação',
+                message: _buildResumoMarkdown(payload),
                 showCancel: false,
             });
         }
