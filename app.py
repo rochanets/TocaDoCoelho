@@ -6426,8 +6426,8 @@ def autotoca_chamado_juridico():
     execution_id = datetime.utcnow().strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex[:6]
     try:
         data = request.get_json(force=True) or {}
-        submit = False
-        headful = True
+        submit = data.get('submit', False)  # Aceitar parâmetro submit do frontend
+        headful = True  # Sempre usar headful para abrir em aba do navegador existente
         input_payload = data.get('payload') or {}
 
         settings = _load_app_settings_map([

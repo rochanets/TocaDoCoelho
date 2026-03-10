@@ -2045,9 +2045,16 @@
                         <button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()" style="padding:10px 16px;">
                             <i class="fas fa-list-check"></i> Gerar Resumo
                         </button>
-                        <button class="btn btn-auto-mapping" type="submit" style="padding:10px 16px;">
+                        <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px; position:relative;">
                             <span class="ai-star-icon">✦</span> Executar Automação
+                            <span id="autotocaLoadingSpinner" style="display:none; margin-left:8px; width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top:2px solid white; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle;"></span>
                         </button>
+                        <style>
+                            @keyframes spin {
+                                0% { transform: rotate(0deg); }
+                                100% { transform: rotate(360deg); }
+                            }
+                        </style>
                     </div>
                 </form>
                 <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
@@ -2835,20 +2842,35 @@
 
         async function runChamadoJuridico(event) {
             event.preventDefault();
-            const payload = buildAutoTocaPayload();
-            const response = await fetch(`${API_BASE}/autotoca/chamado-juridico`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ payload })
-            });
-            const data = await response.json();
-            if (!response.ok) {
-                document.getElementById('autotocaLogs').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(data.error || 'Falha na automação')}</span>`;
-                return showError(data.error || 'Falha na automação.');
+            const btn = document.getElementById('autotocaSubmitBtn');
+            const spinner = document.getElementById('autotocaLoadingSpinner');
+            
+            btn.disabled = true;
+            spinner.style.display = 'inline-block';
+            
+            try {
+                const payload = buildAutoTocaPayload();
+                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ payload, submit: false })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    document.getElementById('autotocaLogs').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(data.error || 'Falha na automação')}</span>`;
+                    showError(data.error || 'Falha na automação.');
+                    return;
+                }
+                const logs = (data.logs || []).map(item => `<div>${escapeHtml(item)}</div>`).join('');
+                document.getElementById('autotocaLogs').innerHTML = `<strong>Execução #${data.execution_id}</strong>${logs}`;
+                showSuccess('Formulário preenchido! Verifique a janela aberta e clique em Enviar para confirmar.');
+            } catch (error) {
+                document.getElementById('autotocaLogs').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(error.message || 'Erro na execução')}</span>`;
+                showError(error.message || 'Erro na automação.');
+            } finally {
+                btn.disabled = false;
+                spinner.style.display = 'none';
             }
-            const logs = (data.logs || []).map(item => `<div>${escapeHtml(item)}</div>`).join('');
-            document.getElementById('autotocaLogs').innerHTML = `<strong>Execução #${data.execution_id}</strong>${logs}`;
-            showSuccess('Automação executada com sucesso.');
         }
 
         async function loadIntegrationConfig() {
