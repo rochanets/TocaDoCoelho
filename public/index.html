@@ -2298,7 +2298,7 @@
                 <input type="hidden" id="kanbanCardId">
                 <div class="form-group"><label>Título *</label><input id="kanbanCardTitle" required></div>
                 <div class="form-group"><label>Descrição *</label><textarea id="kanbanCardDescription" rows="4" required oninput="autoFillKanbanTag()"></textarea></div>
-                <div class="form-group"><label>Tag (automática)</label><input id="kanbanCardTag" readonly style="background:#ecfdf5;color:#065f46;cursor:not-allowed;"></div>
+                <div class="form-group"><label>Tag</label><input id="kanbanCardTag" placeholder="Ex: Comercial | Prioridade Alta" style="background:#ecfdf5;color:#065f46;"></div>
                 <div class="form-group"><label>Conta</label><select id="kanbanCardAccount"></select></div>
                 <div class="form-group"><label>Contato</label><select id="kanbanCardContact"></select></div>
                 <div class="modal-footer">
@@ -4102,7 +4102,10 @@
 
         function autoFillKanbanTag() {
             const desc = document.getElementById('kanbanCardDescription')?.value || '';
-            document.getElementById('kanbanCardTag').value = inferKanbanTagLocal(desc);
+            const tagInput = document.getElementById('kanbanCardTag');
+            if (!tagInput) return;
+            if ((tagInput.value || '').trim()) return;
+            tagInput.value = inferKanbanTagLocal(desc);
         }
 
         async function saveKanbanCard(event) {
@@ -4142,10 +4145,17 @@
                 const tagsHtml = resolvedTags.map(tag => `<span class=\"kanban-tag\">${escapeHtml(tag)}</span>`).join('');
                 const activities = data.activities || [];
                 document.getElementById('kanbanCardViewTitle').textContent = data.title || 'Card';
+                const accountBlock = data.account_name
+                    ? `<div class="kanban-view-box"><div style="color:#6b7280;font-size:12px;">Conta</div><div style="display:flex; align-items:center; gap:8px; margin-top:4px;"><img src="${data.account_logo_url || '/logo-coelho.png'}" class="kanban-avatar"><div style="font-weight:700;color:#065f46;">${escapeHtml(data.account_name)}</div></div></div>`
+                    : `<div class="kanban-view-box"><div style="color:#6b7280;font-size:12px;">Conta</div><div style="font-weight:700;color:#94a3b8;">Não vinculada</div></div>`;
+                const contactBlock = data.contact_name
+                    ? `<div class="kanban-view-box"><div style="color:#6b7280;font-size:12px;">Contato</div><div style="display:flex; align-items:center; gap:8px; margin-top:4px;"><img src="${data.contact_photo_url || '/images/sad-contact-bunny.svg'}" class="kanban-avatar"><div><div style="font-weight:700;color:#065f46;">${escapeHtml(data.contact_name)}</div><div style="font-size:11px;color:#94a3b8;">${escapeHtml(data.contact_position || '')}</div></div></div></div>`
+                    : '';
                 document.getElementById('kanbanCardViewBody').innerHTML = `
                     <div class="kanban-view-grid">
                         <div class="kanban-view-box"><div style="color:#6b7280;font-size:12px;">Sessão</div><div style="font-weight:700;color:#065f46;">${escapeHtml(data.column_title || '-')}</div></div>
-                        <div class="kanban-view-box"><div style="color:#6b7280;font-size:12px;">Conta</div><div style="font-weight:700;color:#065f46;">${escapeHtml(data.account_name || 'Sem conta')}</div></div>
+                        ${accountBlock}
+                        ${contactBlock}
                     </div>
                     <div class="kanban-view-box" style="margin-bottom:12px;"><div style="color:#6b7280;font-size:12px; margin-bottom:4px;">Descrição</div><div style="white-space:pre-wrap; color:#334155;">${escapeHtml(data.description || '')}</div></div>
                     <div class="kanban-view-box" style="margin-bottom:12px;"><div style="color:#6b7280;font-size:12px; margin-bottom:6px;">Tags</div><div class="kanban-tags">${tagsHtml || ''}</div></div>
