@@ -1522,6 +1522,13 @@
         @keyframes kanbanPulse { 0%{transform:scale(1); opacity:1;} 50%{transform:scale(1.18); opacity:.65;} 100%{transform:scale(1); opacity:1;} }
         .kanban-view-inline-meta { display:flex; gap:10px; align-items:flex-start; margin:8px 0 10px; }
         .kanban-view-inline-meta .kanban-view-box { flex:1; margin:0; }
+        .kanban-card-actions { display:flex; gap:4px; }
+        .kanban-card-action-btn { padding:4px 6px !important; font-size:10px !important; min-width:auto !important; border-radius:6px !important; }
+        .kanban-urgency-chip { position:absolute; right:8px; bottom:6px; font-size:10px; padding:2px 7px; border-radius:999px; background:#ecfdf5; color:#065f46; border:1px solid rgba(16,185,129,.35); cursor:pointer; user-select:none; }
+        .kanban-urgency-editor { position:fixed; z-index:1300; background:#fff; border:1px solid #d1fae5; border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.14); padding:8px; display:none; min-width:120px; }
+        .kanban-urgency-editor.open { display:block; }
+        .kanban-urgency-editor button { width:100%; text-align:left; background:none; border:none; padding:6px 8px; border-radius:8px; cursor:pointer; font-size:12px; color:#065f46; }
+        .kanban-urgency-editor button:hover { background:#ecfdf5; }
 
         @media (max-width: 1080px) {
             .wiki-grid { grid-template-columns: 1fr; }
@@ -2327,6 +2334,8 @@
             <div id="kanbanCardViewBody"></div>
         </div>
     </div>
+
+    <div id="kanbanUrgencyEditor" class="kanban-urgency-editor"></div>
 
     <script>
         const API_BASE = '/api';
@@ -3998,24 +4007,26 @@
                         <button class="btn btn-edit-accent btn-small" onclick="renameKanbanColumn(${column.id}, '${escapeHtml(column.title).replace(/'/g, "\'")}')"><i class="fas fa-pen"></i></button>
                         <button class="btn btn-danger btn-small" onclick="deleteKanbanColumn(${column.id})"><i class="fas fa-trash"></i></button>
                     </div>`;
-                const cardsHtml = (cardsByColumn[column.id] || []).map(card => {
+                const cardsInColumn = (cardsByColumn[column.id] || []);
+                const cardsHtml = cardsInColumn.map((card, idx) => {
                     const accountImg = card.account_logo_url || '/logo-coelho.png';
                     const contactImg = card.contact_photo_url || '/images/sad-contact-bunny.svg';
                     const resolvedTags = parseKanbanTags(card.tag).length ? parseKanbanTags(card.tag) : extractKanbanKeywords(card.description || '');
                     const tagsHtml = resolvedTags.map(tag => `<span class="kanban-tag">${escapeHtml(tag)}</span>`).join('');
                     const stateClass = isDiscardedColumn ? 'kanban-card-discarded' : (isDoneColumn ? 'kanban-card-done' : '');
-                    return `<div class="kanban-card ${stateClass}" draggable="true" ondragstart="onKanbanCardDragStart(event, ${card.id})" onclick="openKanbanCardViewModal(${card.id})">
+                    return `<div class="kanban-card ${stateClass}" draggable="true" ondragstart="onKanbanCardDragStart(event, ${card.id})" ondragover="onKanbanColumnDragOver(event)" ondragleave="onKanbanColumnDragLeave(event)" ondrop="onKanbanCardDrop(event, ${column.id}, ${idx})" onclick="openKanbanCardViewModal(${card.id})">
                         <div style="display:flex; justify-content:space-between; gap:8px;">
                             <h4>${escapeHtml(card.title)}</h4>
-                            <div style="display:flex; gap:4px;">
-                                <button class="btn btn-edit-accent btn-small" onclick="event.stopPropagation(); openKanbanCardModal(${card.id})"><i class="fas fa-pen"></i></button>
-                                <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteKanbanCard(${card.id})"><i class="fas fa-trash"></i></button>
+                            <div class="kanban-card-actions">
+                                <button class="btn btn-edit-accent btn-small kanban-card-action-btn" onclick="event.stopPropagation(); openKanbanCardModal(${card.id})"><i class="fas fa-pen"></i></button>
+                                <button class="btn btn-danger btn-small kanban-card-action-btn" onclick="event.stopPropagation(); deleteKanbanCard(${card.id})"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
                         ${card.account_name ? `<div class="kanban-meta"><img src="${accountImg}" class="kanban-avatar"> ${escapeHtml(card.account_name)}</div>` : ''}
                         ${card.contact_name ? `<div class="kanban-meta"><img src="${contactImg}" class="kanban-avatar"> ${escapeHtml(card.contact_name)}</div>` : ''}
                         ${tagsHtml ? `<div class="kanban-tags">${tagsHtml}</div>` : ''}
                         ${isKanbanCardOverdue(card) ? `<span class="kanban-urgent-badge" title="Sem update de atividade no prazo">!</span>` : ''}
+                        <span class="kanban-urgency-chip" onclick="event.stopPropagation(); openKanbanUrgencyEditor(event, ${card.id}, '${(card.urgency || 'Média').replace(/'/g, \"\'\")}')">${escapeHtml(card.urgency || 'Média')}</span>
                     </div>`;
                 }).join('');
                 return `<div class="kanban-column" ondragover="onKanbanColumnDragOver(event)" ondragleave="onKanbanColumnDragLeave(event)" ondrop="onKanbanCardDrop(event, ${column.id})">
@@ -4237,6 +4248,47 @@
             if (modal) modal.classList.remove('active');
         }
 
+        document.addEventListener('click', (ev) => {
+            const editor = document.getElementById('kanbanUrgencyEditor');
+            if (!editor || !editor.classList.contains('open')) return;
+            if (ev.target.closest('#kanbanUrgencyEditor') || ev.target.closest('.kanban-urgency-chip')) return;
+            closeKanbanUrgencyEditor();
+        });
+
+
+        function closeKanbanUrgencyEditor() {
+            const editor = document.getElementById('kanbanUrgencyEditor');
+            if (!editor) return;
+            editor.classList.remove('open');
+            editor.innerHTML = '';
+        }
+
+        function openKanbanUrgencyEditor(event, cardId, currentUrgency) {
+            const editor = document.getElementById('kanbanUrgencyEditor');
+            if (!editor) return;
+            const options = ['Baixa', 'Média', 'Alta', 'Crítica'];
+            editor.innerHTML = options.map(opt => `<button onclick="setKanbanCardUrgency(${cardId}, '${opt}')">${opt}${opt===currentUrgency?' ✓':''}</button>`).join('');
+            editor.style.left = `${(event.clientX || 0) + 8}px`;
+            editor.style.top = `${(event.clientY || 0) - 8}px`;
+            editor.classList.add('open');
+        }
+
+        async function setKanbanCardUrgency(cardId, urgency) {
+            try {
+                const response = await fetch(`${API_BASE}/kanban/cards/${cardId}/urgency`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urgency })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Erro ao atualizar urgência');
+                closeKanbanUrgencyEditor();
+                loadKanban();
+            } catch (e) {
+                showError(e.message);
+            }
+        }
+
         async function deleteKanbanCard(cardId) {
             const confirmed = await uiConfirm('Deseja excluir este card? Esta ação não pode ser desfeita.', 'Excluir card');
             if (!confirmed) return;
@@ -4264,16 +4316,20 @@
             event.currentTarget.classList.remove('kanban-drop-hover');
         }
 
-        async function onKanbanCardDrop(event, columnId) {
+        async function onKanbanCardDrop(event, columnId, position = null) {
             event.preventDefault();
             event.currentTarget.classList.remove('kanban-drop-hover');
             const cardId = Number(event.dataTransfer.getData('text/plain'));
             if (!cardId) return;
             try {
+                if (position === null || Number.isNaN(Number(position))) {
+                    const colCards = kanbanCards.filter(c => Number(c.column_id) === Number(columnId));
+                    position = colCards.length;
+                }
                 const response = await fetch(`${API_BASE}/kanban/cards/${cardId}/move`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ column_id: columnId, position: 999 })
+                    body: JSON.stringify({ column_id: columnId, position: Number(position) })
                 });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Erro ao mover card');

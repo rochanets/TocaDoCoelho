@@ -4751,6 +4751,30 @@ def delete_kanban_card(card_id):
         return jsonify({'error': str(e)}), 500
 
 
+
+
+@app.route('/api/kanban/cards/<int:card_id>/urgency', methods=['PATCH'])
+def update_kanban_card_urgency(card_id):
+    try:
+        urgency = (request.json.get('urgency') or '').strip() or 'Média'
+        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
+            return jsonify({'error': 'Urgência inválida'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
+
+        c.execute('UPDATE kanban_cards SET urgency = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (urgency, card_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Urgência atualizada com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] PATCH /api/kanban/cards/{card_id}/urgency: {e}')
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/kanban/cards/<int:card_id>/move', methods=['PATCH'])
 def move_kanban_card(card_id):
     try:
