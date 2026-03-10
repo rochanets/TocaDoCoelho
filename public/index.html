@@ -1523,7 +1523,7 @@
         .kanban-view-inline-meta { display:flex; gap:10px; align-items:flex-start; margin:8px 0 10px; }
         .kanban-view-inline-meta .kanban-view-box { flex:1; margin:0; }
         .kanban-card-actions { display:flex; gap:4px; }
-        .kanban-card-action-btn { padding:4px 6px !important; font-size:10px !important; min-width:auto !important; border-radius:6px !important; }
+        .kanban-card-action-btn { width:22px !important; height:22px !important; padding:0 !important; font-size:10px !important; min-width:22px !important; border-radius:6px !important; display:inline-flex !important; align-items:center; justify-content:center; }
         .kanban-urgency-chip { position:absolute; right:8px; bottom:6px; font-size:10px; padding:2px 7px; border-radius:999px; background:#ecfdf5; color:#065f46; border:1px solid rgba(16,185,129,.35); cursor:pointer; user-select:none; }
         .kanban-urgency-editor { position:fixed; z-index:1300; background:#fff; border:1px solid #d1fae5; border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.14); padding:8px; display:none; min-width:120px; }
         .kanban-urgency-editor.open { display:block; }
@@ -4014,7 +4014,7 @@
                     const resolvedTags = parseKanbanTags(card.tag).length ? parseKanbanTags(card.tag) : extractKanbanKeywords(card.description || '');
                     const tagsHtml = resolvedTags.map(tag => `<span class="kanban-tag">${escapeHtml(tag)}</span>`).join('');
                     const stateClass = isDiscardedColumn ? 'kanban-card-discarded' : (isDoneColumn ? 'kanban-card-done' : '');
-                    return `<div class="kanban-card ${stateClass}" draggable="true" ondragstart="onKanbanCardDragStart(event, ${card.id})" ondragover="onKanbanColumnDragOver(event)" ondragleave="onKanbanColumnDragLeave(event)" ondrop="onKanbanCardDrop(event, ${column.id}, ${idx})" onclick="openKanbanCardViewModal(${card.id})">
+                    return `<div class="kanban-card ${stateClass}" data-card-id="${card.id}" draggable="true" ondragstart="onKanbanCardDragStart(event, ${card.id})" ondragend="onKanbanCardDragEnd(event)" onclick="onKanbanCardClick(event, ${card.id})">
                         <div style="display:flex; justify-content:space-between; gap:8px;">
                             <h4>${escapeHtml(card.title)}</h4>
                             <div class="kanban-card-actions">
@@ -4029,12 +4029,12 @@
                         <span class="kanban-urgency-chip" onclick="event.stopPropagation(); openKanbanUrgencyEditor(event, ${card.id}, '${(card.urgency || 'Média').replace(/'/g, "\\'")}')">${escapeHtml(card.urgency || 'Média')}</span>
                     </div>`;
                 }).join('');
-                return `<div class="kanban-column" ondragover="onKanbanColumnDragOver(event)" ondragleave="onKanbanColumnDragLeave(event)" ondrop="onKanbanCardDrop(event, ${column.id})">
+                return `<div class="kanban-column" data-column-id="${column.id}">
                     <div class="kanban-column-head">
                         <span class="kanban-column-title">${escapeHtml(column.title)}</span>
                         ${actionButtons}
                     </div>
-                    <div class="kanban-cards">${cardsHtml}</div>
+                    <div class="kanban-cards" ondragover="onKanbanColumnDragOver(event)" ondragleave="onKanbanColumnDragLeave(event)" ondrop="onKanbanCardDrop(event, ${column.id})">${cardsHtml}</div>
                 </div>`;
             }).join('');
         }
@@ -4303,29 +4303,62 @@
             }
         }
 
+        let kanbanDragState = { cardId: null, movedAt: 0 };
+
         function onKanbanCardDragStart(event, cardId) {
-            event.dataTransfer.setData('text/plain', String(cardId));
+            kanbanDragState.cardId = Number(cardId);
+            if (event.dataTransfer) {
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', String(cardId));
+            }
+        }
+
+        function onKanbanCardDragEnd(event) {
+            const dropZones = document.querySelectorAll('.kanban-cards.kanban-drop-hover');
+            dropZones.forEach(el => el.classList.remove('kanban-drop-hover'));
+            kanbanDragState.movedAt = Date.now();
+            kanbanDragState.cardId = null;
+        }
+
+        function onKanbanCardClick(event, cardId) {
+            if (Date.now() - Number(kanbanDragState.movedAt || 0) < 250) return;
+            openKanbanCardViewModal(cardId);
         }
 
         function onKanbanColumnDragOver(event) {
             event.preventDefault();
-            event.currentTarget.classList.add('kanban-drop-hover');
+            const zone = event.currentTarget.closest('.kanban-cards') || event.currentTarget;
+            zone.classList.add('kanban-drop-hover');
         }
 
         function onKanbanColumnDragLeave(event) {
-            event.currentTarget.classList.remove('kanban-drop-hover');
+            const zone = event.currentTarget.closest('.kanban-cards') || event.currentTarget;
+            zone.classList.remove('kanban-drop-hover');
         }
 
-        async function onKanbanCardDrop(event, columnId, position = null) {
+        function getKanbanDropPosition(columnId, mouseY, draggedCardId) {
+            const selector = `.kanban-column[data-column-id="${columnId}"] .kanban-cards .kanban-card`;
+            const cards = Array.from(document.querySelectorAll(selector))
+                .filter(el => Number(el.getAttribute('data-card-id')) !== Number(draggedCardId));
+            let position = cards.length;
+            for (let i = 0; i < cards.length; i += 1) {
+                const rect = cards[i].getBoundingClientRect();
+                if (mouseY < rect.top + (rect.height / 2)) {
+                    position = i;
+                    break;
+                }
+            }
+            return position;
+        }
+
+        async function onKanbanCardDrop(event, columnId) {
             event.preventDefault();
-            event.currentTarget.classList.remove('kanban-drop-hover');
-            const cardId = Number(event.dataTransfer.getData('text/plain'));
+            const zone = event.currentTarget.closest('.kanban-cards') || event.currentTarget;
+            zone.classList.remove('kanban-drop-hover');
+            const cardId = Number((event.dataTransfer && event.dataTransfer.getData('text/plain')) || kanbanDragState.cardId);
             if (!cardId) return;
             try {
-                if (position === null || Number.isNaN(Number(position))) {
-                    const colCards = kanbanCards.filter(c => Number(c.column_id) === Number(columnId));
-                    position = colCards.length;
-                }
+                const position = getKanbanDropPosition(columnId, event.clientY, cardId);
                 const response = await fetch(`${API_BASE}/kanban/cards/${cardId}/move`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
@@ -4333,6 +4366,7 @@
                 });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Erro ao mover card');
+                kanbanDragState.movedAt = Date.now();
                 loadKanban();
             } catch (e) {
                 showError(e.message);
