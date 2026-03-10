@@ -3,6 +3,8 @@ import logging
 import time
 import os
 import platform
+import tempfile
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -19,10 +21,27 @@ def _get_chrome_user_data_dir():
         return os.path.expanduser('~/.config/google-chrome')
 
 
+def _try_remote_debugging(logger):
+    """Tenta se conectar a uma instância do Chrome já aberta via Remote Debugging."""
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        
+        chrome_options = Options()
+        chrome_options.add_experimental_option('debuggerAddress', 'localhost:9222')
+        
+        driver = webdriver.Chrome(options=chrome_options)
+        logger.info('[AutoToca] Conectado a instância de Chrome existente via Remote Debugging.')
+        return driver
+    except Exception as e:
+        logger.warning(f'[AutoToca] Não foi possível conectar via Remote Debugging: {e}')
+        return None
+
+
 def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headful: bool, screenshots_dir: Path, logger: logging.Logger):
     """
     Executa a automação do formulário Microsoft Forms usando Selenium.
-    O frontend já abre a aba, então aqui apenas preenchemos os dados.
+    Tenta se conectar a uma instância existente via Remote Debugging ou abre uma nova com perfil temporário.
     """
     try:
         from selenium import webdriver
@@ -44,29 +63,31 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         logger.info('[AutoToca][ChamadoJuridico] %s', message)
 
     driver = None
+    temp_profile_dir = None
 
     try:
         step('Iniciando Selenium para preencher formulário...')
         
-        # Configurar opções do Chrome
-        chrome_options = Options()
+        # Tentar conectar a uma instância existente via Remote Debugging
+        step('Tentando conectar a instância de Chrome existente via Remote Debugging...')
+        driver = _try_remote_debugging(logger)
         
-        # Usar o perfil do usuário
-        user_data_dir = _get_chrome_user_data_dir()
-        if os.path.exists(user_data_dir):
-            chrome_options.add_argument(f'user-data-dir={user_data_dir}')
-            step(f'Usando perfil do Chrome: {user_data_dir}')
-        
-        # Manter o navegador aberto após a execução
-        chrome_options.add_experimental_option('detach', True)
-        
-        # Desabilitar notificações e popups
-        prefs = {'profile.default_content_setting_values.notifications': 2}
-        chrome_options.add_experimental_option('prefs', prefs)
-        
-        # Inicializar o driver
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        if not driver:
+            # Se não conseguir, abrir uma nova instância com perfil temporário
+            step('Nenhuma instância existente encontrada. Abrindo nova instância com perfil temporário.')
+            
+            # Criar um diretório temporário para o perfil
+            temp_profile_dir = tempfile.mkdtemp(prefix='chrome_profile_')
+            
+            chrome_options = Options()
+            chrome_options.add_argument(f'user-data-dir={temp_profile_dir}')
+            chrome_options.add_experimental_option('detach', True)
+            prefs = {'profile.default_content_setting_values.notifications': 2}
+            chrome_options.add_experimental_option('prefs', prefs)
+            
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            step(f'Nova instância aberta com perfil temporário: {temp_profile_dir}')
         
         step('Navegando para o formulário...')
         driver.get(form_url)
@@ -312,6 +333,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         if not headful and driver:
             try:
                 driver.quit()
+            except:
+                pass
+        
+        # Limpar o diretório temporário se foi criado
+        if temp_profile_dir and os.path.exists(temp_profile_dir):
+            try:
+                shutil.rmtree(temp_profile_dir)
             except:
                 pass
 
