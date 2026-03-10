@@ -6347,8 +6347,8 @@ def autotoca_chamado_juridico():
     execution_id = datetime.utcnow().strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex[:6]
     try:
         data = request.get_json(force=True) or {}
-        submit = bool(data.get('submit', False))
-        headful = bool(data.get('headful', True))
+        submit = False
+        headful = True
         input_payload = data.get('payload') or {}
 
         settings = _load_app_settings_map([
