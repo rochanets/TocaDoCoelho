@@ -19,38 +19,10 @@ def _get_chrome_user_data_dir():
         return os.path.expanduser('~/.config/google-chrome')
 
 
-def _find_input_by_label(page, label_text):
-    """Encontra um input procurando pelo texto do label associado."""
-    try:
-        # Procurar por label com o texto exato ou parcial
-        label = page.locator('label', has_text=label_text).first
-        if label.count() > 0:
-            # Tentar obter o input associado via aria-labelledby ou for
-            label_id = label.get_attribute('id')
-            if label_id:
-                input_elem = page.locator(f'input[aria-labelledby="{label_id}"]').first
-                if input_elem.count() > 0:
-                    return input_elem
-            
-            # Tentar encontrar o input mais próximo (parent/sibling)
-            input_elem = label.locator('..').locator('input').first
-            if input_elem.count() > 0:
-                return input_elem
-            
-            # Tentar encontrar input no próximo elemento irmão
-            input_elem = label.locator('~ input').first
-            if input_elem.count() > 0:
-                return input_elem
-        
-        return None
-    except Exception as e:
-        return None
-
-
 def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headful: bool, screenshots_dir: Path, logger: logging.Logger):
     """
     Executa a automação do formulário Microsoft Forms usando Playwright.
-    O frontend já abre a aba, então aqui apenas preenchemos os dados.
+    Usa seletores de acessibilidade (ARIA) exatos baseados nos prints do usuário.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -120,8 +92,8 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
                     page.reload()
                     continue
                 
-                # Verificar se chegou no formulário - procurar por qualquer input
-                if page.locator('input[type="text"]').count() > 0:
+                # Verificar se chegou no formulário - procurar por qualquer input ou combobox
+                if page.locator('[role="combobox"]').count() > 0 or page.locator('input[type="text"]').count() > 0:
                     step('Login concluído. Formulário carregado com sucesso.')
                     break
                 
@@ -137,20 +109,23 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
 
         # Aguardar o formulário estar pronto
         try:
-            page.wait_for_selector('input[type="text"]', timeout=30000)
+            page.wait_for_selector('[role="combobox"], input[type="text"]', timeout=30000)
         except Exception as e:
             logger.warning(f'[AutoToca] Timeout aguardando formulário: {e}')
 
         # Aguardar um pouco mais para o formulário ficar totalmente interativo
-        time.sleep(2)
+        time.sleep(3)
 
         # Campo 1: Empresa Stefanini (combobox)
         try:
             step('Preenchendo campo 1 (Empresa Stefanini).')
-            combobox = page.locator('[role="combobox"]').first
+            combobox = page.get_by_role('combobox', name='1. Empresa do grupo Stefanini Requer resposta Opção única.').first
+            if combobox.count() == 0:
+                combobox = page.locator('[role="combobox"]').first
+            
             if combobox.count() > 0:
                 combobox.click()
-                time.sleep(0.5)
+                time.sleep(1)
                 # Procurar pela opção STEFANINI
                 option = page.locator('[role="option"]', has_text='STEFANINI CONSULTORIA').first
                 if option.count() > 0:
@@ -166,33 +141,28 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
 
         # Campo 2: Razão Social - Parte Contrária
         try:
-            step('Preenchendo campo 2 (Razão Social - Parte Contrária).')
-            # Procurar pelo texto exato do label
-            input_field = page.locator('input[type="text"]', has_text='Insira sua resposta').first
-            if input_field.count() > 0:
-                input_field.fill(payload['contaSelecionada'])
-                step(f'Campo 2 preenchido com: {payload["contaSelecionada"]}')
+            step('Preenchendo campo 2 (Razão Social).')
+            # Seletor exato baseado no print do usuário
+            field = page.get_by_role('textbox', name='2. Razão Social - Parte Contrária Requer resposta Texto de linha única.').first
+            if field.count() > 0:
+                field.fill(payload['contaSelecionada'])
+                step('Campo 2 preenchido com sucesso.')
             else:
-                # Fallback: usar o primeiro input de texto após o combobox
-                inputs = page.locator('input[type="text"]')
-                if inputs.count() > 0:
-                    inputs.nth(0).fill(payload['contaSelecionada'])
-                    step(f'Campo 2 preenchido com: {payload["contaSelecionada"]} (fallback)')
-                else:
-                    step('Aviso: Campo de texto para Razão Social não encontrado.')
+                step('Aviso: Campo 2 não encontrado pelo seletor ARIA.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 2: {e}')
             step(f'Erro ao preencher campo 2: {str(e)[:100]}')
 
         # Campo 3: Endereço Atualizado - Parte Contrária
         try:
-            step('Preenchendo campo 3 (Endereço Atualizado - Parte Contrária).')
-            inputs = page.locator('input[type="text"]')
-            if inputs.count() > 1:
-                inputs.nth(1).fill(payload['enderecoFinalConfirmado'])
-                step(f'Campo 3 preenchido com: {payload["enderecoFinalConfirmado"]}')
+            step('Preenchendo campo 3 (Endereço).')
+            # Seletor exato baseado no print do usuário
+            field = page.get_by_role('textbox', name='3. Endereço Atualizado - Parte Contrária Requer resposta Texto de linha única.').first
+            if field.count() > 0:
+                field.fill(payload['enderecoFinalConfirmado'])
+                step('Campo 3 preenchido com sucesso.')
             else:
-                step('Aviso: Campo de texto para Endereço não encontrado.')
+                step('Aviso: Campo 3 não encontrado pelo seletor ARIA.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 3: {e}')
             step(f'Erro ao preencher campo 3: {str(e)[:100]}')
@@ -200,13 +170,17 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         # Campo 4: Minuta própria Stefanini (radio button)
         try:
             step('Preenchendo campo 4 (Minuta própria Stefanini).')
-            # Procurar pelo texto exato da opção
-            label = page.locator('label', has_text=payload['tipoMinuta']).first
-            if label.count() > 0:
-                label.click()
-                step(f'Campo 4 preenchido com: {payload["tipoMinuta"]}')
+            # Seletor exato baseado no print do usuário
+            radiogroup = page.get_by_role('radiogroup', name='4. Minuta própria Stefanini? Requer resposta Opção única.').first
+            if radiogroup.count() > 0:
+                option = radiogroup.get_by_role('radio', name=payload['tipoMinuta']).first
+                if option.count() > 0:
+                    option.click()
+                    step('Campo 4 preenchido com sucesso.')
+                else:
+                    step(f'Aviso: Opção "{payload["tipoMinuta"]}" não encontrada no radiogroup 4.')
             else:
-                step(f'Aviso: Opção "{payload["tipoMinuta"]}" não encontrada.')
+                step('Aviso: Radiogroup 4 não encontrado.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 4: {e}')
             step(f'Erro ao preencher campo 4: {str(e)[:100]}')
@@ -214,12 +188,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         # Campo 5: Número contrato Salesforce
         try:
             step('Preenchendo campo 5 (Número Contrato Salesforce).')
-            inputs = page.locator('input[type="text"]')
-            if inputs.count() > 2:
-                inputs.nth(2).fill(payload['numeroContratoSalesforce'])
-                step(f'Campo 5 preenchido com: {payload["numeroContratoSalesforce"]}')
+            # Seletor exato baseado no print do usuário
+            field = page.get_by_role('textbox', name='5. Há número de contrato criado no Sales Force? Se sim, informar. Requer resposta Texto de linha única.').first
+            if field.count() > 0:
+                field.fill(payload['numeroContratoSalesforce'])
+                step('Campo 5 preenchido com sucesso.')
             else:
-                step('Aviso: Campo de texto para Salesforce não encontrado.')
+                step('Aviso: Campo 5 não encontrado pelo seletor ARIA.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 5: {e}')
             step(f'Erro ao preencher campo 5: {str(e)[:100]}')
@@ -227,12 +202,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         # Campo 6: Data assinatura
         try:
             step('Preenchendo campo 6 (Data assinatura).')
-            date_input = page.locator('input[type="date"]').first
-            if date_input.count() > 0:
-                date_input.fill(payload['dataAssinaturaContratoOriginal'])
-                step(f'Campo 6 preenchido com: {payload["dataAssinaturaContratoOriginal"]}')
+            # Seletor exato baseado no print do usuário
+            field = page.get_by_role('textbox', name='6. Data de assinatura do Contrato original Requer resposta Texto de linha única.').first
+            if field.count() > 0:
+                field.fill(payload['dataAssinaturaContratoOriginal'])
+                step('Campo 6 preenchido com sucesso.')
             else:
-                step('Aviso: Campo de data não encontrado.')
+                step('Aviso: Campo 6 não encontrado pelo seletor ARIA.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 6: {e}')
             step(f'Erro ao preencher campo 6: {str(e)[:100]}')
@@ -241,12 +217,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         try:
             step('Upload campo 7 (Aditivos anteriores).')
             if payload.get('arquivosAditivosAnteriores'):
-                file_inputs = page.locator('input[type="file"]')
-                if file_inputs.count() > 0:
-                    file_inputs.nth(0).set_input_files(payload['arquivosAditivosAnteriores'])
+                # Procurar pelo botão de carregar arquivo da pergunta 7
+                file_input = page.locator('input[type="file"]').nth(0)
+                if file_input.count() > 0:
+                    file_input.set_input_files(payload['arquivosAditivosAnteriores'])
                     step('Campo 7 preenchido com sucesso.')
                 else:
-                    step('Aviso: Campo de upload para Aditivos não encontrado.')
+                    step('Aviso: Campo de upload 7 não encontrado.')
             else:
                 step('Campo 7: Nenhum arquivo fornecido.')
         except Exception as e:
@@ -257,12 +234,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         try:
             step('Upload campo 8 (Contrato original).')
             if payload.get('arquivosContratoOriginal'):
-                file_inputs = page.locator('input[type="file"]')
-                if file_inputs.count() > 1:
-                    file_inputs.nth(1).set_input_files(payload['arquivosContratoOriginal'])
+                # Procurar pelo botão de carregar arquivo da pergunta 8
+                file_input = page.locator('input[type="file"]').nth(1)
+                if file_input.count() > 0:
+                    file_input.set_input_files(payload['arquivosContratoOriginal'])
                     step('Campo 8 preenchido com sucesso.')
                 else:
-                    step('Aviso: Campo de upload para Contrato não encontrado.')
+                    step('Aviso: Campo de upload 8 não encontrado.')
             else:
                 step('Campo 8: Nenhum arquivo fornecido.')
         except Exception as e:
@@ -273,12 +251,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         try:
             step('Campo 9 (Minuta para validação).')
             if payload.get('arquivosMinutaCliente'):
-                file_inputs = page.locator('input[type="file"]')
-                if file_inputs.count() > 2:
-                    file_inputs.nth(2).set_input_files(payload['arquivosMinutaCliente'])
+                # Procurar pelo botão de carregar arquivo da pergunta 9
+                file_input = page.locator('input[type="file"]').nth(2)
+                if file_input.count() > 0:
+                    file_input.set_input_files(payload['arquivosMinutaCliente'])
                     step('Campo 9 preenchido com sucesso.')
                 else:
-                    step('Aviso: Campo de upload para Minuta não encontrado.')
+                    step('Aviso: Campo de upload 9 não encontrado.')
             else:
                 step('Campo 9: Nenhum arquivo fornecido.')
         except Exception as e:
@@ -289,12 +268,17 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         try:
             step('Campo 10 (Haverá reajuste de valores).')
             reajuste_value = payload.get('haveraReajusteValores', 'Não')
-            label = page.locator('label', has_text=reajuste_value).first
-            if label.count() > 0:
-                label.click()
-                step(f'Campo 10 preenchido com: {reajuste_value}')
+            # Seletor exato baseado no print do usuário
+            radiogroup = page.get_by_role('radiogroup', name='10. Haverá reajuste de valores? Requer resposta Opção única.').first
+            if radiogroup.count() > 0:
+                option = radiogroup.get_by_role('radio', name=reajuste_value).first
+                if option.count() > 0:
+                    option.click()
+                    step(f'Campo 10 preenchido com "{reajuste_value}" com sucesso.')
+                else:
+                    step(f'Aviso: Opção "{reajuste_value}" não encontrada no radiogroup 10.')
             else:
-                step(f'Aviso: Opção "{reajuste_value}" não encontrada para reajuste.')
+                step('Aviso: Radiogroup 10 não encontrado.')
         except Exception as e:
             logger.error(f'[AutoToca] Erro ao preencher campo 10: {e}')
             step(f'Erro ao preencher campo 10: {str(e)[:100]}')
@@ -304,12 +288,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
             try:
                 step('Campo 11 (Índice de reajuste).')
                 if payload.get('indiceReajuste'):
-                    textareas = page.locator('textarea')
-                    if textareas.count() > 0:
-                        textareas.nth(0).fill(payload['indiceReajuste'])
+                    # Seletor ARIA para textarea (pergunta 11)
+                    field = page.get_by_role('textbox', name='11. Se sim, descrever o índice, data base e valores atualizados já com o reajuste Requer resposta Texto de várias linhas.').first
+                    if field.count() > 0:
+                        field.fill(payload['indiceReajuste'])
                         step('Campo 11 preenchido com sucesso.')
                     else:
-                        step('Aviso: Textarea para Índice não encontrado.')
+                        step('Aviso: Campo 11 não encontrado pelo seletor ARIA.')
             except Exception as e:
                 logger.error(f'[AutoToca] Erro ao preencher campo 11: {e}')
                 step(f'Erro ao preencher campo 11: {str(e)[:100]}')
@@ -317,12 +302,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
             try:
                 step('Campo 12 (Aprovação do CEO).')
                 if payload.get('arquivosAprovacaoCEO'):
-                    file_inputs = page.locator('input[type="file"]')
-                    if file_inputs.count() > 3:
-                        file_inputs.nth(3).set_input_files(payload['arquivosAprovacaoCEO'])
+                    # Procurar pelo botão de carregar arquivo da pergunta 12
+                    file_input = page.locator('input[type="file"]').nth(3)
+                    if file_input.count() > 0:
+                        file_input.set_input_files(payload['arquivosAprovacaoCEO'])
                         step('Campo 12 preenchido com sucesso.')
                     else:
-                        step('Aviso: Campo de upload para Aprovação do CEO não encontrado.')
+                        step('Aviso: Campo de upload 12 não encontrado.')
                 else:
                     step('Campo 12: Nenhum arquivo fornecido.')
             except Exception as e:
@@ -334,7 +320,7 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
         if submit:
             try:
                 step('submit=true: enviando formulário.')
-                submit_btn = page.locator('button', has_text='Enviar').first
+                submit_btn = page.get_by_role('button', name='Enviar').first
                 if submit_btn.count() > 0:
                     submit_btn.click()
                     page.screenshot(path=str(screenshots_dir / '03-form-submitted.png'), full_page=True)
