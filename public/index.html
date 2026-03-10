@@ -4004,7 +4004,7 @@
                 const isDoneColumn = normalizedTitle === 'done';
                 const actionButtons = locked ? '' : `
                     <div style="display:flex; gap:4px;">
-                        <button class="btn btn-edit-accent btn-small" onclick="renameKanbanColumn(${column.id}, '${escapeHtml(column.title).replace(/'/g, "\'")}')"><i class="fas fa-pen"></i></button>
+                        <button class="btn btn-edit-accent btn-small" onclick="renameKanbanColumn(${column.id}, '${escapeHtml(column.title).replace(/'/g, "\\'")}')"><i class="fas fa-pen"></i></button>
                         <button class="btn btn-danger btn-small" onclick="deleteKanbanColumn(${column.id})"><i class="fas fa-trash"></i></button>
                     </div>`;
                 const cardsInColumn = (cardsByColumn[column.id] || []);
@@ -4026,7 +4026,7 @@
                         ${card.contact_name ? `<div class="kanban-meta"><img src="${contactImg}" class="kanban-avatar"> ${escapeHtml(card.contact_name)}</div>` : ''}
                         ${tagsHtml ? `<div class="kanban-tags">${tagsHtml}</div>` : ''}
                         ${isKanbanCardOverdue(card) ? `<span class="kanban-urgent-badge" title="Sem update de atividade no prazo">!</span>` : ''}
-                        <span class="kanban-urgency-chip" onclick="event.stopPropagation(); openKanbanUrgencyEditor(event, ${card.id}, '${(card.urgency || 'Média').replace(/'/g, \"\'\")}')">${escapeHtml(card.urgency || 'Média')}</span>
+                        <span class="kanban-urgency-chip" onclick="event.stopPropagation(); openKanbanUrgencyEditor(event, ${card.id}, '${(card.urgency || 'Média').replace(/'/g, "\\'")}')">${escapeHtml(card.urgency || 'Média')}</span>
                     </div>`;
                 }).join('');
                 return `<div class="kanban-column" ondragover="onKanbanColumnDragOver(event)" ondragleave="onKanbanColumnDragLeave(event)" ondrop="onKanbanCardDrop(event, ${column.id})">
