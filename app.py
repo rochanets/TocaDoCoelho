@@ -6320,10 +6320,89 @@ def autotoca_upload():
         file = request.files['file']
         if not file.filename:
             return jsonify({'error': 'Nome de arquivo inválido.'}), 400
-        safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{secure_filename(file.filename)}"
-        target = AUTOTOCA_UPLOAD_DIR / safe_name
-        file.save(str(target))
-        return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': file.filename})
+        
+        # Verificar se deve converter para PDF (parâmetro convert_to_pdf)
+        convert_to_pdf = request.form.get('convert_to_pdf', 'false').lower() == 'true'
+        original_filename = secure_filename(file.filename)
+        
+        # Se deve converter para PDF
+        if convert_to_pdf and not original_filename.lower().endswith('.pdf'):
+            try:
+                # Salvar arquivo temporário
+                temp_path = AUTOTOCA_UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{original_filename}"
+                file.save(str(temp_path))
+                
+                # Converter para PDF
+                pdf_filename = original_filename.rsplit('.', 1)[0] + '.pdf'
+                safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{pdf_filename}"
+                target = AUTOTOCA_UPLOAD_DIR / safe_name
+                
+                # Se é um arquivo de imagem, converter para PDF
+                file_ext = original_filename.rsplit('.', 1)[-1].lower() if '.' in original_filename else ''
+                if file_ext in {'jpg', 'jpeg', 'png', 'gif', 'bmp'}:
+                    try:
+                        from PIL import Image
+                        img = Image.open(str(temp_path))
+                        if img.mode == 'RGBA':
+                            img = img.convert('RGB')
+                        img.save(str(target), 'PDF')
+                        logger.info(f'[AutoToca] Imagem convertida para PDF: {original_filename} -> {pdf_filename}')
+                    except Exception as e:
+                        logger.warning(f'[AutoToca] Falha ao converter imagem para PDF: {e}. Usando arquivo original.')
+                        target = AUTOTOCA_UPLOAD_DIR / f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{original_filename}"
+                        file.seek(0)
+                        file.save(str(target))
+                        pdf_filename = original_filename
+                elif file_ext in {'docx', 'doc', 'txt', 'html', 'htm'}:
+                    try:
+                        # Para documentos Word, usar python-docx
+                        if file_ext in {'docx', 'doc'} and PYTHON_DOCX_AVAILABLE:
+                            from reportlab.lib.pagesizes import letter
+                            from reportlab.pdfgen import canvas
+                            doc = python_docx.Document(str(temp_path))
+                            c = canvas.Canvas(str(target), pagesize=letter)
+                            y = 750
+                            for para in doc.paragraphs:
+                                if para.text.strip():
+                                    text = para.text[:100]
+                                    c.drawString(50, y, text)
+                                    y -= 20
+                                    if y < 50:
+                                        c.showPage()
+                                        y = 750
+                            c.save()
+                            logger.info(f'[AutoToca] Documento convertido para PDF: {original_filename} -> {pdf_filename}')
+                        else:
+                            # Fallback: copiar arquivo original
+                            shutil.copy2(str(temp_path), str(target))
+                    except Exception as e:
+                        logger.warning(f'[AutoToca] Falha ao converter documento para PDF: {e}. Usando arquivo original.')
+                        shutil.copy2(str(temp_path), str(target))
+                else:
+                    # Para outros formatos, apenas copiar
+                    shutil.copy2(str(temp_path), str(target))
+                
+                # Remover arquivo temporário
+                try:
+                    temp_path.unlink()
+                except:
+                    pass
+                
+                return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': pdf_filename})
+            except Exception as e:
+                logger.exception(f'[AutoToca] Erro ao converter arquivo para PDF: {e}')
+                # Fallback: salvar arquivo original
+                safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{original_filename}"
+                target = AUTOTOCA_UPLOAD_DIR / safe_name
+                file.seek(0)
+                file.save(str(target))
+                return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': original_filename})
+        else:
+            # Sem conversão, salvar normalmente
+            safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{original_filename}"
+            target = AUTOTOCA_UPLOAD_DIR / safe_name
+            file.save(str(target))
+            return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': file.filename})
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/upload: {e}')
         return jsonify({'error': str(e)}), 500

@@ -75,14 +75,22 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
             page.get_by_label('Enviar cópia do Contrato original assinado por ambas partes').set_input_files(payload['arquivosContratoOriginal'])
 
         step('Campo 9 (Minuta para validação).')
-        # Determina se o cliente encaminhou minuta baseado na presença de arquivos (que não sejam o genérico)
-        # No entanto, a lógica de negócio agora diz que se não subir, usa o genérico.
-        # Vamos apenas preencher o arquivo se ele existir no payload.
+        # Determina se o cliente encaminhou minuta baseado na presença de arquivos
         if payload.get('arquivosMinutaCliente'):
             page.get_by_label('Cliente encaminhou minuta para validação? Se sim, encaminhar documento').set_input_files(payload['arquivosMinutaCliente'])
 
         step('Campo 10 (Reajuste de valores).')
         page.get_by_role('radio', name=payload['haveraReajusteValores']).check()
+
+        # Se houver reajuste, preencher campos 11 e 12
+        if payload.get('haveraReajusteValores') == 'Sim':
+            step('Campo 11 (Índice de reajuste).')
+            if payload.get('indiceReajuste'):
+                page.get_by_label('Se sim, descrever o índice, data base e valores atualizados já com o reajuste').fill(payload['indiceReajuste'])
+            
+            step('Campo 12 (Aprovação do CEO).')
+            if payload.get('arquivosAprovacaoCEO'):
+                page.get_by_label('Há aprovação para aplicação de reajuste diferente do previsto em Contrato? (Necessita de acordo do CEO Brasil).').set_input_files(payload['arquivosAprovacaoCEO'])
 
         page.screenshot(path=str(screenshots_dir / '02-form-filled.png'), full_page=True)
 
@@ -92,9 +100,13 @@ def run_aditivo_automation(*, payload: dict, form_url: str, submit: bool, headfu
             page.screenshot(path=str(screenshots_dir / '03-form-submitted.png'), full_page=True)
         else:
             step('submit=false: formulário preenchido sem envio automático.')
+            if headful:
+                step('Aguardando ação do usuário (janela permanecerá aberta)...')
 
-        context.close()
-        browser.close()
+        if not headful:
+            context.close()
+            browser.close()
+        # Se headful, deixar a janela aberta para o usuário interagir
 
     (screenshots_dir / 'execution-log.json').write_text(
         json.dumps({'created_at': datetime.now().isoformat(), 'steps': execution_log}, ensure_ascii=False, indent=2),

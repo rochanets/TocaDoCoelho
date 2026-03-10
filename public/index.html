@@ -1953,34 +1953,85 @@
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
                 <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Preencha os dados, revise um resumo rápido e execute a automação do formulário externo.</p>
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
-                    <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px;">
-                        <div class="form-group"><label>Conta</label><select id="autotocaConta" required></select></div>
-                        <div class="form-group" id="autotocaContaOutroWrap" style="display:none;"><label>Outra conta (Razão Social)</label><input id="autotocaContaOutro" type="text" placeholder="Digite a razão social"></div>
+                    <!-- Linha 1: Conta, Tipo de Minuta, Minuta do Cliente -->
+                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                        <div class="form-group">
+                            <label>Conta <span style="color:#dc2626;">*</span></label>
+                            <select id="autotocaConta" required></select>
+                            <div id="autotocaContaOutroWrap" style="display:none; margin-top:8px;">
+                                <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Tipo de Minuta <span style="color:#dc2626;">*</span></label>
+                            <select id="autotocaTipoMinuta" required>
+                                <option>Minuta padrão Stefanini - sem ajustes</option>
+                                <option>Minuta padrão Stefanini - com ajustes do cliente</option>
+                                <option>Minuta enviada pelo cliente</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Minuta do Cliente</label>
+                            <input id="autotocaArquivos9" type="file" onchange="uploadAutoTocaFiles(this,'arquivos9')">
+                        </div>
+                    </div>
 
-                        <div class="form-group"><label>Tipo de minuta</label><select id="autotocaTipoMinuta" required><option>Minuta padrão Stefanini - sem ajustes</option><option>Minuta padrão Stefanini - com ajustes do cliente</option><option>Minuta enviada pelo cliente (anexar no item 8)</option></select></div>
-                        <div class="form-group"><label>Número contrato Salesforce</label><input id="autotocaContratoSF" type="text" required></div>
-
-                        <div class="form-group"><label>Data Assinatura</label><input id="autotocaDataAssinatura" type="text" placeholder="Vazio = Hoje (dd/MM/yyyy)"></div>
-                        <div class="form-group"><label>Haverá reajuste de valores?</label><select id="autotocaReajuste"><option>Sim</option><option selected>Não</option></select></div>
-
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label>Contrato Original (campo 8)</label>
-                            <div style="display:flex; gap:12px; align-items:center;">
+                    <!-- Linha 2: Contrato Original, Aditivos Anteriores -->
+                    <div style="display:grid; grid-template-columns:repeat(2,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                        <div class="form-group">
+                            <label>Contrato Original <span style="color:#dc2626;">*</span></label>
+                            <div style="display:flex; gap:12px; align-items:flex-start;">
                                 <input id="autotocaArquivos8" type="file" onchange="uploadAutoTocaFiles(this,'arquivos8')" style="flex:1;">
-                                <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; margin:0; white-space:nowrap;">
+                                <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; margin-top:8px; white-space:nowrap;">
                                     <input type="checkbox" id="autotocaContratoOriginalNaoAplica" onchange="toggleAutoTocaContratoOriginal()"> Não se aplica
                                 </label>
                             </div>
                         </div>
-
-                        <div class="form-group"><label>Aditivos anteriores</label><input id="autotocaArquivos7" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos7')"></div>
-                        <div class="form-group"><label>Minuta do Cliente (opcional)</label><input id="autotocaArquivos9" type="file" onchange="uploadAutoTocaFiles(this,'arquivos9')"></div>
+                        <div class="form-group">
+                            <label>Aditivos Anteriores</label>
+                            <input id="autotocaArquivos7" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos7')">
+                        </div>
                     </div>
 
-                    <div class="form-group" style="margin-top:10px;">
+                    <!-- Linha 3: Dados gerais -->
+                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                        <div class="form-group">
+                            <label>Número Contrato SF <span style="color:#dc2626;">*</span></label>
+                            <input id="autotocaContratoSF" type="text" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Data Assinatura</label>
+                            <input id="autotocaDataAssinatura" type="text" placeholder="Vazio = Hoje (dd/MM/yyyy)">
+                        </div>
+                        <div class="form-group">
+                            <label>Haverá Reajuste? <span style="color:#dc2626;">*</span></label>
+                            <select id="autotocaReajuste" onchange="toggleAutoTocaReajuste()">
+                                <option>Não</option>
+                                <option>Sim</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Campos de Reajuste (ocultos por padrão) -->
+                    <div id="autotocaReajusteFields" style="display:none; border:1px solid #fcd34d; border-radius:8px; padding:12px; background:#fffbeb; margin-bottom:12px;">
+                        <div style="display:grid; grid-template-columns:1fr; gap:12px;">
+                            <div class="form-group">
+                                <label>Informe o Índice Utilizado e Valor Pós Reajuste <span style="color:#dc2626;">*</span></label>
+                                <textarea id="autotocaIndiceReajuste" rows="3" placeholder="Ex: IPCA 2024 + 2%, valor anterior R$ 1.000, novo valor R$ 1.050"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>Se Diferente do Previsto, Anexar Aprovação do CEO <span style="color:#dc2626;">*</span></label>
+                                <input id="autotocaArquivosAprovacaoCEO" type="file" onchange="uploadAutoTocaFiles(this,'aprovacaoCEO')">
+                                <small style="color:#6b7280; display:block; margin-top:4px;">Será convertido para PDF automaticamente</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Endereço -->
+                    <div class="form-group" style="margin-bottom:12px;">
                         <label style="display:flex; justify-content:space-between; align-items:center;">
-                            Endereço
-                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca()" style="padding:4px 10px; font-size:12px;">
+                            Endereço <span style="color:#dc2626;">*</span>
+                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca()" style="padding:6px 12px; font-size:12px; margin:0;">
                                 <span class="ai-star-icon">✦</span> Buscar Sede
                             </button>
                         </label>
@@ -1989,9 +2040,12 @@
                         <input type="hidden" id="autotocaEnderecoFonte">
                     </div>
 
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;">
-                        <button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()"><i class="fas fa-list-check"></i> Gerar resumo</button>
-                        <button class="btn btn-auto-mapping" type="submit" style="flex:1; justify-content:center;">
+                    <!-- Botões de ação -->
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
+                        <button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()" style="padding:10px 16px;">
+                            <i class="fas fa-list-check"></i> Gerar Resumo
+                        </button>
+                        <button class="btn btn-auto-mapping" type="submit" style="padding:10px 16px;">
                             <span class="ai-star-icon">✦</span> Executar Automação
                         </button>
                     </div>
@@ -2610,7 +2664,7 @@
 
         async function loadAutoToca() {
             await loadAutoTocaConfig();
-            autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [] };
+            autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [], aprovacaoCEO: [] };
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
             if (response.ok && select) {
@@ -2646,6 +2700,14 @@
             }
         }
 
+        function toggleAutoTocaReajuste() {
+            const reajuste = document.getElementById('autotocaReajuste').value;
+            const reajusteFields = document.getElementById('autotocaReajusteFields');
+            if (reajusteFields) {
+                reajusteFields.style.display = reajuste === 'Sim' ? 'block' : 'none';
+            }
+        }
+
         async function uploadAutoTocaFiles(input, bucket) {
             const files = Array.from(input.files || []);
             if (!files.length) {
@@ -2656,6 +2718,10 @@
             for (const file of files) {
                 const fd = new FormData();
                 fd.append('file', file);
+                // Se for arquivo de aprovação do CEO, converter para PDF
+                if (bucket === 'aprovacaoCEO') {
+                    fd.append('convert_to_pdf', 'true');
+                }
                 const response = await fetch(`${API_BASE}/autotoca/upload`, { method: 'POST', body: fd });
                 if (!response.ok) { showError(`Falha no upload de ${file.name}`); return; }
                 const body = await response.json();
@@ -2707,6 +2773,8 @@
 
             const dataAssinaturaRaw = (document.getElementById('autotocaDataAssinatura').value || '').trim();
             const contratoOriginalNaoAplica = document.getElementById('autotocaContratoOriginalNaoAplica')?.checked;
+            const haveraReajuste = document.getElementById('autotocaReajuste').value;
+            const indiceReajuste = haveraReajuste === 'Sim' ? (document.getElementById('autotocaIndiceReajuste').value || '').trim() : '';
 
             return {
                 contaSelecionada: conta,
@@ -2722,7 +2790,9 @@
                 arquivosContratoOriginal: autoTocaUploadedFiles.arquivos8,
                 clienteEncaminhouMinuta: autoTocaUploadedFiles.arquivos9.length > 0 ? 'Sim' : 'Não',
                 arquivosMinutaCliente: autoTocaUploadedFiles.arquivos9,
-                haveraReajusteValores: document.getElementById('autotocaReajuste').value,
+                haveraReajusteValores: haveraReajuste,
+                indiceReajuste: indiceReajuste,
+                arquivosAprovacaoCEO: autoTocaUploadedFiles.aprovacaoCEO || [],
             };
         }
 

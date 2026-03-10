@@ -21,6 +21,8 @@ def map_aditivo_input(payload: dict) -> dict:
         'clienteEncaminhouMinuta': (data.get('clienteEncaminhouMinuta') or 'Não').strip(),
         'arquivosMinutaCliente': list(data.get('arquivosMinutaCliente') or []),
         'haveraReajusteValores': (data.get('haveraReajusteValores') or 'Não').strip(),
+        'indiceReajuste': (data.get('indiceReajuste') or '').strip(),
+        'arquivosAprovacaoCEO': list(data.get('arquivosAprovacaoCEO') or []),
     }
 
     # Se a data estiver vazia, coloca a data de hoje
