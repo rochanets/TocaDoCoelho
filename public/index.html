@@ -2850,6 +2850,22 @@
             
             try {
                 const payload = buildAutoTocaPayload();
+                
+                // Abrir o formulário em uma nova aba (como WhatsApp e Email fazem)
+                const formUrl = autoTocaConfig?.chamado_juridico_form_url || '';
+                if (!formUrl) {
+                    throw new Error('URL do formulário não configurada.');
+                }
+                
+                const formWindow = window.open(formUrl, '_blank');
+                if (!formWindow) {
+                    throw new Error('Não foi possível abrir a aba. Verifique se o navegador permite abrir abas.');
+                }
+                
+                // Aguardar um pouco para o formulário carregar
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                // Enviar payload para o backend preencher via Playwright
                 const response = await fetch(`${API_BASE}/autotoca/chamado-juridico`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
