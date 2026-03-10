@@ -490,6 +490,42 @@ def init_db():
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
         UNIQUE(card_id, client_id)
     )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS kanban_columns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        display_order INTEGER DEFAULT 0,
+        is_system INTEGER DEFAULT 0,
+        is_locked INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS kanban_cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        tag TEXT,
+        account_id INTEGER,
+        contact_id INTEGER,
+        activity TEXT,
+        urgency TEXT DEFAULT 'Média',
+        column_id INTEGER NOT NULL,
+        display_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(column_id) REFERENCES kanban_columns(id) ON DELETE CASCADE,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL,
+        FOREIGN KEY(contact_id) REFERENCES clients(id) ON DELETE SET NULL
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS kanban_card_activities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(card_id) REFERENCES kanban_cards(id) ON DELETE CASCADE
+    )''')
     
     # Tabela de sugestões diárias
     c.execute('''CREATE TABLE IF NOT EXISTS daily_suggestions (
@@ -534,6 +570,35 @@ def init_db():
         if not c.fetchone():
             c.execute('INSERT INTO environment_cards (title, description, display_order) VALUES (?, ?, ?)', 
                       (title, description, order))
+
+    c.execute("PRAGMA table_info(kanban_columns)")
+    kanban_column_cols = [col[1] for col in c.fetchall()]
+    if 'is_system' not in kanban_column_cols:
+        c.execute('ALTER TABLE kanban_columns ADD COLUMN is_system INTEGER DEFAULT 0')
+    if 'is_locked' not in kanban_column_cols:
+        c.execute('ALTER TABLE kanban_columns ADD COLUMN is_locked INTEGER DEFAULT 0')
+
+    c.execute('SELECT COUNT(*) FROM kanban_columns')
+    has_columns = c.fetchone()[0] > 0
+    if not has_columns:
+        default_columns = [
+            ('Backlog', 1, 1, 0),
+            ('Em Andamento', 2, 1, 0),
+            ('Hold', 3, 1, 0),
+            ('Done', 4, 1, 1),
+            ('Descartado', 5, 1, 1)
+        ]
+        c.executemany(
+            'INSERT INTO kanban_columns (title, display_order, is_system, is_locked) VALUES (?, ?, ?, ?)',
+            default_columns
+        )
+
+    c.execute("UPDATE kanban_columns SET title = 'Done', updated_at = CURRENT_TIMESTAMP WHERE lower(title) = 'finalizado'")
+
+    c.execute("PRAGMA table_info(kanban_cards)")
+    kanban_card_cols = [col[1] for col in c.fetchall()]
+    if 'urgency' not in kanban_card_cols:
+        c.execute('ALTER TABLE kanban_cards ADD COLUMN urgency TEXT DEFAULT "Média"')
     
     # Adicionar coluna last_activity_date à tabela clients se não existir
     c.execute("PRAGMA table_info(clients)")
@@ -1730,8 +1795,56 @@ _ITOCA_TABLE_LABELS = {
     'wiki_entries': 'Entrada de Conhecimento (WikiToca)',
     'wiki_documents': 'Documento do WikiToca',
     'environment_cards': 'Card de Mapeamento de Ambiente',
+    'kanban_columns': 'Sessão do Kanban',
+    'kanban_cards': 'Card do Kanban',
     'daily_suggestions': 'Sugestão Diária',
 }
+
+
+def infer_kanban_tag(description):
+    text = (description or '').strip().lower()
+    if not text:
+        return ''
+
+    tag_rules = [
+        ('Comercial', ['proposta', 'orcamento', 'negoci', 'cliente', 'venda', 'pipeline', 'lead']),
+        ('Técnico', ['api', 'erro', 'sistema', 'infra', 'deploy', 'integracao', 'bug', 'arquitetura']),
+        ('Financeiro', ['fatur', 'pagamento', 'custo', 'contrato', 'budget', 'receita']),
+        ('Relacionamento', ['reuniao', 'follow-up', 'contato', 'alinhamento', 'feedback', 'stakeholder']),
+        ('Produto', ['produto', 'feature', 'roadmap', 'release', 'sprint']),
+        ('Prioridade Alta', ['urgente', 'critico', 'hoje', 'bloqueio'])
+    ]
+
+    found_tags = []
+    for tag, keywords in tag_rules:
+        if any(keyword in text for keyword in keywords):
+            found_tags.append(tag)
+
+    if found_tags:
+        return ' | '.join(found_tags)
+
+    tokens = re.findall(r"[a-zA-ZÀ-ÿ]{3,}", text)
+    stopwords = {
+        'para', 'com', 'sobre', 'entre', 'pelos', 'pelas', 'isso', 'essa', 'esse', 'dele', 'dela',
+        'card', 'tarefa', 'atividade', 'fazer', 'sera', 'será', 'esta', 'está', 'mais', 'muito', 'pouco',
+        'uma', 'uns', 'das', 'dos', 'que', 'por', 'sem'
+    }
+    keywords = []
+    for token in tokens:
+        tk = token.strip().lower()
+        if tk in stopwords:
+            continue
+        label = tk.capitalize()
+        if label not in keywords:
+            keywords.append(label)
+        if len(keywords) >= 4:
+            break
+    if keywords:
+        return ' | '.join(keywords)
+
+    raw_tokens = [t.strip().capitalize() for t in re.findall(r"[a-zA-ZÀ-ÿ]{2,}", text) if t.strip()]
+    raw_tokens = [t for t in raw_tokens if t.lower() not in stopwords][:3]
+    return ' | '.join(raw_tokens) if raw_tokens else ''
 
 def _itoca_compose_context_text(context_rows):
     """Formata as linhas de contexto em texto estruturado e semântico para envio ao LLM."""
@@ -2383,7 +2496,7 @@ def create_commitments_from_activity(cursor, client_id, activity_id, text):
     for due_date in dates:
         cursor.execute(
             '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
             (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity')
         )
         created.append({
@@ -4381,6 +4494,329 @@ def import_clients():
     except Exception as e:
         print(f'[ERROR] POST /api/importar-clientes: {e}')
         return jsonify({'error': str(e)}), 500
+
+# Rotas de Kanban
+@app.route('/api/kanban/columns', methods=['GET'])
+def list_kanban_columns():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT kc.*, COUNT(kb.id) AS cards_count
+                     FROM kanban_columns kc
+                     LEFT JOIN kanban_cards kb ON kb.column_id = kc.id
+                     GROUP BY kc.id
+                     ORDER BY kc.display_order, kc.id""")
+        rows = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        print(f'[ERROR] GET /api/kanban/columns: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/columns', methods=['POST'])
+def create_kanban_column():
+    try:
+        title = (request.json.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'Título é obrigatório'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_columns')
+        next_order = (c.fetchone()[0] or 0) + 1
+        c.execute('INSERT INTO kanban_columns (title, display_order) VALUES (?, ?)', (title, next_order))
+        conn.commit()
+        new_id = c.lastrowid
+        conn.close()
+        return jsonify({'id': new_id, 'message': 'Sessão criada com sucesso'}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/kanban/columns: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/columns/<int:column_id>', methods=['PUT'])
+def update_kanban_column(column_id):
+    try:
+        title = (request.json.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'Título é obrigatório'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM kanban_columns WHERE id = ?', (column_id,))
+        current = c.fetchone()
+        if not current:
+            conn.close()
+            return jsonify({'error': 'Sessão não encontrada'}), 404
+        current = dict_from_row(current)
+        if int(current.get('is_locked') or 0) == 1:
+            conn.close()
+            return jsonify({'error': 'Sessão bloqueada não pode ser editada'}), 403
+
+        c.execute('UPDATE kanban_columns SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (title, column_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Sessão atualizada com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/kanban/columns/{column_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/columns/<int:column_id>', methods=['DELETE'])
+def delete_kanban_column(column_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM kanban_columns WHERE id = ?', (column_id,))
+        current = c.fetchone()
+        if not current:
+            conn.close()
+            return jsonify({'error': 'Sessão não encontrada'}), 404
+        current = dict_from_row(current)
+        if int(current.get('is_locked') or 0) == 1:
+            conn.close()
+            return jsonify({'error': 'Sessão bloqueada não pode ser apagada'}), 403
+
+        c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
+        first_column = c.fetchone()
+        first_column_id = first_column[0] if first_column else None
+
+        if first_column_id and first_column_id != column_id:
+            c.execute('UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE column_id = ?', (first_column_id, column_id))
+
+        c.execute('DELETE FROM kanban_columns WHERE id = ?', (column_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Sessão removida com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/kanban/columns/{column_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards', methods=['GET'])
+def list_kanban_cards():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT kb.*,
+                            acc.name AS account_name,
+                            acc.logo_url AS account_logo_url,
+                            cl.name AS contact_name,
+                            cl.photo_url AS contact_photo_url,
+                            (SELECT MAX(kca.created_at) FROM kanban_card_activities kca WHERE kca.card_id = kb.id) AS last_activity_at
+                     FROM kanban_cards kb
+                     LEFT JOIN accounts acc ON acc.id = kb.account_id
+                     LEFT JOIN clients cl ON cl.id = kb.contact_id
+                     ORDER BY kb.column_id, kb.display_order, kb.id""")
+        rows = [dict_from_row(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        print(f'[ERROR] GET /api/kanban/cards: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards', methods=['POST'])
+def create_kanban_card():
+    try:
+        data = request.json or {}
+        title = (data.get('title') or '').strip()
+        description = (data.get('description') or '').strip()
+        tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
+        account_id = data.get('account_id')
+        contact_id = data.get('contact_id')
+        urgency = (data.get('urgency') or 'Média').strip() or 'Média'
+        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
+            urgency = 'Média'
+        if not title or not description:
+            return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
+        first = c.fetchone()
+        if not first:
+            conn.close()
+            return jsonify({'error': 'Nenhuma sessão disponível no Kanban'}), 400
+        first_column_id = first[0]
+
+        c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (first_column_id,))
+        next_order = (c.fetchone()[0] or 0) + 1
+
+        c.execute('''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, urgency, column_id, display_order)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (title, description, tag, account_id, contact_id, urgency, first_column_id, next_order))
+        conn.commit()
+        new_id = c.lastrowid
+        conn.close()
+        return jsonify({'id': new_id, 'message': 'Card criado com sucesso'}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/kanban/cards: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards/<int:card_id>', methods=['PUT'])
+def update_kanban_card(card_id):
+    try:
+        data = request.json or {}
+        title = (data.get('title') or '').strip()
+        description = (data.get('description') or '').strip()
+        tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
+        account_id = data.get('account_id')
+        contact_id = data.get('contact_id')
+        urgency = (data.get('urgency') or 'Média').strip() or 'Média'
+        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
+            urgency = 'Média'
+        if not title or not description:
+            return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''UPDATE kanban_cards
+                     SET title = ?, description = ?, tag = ?, account_id = ?, contact_id = ?, urgency = ?, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?''',
+                  (title, description, tag, account_id, contact_id, urgency, card_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Card atualizado com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/kanban/cards/{card_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards/<int:card_id>', methods=['GET'])
+def get_kanban_card(card_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT kb.*, kc.title as column_title,
+                            acc.name AS account_name, acc.logo_url AS account_logo_url,
+                            cl.name AS contact_name, cl.photo_url AS contact_photo_url, cl.position AS contact_position,
+                            (SELECT MAX(kca.created_at) FROM kanban_card_activities kca WHERE kca.card_id = kb.id) AS last_activity_at
+                     FROM kanban_cards kb
+                     JOIN kanban_columns kc ON kc.id = kb.column_id
+                     LEFT JOIN accounts acc ON acc.id = kb.account_id
+                     LEFT JOIN clients cl ON cl.id = kb.contact_id
+                     WHERE kb.id = ?''', (card_id,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
+        card = dict_from_row(row)
+        c.execute('SELECT id, content, created_at FROM kanban_card_activities WHERE card_id = ? ORDER BY created_at DESC, id DESC', (card_id,))
+        card['activities'] = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(card)
+    except Exception as e:
+        print(f'[ERROR] GET /api/kanban/cards/{card_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards/<int:card_id>/activities', methods=['POST'])
+def add_kanban_card_activity(card_id):
+    try:
+        content = (request.json.get('content') or '').strip()
+        if not content:
+            return jsonify({'error': 'Atividade é obrigatória'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
+        c.execute('INSERT INTO kanban_card_activities (card_id, content) VALUES (?, ?)', (card_id, content))
+        conn.commit()
+        new_id = c.lastrowid
+        c.execute('SELECT id, content, created_at FROM kanban_card_activities WHERE id = ?', (new_id,))
+        created = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify({'message': 'Atividade adicionada', 'activity': created}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/kanban/cards/{card_id}/activities: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/cards/<int:card_id>', methods=['DELETE'])
+def delete_kanban_card(card_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM kanban_cards WHERE id = ?', (card_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Card removido com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/kanban/cards/{card_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+
+
+@app.route('/api/kanban/cards/<int:card_id>/urgency', methods=['PATCH'])
+def update_kanban_card_urgency(card_id):
+    try:
+        urgency = (request.json.get('urgency') or '').strip() or 'Média'
+        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
+            return jsonify({'error': 'Urgência inválida'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
+
+        c.execute('UPDATE kanban_cards SET urgency = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (urgency, card_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Urgência atualizada com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] PATCH /api/kanban/cards/{card_id}/urgency: {e}')
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/kanban/cards/<int:card_id>/move', methods=['PATCH'])
+def move_kanban_card(card_id):
+    try:
+        data = request.json or {}
+        column_id = data.get('column_id')
+        position = int(data.get('position') or 0)
+        if not column_id:
+            return jsonify({'error': 'Sessão de destino é obrigatória'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
+
+        c.execute('SELECT id FROM kanban_columns WHERE id = ?', (column_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Sessão de destino não encontrada'}), 404
+
+        c.execute('''SELECT id FROM kanban_cards
+                     WHERE column_id = ? AND id != ?
+                     ORDER BY display_order, id''', (column_id, card_id))
+        ids = [row[0] for row in c.fetchall()]
+        if position < 0:
+            position = 0
+        if position > len(ids):
+            position = len(ids)
+        ids.insert(position, card_id)
+
+        for order, cid in enumerate(ids, start=1):
+            c.execute('UPDATE kanban_cards SET column_id = ?, display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                      (column_id, order, cid))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Card movido com sucesso'})
+    except Exception as e:
+        print(f'[ERROR] PATCH /api/kanban/cards/{card_id}/move: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 # Rotas de mapeamento de ambiente
 @app.route('/api/environment/cards', methods=['GET'])
