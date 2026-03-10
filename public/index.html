@@ -2445,15 +2445,15 @@
             const nav = document.querySelector('.sidebar-nav');
             if (!nav) return;
 
-            let btn = nav.querySelector(".nav-item[onclick*="'autotoca'"]");
+            let btn = nav.querySelector('.nav-item[onclick*="\'autotoca\'"]');
             const tab = document.getElementById('autotoca');
 
             if (!btn) {
-                const atividadesBtn = nav.querySelector(".nav-item[onclick*="'atividades'"]");
+                const atividadesBtn = nav.querySelector('.nav-item[onclick*="\'atividades\'"]');
                 const html = `<button class="nav-item" onclick="switchTab(event, 'autotoca')"><i class="fas fa-wand-magic-sparkles"></i><span>AutoToca</span></button>`;
                 if (atividadesBtn) atividadesBtn.insertAdjacentHTML('beforebegin', html);
                 else nav.insertAdjacentHTML('beforeend', html);
-                btn = nav.querySelector(".nav-item[onclick*="'autotoca'"]");
+                btn = nav.querySelector('.nav-item[onclick*="\'autotoca\'"]');
             }
 
             if (!tab) {
