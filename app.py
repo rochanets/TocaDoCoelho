@@ -509,6 +509,7 @@ def init_db():
         account_id INTEGER,
         contact_id INTEGER,
         activity TEXT,
+        urgency TEXT DEFAULT 'Média',
         column_id INTEGER NOT NULL,
         display_order INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -593,6 +594,11 @@ def init_db():
         )
 
     c.execute("UPDATE kanban_columns SET title = 'Done', updated_at = CURRENT_TIMESTAMP WHERE lower(title) = 'finalizado'")
+
+    c.execute("PRAGMA table_info(kanban_cards)")
+    kanban_card_cols = [col[1] for col in c.fetchall()]
+    if 'urgency' not in kanban_card_cols:
+        c.execute('ALTER TABLE kanban_cards ADD COLUMN urgency TEXT DEFAULT "Média"')
     
     # Adicionar coluna last_activity_date à tabela clients se não existir
     c.execute("PRAGMA table_info(clients)")
@@ -2490,7 +2496,7 @@ def create_commitments_from_activity(cursor, client_id, activity_id, text):
     for due_date in dates:
         cursor.execute(
             '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
             (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity')
         )
         created.append({
@@ -4597,7 +4603,8 @@ def list_kanban_cards():
                             acc.name AS account_name,
                             acc.logo_url AS account_logo_url,
                             cl.name AS contact_name,
-                            cl.photo_url AS contact_photo_url
+                            cl.photo_url AS contact_photo_url,
+                            (SELECT MAX(kca.created_at) FROM kanban_card_activities kca WHERE kca.card_id = kb.id) AS last_activity_at
                      FROM kanban_cards kb
                      LEFT JOIN accounts acc ON acc.id = kb.account_id
                      LEFT JOIN clients cl ON cl.id = kb.contact_id
@@ -4619,6 +4626,9 @@ def create_kanban_card():
         tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
         account_id = data.get('account_id')
         contact_id = data.get('contact_id')
+        urgency = (data.get('urgency') or 'Média').strip() or 'Média'
+        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
+            urgency = 'Média'
         if not title or not description:
             return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
 
@@ -4634,9 +4644,9 @@ def create_kanban_card():
         c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (first_column_id,))
         next_order = (c.fetchone()[0] or 0) + 1
 
-        c.execute('''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, column_id, display_order)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                  (title, description, tag, account_id, contact_id, first_column_id, next_order))
+        c.execute('''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, urgency, column_id, display_order)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (title, description, tag, account_id, contact_id, urgency, first_column_id, next_order))
         conn.commit()
         new_id = c.lastrowid
         conn.close()
@@ -4655,15 +4665,18 @@ def update_kanban_card(card_id):
         tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
         account_id = data.get('account_id')
         contact_id = data.get('contact_id')
+        urgency = (data.get('urgency') or 'Média').strip() or 'Média'
+        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
+            urgency = 'Média'
         if not title or not description:
             return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
 
         conn = get_db()
         c = conn.cursor()
         c.execute('''UPDATE kanban_cards
-                     SET title = ?, description = ?, tag = ?, account_id = ?, contact_id = ?, updated_at = CURRENT_TIMESTAMP
+                     SET title = ?, description = ?, tag = ?, account_id = ?, contact_id = ?, urgency = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (title, description, tag, account_id, contact_id, card_id))
+                  (title, description, tag, account_id, contact_id, urgency, card_id))
         conn.commit()
         conn.close()
         return jsonify({'message': 'Card atualizado com sucesso'})
@@ -4679,7 +4692,8 @@ def get_kanban_card(card_id):
         c = conn.cursor()
         c.execute('''SELECT kb.*, kc.title as column_title,
                             acc.name AS account_name, acc.logo_url AS account_logo_url,
-                            cl.name AS contact_name, cl.photo_url AS contact_photo_url, cl.position AS contact_position
+                            cl.name AS contact_name, cl.photo_url AS contact_photo_url, cl.position AS contact_position,
+                            (SELECT MAX(kca.created_at) FROM kanban_card_activities kca WHERE kca.card_id = kb.id) AS last_activity_at
                      FROM kanban_cards kb
                      JOIN kanban_columns kc ON kc.id = kb.column_id
                      LEFT JOIN accounts acc ON acc.id = kb.account_id
