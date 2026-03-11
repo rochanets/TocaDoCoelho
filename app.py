@@ -1026,8 +1026,6 @@ ITOCA_EXCLUDED_TABLES = {
     'status_rules',
     'job_groupings',
     'job_grouping_positions',
-    'message_templates',
-    'environment_responses',
 }
 
 
@@ -1076,17 +1074,35 @@ def _itoca_text_columns(cursor, table_name):
 
 
 def _itoca_build_snippet(row_dict):
+    # Campos de baixa relevância semântica que não devem aparecer no snippet genérico
+    _SKIP_KEYS = {'id', 'created_at', 'updated_at', 'logo_url', 'photo_url', 'file_url',
+                  'file_name', 'file_size', 'display_order', 'is_system', 'is_locked',
+                  'is_target', 'is_cold_contact', 'completed', 'completed_at',
+                  'account_id', 'client_id', 'card_id', 'column_id', 'presence_id',
+                  'activity_id', 'grouping_id', 'focal_client_id', 'contact_id', 'target_id'}
+    # Campos de data que devem ser formatados
+    _DATE_KEYS = {'activity_date', 'due_date', 'validity_month'}
     parts = []
     for key, value in row_dict.items():
-        if key in {'id', 'created_at', 'updated_at'}:
+        if key in _SKIP_KEYS:
             continue
         if value is None:
             continue
         text = str(value).strip()
         if not text:
             continue
+        # Formata datas para o padrão brasileiro
+        if key in _DATE_KEYS:
+            try:
+                dt = datetime.strptime(text[:10], '%Y-%m-%d')
+                text = dt.strftime('%d/%m/%Y')
+            except Exception:
+                pass
+        # Trunca campos muito longos
+        if len(text) > 500:
+            text = text[:500] + '...'
         parts.append(f'{key}: {text}')
-        if len(parts) >= 4:
+        if len(parts) >= 8:
             break
     return ' | '.join(parts)
 
@@ -1634,18 +1650,245 @@ def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
     return items
 
 
+def _itoca_build_activities_items(conn):
+    """Gera itens de atividades com JOIN em clients para contexto rico."""
+    cursor = conn.cursor()
+    items = []
+    try:
+        cursor.execute('''
+            SELECT ac.id, ac.contact_type, ac.information, ac.description, ac.activity_date,
+                   cl.name as client_name, cl.company as client_company, cl.position as client_position
+            FROM activities ac
+            LEFT JOIN clients cl ON ac.client_id = cl.id
+            ORDER BY ac.activity_date DESC
+            LIMIT 500
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('client_name'):
+                parts.append(f'contato: {rd["client_name"]}')
+            if rd.get('client_company'):
+                parts.append(f'empresa: {rd["client_company"]}')
+            if rd.get('client_position'):
+                parts.append(f'cargo: {rd["client_position"]}')
+            if rd.get('contact_type'):
+                parts.append(f'tipo: {rd["contact_type"]}')
+            if rd.get('activity_date'):
+                try:
+                    dt = datetime.strptime(str(rd['activity_date'])[:10], '%Y-%m-%d')
+                    parts.append(f'data: {dt.strftime("%d/%m/%Y")}')
+                except Exception:
+                    parts.append(f'data: {rd["activity_date"]}')
+            if rd.get('information'):
+                parts.append(f'informacao: {str(rd["information"])[:300]}')
+            if rd.get('description') and rd['description'] != rd.get('information'):
+                parts.append(f'descricao: {str(rd["description"])[:300]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({'table': 'activities', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar activities: {e}')
+    return items
+
+
+def _itoca_build_presences_items(conn):
+    """Gera itens de presenças em contas com JOIN em accounts e clients."""
+    cursor = conn.cursor()
+    items = []
+    try:
+        cursor.execute('''
+            SELECT ap.id, ap.delivery_name, ap.stf_owner, ap.current_revenue_cents,
+                   ap.validity_month,
+                   ac.name as account_name, ac.sector as account_sector,
+                   cl.name as focal_contact_name
+            FROM account_presences ap
+            LEFT JOIN accounts ac ON ap.account_id = ac.id
+            LEFT JOIN clients cl ON ap.focal_client_id = cl.id
+            ORDER BY ap.updated_at DESC
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('account_name'):
+                parts.append(f'conta: {rd["account_name"]}')
+            if rd.get('account_sector'):
+                parts.append(f'setor: {rd["account_sector"]}')
+            if rd.get('delivery_name'):
+                parts.append(f'entrega: {rd["delivery_name"]}')
+            if rd.get('stf_owner'):
+                parts.append(f'responsavel_stf: {rd["stf_owner"]}')
+            if rd.get('focal_contact_name'):
+                parts.append(f'contato_focal: {rd["focal_contact_name"]}')
+            if rd.get('current_revenue_cents'):
+                try:
+                    receita = int(rd['current_revenue_cents']) / 100
+                    parts.append(f'receita_atual: R$ {receita:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
+                except Exception:
+                    pass
+            if rd.get('validity_month'):
+                parts.append(f'validade: {rd["validity_month"]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({'table': 'account_presences', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar account_presences: {e}')
+    return items
+
+
+def _itoca_build_kanban_items(conn):
+    """Gera itens do Kanban com JOIN em accounts, clients e kanban_columns."""
+    cursor = conn.cursor()
+    items = []
+    try:
+        cursor.execute('''
+            SELECT kc.id, kc.title, kc.description, kc.tag, kc.urgency, kc.activity,
+                   kc.updated_at,
+                   col.title as column_title,
+                   ac.name as account_name,
+                   cl.name as contact_name
+            FROM kanban_cards kc
+            LEFT JOIN kanban_columns col ON kc.column_id = col.id
+            LEFT JOIN accounts ac ON kc.account_id = ac.id
+            LEFT JOIN clients cl ON kc.contact_id = cl.id
+            ORDER BY kc.updated_at DESC
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('column_title'):
+                parts.append(f'coluna: {rd["column_title"]}')
+            if rd.get('account_name'):
+                parts.append(f'conta: {rd["account_name"]}')
+            if rd.get('contact_name'):
+                parts.append(f'contato: {rd["contact_name"]}')
+            if rd.get('urgency'):
+                parts.append(f'urgencia: {rd["urgency"]}')
+            if rd.get('tag'):
+                parts.append(f'tag: {rd["tag"]}')
+            if rd.get('description'):
+                parts.append(f'descricao: {str(rd["description"])[:300]}')
+            if rd.get('activity'):
+                parts.append(f'atividade: {str(rd["activity"])[:200]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({'table': 'kanban_cards', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar kanban_cards: {e}')
+    return items
+
+
+def _itoca_build_environment_items(conn):
+    """Gera itens de mapeamento de ambiente com JOIN em environment_cards, clients e accounts."""
+    cursor = conn.cursor()
+    items = []
+    try:
+        cursor.execute('''
+            SELECT er.id, er.response,
+                   ec.title as card_title,
+                   cl.name as client_name, cl.company as client_company
+            FROM environment_responses er
+            LEFT JOIN environment_cards ec ON er.card_id = ec.id
+            LEFT JOIN clients cl ON er.client_id = cl.id
+            WHERE er.response IS NOT NULL AND TRIM(er.response) != ""
+            ORDER BY er.updated_at DESC
+        ''')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('client_company'):
+                parts.append(f'empresa: {rd["client_company"]}')
+            if rd.get('client_name'):
+                parts.append(f'contato: {rd["client_name"]}')
+            if rd.get('card_title'):
+                parts.append(f'mapeamento: {rd["card_title"]}')
+            if rd.get('response'):
+                parts.append(f'resposta: {str(rd["response"])[:400]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({'table': 'environment_responses', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar environment_responses: {e}')
+    return items
+
+
+def _itoca_build_user_profile_item(conn):
+    """Gera item fixo com o perfil do usuário para sempre estar no contexto."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT full_name, nickname, position, email, phone, boss_name, boss_email FROM user_profile WHERE id = 1')
+        row = cursor.fetchone()
+        if not row:
+            return None
+        rd = dict_from_row(row)
+        parts = []
+        if rd.get('full_name'):
+            parts.append(f'nome: {rd["full_name"]}')
+        if rd.get('nickname'):
+            parts.append(f'apelido: {rd["nickname"]}')
+        if rd.get('position'):
+            parts.append(f'cargo: {rd["position"]}')
+        if rd.get('email'):
+            parts.append(f'email: {rd["email"]}')
+        if rd.get('phone'):
+            parts.append(f'telefone: {rd["phone"]}')
+        if rd.get('boss_name'):
+            parts.append(f'gestor: {rd["boss_name"]}')
+        if rd.get('boss_email'):
+            parts.append(f'email_gestor: {rd["boss_email"]}')
+        snippet = ' | '.join(parts)
+        if snippet:
+            return {'table': 'user_profile', 'id': 1, 'snippet': snippet, 'search_text': snippet.lower()}
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar user_profile: {e}')
+    return None
+
+
+def _itoca_build_message_templates_items(conn):
+    """Gera itens dos templates de mensagem para consulta pelo iToca."""
+    cursor = conn.cursor()
+    items = []
+    try:
+        cursor.execute('SELECT id, title, description FROM message_templates ORDER BY title')
+        for row in cursor.fetchall():
+            rd = dict_from_row(row)
+            parts = []
+            if rd.get('title'):
+                parts.append(f'titulo: {rd["title"]}')
+            if rd.get('description'):
+                parts.append(f'conteudo: {str(rd["description"])[:600]}')
+            snippet = ' | '.join(parts)
+            if snippet:
+                items.append({'table': 'message_templates', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+    except Exception as e:
+        logger.warning(f'[iToca] Erro ao indexar message_templates: {e}')
+    return items
+
+
 def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items=6000, progress_cb=None):
     """Constrói o snapshot RAG. progress_cb(percent, message) é chamado durante o processo."""
     def _progress(pct, msg):
         if progress_cb:
             progress_cb(pct, msg)
 
+    # Tabelas que têm funções especializadas e não devem ser varridas genericamente
+    _SPECIALIZED_TABLES = {
+        'activities', 'commitments', 'account_renewal_events', 'account_presences',
+        'kanban_cards', 'environment_responses', 'wiki_entries', 'wiki_documents',
+        'user_profile', 'message_templates'
+    }
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-    tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES][:max_tables]
+    tables = [
+        row['name'] for row in cursor.fetchall()
+        if row['name'] not in ITOCA_EXCLUDED_TABLES and row['name'] not in _SPECIALIZED_TABLES
+    ][:max_tables]
 
-    _progress(5, f'Lendo {len(tables)} tabelas do banco de dados...')
+    _progress(5, f'Lendo {len(tables)} tabelas genéricas do banco de dados...')
     items = []
     total_tables = max(len(tables), 1)
     for t_idx, table in enumerate(tables):
@@ -1674,17 +1917,53 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
                 _progress(100, f'Concluído: {len(items)} registros indexados.')
                 return items
 
-        pct_tables = 5 + int((t_idx + 1) / total_tables * 40)  # 5% a 45%
+        pct_tables = 5 + int((t_idx + 1) / total_tables * 20)  # 5% a 25%
         _progress(pct_tables, f'Tabela {table} indexada ({t_idx+1}/{total_tables})...')
 
+    # Perfil do usuário (item fixo)
+    _progress(26, 'Indexando perfil do usuário...')
+    profile_item = _itoca_build_user_profile_item(conn)
+    if profile_item:
+        items.append(profile_item)
+
+    # Atividades com JOIN enriquecido
+    _progress(30, 'Indexando atividades com contatos...')
+    activity_items = _itoca_build_activities_items(conn)
+    items.extend(activity_items)
+    _progress(38, f'{len(activity_items)} atividades indexadas.')
+
     # Agenda
-    _progress(50, 'Indexando agenda e compromissos...')
+    _progress(40, 'Indexando agenda e compromissos...')
     agenda_items = _itoca_build_agenda_items(conn)
     items.extend(agenda_items)
-    _progress(60, f'{len(agenda_items)} eventos de agenda indexados.')
+    _progress(48, f'{len(agenda_items)} eventos de agenda indexados.')
+
+    # Presenças em contas com JOIN
+    _progress(50, 'Indexando presenças em contas...')
+    presences_items = _itoca_build_presences_items(conn)
+    items.extend(presences_items)
+    _progress(55, f'{len(presences_items)} presenças indexadas.')
+
+    # Kanban com JOIN
+    _progress(57, 'Indexando cards do Kanban...')
+    kanban_items = _itoca_build_kanban_items(conn)
+    items.extend(kanban_items)
+    _progress(62, f'{len(kanban_items)} cards do Kanban indexados.')
+
+    # Mapeamento de ambiente com JOIN
+    _progress(64, 'Indexando mapeamento de ambiente...')
+    env_items = _itoca_build_environment_items(conn)
+    items.extend(env_items)
+    _progress(68, f'{len(env_items)} respostas de mapeamento indexadas.')
+
+    # Templates de mensagem
+    _progress(69, 'Indexando templates de mensagem...')
+    template_items = _itoca_build_message_templates_items(conn)
+    items.extend(template_items)
+    _progress(70, f'{len(template_items)} templates indexados.')
 
     # WikiToca — mais demorado por causa da extração de PDF
-    _progress(65, 'Indexando WikiToca (entradas de conhecimento)...')
+    _progress(72, 'Indexando WikiToca (entradas de conhecimento)...')
     conn2 = get_db()
     cursor2 = conn2.cursor()
     wiki_entry_items = []
@@ -1703,7 +1982,7 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
     except Exception as e:
         logger.warning(f'[iToca] Erro ao indexar wiki_entries: {e}')
     items.extend(wiki_entry_items)
-    _progress(70, f'{len(wiki_entry_items)} entradas WikiToca indexadas. Processando documentos...')
+    _progress(78, f'{len(wiki_entry_items)} entradas WikiToca indexadas. Processando documentos...')
 
     # Documentos WikiToca com extração de texto (pode ser lento por OCR)
     wiki_doc_items = []
@@ -1717,7 +1996,7 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
             doc_ext = rd.get('file_ext', '')
             file_path = WIKI_UPLOAD_DIR / (rd.get('file_name') or '')
             doc_text = ''
-            pct_docs = 70 + int((d_idx + 1) / total_docs * 25)  # 70% a 95%
+            pct_docs = 78 + int((d_idx + 1) / total_docs * 18)  # 78% a 96%
             _progress(pct_docs, f'Processando documento {d_idx+1}/{total_docs}: {doc_title[:40]}...')
             if file_path.exists():
                 doc_text = _itoca_extract_text_from_file(str(file_path))
@@ -1743,8 +2022,168 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
     return items
 
 
-def _itoca_update_cached_base(progress_cb=None):
-    snapshot_items = _itoca_build_base_snapshot(progress_cb=progress_cb)
+def _itoca_update_cached_base(progress_cb=None, incremental=False):
+    """Atualiza o snapshot RAG.
+    Se incremental=True, re-indexa apenas registros modificados após o último update.
+    Se incremental=False (padrão), faz a indexação completa.
+    """
+    def _progress(pct, msg):
+        if progress_cb:
+            progress_cb(pct, msg)
+
+    if incremental:
+        # Busca o timestamp do último update
+        settings_map = _load_app_settings_map(['itoca_base_updated_at', 'itoca_base_snapshot'])
+        last_updated = (settings_map.get('itoca_base_updated_at') or '').strip()
+        raw_snapshot = (settings_map.get('itoca_base_snapshot') or '').strip()
+
+        if not last_updated or not raw_snapshot:
+            # Nunca foi indexado: faz completo
+            _progress(0, 'Primeira indexação: executando indexação completa...')
+            return _itoca_update_cached_base(progress_cb=progress_cb, incremental=False)
+
+        try:
+            existing_items = json.loads(raw_snapshot)
+        except Exception:
+            existing_items = []
+
+        _progress(5, f'Indexação incremental desde {last_updated}...')
+        conn = get_db()
+        cursor = conn.cursor()
+        new_items = []
+        seen_keys = set()
+
+        # Tabelas com coluna updated_at ou created_at para filtro incremental
+        _INCREMENTAL_TABLES = [
+            'clients', 'accounts', 'account_presences', 'account_main_contacts',
+            'kanban_cards', 'kanban_card_activities', 'daily_suggestions',
+            'environment_cards', 'account_sectors'
+        ]
+        _INCREMENTAL_SPECIALIZED = [
+            ('activities', '_itoca_build_activities_items'),
+            ('commitments', '_itoca_build_agenda_items'),
+            ('account_renewal_events', '_itoca_build_agenda_items'),
+            ('account_presences', '_itoca_build_presences_items'),
+            ('kanban_cards', '_itoca_build_kanban_items'),
+            ('environment_responses', '_itoca_build_environment_items'),
+            ('wiki_entries', None),
+            ('wiki_documents', None),
+            ('message_templates', '_itoca_build_message_templates_items'),
+        ]
+
+        # Verifica se houve alterações em tabelas genéricas
+        generic_changed = False
+        for table in _INCREMENTAL_TABLES:
+            try:
+                cursor.execute(
+                    f'SELECT COUNT(*) as cnt FROM "{table}" WHERE updated_at > ? OR created_at > ?',
+                    (last_updated, last_updated)
+                )
+                row = cursor.fetchone()
+                if row and (dict_from_row(row).get('cnt') or 0) > 0:
+                    generic_changed = True
+                    break
+            except Exception:
+                pass
+
+        # Verifica se houve alterações nas tabelas especializadas
+        specialized_changed_tables = set()
+        for table, _ in _INCREMENTAL_SPECIALIZED:
+            try:
+                col = 'updated_at'
+                cursor.execute(f"PRAGMA table_info('{table}')")
+                cols = [r['name'] for r in cursor.fetchall()]
+                if 'updated_at' not in cols:
+                    col = 'created_at'
+                if col not in cols:
+                    specialized_changed_tables.add(table)
+                    continue
+                cursor.execute(
+                    f'SELECT COUNT(*) as cnt FROM "{table}" WHERE {col} > ?',
+                    (last_updated,)
+                )
+                row = cursor.fetchone()
+                if row and (dict_from_row(row).get('cnt') or 0) > 0:
+                    specialized_changed_tables.add(table)
+            except Exception:
+                specialized_changed_tables.add(table)
+
+        # Se nada mudou, retorna o snapshot existente sem reprocessar
+        if not generic_changed and not specialized_changed_tables:
+            _progress(100, f'Nenhuma alteração detectada. Base já está atualizada ({len(existing_items)} registros).')
+            conn.close()
+            updated_at = datetime.now().isoformat(timespec='seconds')
+            c = get_db()
+            cc = c.cursor()
+            cc.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (updated_at, 'itoca_base_updated_at'))
+            c.commit()
+            c.close()
+            return {'items': existing_items, 'updated_at': updated_at, 'incremental': True, 'changed': False}
+
+        # Remove do snapshot existente os registros das tabelas que mudaram
+        tables_to_refresh = set()
+        if generic_changed:
+            tables_to_refresh.update(_INCREMENTAL_TABLES)
+        tables_to_refresh.update(specialized_changed_tables)
+
+        # Sempre re-indexa user_profile (item fixo, muito leve)
+        tables_to_refresh.add('user_profile')
+
+        _progress(10, f'Atualizando {len(tables_to_refresh)} tabelas modificadas...')
+
+        # Mantém registros de tabelas não alteradas
+        kept_items = [item for item in existing_items if item.get('table') not in tables_to_refresh]
+        seen_keys = {f"{item.get('table')}:{item.get('id')}" for item in kept_items}
+
+        # Re-indexa tabelas genéricas alteradas
+        if generic_changed:
+            for table in _INCREMENTAL_TABLES:
+                if table not in tables_to_refresh:
+                    continue
+                text_columns = _itoca_text_columns(cursor, table)
+                if not text_columns:
+                    continue
+                try:
+                    cursor.execute(f'SELECT * FROM "{table}" LIMIT 250')
+                    for row in cursor.fetchall():
+                        rd = dict_from_row(row)
+                        snippet = _itoca_build_snippet(rd)
+                        if snippet:
+                            kept_items.append({'table': table, 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+                except Exception:
+                    pass
+
+        # Re-indexa tabelas especializadas alteradas
+        if 'user_profile' in tables_to_refresh:
+            p = _itoca_build_user_profile_item(conn)
+            if p:
+                kept_items.append(p)
+        if 'activities' in tables_to_refresh:
+            kept_items.extend(_itoca_build_activities_items(conn))
+        if 'commitments' in tables_to_refresh or 'account_renewal_events' in tables_to_refresh:
+            kept_items.extend(_itoca_build_agenda_items(conn))
+        if 'account_presences' in tables_to_refresh:
+            kept_items.extend(_itoca_build_presences_items(conn))
+        if 'kanban_cards' in tables_to_refresh:
+            kept_items.extend(_itoca_build_kanban_items(conn))
+        if 'environment_responses' in tables_to_refresh:
+            kept_items.extend(_itoca_build_environment_items(conn))
+        if 'message_templates' in tables_to_refresh:
+            kept_items.extend(_itoca_build_message_templates_items(conn))
+
+        # Re-indexa wiki se necessário
+        if 'wiki_entries' in tables_to_refresh or 'wiki_documents' in tables_to_refresh:
+            _progress(60, 'Atualizando WikiToca...')
+            kept_items.extend(_itoca_build_wiki_items(conn))
+
+        conn.close()
+        snapshot_items = kept_items
+        _progress(95, f'Incremental concluído: {len(snapshot_items)} registros na base.')
+
+    else:
+        # Indexação completa
+        snapshot_items = _itoca_build_base_snapshot(progress_cb=progress_cb)
+
     updated_at = datetime.now().isoformat(timespec='seconds')
     conn = get_db()
     c = conn.cursor()
@@ -1752,7 +2191,8 @@ def _itoca_update_cached_base(progress_cb=None):
     c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (updated_at, 'itoca_base_updated_at'))
     conn.commit()
     conn.close()
-    return {'items': snapshot_items, 'updated_at': updated_at}
+    _progress(100, f'Base atualizada: {len(snapshot_items)} registros indexados.')
+    return {'items': snapshot_items, 'updated_at': updated_at, 'incremental': incremental}
 
 
 def _itoca_get_cached_base():
@@ -1791,17 +2231,22 @@ def _itoca_search_in_cached_snapshot(question, snapshot_items, limit=18):
 _ITOCA_TABLE_LABELS = {
     'clients': 'Contato/Cliente',
     'accounts': 'Conta/Empresa',
-    'activities': 'Atividade/Interação',
-    'commitments': 'Evento de Agenda/Compromisso',
-    'account_renewal_events': 'Evento de Renovação de Conta',
-    'account_presences': 'Presença em Conta',
+    'activities': 'Atividade/Interação com Contato',
+    'commitments': 'Compromisso/Evento de Agenda',
+    'account_renewal_events': 'Evento de Renovação de Contrato',
+    'account_presences': 'Presença/Entrega em Conta',
     'account_main_contacts': 'Contato Principal de Conta',
-    'wiki_entries': 'Entrada de Conhecimento (WikiToca)',
+    'wiki_entries': 'Conhecimento do WikiToca',
     'wiki_documents': 'Documento do WikiToca',
     'environment_cards': 'Card de Mapeamento de Ambiente',
-    'kanban_columns': 'Sessão do Kanban',
+    'environment_responses': 'Resposta de Mapeamento de Ambiente',
+    'kanban_columns': 'Coluna do Kanban',
     'kanban_cards': 'Card do Kanban',
     'daily_suggestions': 'Sugestão Diária',
+    'user_profile': 'Perfil do Usuário',
+    'message_templates': 'Template de Mensagem',
+    'account_sectors': 'Setor de Conta',
+    'job_groupings': 'Agrupamento de Cargos',
 }
 
 
@@ -1850,32 +2295,92 @@ def infer_kanban_tag(description):
     raw_tokens = [t for t in raw_tokens if t.lower() not in stopwords][:3]
     return ' | '.join(raw_tokens) if raw_tokens else ''
 
-def _itoca_compose_context_text(context_rows):
-    """Formata as linhas de contexto em texto estruturado e semântico para envio ao LLM."""
-    if not context_rows:
-        return ''
+def _itoca_compose_context_text(context_rows, history_rows=None):
+    """Formata as linhas de contexto em texto estruturado e semântico para envio ao LLM.
+    Inclui: data/hora atual, instruções de formatação, histórico de sessão e registros agrupados por categoria.
+    """
+    from datetime import datetime as _dt
+    import locale as _locale
+
+    # Data e hora atual em português
+    now = _dt.now()
+    dias_semana = ['segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado', 'domingo']
+    meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+             'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+    dia_semana = dias_semana[now.weekday()]
+    data_str = f'{dia_semana}, {now.day} de {meses[now.month - 1]} de {now.year}'
+    hora_str = now.strftime('%H:%M')
+
     lines = []
     lines.append('=== CONTEXTO INTERNO DO SISTEMA TOCA DO COELHO ===')
-    lines.append('(Use SOMENTE estas informações para responder. CNPJ = Cadastro Nacional de Pessoa Jurídica. CPF = Cadastro de Pessoa Física.)')
+    lines.append(f'DATA E HORA ATUAL: {data_str}, {hora_str}')
     lines.append('')
-    for i, item in enumerate(context_rows[:20], 1):
-        table = item.get('table', '')
-        label = _ITOCA_TABLE_LABELS.get(table, table)
-        row_id = f" (id={item['id']})" if item.get('id') is not None else ''
-        lines.append(f'--- Registro {i}: {label}{row_id} ---')
-        lines.append(item['snippet'])
+    lines.append('INSTRUÇÕES DE FORMATAÇÃO DA RESPOSTA:')
+    lines.append('- Use linguagem natural, profissional e direta. Evite termos técnicos do banco de dados.')
+    lines.append('- Para listas com 3 ou mais itens, use tópicos com "\u2022" (bullet) ou números.')
+    lines.append('- Para comparar dados (ex: múltiplos contatos, contas, datas), organize em formato de tabela Markdown.')
+    lines.append('- Datas devem ser apresentadas no formato DD/MM/AAAA. Horários no formato HH:MM.')
+    lines.append('- Valores monetários devem usar o formato R$ X.XXX,XX.')
+    lines.append('- Ao citar um compromisso, sempre informe: título, data, horário e contato/empresa envolvidos.')
+    lines.append('- Se a pergunta envolver "próximos eventos" ou "esta semana", use a DATA ATUAL acima como referência.')
+    lines.append('- Não repita os rótulos internos (ex: "titulo:", "conta:") na resposta final; use linguagem natural.')
+    lines.append('')
+
+    # Histórico da sessão (se fornecido)
+    if history_rows:
+        lines.append('=== HISTÓRICO DA CONVERSA ATUAL ===')
+        for h in history_rows[-6:]:  # últimas 3 trocas (user + assistant)
+            role_label = 'Usuário' if h.get('role') == 'user' else 'iToca'
+            lines.append(f'[{role_label}]: {str(h.get("content", ""))[:400]}')
         lines.append('')
+
+    if not context_rows:
+        lines.append('(Nenhum dado encontrado na base interna para esta pergunta.)')
+        return '\n'.join(lines)
+
+    lines.append('=== REGISTROS ENCONTRADOS NA BASE INTERNA ===')
+    lines.append('(Use SOMENTE estas informações. CNPJ = Cadastro Nacional de Pessoa Jurídica. CPF = Cadastro de Pessoa Física.)')
+    lines.append('')
+
+    # Agrupa registros por categoria para facilitar a leitura do LLM
+    from collections import defaultdict as _dd
+    grouped = _dd(list)
+    for item in context_rows[:25]:
+        table = item.get('table', 'outros')
+        grouped[table].append(item)
+
+    # Ordem de apresentação das categorias (mais relevantes primeiro)
+    _CATEGORY_ORDER = [
+        'user_profile', 'commitments', 'account_renewal_events',
+        'activities', 'clients', 'accounts', 'account_presences',
+        'account_main_contacts', 'kanban_cards', 'environment_responses',
+        'wiki_entries', 'wiki_documents', 'message_templates', 'daily_suggestions'
+    ]
+    ordered_tables = _CATEGORY_ORDER + [t for t in grouped if t not in _CATEGORY_ORDER]
+
+    reg_num = 1
+    for table in ordered_tables:
+        if table not in grouped:
+            continue
+        label = _ITOCA_TABLE_LABELS.get(table, table)
+        lines.append(f'--- [{label}] ---')
+        for item in grouped[table]:
+            row_id = f" #{item['id']}" if item.get('id') is not None else ''
+            lines.append(f'  Registro {reg_num}{row_id}: {item["snippet"]}')
+            reg_num += 1
+        lines.append('')
+
     return '\n'.join(lines)
 
 
-def _itoca_call_sai_llm(question, context_rows):
+def _itoca_call_sai_llm(question, context_rows, history_rows=None):
     """Chama a API SAI LLM com a pergunta e o contexto. Retorna dict com answer, confidence_percent, needs_refinement, refinement_hint."""
     settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
     api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
     template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
     base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
-    context_text = _itoca_compose_context_text(context_rows)
+    context_text = _itoca_compose_context_text(context_rows, history_rows=history_rows)
 
     if not api_key:
         # Fallback sem LLM: retorna resposta estruturada básica
@@ -3136,17 +3641,15 @@ def itoca_base_status():
 
 @app.route('/api/itoca/base-update', methods=['POST'])
 def itoca_base_update():
-    """Inicia a atualização da base iToca e retorna progresso via SSE (Server-Sent Events).
-    O cliente pode usar EventSource ou fetch com streaming para acompanhar o progresso.
-    Ao concluir, envia evento 'done' com o resultado final.
+    """Inicia a atualização da base iToca e retorna progresso via SSE.
+    Aceita parâmetro JSON: { "incremental": true } para indexação incremental (só o que mudou).
+    Sem parâmetro ou incremental=false: indexação completa.
     """
+    req_data = request.get_json(silent=True) or {}
+    incremental = bool(req_data.get('incremental', False))
+
     def generate():
         try:
-            def on_progress(pct, msg):
-                data = json.dumps({'percent': pct, 'message': msg}, ensure_ascii=False)
-                yield f'data: {data}\n\n'
-
-            # Usamos uma fila para passar eventos da thread de progresso
             import queue
             q = queue.Queue()
 
@@ -3158,7 +3661,7 @@ def itoca_base_update():
 
             def run_update():
                 try:
-                    result = _itoca_update_cached_base(progress_cb=progress_cb)
+                    result = _itoca_update_cached_base(progress_cb=progress_cb, incremental=incremental)
                     result_holder['result'] = result
                 except Exception as ex:
                     error_holder['error'] = str(ex)
@@ -3170,7 +3673,7 @@ def itoca_base_update():
 
             while True:
                 try:
-                    evt = q.get(timeout=120)
+                    evt = q.get(timeout=180)
                 except Exception:
                     yield f'data: {json.dumps({"type":"error","message":"Timeout aguardando indexação."}, ensure_ascii=False)}\n\n'
                     break
@@ -3182,11 +3685,15 @@ def itoca_base_update():
                         payload = json.dumps({'type': 'error', 'message': error_holder['error']}, ensure_ascii=False)
                     else:
                         r = result_holder.get('result', {})
+                        changed = r.get('changed', True)
+                        msg = 'Base iToca atualizada com sucesso.' if changed else 'Base já estava atualizada. Nenhuma alteração detectada.'
                         payload = json.dumps({
                             'type': 'done',
-                            'message': 'Base iToca atualizada com sucesso.',
+                            'message': msg,
                             'items_count': len(r.get('items', [])),
-                            'updated_at': r.get('updated_at', '')
+                            'updated_at': r.get('updated_at', ''),
+                            'incremental': r.get('incremental', False),
+                            'changed': changed
                         }, ensure_ascii=False)
                     yield f'data: {payload}\n\n'
                     break
@@ -3239,9 +3746,24 @@ def itoca_ask():
             if key not in seen_keys:
                 seen_keys.add(key)
                 context_rows.append(item)
-        context_rows = context_rows[:20]
+        context_rows = context_rows[:25]
 
-        llm_result = _itoca_call_sai_llm(question, context_rows)
+        # Busca histórico da sessão atual para enviar como contexto de conversa
+        history_rows = []
+        if session_id:
+            try:
+                conn_h = get_db()
+                c_h = conn_h.cursor()
+                c_h.execute(
+                    'SELECT role, content FROM itoca_chat_history WHERE session_id = ? ORDER BY created_at ASC LIMIT 12',
+                    (session_id,)
+                )
+                history_rows = [dict_from_row(r) for r in c_h.fetchall()]
+                conn_h.close()
+            except Exception as he:
+                logger.warning(f'[iToca] Erro ao buscar histórico: {he}')
+
+        llm_result = _itoca_call_sai_llm(question, context_rows, history_rows=history_rows)
         answer = llm_result.get('answer', '')
         confidence = llm_result.get('confidence_percent', 0)
         needs_ref = llm_result.get('needs_refinement', False)

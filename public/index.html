@@ -1657,7 +1657,8 @@
 
             <!-- Base controls -->
             <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-auto-mapping btn-small" id="itocaBaseUpdateBtn" onclick="updateITocaBase()"><span class="ai-star-icon">✶</span> Base Update</button>
+                <button type="button" class="btn btn-auto-mapping btn-small" id="itocaBaseUpdateBtn" onclick="updateITocaBase(false)" title="Reindexar tudo do zero"><span class="ai-star-icon">✶</span> Base Update</button>
+                <button type="button" class="btn btn-secondary btn-small" id="itocaIncrementalBtn" onclick="updateITocaBase(true)" title="Indexar apenas o que mudou desde o último update (mais rápido)"><i class="fas fa-sync-alt"></i> Atualizar Base</button>
                 <button type="button" class="btn btn-secondary btn-small" onclick="clearITocaChat()" title="Limpar histórico do chat"><i class="fas fa-trash-alt"></i> Limpar chat</button>
                 <small id="itocaBaseUpdatedAt" style="color:#4b5563; font-size:12px;">Base não atualizada.</small>
             </div>
@@ -6543,20 +6544,21 @@
             }
         }
 
-        async function updateITocaBase() {
+        async function updateITocaBase(incremental = false) {
             const label = document.getElementById('itocaBaseUpdatedAt');
             const btn = document.getElementById('itocaBaseUpdateBtn');
+            const btnInc = document.getElementById('itocaIncrementalBtn');
             const progressContainer = document.getElementById('itocaProgressContainer');
             const progressBar = document.getElementById('itocaProgressBar');
             const progressMsg = document.getElementById('itocaProgressMsg');
             const progressPct = document.getElementById('itocaProgressPct');
 
-            // Mostrar barra de progresso e desabilitar botão
-            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
-            if (label) label.textContent = 'Indexando...';
+            // Desabilitar ambos os botões durante a indexação
+            [btn, btnInc].forEach(b => { if (b) { b.disabled = true; b.style.opacity = '0.6'; } });
+            if (label) label.textContent = incremental ? 'Verificando alterações...' : 'Indexando tudo...';
             if (progressContainer) progressContainer.style.display = 'block';
             if (progressBar) progressBar.style.width = '0%';
-            if (progressMsg) progressMsg.textContent = 'Iniciando indexação...';
+            if (progressMsg) progressMsg.textContent = incremental ? 'Iniciando indexação incremental...' : 'Iniciando indexação completa...';
             if (progressPct) progressPct.textContent = '0%';
 
             function setProgress(pct, msg) {
@@ -6568,7 +6570,8 @@
             try {
                 const response = await fetch(`${API_BASE}/itoca/base-update`, {
                     method: 'POST',
-                    headers: { 'Accept': 'text/event-stream' }
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+                    body: JSON.stringify({ incremental: !!incremental })
                 });
 
                 if (!response.ok) {
@@ -6585,7 +6588,7 @@
                     if (done) break;
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split('\n');
-                    buffer = lines.pop(); // guarda linha incompleta
+                    buffer = lines.pop();
                     for (const line of lines) {
                         if (!line.startsWith('data:')) continue;
                         try {
@@ -6593,7 +6596,8 @@
                             if (evt.type === 'done') {
                                 setProgress(100, evt.message || 'Concluído!');
                                 showSuccess(evt.message || 'Base iToca atualizada.');
-                                if (label) label.textContent = `Último update: ${formatDateBr(evt.updated_at)} — ${evt.items_count} registros`;
+                                const modeLabel = evt.incremental ? ' (incremental)' : '';
+                                if (label) label.textContent = `Último update: ${formatDateBr(evt.updated_at)} — ${evt.items_count} registros${modeLabel}`;
                                 setTimeout(() => {
                                     if (progressContainer) progressContainer.style.display = 'none';
                                 }, 3000);
@@ -6612,7 +6616,7 @@
                 if (label) label.textContent = 'Base não atualizada.';
                 if (progressContainer) progressContainer.style.display = 'none';
             } finally {
-                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+                [btn, btnInc].forEach(b => { if (b) { b.disabled = false; b.style.opacity = '1'; } });
             }
         }
 
