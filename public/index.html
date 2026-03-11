@@ -6664,19 +6664,50 @@
         }
 
         function _itocaRenderMarkdown(text) {
+            // Pré-processa o texto antes de passar ao marked:
+            // converte bullets com • em listas Markdown e normaliza espaços
+            let processed = text;
+
+            // Converte linhas que começam com • ou – em listas Markdown (-)
+            processed = processed.replace(/^[\u2022\u2013\u2014]\s*/gm, '- ');
+
+            // Garante que linhas de cabeçalho (Contato principal:, Compromissos:, etc.)
+            // que terminam com ':' e estão sozinhas na linha virem como bold
+            processed = processed.replace(/^([A-ZÀ-ÿ][^:\n]{2,50}):$/gm, '**$1:**');
+
             if (typeof marked !== 'undefined') {
                 try {
-                    return marked.parse(text, { breaks: true, gfm: true });
+                    // breaks:true converte \n simples em <br>, gfm habilita tabelas e listas
+                    return marked.parse(processed, { breaks: true, gfm: true });
                 } catch(e) {
-                    return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                    // Fallback manual se marked falhar
                 }
             }
-            return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+            // Fallback manual: converte Markdown básico sem biblioteca
+            let html = processed
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                // Headers
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                // Bold e italic
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                // Listas
+                .replace(/^- (.+)$/gm, '<li>$1</li>')
+                // Linhas horizontais
+                .replace(/^---+$/gm, '<hr>')
+                // Quebras de linha
+                .replace(/\n/g, '<br>');
+            // Envolve li em ul
+            html = html.replace(/(<li>.*?<\/li>)(<br>)*/gs, (m) => `<ul>${m.replace(/<br>/g,'')}</ul>`);
+            return html;
         }
 
         function _itocaIsLongResponse(text) {
-            // Considera longa se tem mais de 120 chars ou já tem markdown
-            return text.length > 120 || /[#*_`\[\]|\n]{2,}/.test(text);
+            // Considera longa se tem mais de 80 chars, tem markdown ou tem quebras de linha
+            return text.length > 80 || /[#*_`\[\]|\n\u2022\u2013]/.test(text);
         }
 
         function _itocaAppendUserMsg(question) {
@@ -6731,15 +6762,45 @@
             const container = document.getElementById('itocaChatMessages');
             if (!container) return;
             const msgId = `itocaMsg${++itocaChatMsgCount}`;
-            const rawAnswer = payload.answer || 'Sem resposta disponível.';
+
+            // ─── Sanitização defensiva do campo answer ────────────────────────────────
+            // Caso o backend ainda retorne JSON bruto no campo answer (double-encoding
+            // ou wrapper da API SAI não totalmente desencapsulado), tenta extrair aqui.
+            let rawAnswer = payload.answer || 'Sem resposta disponível.';
+
+            // 1. Se rawAnswer começa com '{' e contém "answer", tenta extrair
+            if (typeof rawAnswer === 'string' && rawAnswer.trimStart().startsWith('{') && rawAnswer.includes('"answer"')) {
+                try {
+                    const innerObj = JSON.parse(rawAnswer);
+                    if (innerObj && typeof innerObj.answer === 'string' && innerObj.answer.trim()) {
+                        rawAnswer = innerObj.answer;
+                        // Atualiza os metadados se o JSON interno os tiver
+                        if (innerObj.confidence_percent != null) payload.confidence_percent = innerObj.confidence_percent;
+                        if (innerObj.needs_refinement != null) payload.needs_refinement = innerObj.needs_refinement;
+                        if (innerObj.refinement_hint)           payload.refinement_hint  = innerObj.refinement_hint;
+                    }
+                } catch (_e) {
+                    // Não era JSON válido, mantém o texto original
+                }
+            }
+
+            // 2. Converte \n literais (dois chars: barra + n) em quebras de linha reais
+            rawAnswer = rawAnswer.replace(/\\n/g, '\n');
+
+            // 3. Remove aspas externas se o LLM retornou a string entre aspas
+            if (rawAnswer.startsWith('"') && rawAnswer.endsWith('"') && rawAnswer.length > 2) {
+                try { rawAnswer = JSON.parse(rawAnswer); } catch (_e) {}
+            }
+
             const confidence = payload.confidence_percent != null ? payload.confidence_percent : null;
             const needsRefinement = payload.needs_refinement || false;
             const refinementHint = (payload.refinement_hint || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             const sources = payload.sources || [];
             const llmUsed = payload.llm_used || false;
 
-            // Renderiza Markdown em respostas médias/longas ou que já contenham markdown
-            const useMarkdown = _itocaIsLongResponse(rawAnswer);
+            // Renderiza sempre como Markdown quando o LLM foi usado (respostas estruturadas)
+            // Para respostas curtas sem LLM, usa texto simples
+            const useMarkdown = llmUsed || _itocaIsLongResponse(rawAnswer);
             const answerHtml = useMarkdown
                 ? _itocaRenderMarkdown(rawAnswer)
                 : rawAnswer.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');

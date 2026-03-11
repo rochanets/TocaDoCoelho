@@ -2435,22 +2435,106 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
         logger.error(f'[iToca][SAI] Erro de conexão: {e}')
         raise RuntimeError(f'Falha ao conectar com a API SAI: {str(e)}')
 
-    parsed = _extract_json_object_from_text(raw)
-    if not parsed or not isinstance(parsed, dict):
-        # Tenta usar o texto bruto como resposta
+    # ─── Parsing robusto da resposta da API SAI ───────────────────────────────────────────────
+    # A API SAI pode retornar o JSON do LLM de várias formas:
+    #   1. JSON direto: {"answer": "...", "confidence_percent": 80, ...}
+    #   2. Wrapper com "output": {"output": "{\"answer\":\"...\"}"}
+    #   3. Wrapper com "result": {"result": "{\"answer\":\"...\"}"}
+    #   4. Wrapper com "text": {"text": "{\"answer\":\"...\"}"}
+    #   5. O campo answer já contém um JSON serializado como string
+    # ───────────────────────────────────────────────────────────────────────
+    logger.debug(f'[iToca][SAI] raw response (primeiros 500 chars): {raw[:500]}')
+
+    def _try_parse_llm_json(text):
+        """Tenta extrair o dict com 'answer' de uma string que pode conter JSON em vários níveis."""
+        if not text:
+            return None
+        # Tentativa 1: parse direto
+        try:
+            obj = json.loads(text.strip())
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+        # Tentativa 2: extrai o primeiro objeto JSON da string
+        obj = _extract_json_object_from_text(text)
+        if obj and isinstance(obj, dict):
+            return obj
+        return None
+
+    # Passo 1: parse do envelope externo retornado pela API
+    outer = _try_parse_llm_json(raw)
+
+    # Passo 2: se o envelope externo não tem 'answer', procura em campos comuns de wrapper
+    inner = None
+    if outer and isinstance(outer, dict):
+        if 'answer' in outer:
+            # Caso ideal: o JSON do LLM já está no nível raiz
+            inner = outer
+        else:
+            # Tenta extrair de campos de wrapper conhecidos
+            for wrapper_key in ('output', 'result', 'text', 'content', 'response', 'data', 'message'):
+                candidate = outer.get(wrapper_key)
+                if candidate:
+                    if isinstance(candidate, dict) and 'answer' in candidate:
+                        inner = candidate
+                        break
+                    if isinstance(candidate, str):
+                        parsed_inner = _try_parse_llm_json(candidate)
+                        if parsed_inner and isinstance(parsed_inner, dict) and 'answer' in parsed_inner:
+                            inner = parsed_inner
+                            break
+            # Se ainda não achou, tenta buscar qualquer JSON com 'answer' na string bruta
+            if not inner:
+                inner = _try_parse_llm_json(raw)
+    else:
+        # Não conseguiu parsear o envelope; tenta direto na string bruta
+        inner = _try_parse_llm_json(raw)
+
+    # Passo 3: verifica se o campo 'answer' em si é um JSON serializado (double-encoding)
+    if inner and isinstance(inner, dict):
+        raw_answer = inner.get('answer') or ''
+        if isinstance(raw_answer, str) and raw_answer.strip().startswith('{'):
+            double_parsed = _try_parse_llm_json(raw_answer)
+            if double_parsed and isinstance(double_parsed, dict) and 'answer' in double_parsed:
+                logger.debug('[iToca][SAI] Detectado double-encoding no campo answer — desencapsulando.')
+                inner = double_parsed
+
+    if not inner or not isinstance(inner, dict):
+        # Fallback final: usa o texto bruto como resposta, mas limpa eventuais artefatos JSON
+        fallback_text = raw.strip()
+        # Remove prefixos de JSON que possam ter vazado
+        if fallback_text.startswith('{') and '"answer"' in fallback_text:
+            extracted = _try_parse_llm_json(fallback_text)
+            if extracted and 'answer' in extracted:
+                fallback_text = (extracted.get('answer') or '').strip()
         return {
-            'answer': raw.strip() or 'Não foi possível interpretar a resposta do assistente.',
+            'answer': fallback_text or 'Não foi possível interpretar a resposta do assistente.',
             'confidence_percent': 50,
             'needs_refinement': False,
             'refinement_hint': '',
             'llm_used': True
         }
 
+    # Passo 4: limpa o campo answer de \n literais (sequencia de barra-n) que o LLM pode gerar
+    answer_text = (inner.get('answer') or '').strip()
+    # Converte \n literais (como string de 2 chars) em quebras de linha reais
+    answer_text = answer_text.replace('\\n', '\n')
+    # Remove aspas externas se o LLM retornou a string entre aspas
+    if answer_text.startswith('"') and answer_text.endswith('"') and len(answer_text) > 2:
+        try:
+            answer_text = json.loads(answer_text)
+        except Exception:
+            pass
+
+    if not answer_text:
+        answer_text = 'Sem resposta disponível.'
+
     return {
-        'answer': (parsed.get('answer') or '').strip() or 'Sem resposta disponível.',
-        'confidence_percent': max(0, min(100, int(parsed.get('confidence_percent') or 0))),
-        'needs_refinement': bool(parsed.get('needs_refinement')),
-        'refinement_hint': (parsed.get('refinement_hint') or '').strip(),
+        'answer': answer_text,
+        'confidence_percent': max(0, min(100, int(inner.get('confidence_percent') or 0))),
+        'needs_refinement': bool(inner.get('needs_refinement')),
+        'refinement_hint': (inner.get('refinement_hint') or '').strip(),
         'llm_used': True
     }
 
