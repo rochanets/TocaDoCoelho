@@ -644,6 +644,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_template_id', '69ac3c87024adc2d2bdc19f5'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -2454,6 +2455,105 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# iToca — Detector de Intenção de Ação (segundo LLM SAI)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Tipos de ação reconhecidos e seus rótulos legíveis
+_ITOCA_ACTION_LABELS = {
+    'kanban_card':          'Criar card no Kanban',
+    'activity':             'Registrar atividade com contato',
+    'new_contact':          'Adicionar novo contato',
+    'environment_mapping':  'Registrar mapeamento de ambiente',
+    'wiki_entry':           'Salvar conhecimento no WikiToca',
+    'commitment':           'Agendar compromisso',
+}
+
+
+def _itoca_detect_action_intent(question: str, answer: str) -> dict:
+    """Chama o segundo LLM SAI (template 69b1c662485ca1e93db65015) para detectar
+    se a mensagem do usuário expressa intenção de criar um registro no sistema.
+
+    Retorna um dict com:
+        action_type  (str | None)  — tipo da ação detectada ou None
+        confidence   (float)       — 0.0 a 1.0
+        label        (str)         — rótulo legível da ação
+        fields       (dict)        — campos extraídos pelo LLM
+        raw          (str)         — resposta bruta da API (para debug)
+    """
+    try:
+        settings_map = _load_app_settings_map([
+            'itoca_sai_api_key',
+            'itoca_sai_base_url',
+            'itoca_action_detector_template_id'
+        ])
+        api_key = (settings_map.get('itoca_sai_api_key') or '').strip() \
+                  or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+        base_url = (settings_map.get('itoca_sai_base_url') or '').strip() \
+                   or 'https://sai-library.saiapplications.com'
+        template_id = (settings_map.get('itoca_action_detector_template_id') or '').strip() \
+                      or '69b1c662485ca1e93db65015'
+
+        if not api_key:
+            logger.debug('[iToca][ActionDetector] API key não configurada — detector desativado.')
+            return {'action_type': None, 'confidence': 0.0, 'label': '', 'fields': {}, 'raw': ''}
+
+        url = f'{base_url}/api/templates/{template_id}/execute'
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Api-Key': api_key
+        }
+        payload = {
+            'inputs': {
+                'question': question[:1000],   # limita para não inflar o payload
+                'answer': answer[:1000]
+            }
+        }
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers=headers,
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode('utf-8')
+
+        parsed = _extract_json_object_from_text(raw)
+        if not parsed or not isinstance(parsed, dict):
+            logger.warning(f'[iToca][ActionDetector] Resposta não-JSON: {raw[:200]}')
+            return {'action_type': None, 'confidence': 0.0, 'label': '', 'fields': {}, 'raw': raw}
+
+        action_type = (parsed.get('action_type') or '').strip().lower()
+        if action_type in ('none', '', 'null'):
+            action_type = None
+
+        # Valida que o tipo retornado é um dos reconhecidos
+        if action_type and action_type not in _ITOCA_ACTION_LABELS:
+            logger.warning(f'[iToca][ActionDetector] Tipo desconhecido: {action_type!r}')
+            action_type = None
+
+        confidence = float(parsed.get('confidence') or 0.0)
+        fields = parsed.get('fields') or {}
+        if not isinstance(fields, dict):
+            fields = {}
+
+        label = _ITOCA_ACTION_LABELS.get(action_type, '') if action_type else ''
+
+        logger.info(f'[iToca][ActionDetector] action={action_type!r} confidence={confidence:.2f} fields={list(fields.keys())}')
+        return {
+            'action_type': action_type,
+            'confidence': confidence,
+            'label': label,
+            'fields': fields,
+            'raw': raw
+        }
+
+    except Exception as e:
+        logger.warning(f'[iToca][ActionDetector] Erro ao detectar intenção: {e}')
+        return {'action_type': None, 'confidence': 0.0, 'label': '', 'fields': {}, 'raw': ''}
+
+
 def ensure_account_for_company(cursor, company_name):
     name = (company_name or '').strip()
     if not name:
@@ -3787,6 +3887,38 @@ def itoca_ask():
             except Exception as he:
                 logger.warning(f'[iToca] Erro ao salvar histórico: {he}')
 
+        # Detectar intenção de ação em thread separada (não bloqueia a resposta)
+        # Apenas executa quando o LLM principal foi usado (API configurada)
+        suggested_action = None
+        if llm_result.get('llm_used') and not needs_ref:
+            try:
+                import threading as _threading
+                import queue as _queue
+                result_queue = _queue.Queue()
+
+                def _run_detector():
+                    try:
+                        result_queue.put(_itoca_detect_action_intent(question, answer))
+                    except Exception as _e:
+                        result_queue.put(None)
+
+                t = _threading.Thread(target=_run_detector, daemon=True)
+                t.start()
+                t.join(timeout=12)  # aguarda até 12s para não atrasar demais a resposta
+
+                if not result_queue.empty():
+                    det = result_queue.get_nowait()
+                    # Só sugere ação se confiante o suficiente (>= 0.6)
+                    if det and det.get('action_type') and float(det.get('confidence', 0)) >= 0.6:
+                        suggested_action = {
+                            'action_type': det['action_type'],
+                            'label': det['label'],
+                            'confidence': det['confidence'],
+                            'fields': det['fields']
+                        }
+            except Exception as det_err:
+                logger.warning(f'[iToca] Erro no detector de intenção: {det_err}')
+
         return jsonify({
             'answer': answer,
             'confidence_percent': confidence,
@@ -3796,11 +3928,312 @@ def itoca_ask():
             'items_found': len(context_rows),
             'sources': context_rows,
             'base_updated_at': updated_at,
-            'base_ready': True
+            'base_ready': True,
+            'suggested_action': suggested_action  # None ou dict com action_type, label, confidence, fields
         })
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
         return jsonify({'error': f'Erro ao consultar iToca: {e}'}), 500
+
+
+@app.route('/api/itoca/execute-action', methods=['POST'])
+def itoca_execute_action():
+    """Executa a ação sugerida pelo detector de intenção após confirmação do usuário.
+
+    Payload esperado:
+        action_type  (str)   — tipo da ação (kanban_card, activity, new_contact, etc.)
+        fields       (dict)  — campos extraídos pelo LLM
+
+    Retorna:
+        success      (bool)
+        message      (str)   — mensagem de confirmação
+        created_id   (int)   — ID do registro criado (quando aplicável)
+        action_type  (str)
+    """
+    try:
+        data = request.get_json() or {}
+        action_type = (data.get('action_type') or '').strip().lower()
+        fields = data.get('fields') or {}
+
+        if not action_type or action_type not in _ITOCA_ACTION_LABELS:
+            return jsonify({'error': f'Tipo de ação inválido: {action_type!r}'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+
+        # ------------------------------------------------------------------ #
+        # kanban_card — cria card na primeira coluna do Kanban                #
+        # ------------------------------------------------------------------ #
+        if action_type == 'kanban_card':
+            title = (fields.get('title') or '').strip()
+            description = (fields.get('description') or fields.get('title') or '').strip()
+            urgency = (fields.get('urgency') or 'Média').strip()
+            if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
+                urgency = 'Média'
+            account_name = (fields.get('account_name') or fields.get('company') or '').strip()
+            contact_name = (fields.get('contact_name') or '').strip()
+
+            if not title:
+                conn.close()
+                return jsonify({'error': 'Título do card é obrigatório.'}), 400
+
+            # Resolve account_id e contact_id se fornecidos
+            account_id = None
+            if account_name:
+                account_id = ensure_account_for_company(c, account_name)
+
+            contact_id = None
+            if contact_name:
+                c.execute('SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) LIMIT 1', (f'%{contact_name}%',))
+                row = c.fetchone()
+                if row:
+                    contact_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+
+            tag = infer_kanban_tag(description)
+            c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
+            first_col = c.fetchone()
+            if not first_col:
+                conn.close()
+                return jsonify({'error': 'Nenhuma coluna disponível no Kanban.'}), 400
+            col_id = first_col[0] if not isinstance(first_col, sqlite3.Row) else first_col['id']
+
+            c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (col_id,))
+            next_order = (c.fetchone()[0] or 0) + 1
+            c.execute(
+                '''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, urgency, column_id, display_order)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (title, description, tag, account_id, contact_id, urgency, col_id, next_order)
+            )
+            conn.commit()
+            created_id = c.lastrowid
+            conn.close()
+            return jsonify({
+                'success': True,
+                'message': f'Card “{title}” criado no Kanban com sucesso!',
+                'created_id': created_id,
+                'action_type': action_type
+            }), 201
+
+        # ------------------------------------------------------------------ #
+        # activity — registra atividade vinculada a um contato               #
+        # ------------------------------------------------------------------ #
+        elif action_type == 'activity':
+            contact_name = (fields.get('contact_name') or fields.get('name') or '').strip()
+            company = (fields.get('company') or fields.get('account_name') or '').strip()
+            description = (fields.get('description') or fields.get('information') or '').strip()
+            contact_type = (fields.get('contact_type') or 'Outro').strip()
+
+            if not description:
+                conn.close()
+                return jsonify({'error': 'Descrição da atividade é obrigatória.'}), 400
+
+            # Tenta encontrar o contato pelo nome e/ou empresa
+            client_id = None
+            if contact_name:
+                query = 'SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?))'
+                params = [f'%{contact_name}%']
+                if company:
+                    query += ' AND LOWER(TRIM(company)) LIKE LOWER(TRIM(?))'
+                    params.append(f'%{company}%')
+                query += ' LIMIT 1'
+                c.execute(query, params)
+                row = c.fetchone()
+                if row:
+                    client_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+
+            if not client_id:
+                conn.close()
+                return jsonify({
+                    'error': f'Contato “{contact_name or "(não informado)"}” não encontrado. Verifique o nome e tente novamente.',
+                    'needs_contact_selection': True
+                }), 404
+
+            c.execute(
+                '''INSERT INTO activities (client_id, contact_type, information)
+                   VALUES (?, ?, ?)''',
+                (client_id, contact_type, description)
+            )
+            c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (client_id,))
+            conn.commit()
+            created_id = c.lastrowid
+            conn.close()
+            return jsonify({
+                'success': True,
+                'message': f'Atividade registrada para “{contact_name}” com sucesso!',
+                'created_id': created_id,
+                'action_type': action_type
+            }), 201
+
+        # ------------------------------------------------------------------ #
+        # new_contact — adiciona novo contato/cliente                        #
+        # ------------------------------------------------------------------ #
+        elif action_type == 'new_contact':
+            name = (fields.get('name') or fields.get('contact_name') or '').strip()
+            company = (fields.get('company') or fields.get('account_name') or '').strip()
+            position = (fields.get('position') or fields.get('cargo') or '').strip()
+            email = (fields.get('email') or '').strip()
+            phone = (fields.get('phone') or fields.get('telefone') or '').strip()
+
+            if not name or not company or not position:
+                conn.close()
+                return jsonify({'error': 'Nome, empresa e cargo são obrigatórios para criar um contato.'}), 400
+
+            # Verifica duplicidade simples
+            c.execute(
+                'SELECT id FROM clients WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1',
+                (name, company)
+            )
+            if c.fetchone():
+                conn.close()
+                return jsonify({
+                    'error': f'Contato “{name}” da empresa “{company}” já existe no sistema.',
+                    'duplicate': True
+                }), 409
+
+            c.execute(
+                '''INSERT INTO clients (name, company, position, email, phone, updated_at)
+                   VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (name, company, position, email or None, phone or None)
+            )
+            conn.commit()
+            created_id = c.lastrowid
+            conn.close()
+            return jsonify({
+                'success': True,
+                'message': f'Contato “{name}” ({position} na {company}) adicionado com sucesso!',
+                'created_id': created_id,
+                'action_type': action_type
+            }), 201
+
+        # ------------------------------------------------------------------ #
+        # wiki_entry — salva conhecimento no WikiToca                        #
+        # ------------------------------------------------------------------ #
+        elif action_type == 'wiki_entry':
+            title = (fields.get('title') or '').strip()
+            content = (fields.get('content') or fields.get('description') or '').strip()
+            category = (fields.get('category') or '').strip() or None
+            tags = (fields.get('tags') or '').strip() or None
+
+            if not title or not content:
+                conn.close()
+                return jsonify({'error': 'Título e conteúdo são obrigatórios para criar um conhecimento.'}), 400
+
+            c.execute(
+                '''INSERT INTO wiki_entries (title, category, content, tags, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                (title, category, content, tags)
+            )
+            conn.commit()
+            created_id = c.lastrowid
+            conn.close()
+            return jsonify({
+                'success': True,
+                'message': f'Conhecimento “{title}” salvo no WikiToca com sucesso!',
+                'created_id': created_id,
+                'action_type': action_type
+            }), 201
+
+        # ------------------------------------------------------------------ #
+        # commitment — agenda compromisso                                    #
+        # ------------------------------------------------------------------ #
+        elif action_type == 'commitment':
+            title = (fields.get('title') or '').strip()
+            due_date = (fields.get('due_date') or '').strip()
+            due_time = (fields.get('due_time') or '').strip() or None
+            notes = (fields.get('notes') or fields.get('description') or title or '').strip()
+            contact_name = (fields.get('contact_name') or '').strip()
+
+            if not due_date:
+                conn.close()
+                return jsonify({'error': 'Data do compromisso é obrigatória.'}), 400
+
+            # Tenta encontrar o contato
+            client_id = None
+            if contact_name:
+                c.execute('SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) LIMIT 1', (f'%{contact_name}%',))
+                row = c.fetchone()
+                if row:
+                    client_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+
+            if not client_id:
+                conn.close()
+                return jsonify({
+                    'error': f'Contato “{contact_name or "(não informado)"}” não encontrado para vincular o compromisso.',
+                    'needs_contact_selection': True
+                }), 404
+
+            c.execute(
+                '''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (client_id, title or 'Compromisso via iToca', notes, due_date, due_time, 'itoca')
+            )
+            conn.commit()
+            created_id = c.lastrowid
+            conn.close()
+            return jsonify({
+                'success': True,
+                'message': f'Compromisso “{title or due_date}” agendado com sucesso!',
+                'created_id': created_id,
+                'action_type': action_type
+            }), 201
+
+        # ------------------------------------------------------------------ #
+        # environment_mapping — registra resposta de mapeamento de ambiente  #
+        # ------------------------------------------------------------------ #
+        elif action_type == 'environment_mapping':
+            company = (fields.get('company') or fields.get('account_name') or '').strip()
+            card_title = (fields.get('card_title') or fields.get('question') or '').strip()
+            response_text = (fields.get('response') or fields.get('answer') or fields.get('content') or '').strip()
+
+            if not company or not response_text:
+                conn.close()
+                return jsonify({'error': 'Empresa e resposta são obrigatórios para o mapeamento.'}), 400
+
+            # Encontra ou cria a conta
+            account_id = ensure_account_for_company(c, company)
+
+            # Encontra o card de mapeamento pelo título (ou cria um genérico)
+            card_id = None
+            if card_title:
+                c.execute(
+                    'SELECT id FROM environment_cards WHERE LOWER(TRIM(title)) LIKE LOWER(TRIM(?)) LIMIT 1',
+                    (f'%{card_title}%',)
+                )
+                row = c.fetchone()
+                if row:
+                    card_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+
+            if not card_id:
+                # Cria um card genérico para a resposta
+                c.execute(
+                    '''INSERT INTO environment_cards (title, description, created_at, updated_at)
+                       VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                    (card_title or 'Informação via iToca', '')
+                )
+                conn.commit()
+                card_id = c.lastrowid
+
+            c.execute(
+                '''INSERT INTO environment_responses (card_id, account_id, response, created_at, updated_at)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                (card_id, account_id, response_text)
+            )
+            conn.commit()
+            created_id = c.lastrowid
+            conn.close()
+            return jsonify({
+                'success': True,
+                'message': f'Mapeamento de “{company}” registrado com sucesso!',
+                'created_id': created_id,
+                'action_type': action_type
+            }), 201
+
+        conn.close()
+        return jsonify({'error': f'Ação “{action_type}” não implementada.'}), 501
+
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/itoca/execute-action: {e}')
+        return jsonify({'error': f'Erro ao executar ação: {e}'}), 500
 
 
 @app.route('/api/itoca/history', methods=['GET'])

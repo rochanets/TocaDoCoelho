@@ -1455,6 +1455,31 @@
         .itoca-refinement-hint { font-size:12px; color:#6b7280; font-style:italic; }
         .itoca-sources-toggle { font-size:11px; color:#6b7280; cursor:pointer; text-decoration:underline; background:none; border:none; padding:0; }
         .itoca-sources-toggle:hover { color:#10b981; }
+        /* Notificação de ação sugerida pelo detector de intenção */
+        .itoca-action-notification { margin-top:8px; border-radius:10px; overflow:hidden; border:1px solid #a7f3d0; animation:itocaFadeIn .3s ease; }
+        .itoca-action-notification-header { display:flex; align-items:center; gap:8px; padding:8px 12px; background:#ecfdf5; cursor:pointer; user-select:none; transition:background .15s; }
+        .itoca-action-notification-header:hover { background:#d1fae5; }
+        .itoca-action-notification-icon { font-size:15px; color:#059669; flex-shrink:0; }
+        .itoca-action-notification-title { font-size:12px; font-weight:600; color:#065f46; flex:1; }
+        .itoca-action-notification-badge { font-size:10px; background:#10b981; color:#fff; border-radius:8px; padding:1px 7px; font-weight:600; }
+        .itoca-action-notification-chevron { font-size:11px; color:#6b7280; transition:transform .2s; }
+        .itoca-action-notification-header.open .itoca-action-notification-chevron { transform:rotate(180deg); }
+        .itoca-action-notification-body { display:none; padding:10px 14px 12px; background:#f0fdf4; border-top:1px solid #a7f3d0; }
+        .itoca-action-notification-body.open { display:block; }
+        .itoca-action-fields { margin-bottom:10px; }
+        .itoca-action-field { display:flex; gap:6px; font-size:12px; margin-bottom:4px; align-items:flex-start; }
+        .itoca-action-field-label { color:#6b7280; font-weight:500; min-width:90px; flex-shrink:0; }
+        .itoca-action-field-value { color:#111827; word-break:break-word; }
+        .itoca-action-field-input { flex:1; font-size:12px; padding:3px 7px; border:1px solid #d1d5db; border-radius:6px; background:#fff; color:#111827; }
+        .itoca-action-field-input:focus { outline:none; border-color:#10b981; box-shadow:0 0 0 2px rgba(16,185,129,.15); }
+        .itoca-action-buttons { display:flex; gap:8px; margin-top:10px; }
+        .itoca-action-btn-confirm { flex:1; padding:7px 14px; background:#10b981; color:#fff; border:none; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; }
+        .itoca-action-btn-confirm:hover { background:#059669; }
+        .itoca-action-btn-confirm:disabled { background:#9ca3af; cursor:not-allowed; }
+        .itoca-action-btn-discard { padding:7px 14px; background:#f3f4f6; color:#6b7280; border:1px solid #d1d5db; border-radius:8px; font-size:12px; cursor:pointer; transition:background .15s; }
+        .itoca-action-btn-discard:hover { background:#fee2e2; color:#991b1b; border-color:#fca5a5; }
+        .itoca-action-success { font-size:12px; color:#065f46; background:#d1fae5; border-radius:6px; padding:6px 10px; text-align:center; font-weight:500; }
+        .itoca-action-error { font-size:12px; color:#991b1b; background:#fee2e2; border-radius:6px; padding:6px 10px; text-align:center; }
         .itoca-sources-list { margin-top:6px; font-size:11px; color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 10px; display:none; }
         .itoca-sources-list.open { display:block; }
         .itoca-sources-list li { list-style:disc; margin-left:14px; margin-bottom:2px; }
@@ -6736,19 +6761,177 @@
                 metaHtml += `<button class="itoca-sources-toggle" onclick="_itocaToggleSources(this)">Ver fontes (${sources.length})</button><ul class="itoca-sources-list" data-count="${sources.length}">${sourcesHtml}</ul>`;
             }
 
+            // Notificação de ação sugerida (se houver)
+            const suggestedAction = payload.suggested_action || null;
+            let actionNotificationHtml = '';
+            if (suggestedAction && suggestedAction.action_type) {
+                actionNotificationHtml = _itocaBuildActionNotification(msgId, suggestedAction);
+            }
+
             const bubbleClass = (needsRefinement ? 'itoca-msg-bubble needs-refinement' : 'itoca-msg-bubble') + (useMarkdown ? ' itoca-markdown' : '');
             const div = document.createElement('div');
             div.className = 'itoca-msg assistant';
             div.id = msgId;
             div.innerHTML = `
                 <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca"></div>
-                <div>
+                <div style="flex:1; min-width:0;">
                     <div class="${bubbleClass}">${answerHtml}</div>
                     ${metaHtml ? `<div class="itoca-msg-meta">${metaHtml}</div>` : ''}
+                    ${actionNotificationHtml}
                 </div>
             `;
             container.appendChild(div);
             _itocaScrollToBottom();
+        }
+
+        // Mapa de rótulos legíveis para os campos de cada tipo de ação
+        const _ITOCA_FIELD_LABELS = {
+            title:        'Título',
+            description:  'Descrição',
+            urgency:      'Urgência',
+            account_name: 'Empresa',
+            company:      'Empresa',
+            contact_name: 'Contato',
+            name:         'Nome',
+            position:     'Cargo',
+            email:        'E-mail',
+            phone:        'Telefone',
+            information:  'Informação',
+            contact_type: 'Tipo de contato',
+            due_date:     'Data',
+            due_time:     'Horário',
+            notes:        'Observações',
+            card_title:   'Pergunta de mapeamento',
+            response:     'Resposta',
+            content:      'Conteúdo',
+            category:     'Categoria',
+            tags:         'Tags',
+        };
+
+        // Campos editáveis por tipo de ação (o usuário pode corrigir antes de confirmar)
+        const _ITOCA_EDITABLE_FIELDS = {
+            kanban_card:         ['title', 'description', 'urgency', 'account_name', 'contact_name'],
+            activity:            ['contact_name', 'company', 'description', 'contact_type'],
+            new_contact:         ['name', 'company', 'position', 'email', 'phone'],
+            wiki_entry:          ['title', 'content', 'category', 'tags'],
+            commitment:          ['title', 'due_date', 'due_time', 'contact_name', 'notes'],
+            environment_mapping: ['company', 'card_title', 'response'],
+        };
+
+        function _itocaBuildActionNotification(msgId, action) {
+            const notifId = `itocaAction_${msgId}`;
+            const bodyId  = `itocaActionBody_${msgId}`;
+            const label   = action.label || 'Ação sugerida';
+            const fields  = action.fields || {};
+            const actionType = action.action_type;
+            const editableKeys = _ITOCA_EDITABLE_FIELDS[actionType] || Object.keys(fields);
+
+            // Monta os campos editáveis
+            let fieldsHtml = '';
+            for (const key of editableKeys) {
+                const val = (fields[key] || '').toString();
+                if (!val && key !== 'notes' && key !== 'due_time' && key !== 'tags' && key !== 'category') continue;
+                const fieldLabel = _ITOCA_FIELD_LABELS[key] || key;
+                const escaped = val.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                fieldsHtml += `
+                    <div class="itoca-action-field">
+                        <span class="itoca-action-field-label">${fieldLabel}:</span>
+                        <input class="itoca-action-field-input" data-field="${key}" value="${escaped}" placeholder="${fieldLabel}">
+                    </div>`;
+            }
+
+            const actionDataJson = JSON.stringify(action).replace(/"/g, '&quot;');
+
+            return `
+            <div class="itoca-action-notification" id="${notifId}">
+                <div class="itoca-action-notification-header" onclick="_itocaToggleActionNotif('${bodyId}', this)">
+                    <span class="itoca-action-notification-icon"><i class="fas fa-magic"></i></span>
+                    <span class="itoca-action-notification-title">Ação sugerida: ${label}</span>
+                    <span class="itoca-action-notification-badge">NOVO</span>
+                    <span class="itoca-action-notification-chevron"><i class="fas fa-chevron-down"></i></span>
+                </div>
+                <div class="itoca-action-notification-body" id="${bodyId}">
+                    <div class="itoca-action-fields">${fieldsHtml || '<span style="font-size:12px;color:#6b7280;">Nenhum campo extraído.</span>'}</div>
+                    <div class="itoca-action-buttons">
+                        <button class="itoca-action-btn-confirm" onclick="_itocaConfirmAction('${notifId}', '${bodyId}', '${actionType}')">
+                            <i class="fas fa-check"></i> Confirmar e criar
+                        </button>
+                        <button class="itoca-action-btn-discard" onclick="_itocaDiscardAction('${notifId}')">
+                            <i class="fas fa-times"></i> Descartar
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function _itocaToggleActionNotif(bodyId, headerEl) {
+            const body = document.getElementById(bodyId);
+            if (!body) return;
+            const isOpen = body.classList.toggle('open');
+            if (headerEl) headerEl.classList.toggle('open', isOpen);
+            _itocaScrollToBottom();
+        }
+
+        async function _itocaConfirmAction(notifId, bodyId, actionType) {
+            const notif = document.getElementById(notifId);
+            const body  = document.getElementById(bodyId);
+            if (!notif || !body) return;
+
+            // Coleta os campos editados pelo usuário
+            const inputs = body.querySelectorAll('.itoca-action-field-input');
+            const fields = {};
+            inputs.forEach(inp => {
+                const key = inp.dataset.field;
+                if (key) fields[key] = inp.value.trim();
+            });
+
+            // Desabilita botões durante o envio
+            const confirmBtn = body.querySelector('.itoca-action-btn-confirm');
+            const discardBtn = body.querySelector('.itoca-action-btn-discard');
+            if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Criando...'; }
+            if (discardBtn) discardBtn.disabled = true;
+
+            try {
+                const response = await fetch(`${API_BASE}/itoca/execute-action`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action_type: actionType, fields })
+                });
+                const result = await response.json().catch(() => ({}));
+
+                if (response.ok && result.success) {
+                    // Substitui o corpo da notificação por mensagem de sucesso
+                    body.innerHTML = `<div class="itoca-action-success"><i class="fas fa-check-circle"></i> ${result.message || 'Criado com sucesso!'}</div>`;
+                    body.classList.add('open');
+                    // Atualiza o header para indicar concluído
+                    const header = notif.querySelector('.itoca-action-notification-header');
+                    if (header) {
+                        header.style.cursor = 'default';
+                        header.onclick = null;
+                        const badge = header.querySelector('.itoca-action-notification-badge');
+                        if (badge) { badge.textContent = 'FEITO'; badge.style.background = '#059669'; }
+                    }
+                } else {
+                    const errMsg = result.error || 'Não foi possível criar o registro.';
+                    body.innerHTML += `<div class="itoca-action-error" style="margin-top:8px;"><i class="fas fa-exclamation-circle"></i> ${errMsg}</div>`;
+                    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerHTML = '<i class="fas fa-check"></i> Tentar novamente'; }
+                    if (discardBtn) discardBtn.disabled = false;
+                }
+            } catch (err) {
+                body.innerHTML += `<div class="itoca-action-error" style="margin-top:8px;"><i class="fas fa-exclamation-circle"></i> Erro de conexão: ${err.message}</div>`;
+                if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerHTML = '<i class="fas fa-check"></i> Tentar novamente'; }
+                if (discardBtn) discardBtn.disabled = false;
+            }
+            _itocaScrollToBottom();
+        }
+
+        function _itocaDiscardAction(notifId) {
+            const notif = document.getElementById(notifId);
+            if (notif) {
+                notif.style.opacity = '0';
+                notif.style.transition = 'opacity .3s';
+                setTimeout(() => notif.remove(), 300);
+            }
         }
 
         function _itocaAppendErrorMsg(message) {
