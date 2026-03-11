@@ -1951,7 +1951,7 @@
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
-                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Preencha os dados, revise um resumo rápido e execute a automação do formulário externo.</p>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Preencha os dados e revise um resumo rápido antes de executar.</p>
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
                     <!-- Linha 1: Conta, Tipo de Minuta, Minuta do Cliente -->
                     <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
@@ -2158,17 +2158,6 @@
                             <input type="text" id="itocaSaiBaseUrl" placeholder="https://sai-library.saiapplications.com">
                         </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar Integrações</button>
-                    </form>
-                </section>
-
-                <section class="settings-card">
-                    <h3>AutoToca</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Parametrizações da automação Chamado Jurídico.</p>
-                    <form onsubmit="saveAutoTocaConfig(event)">
-                        <div class="form-group"><label>URL formulário (padrão)</label><input id="autotocaFormUrl" type="url" required></div>
-                        <div class="form-group"><label>GENERIC_CONTRATO_ORIGINAL_FILE</label><input id="autotocaGenericContrato" type="text" required></div>
-                        <div class="form-group"><label>GENERIC_MINUTA_CLIENTE_FILE</label><input id="autotocaGenericMinuta" type="text" required></div>
-                        <button class="btn btn-primary" type="submit"><i class="fas fa-save"></i> Salvar AutoToca</button>
                     </form>
                 </section>
 
@@ -2509,7 +2498,6 @@
         let kanbanCards = [];
         let kanbanAccounts = [];
         let kanbanContacts = [];
-        let autoTocaConfig = null;
         let autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [] };
 
         // Tab switching
@@ -2594,7 +2582,7 @@
 
         async function loadSettings() {
             setupSettingsCards();
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig(), loadAutoTocaConfig()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig()]);
             renderSettings();
         }
 
@@ -2640,37 +2628,7 @@
             });
         }
 
-        async function loadAutoTocaConfig() {
-            const response = await fetch(`${API_BASE}/autotoca/config`);
-            if (response.ok) {
-                autoTocaConfig = await response.json();
-                const url = document.getElementById('autotocaFormUrl');
-                const contrato = document.getElementById('autotocaGenericContrato');
-                const minuta = document.getElementById('autotocaGenericMinuta');
-                if (url) url.value = autoTocaConfig.chamado_juridico_form_url || '';
-                if (contrato) contrato.value = autoTocaConfig.generic_contrato_original_file || '';
-                if (minuta) minuta.value = autoTocaConfig.generic_minuta_cliente_file || '';
-            }
-        }
-
-        async function saveAutoTocaConfig(event) {
-            event.preventDefault();
-            const payload = {
-                chamado_juridico_form_url: document.getElementById('autotocaFormUrl').value.trim(),
-                generic_contrato_original_file: document.getElementById('autotocaGenericContrato').value.trim(),
-                generic_minuta_cliente_file: document.getElementById('autotocaGenericMinuta').value.trim(),
-            };
-            const response = await fetch(`${API_BASE}/autotoca/config`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (!response.ok) return showError('Falha ao salvar configurações AutoToca.');
-            showSuccess('Configurações AutoToca salvas com sucesso.');
-        }
-
         async function loadAutoToca() {
-            await loadAutoTocaConfig();
             autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [], aprovacaoCEO: [] };
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
@@ -2842,51 +2800,10 @@
 
         async function runChamadoJuridico(event) {
             event.preventDefault();
-            const btn = document.getElementById('autotocaSubmitBtn');
-            const spinner = document.getElementById('autotocaLoadingSpinner');
-            
-            btn.disabled = true;
-            spinner.style.display = 'inline-block';
-            
-            try {
-                const payload = buildAutoTocaPayload();
-                
-                // Abrir o formulário em uma nova aba (como WhatsApp e Email fazem)
-                const formUrl = autoTocaConfig?.chamado_juridico_form_url || '';
-                if (!formUrl) {
-                    throw new Error('URL do formulário não configurada.');
-                }
-                
-                const formWindow = window.open(formUrl, '_blank');
-                if (!formWindow) {
-                    throw new Error('Não foi possível abrir a aba. Verifique se o navegador permite abrir abas.');
-                }
-                
-                // Aguardar um pouco para o formulário carregar
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                
-                // Enviar payload para o backend preencher via Playwright
-                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ payload, submit: false })
-                });
-                const data = await response.json();
-                if (!response.ok) {
-                    document.getElementById('autotocaLogs').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(data.error || 'Falha na automação')}</span>`;
-                    showError(data.error || 'Falha na automação.');
-                    return;
-                }
-                const logs = (data.logs || []).map(item => `<div>${escapeHtml(item)}</div>`).join('');
-                document.getElementById('autotocaLogs').innerHTML = `<strong>Execução #${data.execution_id}</strong>${logs}`;
-                showSuccess('Formulário preenchido! Verifique a janela aberta e clique em Enviar para confirmar.');
-            } catch (error) {
-                document.getElementById('autotocaLogs').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(error.message || 'Erro na execução')}</span>`;
-                showError(error.message || 'Erro na automação.');
-            } finally {
-                btn.disabled = false;
-                spinner.style.display = 'none';
-            }
+            // TODO: nova estratégia de integração a ser implementada
+            const payload = buildAutoTocaPayload();
+            document.getElementById('autotocaLogs').innerHTML = `<span style="color:#6b7280;">Payload coletado. Aguardando nova estratégia de envio.</span>`;
+            console.log('[ChamadoJuridico] payload:', payload);
         }
 
         async function loadIntegrationConfig() {

@@ -28,7 +28,7 @@ from flask import Flask, jsonify, request, send_from_directory, Response, stream
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
-from autotoca import AccountAddressService, map_aditivo_input, validate_aditivo_payload, run_aditivo_automation
+from autotoca import AccountAddressService
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
@@ -112,8 +112,6 @@ WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-AUTOTOCA_EXECUTIONS_DIR = DATA_DIR / 'autotoca' / 'executions'
-AUTOTOCA_EXECUTIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -562,18 +560,6 @@ def init_db():
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_query_key ON automapping_runs(query_key)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_created_at ON automapping_runs(created_at)')
 
-    c.execute('''CREATE TABLE IF NOT EXISTS autotoca_runs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        automation_name TEXT NOT NULL,
-        account_name TEXT NOT NULL,
-        status TEXT NOT NULL,
-        submit_mode INTEGER DEFAULT 0,
-        error_message TEXT,
-        log_path TEXT,
-        screenshots_dir TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
     # Inserir cards pré-definidos se não existirem
     predefined_cards = [
         ('ERP', '', 1),
@@ -658,10 +644,6 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_template_id', '69ac3c87024adc2d2bdc19f5'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
-    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('autotoca_chamado_juridico_form_url', 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu'))
-    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('autotoca_generic_contrato_original_file', 'public/assets/autotoca/generic_contrato_original.pdf'))
-    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('autotoca_generic_minuta_cliente_file', 'public/assets/autotoca/generic_minuta_cliente.pdf'))
-
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -6238,19 +6220,6 @@ def import_wikitoca_xlsx():
 
 
 
-def _save_autotoca_run(automation_name, account_name, status, submit_mode=False, error_message='', log_path='', screenshots_dir=''):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute(
-        'INSERT INTO autotoca_runs (automation_name, account_name, status, submit_mode, error_message, log_path, screenshots_dir) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        (automation_name, account_name, status, 1 if submit_mode else 0, error_message, log_path, screenshots_dir)
-    )
-    run_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return run_id
-
-
 @app.route('/api/autotoca/accounts', methods=['GET'])
 def autotoca_accounts():
     try:
@@ -6263,52 +6232,6 @@ def autotoca_accounts():
         return jsonify([{'id': 0, 'name': 'OUTRO'}] + accounts)
     except Exception as e:
         logger.exception(f'[AutoToca] GET /api/autotoca/accounts: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/config', methods=['GET'])
-def autotoca_config():
-    try:
-        keys = [
-            'autotoca_chamado_juridico_form_url',
-            'autotoca_generic_contrato_original_file',
-            'autotoca_generic_minuta_cliente_file'
-        ]
-        settings = _load_app_settings_map(keys)
-        return jsonify({
-            'chamado_juridico_form_url': (settings.get('autotoca_chamado_juridico_form_url') or '').strip(),
-            'generic_contrato_original_file': (settings.get('autotoca_generic_contrato_original_file') or '').strip(),
-            'generic_minuta_cliente_file': (settings.get('autotoca_generic_minuta_cliente_file') or '').strip(),
-        })
-    except Exception as e:
-        logger.exception(f'[AutoToca] GET /api/autotoca/config: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/config', methods=['PUT'])
-def autotoca_save_config():
-    try:
-        data = request.get_json(force=True) or {}
-        form_url = (data.get('chamado_juridico_form_url') or '').strip()
-        file1 = (data.get('generic_contrato_original_file') or '').strip()
-        file2 = (data.get('generic_minuta_cliente_file') or '').strip()
-        entries = [
-            ('autotoca_chamado_juridico_form_url', form_url),
-            ('autotoca_generic_contrato_original_file', file1),
-            ('autotoca_generic_minuta_cliente_file', file2),
-        ]
-        conn = get_db()
-        c = conn.cursor()
-        for key, value in entries:
-            c.execute(
-                'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
-                (key, value)
-            )
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True})
-    except Exception as e:
-        logger.exception(f'[AutoToca] PUT /api/autotoca/config: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6418,65 +6341,6 @@ def autotoca_address_suggestion():
         return jsonify(result)
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/address-suggestion: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/chamado-juridico', methods=['POST'])
-def autotoca_chamado_juridico():
-    execution_id = datetime.utcnow().strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex[:6]
-    try:
-        data = request.get_json(force=True) or {}
-        submit = data.get('submit', False)  # Aceitar parâmetro submit do frontend
-        headful = True  # Sempre usar headful para abrir em aba do navegador existente
-        input_payload = data.get('payload') or {}
-
-        settings = _load_app_settings_map([
-            'autotoca_chamado_juridico_form_url',
-            'autotoca_generic_contrato_original_file',
-            'autotoca_generic_minuta_cliente_file'
-        ])
-        form_url = (settings.get('autotoca_chamado_juridico_form_url') or '').strip()
-        generic_contrato = (settings.get('autotoca_generic_contrato_original_file') or '').strip()
-        generic_minuta = (settings.get('autotoca_generic_minuta_cliente_file') or '').strip()
-
-        mapped_payload = map_aditivo_input(input_payload)
-        validation = validate_aditivo_payload(mapped_payload, generic_contrato, generic_minuta)
-        if not validation.get('ok'):
-            _save_autotoca_run('Chamado Jurídico', mapped_payload.get('contaSelecionada') or 'N/A', 'validation_error', submit_mode=submit, error_message='; '.join(validation.get('errors', [])))
-            return jsonify({'error': 'Falha de validação', 'errors': validation.get('errors', [])}), 400
-
-        payload = validation['normalized']
-        screenshots_dir = AUTOTOCA_EXECUTIONS_DIR / execution_id
-
-        logs = run_aditivo_automation(
-            payload=payload,
-            form_url=form_url,
-            submit=submit,
-            headful=headful,
-            screenshots_dir=screenshots_dir,
-            logger=logger,
-        )
-
-        log_path = str((screenshots_dir / 'execution-log.json'))
-        run_id = _save_autotoca_run('Chamado Jurídico', payload.get('contaSelecionada') or 'N/A', 'success', submit_mode=submit, log_path=log_path, screenshots_dir=str(screenshots_dir))
-        return jsonify({'success': True, 'execution_id': execution_id, 'run_id': run_id, 'logs': logs, 'screenshots_dir': str(screenshots_dir)})
-    except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/chamado-juridico: {e}')
-        _save_autotoca_run('Chamado Jurídico', (request.get_json(silent=True) or {}).get('payload', {}).get('contaSelecionada', 'N/A'), 'error', submit_mode=bool((request.get_json(silent=True) or {}).get('submit')), error_message=str(e), screenshots_dir=str(AUTOTOCA_EXECUTIONS_DIR / execution_id))
-        return jsonify({'error': str(e), 'execution_id': execution_id}), 500
-
-
-@app.route('/api/autotoca/runs', methods=['GET'])
-def autotoca_runs():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM autotoca_runs ORDER BY id DESC LIMIT 30')
-        rows = [dict(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(rows)
-    except Exception as e:
-        logger.exception(f'[AutoToca] GET /api/autotoca/runs: {e}')
         return jsonify({'error': str(e)}), 500
 
 
