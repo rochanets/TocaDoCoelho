@@ -1652,20 +1652,36 @@ def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
 
 
 def _itoca_build_activities_items(conn):
-    """Gera itens de atividades com JOIN em clients para contexto rico."""
+    """Gera itens de atividades com JOIN em clients e commitments para contexto rico.
+    Limita a 5 atividades mais recentes por empresa para evitar sobrecarga de tokens.
+    Inclui o título do compromisso vinculado quando existir (via notes ou title match).
+    """
     cursor = conn.cursor()
     items = []
     try:
+        # Busca as 500 mais recentes; depois limita por empresa no Python
         cursor.execute('''
             SELECT ac.id, ac.contact_type, ac.information, ac.description, ac.activity_date,
-                   cl.name as client_name, cl.company as client_company, cl.position as client_position
+                   cl.name as client_name, cl.company as client_company, cl.position as client_position,
+                   cl.id as client_id
             FROM activities ac
             LEFT JOIN clients cl ON ac.client_id = cl.id
             ORDER BY ac.activity_date DESC
             LIMIT 500
         ''')
-        for row in cursor.fetchall():
+        rows = cursor.fetchall()
+
+        # Conta por empresa para limitar a 5 mais recentes
+        company_count = {}
+        for row in rows:
             rd = dict_from_row(row)
+            company = (rd.get('client_company') or '').strip().lower()
+            if not company:
+                company = '__sem_empresa__'
+            if company_count.get(company, 0) >= 5:
+                continue
+            company_count[company] = company_count.get(company, 0) + 1
+
             parts = []
             if rd.get('client_name'):
                 parts.append(f'contato: {rd["client_name"]}')
@@ -1685,6 +1701,27 @@ def _itoca_build_activities_items(conn):
                 parts.append(f'informacao: {str(rd["information"])[:300]}')
             if rd.get('description') and rd['description'] != rd.get('information'):
                 parts.append(f'descricao: {str(rd["description"])[:300]}')
+
+            # Tenta encontrar compromisso vinculado pela data + contato
+            # (commitments com mesmo client_id e due_date próxima da activity_date)
+            if rd.get('client_id') and rd.get('activity_date'):
+                try:
+                    act_date = str(rd['activity_date'])[:10]
+                    cursor.execute('''
+                        SELECT title FROM commitments
+                        WHERE client_id = ?
+                          AND ABS(julianday(due_date) - julianday(?)) <= 7
+                        ORDER BY ABS(julianday(due_date) - julianday(?)) ASC
+                        LIMIT 1
+                    ''', (rd['client_id'], act_date, act_date))
+                    cm_row = cursor.fetchone()
+                    if cm_row:
+                        cm_title = (cm_row[0] if not isinstance(cm_row, sqlite3.Row) else cm_row['title'] if 'title' in cm_row.keys() else cm_row[0]) or ''
+                        if cm_title:
+                            parts.append(f'compromisso_vinculado: {cm_title[:120]}')
+                except Exception:
+                    pass
+
             snippet = ' | '.join(parts)
             if snippet:
                 items.append({'table': 'activities', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
@@ -3992,14 +4029,45 @@ def itoca_ask():
 
                 if not result_queue.empty():
                     det = result_queue.get_nowait()
-                    # Só sugere ação se confiante o suficiente (>= 0.6)
-                    if det and det.get('action_type') and float(det.get('confidence', 0)) >= 0.6:
-                        suggested_action = {
-                            'action_type': det['action_type'],
-                            'label': det['label'],
-                            'confidence': det['confidence'],
-                            'fields': det['fields']
+                    # Só sugere ação se confiante o suficiente (>= 0.75) E tiver campos mínimos
+                    if det and det.get('action_type') and float(det.get('confidence', 0)) >= 0.75:
+                        action_type = det['action_type']
+                        fields = det.get('fields') or {}
+
+                        # Valida campos mínimos por tipo — evita sugestões vazias ou genéricas
+                        _REQUIRED_FIELDS = {
+                            'kanban_card':         ['title'],
+                            'activity':            ['contact_name', 'description'],
+                            'new_contact':         ['name', 'company'],
+                            'environment_mapping': ['company', 'information'],
+                            'wiki_entry':          ['title', 'content'],
+                            'commitment':          ['title', 'due_date'],
                         }
+                        required = _REQUIRED_FIELDS.get(action_type, [])
+                        has_minimum = all(
+                            fields.get(f) and str(fields[f]).strip()
+                            for f in required
+                        )
+
+                        # Rejeita se a descrição for idêntica ou muito similar à pergunta
+                        # (sinal de que o LLM apenas repetiu a pergunta como ação)
+                        desc_field = (fields.get('description') or fields.get('information') or '').strip().lower()
+                        question_lower = question.strip().lower()
+                        is_echo = desc_field and (
+                            desc_field == question_lower or
+                            (len(desc_field) > 20 and question_lower.startswith(desc_field[:40]))
+                        )
+
+                        if has_minimum and not is_echo:
+                            suggested_action = {
+                                'action_type': action_type,
+                                'label': det['label'],
+                                'confidence': det['confidence'],
+                                'fields': fields
+                            }
+                        else:
+                            logger.debug(f'[iToca][ActionDetector] Ação {action_type!r} descartada: '
+                                         f'has_minimum={has_minimum}, is_echo={is_echo}')
             except Exception as det_err:
                 logger.warning(f'[iToca] Erro no detector de intenção: {det_err}')
 

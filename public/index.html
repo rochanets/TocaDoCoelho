@@ -1425,7 +1425,7 @@
         .itoca-msg.user .itoca-msg-avatar .itoca-avatar-initial { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600; }
         .itoca-msg.assistant .itoca-msg-avatar { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; overflow:hidden; padding:0; }
         .itoca-msg.assistant .itoca-msg-avatar img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
-        .itoca-msg-bubble { max-width:82%; padding:10px 14px; border-radius:14px; font-size:14px; line-height:1.55; word-break:break-word; }
+        .itoca-msg-bubble { max-width:90%; padding:10px 14px; border-radius:14px; font-size:14px; line-height:1.55; word-break:break-word; }
         .itoca-msg.user .itoca-msg-bubble { background:#10b981; color:#fff; border-bottom-right-radius:4px; }
         .itoca-msg.assistant .itoca-msg-bubble { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; border-bottom-left-radius:4px; }
         .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown { white-space:normal; }
@@ -1440,10 +1440,15 @@
         .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown em { font-style:italic; }
         .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown code { background:#d1fae5; padding:1px 4px; border-radius:3px; font-family:monospace; font-size:12px; }
         .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown hr { border:none; border-top:1px solid #bbf7d0; margin:8px 0; }
-        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown table { border-collapse:collapse; width:100%; margin:6px 0; font-size:12px; }
+        /* Tabelas Markdown no chat — layout responsivo sem corte de palavras */
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown .itoca-table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:6px 0; border-radius:6px; border:1px solid #bbf7d0; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown table { border-collapse:collapse; width:100%; min-width:360px; font-size:12px; margin:0; }
         .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown th,
-        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown td { border:1px solid #bbf7d0; padding:4px 8px; }
-        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown th { background:#d1fae5; font-weight:700; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown td { border:1px solid #bbf7d0; padding:5px 10px; white-space:nowrap; vertical-align:top; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown td:last-child { white-space:normal; min-width:160px; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown th { background:#d1fae5; font-weight:700; color:#065f46; position:sticky; top:0; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown tr:nth-child(even) td { background:#f0fdf4; }
+        .itoca-msg.assistant .itoca-msg-bubble.itoca-markdown tr:hover td { background:#dcfce7; }
         .itoca-msg.assistant .itoca-msg-bubble:not(.itoca-markdown) { white-space:pre-wrap; }
         .itoca-msg.assistant .itoca-msg-bubble.needs-refinement { background:#fffbeb; border-color:#fde68a; color:#92400e; }
         .itoca-msg.error .itoca-msg-bubble { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }
@@ -1682,9 +1687,8 @@
 
             <!-- Base controls -->
             <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-auto-mapping btn-small" id="itocaBaseUpdateBtn" onclick="updateITocaBase(false)" title="Reindexar tudo do zero"><span class="ai-star-icon">✶</span> Base Update</button>
-                <button type="button" class="btn btn-secondary btn-small" id="itocaIncrementalBtn" onclick="updateITocaBase(true)" title="Indexar apenas o que mudou desde o último update (mais rápido)"><i class="fas fa-sync-alt"></i> Atualizar Base</button>
-                <button type="button" class="btn btn-secondary btn-small" onclick="clearITocaChat()" title="Limpar histórico do chat"><i class="fas fa-trash-alt"></i> Limpar chat</button>
+                <button type="button" class="btn btn-auto-mapping btn-small" id="itocaBaseUpdateBtn" onclick="updateITocaBase(true)" title="Atualiza a base de conhecimento do iToca (indexa apenas o que mudou)"><span class="ai-star-icon">✶</span> Base Update</button>
+                <button type="button" class="btn btn-small" id="itocaClearChatBtn" onclick="clearITocaChat()" title="Limpar histórico do chat" style="background:#fb923c; color:#fff; border:1px solid #ea580c;"><i class="fas fa-trash-alt"></i> Limpar chat</button>
                 <small id="itocaBaseUpdatedAt" style="color:#4b5563; font-size:12px;">Base não atualizada.</small>
             </div>
             <!-- Barra de progresso do Base Update -->
@@ -6572,18 +6576,17 @@
         async function updateITocaBase(incremental = false) {
             const label = document.getElementById('itocaBaseUpdatedAt');
             const btn = document.getElementById('itocaBaseUpdateBtn');
-            const btnInc = document.getElementById('itocaIncrementalBtn');
             const progressContainer = document.getElementById('itocaProgressContainer');
             const progressBar = document.getElementById('itocaProgressBar');
             const progressMsg = document.getElementById('itocaProgressMsg');
             const progressPct = document.getElementById('itocaProgressPct');
 
-            // Desabilitar ambos os botões durante a indexação
-            [btn, btnInc].forEach(b => { if (b) { b.disabled = true; b.style.opacity = '0.6'; } });
-            if (label) label.textContent = incremental ? 'Verificando alterações...' : 'Indexando tudo...';
+            // Desabilitar botão durante a indexação
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+            if (label) label.textContent = 'Verificando alterações...';
             if (progressContainer) progressContainer.style.display = 'block';
             if (progressBar) progressBar.style.width = '0%';
-            if (progressMsg) progressMsg.textContent = incremental ? 'Iniciando indexação incremental...' : 'Iniciando indexação completa...';
+            if (progressMsg) progressMsg.textContent = 'Iniciando indexação...';
             if (progressPct) progressPct.textContent = '0%';
 
             function setProgress(pct, msg) {
@@ -6641,7 +6644,7 @@
                 if (label) label.textContent = 'Base não atualizada.';
                 if (progressContainer) progressContainer.style.display = 'none';
             } finally {
-                [btn, btnInc].forEach(b => { if (b) { b.disabled = false; b.style.opacity = '1'; } });
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
             }
         }
 
@@ -6678,7 +6681,10 @@
             if (typeof marked !== 'undefined') {
                 try {
                     // breaks:true converte \n simples em <br>, gfm habilita tabelas e listas
-                    return marked.parse(processed, { breaks: true, gfm: true });
+                    let html = marked.parse(processed, { breaks: true, gfm: true });
+                    // Envolve cada <table> em um wrapper scrollable para evitar corte
+                    html = html.replace(/<table>/g, '<div class="itoca-table-wrap"><table>').replace(/<\/table>/g, '</table></div>');
+                    return html;
                 } catch(e) {
                     // Fallback manual se marked falhar
                 }
