@@ -1046,6 +1046,14 @@ _ITOCA_SYNONYMS = {
     'wiki': ['wiki', 'documento', 'conhecimento', 'wikitoca'],
     'documento': ['documento', 'arquivo', 'pdf', 'doc', 'wiki'],
     'atividade': ['atividade', 'activity', 'interacao', 'historico'],
+    'contas': ['contas', 'conta', 'empresa', 'account', 'accounts', 'clientes', 'relacionamento'],
+    'conta': ['conta', 'contas', 'empresa', 'account', 'accounts'],
+    'clientes': ['clientes', 'cliente', 'contatos', 'contato', 'leads', 'prospects', 'contas'],
+    'cliente': ['cliente', 'clientes', 'contato', 'lead', 'prospect'],
+    'relacionamento': ['relacionamento', 'relacao', 'historico', 'atividade', 'interacao', 'contas', 'clientes'],
+    'pipeline': ['pipeline', 'kanban', 'funil', 'oportunidade', 'negociacao'],
+    'resumo': ['resumo', 'status', 'situacao', 'overview', 'panorama', 'visao geral'],
+    'status': ['status', 'situacao', 'resumo', 'estado', 'andamento'],
 }
 
 def _itoca_tokenize(question):
@@ -1157,6 +1165,92 @@ def _itoca_search_context(question, limit=18):
             if len(results) >= limit:
                 conn.close()
                 return results
+
+    # Busca especializada de accounts/clients quando a pergunta menciona contas, clientes, relacionamento ou resumo
+    account_client_keywords = {'contas', 'conta', 'clientes', 'cliente', 'relacionamento', 'relacao', 'resumo', 'status', 'pipeline', 'accounts', 'account'}
+    is_account_query = any(t in account_client_keywords for t in tokens[:10])
+    if is_account_query and len(results) < limit:
+        try:
+            # Busca accounts com última atividade
+            cursor.execute('''
+                SELECT ac.id, ac.name, ac.sector, ac.description,
+                       MAX(act.activity_date) as last_activity,
+                       COUNT(act.id) as total_activities
+                FROM accounts ac
+                LEFT JOIN activities act ON act.account_id = ac.id
+                GROUP BY ac.id
+                ORDER BY last_activity DESC NULLS LAST
+                LIMIT 20
+            ''')
+            for row in cursor.fetchall():
+                rd = dict_from_row(row)
+                parts = []
+                if rd.get('name'):
+                    parts.append(f'empresa: {rd["name"]}')
+                if rd.get('sector'):
+                    parts.append(f'setor: {rd["sector"]}')
+                if rd.get('description'):
+                    parts.append(f'descricao: {rd["description"][:200]}')
+                if rd.get('last_activity'):
+                    try:
+                        dt = datetime.strptime(rd['last_activity'][:10], '%Y-%m-%d')
+                        parts.append(f'ultimo_contato: {dt.strftime("%d/%m/%Y")}')
+                    except Exception:
+                        parts.append(f'ultimo_contato: {rd["last_activity"]}')
+                if rd.get('total_activities'):
+                    parts.append(f'total_interacoes: {rd["total_activities"]}')
+                snippet = ' | '.join(parts)
+                if not snippet:
+                    continue
+                fp = f'accounts:{snippet[:160]}'
+                if fp in seen:
+                    continue
+                seen.add(fp)
+                results.append({'table': 'accounts', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+        except Exception as e:
+            logger.warning(f'[iToca] Erro ao buscar accounts para query de contas: {e}')
+
+        try:
+            # Busca clients com última atividade
+            cursor.execute('''
+                SELECT cl.id, cl.name, cl.company, cl.position, cl.email,
+                       cl.last_activity_date,
+                       COUNT(act.id) as total_activities
+                FROM clients cl
+                LEFT JOIN activities act ON act.client_id = cl.id
+                GROUP BY cl.id
+                ORDER BY cl.last_activity_date DESC NULLS LAST
+                LIMIT 20
+            ''')
+            for row in cursor.fetchall():
+                rd = dict_from_row(row)
+                parts = []
+                if rd.get('name'):
+                    parts.append(f'contato: {rd["name"]}')
+                if rd.get('company'):
+                    parts.append(f'empresa: {rd["company"]}')
+                if rd.get('position'):
+                    parts.append(f'cargo: {rd["position"]}')
+                if rd.get('email'):
+                    parts.append(f'email: {rd["email"]}')
+                if rd.get('last_activity_date'):
+                    try:
+                        dt = datetime.strptime(rd['last_activity_date'][:10], '%Y-%m-%d')
+                        parts.append(f'ultimo_contato: {dt.strftime("%d/%m/%Y")}')
+                    except Exception:
+                        parts.append(f'ultimo_contato: {rd["last_activity_date"]}')
+                if rd.get('total_activities'):
+                    parts.append(f'total_interacoes: {rd["total_activities"]}')
+                snippet = ' | '.join(parts)
+                if not snippet:
+                    continue
+                fp = f'clients:{snippet[:160]}'
+                if fp in seen:
+                    continue
+                seen.add(fp)
+                results.append({'table': 'clients', 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
+        except Exception as e:
+            logger.warning(f'[iToca] Erro ao buscar clients para query de contas: {e}')
 
     # Busca dedicada na agenda (commitments + account_renewal_events)
     try:
