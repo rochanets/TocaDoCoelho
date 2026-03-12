@@ -6793,18 +6793,51 @@
 
             // 1. Se rawAnswer começa com '{' e contém "answer", tenta extrair
             if (typeof rawAnswer === 'string' && rawAnswer.trimStart().startsWith('{') && rawAnswer.includes('"answer"')) {
+                let extracted = null;
+                // 1a. Tenta parse completo (JSON válido)
                 try {
                     const innerObj = JSON.parse(rawAnswer);
                     if (innerObj && typeof innerObj.answer === 'string' && innerObj.answer.trim()) {
-                        rawAnswer = innerObj.answer;
-                        // Atualiza os metadados se o JSON interno os tiver
+                        extracted = innerObj.answer;
                         if (innerObj.confidence_percent != null) payload.confidence_percent = innerObj.confidence_percent;
                         if (innerObj.needs_refinement != null) payload.needs_refinement = innerObj.needs_refinement;
                         if (innerObj.refinement_hint)           payload.refinement_hint  = innerObj.refinement_hint;
                     }
-                } catch (_e) {
-                    // Não era JSON válido, mantém o texto original
+                } catch (_e) { /* JSON inválido ou truncado */ }
+
+                // 1b. Fallback: JSON truncado — extrai o campo 'answer' manualmente
+                if (!extracted) {
+                    const keyIdx = rawAnswer.indexOf('"answer"');
+                    if (keyIdx !== -1) {
+                        const colonIdx = rawAnswer.indexOf(':', keyIdx + 8);
+                        if (colonIdx !== -1) {
+                            const valStart = rawAnswer.indexOf('"', colonIdx + 1);
+                            if (valStart !== -1) {
+                                const chars = [];
+                                let i = valStart + 1;
+                                while (i < rawAnswer.length) {
+                                    const ch = rawAnswer[i];
+                                    if (ch === '\\' && i + 1 < rawAnswer.length) {
+                                        const nc = rawAnswer[i + 1];
+                                        if (nc === 'n') chars.push('\n');
+                                        else if (nc === 't') chars.push('\t');
+                                        else if (nc === '"') chars.push('"');
+                                        else if (nc === '\\') chars.push('\\');
+                                        else chars.push(nc);
+                                        i += 2; continue;
+                                    }
+                                    if (ch === '"') break; // fim da string
+                                    chars.push(ch);
+                                    i++;
+                                }
+                                const partial = chars.join('').trim();
+                                if (partial) extracted = partial;
+                            }
+                        }
+                    }
                 }
+
+                if (extracted) rawAnswer = extracted;
             }
 
             // 2. Converte \n literais (dois chars: barra + n) em quebras de linha reais

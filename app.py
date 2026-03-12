@@ -2746,13 +2746,23 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
                 inner = double_parsed
 
     if not inner or not isinstance(inner, dict):
-        # Fallback final: usa o texto bruto como resposta, mas limpa eventuais artefatos JSON
-        fallback_text = raw.strip()
-        # Remove prefixos de JSON que possam ter vazado
-        if fallback_text.startswith('{') and '"answer"' in fallback_text:
-            extracted = _try_parse_llm_json(fallback_text)
-            if extracted and 'answer' in extracted:
+        # Fallback final: tenta extrair o campo 'answer' mesmo de um JSON truncado
+        fallback_text = None
+        if '"answer"' in raw:
+            # Primeiro tenta parse completo
+            extracted = _try_parse_llm_json(raw)
+            if extracted and isinstance(extracted, dict) and 'answer' in extracted:
                 fallback_text = (extracted.get('answer') or '').strip()
+            else:
+                # JSON truncado: extrai o texto do 'answer' até onde chegou
+                partial = _extract_answer_from_partial_json(raw)
+                if partial:
+                    logger.warning('[iToca][SAI] JSON truncado detectado — usando extração parcial do campo answer.')
+                    fallback_text = partial
+        if not fallback_text:
+            fallback_text = raw.strip()
+        # Converte \n literais em quebras de linha
+        fallback_text = fallback_text.replace('\\n', '\n')
         return {
             'answer': fallback_text or 'Não foi possível interpretar a resposta do assistente.',
             'confidence_percent': 50,
@@ -3163,6 +3173,58 @@ def _default_llm_summary(sections):
             'reasoning': 'Não houve evidência específica suficiente para consolidar uma resposta final.'
         }
     return summary
+
+
+def _extract_answer_from_partial_json(text):
+    """Extrai o valor do campo 'answer' de um JSON potencialmente truncado.
+    Útil quando a API retorna um JSON incompleto (cortado no meio).
+    Estratégia: encontra '"answer"' na string, pula o ':', lê o valor da string
+    até encontrar um '"' de fechamento não escapado.
+    """
+    if not text:
+        return None
+    # Procura a chave 'answer' no texto
+    key_pos = text.find('"answer"')
+    if key_pos == -1:
+        return None
+    # Avança até o ':'
+    colon_pos = text.find(':', key_pos + 8)
+    if colon_pos == -1:
+        return None
+    # Avança até a abertura da string de valor
+    value_start = text.find('"', colon_pos + 1)
+    if value_start == -1:
+        return None
+    # Lê a string até o fechamento (respeitando escapes)
+    chars = []
+    i = value_start + 1
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\' and i + 1 < len(text):
+            # Caractere escapado
+            next_ch = text[i + 1]
+            if next_ch == 'n':
+                chars.append('\n')
+            elif next_ch == 't':
+                chars.append('\t')
+            elif next_ch == 'r':
+                chars.append('\r')
+            elif next_ch == '"':
+                chars.append('"')
+            elif next_ch == '\\':
+                chars.append('\\')
+            else:
+                chars.append(next_ch)
+            i += 2
+            continue
+        if ch == '"':
+            # Fim da string — retorna o que foi lido até aqui
+            return ''.join(chars).strip()
+        chars.append(ch)
+        i += 1
+    # JSON truncado: retorna o que foi lido até o fim do texto
+    result = ''.join(chars).strip()
+    return result if result else None
 
 
 def _extract_json_object_from_text(text):
