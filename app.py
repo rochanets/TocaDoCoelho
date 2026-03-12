@@ -1139,6 +1139,8 @@ def _itoca_search_context(question, limit=18):
             continue
         for row in rows:
             row_dict = dict_from_row(row)
+            # Enriquece o row_dict resolvendo FKs para nomes legíveis antes de gerar o snippet
+            row_dict = _itoca_enrich_snippet_with_joins(cursor, table, row_dict)
             snippet = _itoca_build_snippet(row_dict)
             if not snippet:
                 continue
@@ -1316,6 +1318,100 @@ def _itoca_search_context(question, limit=18):
 
     conn.close()
     return results
+
+
+def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
+    """Enriquece um row_dict de busca ao vivo resolvendo FKs para nomes legíveis.
+    Isso garante que qualquer tabela retornada pela busca genérica (SELECT *)
+    nunca exponha IDs brutos ao LLM quando o nome correspondente está disponível.
+    Aplica-se a qualquer tabela que contenha client_id, account_id, contact_id,
+    column_id, card_id, grouping_id, etc.
+    """
+    enriched = dict(row_dict)  # cópia para não mutar o original
+
+    # Resolve client_id / contact_id / focal_client_id -> nome do contato e empresa
+    for fk_field in ('client_id', 'contact_id', 'focal_client_id'):
+        fk_val = enriched.get(fk_field)
+        if fk_val and not enriched.get('client_name') and not enriched.get('contact_name'):
+            try:
+                cursor.execute('SELECT name, company, position FROM clients WHERE id = ? LIMIT 1', (fk_val,))
+                r = cursor.fetchone()
+                if r:
+                    rd_cl = dict_from_row(r)
+                    if rd_cl.get('name'):
+                        enriched['nome_contato'] = rd_cl['name']
+                    if rd_cl.get('company'):
+                        enriched['empresa'] = rd_cl['company']
+                    if rd_cl.get('position'):
+                        enriched['cargo'] = rd_cl['position']
+            except Exception:
+                pass
+        # Remove o campo de FK bruto para não aparecer no snippet
+        enriched.pop(fk_field, None)
+
+    # Resolve account_id -> nome da conta
+    acct_id = enriched.get('account_id')
+    if acct_id and not enriched.get('account_name') and not enriched.get('nome_conta'):
+        try:
+            cursor.execute('SELECT name, sector FROM accounts WHERE id = ? LIMIT 1', (acct_id,))
+            r = cursor.fetchone()
+            if r:
+                rd_ac = dict_from_row(r)
+                if rd_ac.get('name'):
+                    enriched['nome_conta'] = rd_ac['name']
+                if rd_ac.get('sector'):
+                    enriched['setor'] = rd_ac['sector']
+        except Exception:
+            pass
+    enriched.pop('account_id', None)
+
+    # Resolve column_id -> título da coluna do Kanban
+    col_id = enriched.get('column_id')
+    if col_id and not enriched.get('column_title') and not enriched.get('coluna'):
+        try:
+            cursor.execute('SELECT title FROM kanban_columns WHERE id = ? LIMIT 1', (col_id,))
+            r = cursor.fetchone()
+            if r:
+                rd_col = dict_from_row(r)
+                if rd_col.get('title'):
+                    enriched['coluna_kanban'] = rd_col['title']
+        except Exception:
+            pass
+    enriched.pop('column_id', None)
+
+    # Resolve card_id -> título do card
+    card_id = enriched.get('card_id')
+    if card_id and not enriched.get('card_title'):
+        try:
+            cursor.execute('SELECT title FROM environment_cards WHERE id = ? LIMIT 1', (card_id,))
+            r = cursor.fetchone()
+            if r:
+                rd_card = dict_from_row(r)
+                if rd_card.get('title'):
+                    enriched['mapeamento'] = rd_card['title']
+        except Exception:
+            pass
+    enriched.pop('card_id', None)
+
+    # Resolve grouping_id -> nome do agrupamento
+    grp_id = enriched.get('grouping_id')
+    if grp_id and not enriched.get('agrupamento'):
+        try:
+            cursor.execute('SELECT name FROM job_groupings WHERE id = ? LIMIT 1', (grp_id,))
+            r = cursor.fetchone()
+            if r:
+                rd_grp = dict_from_row(r)
+                if rd_grp.get('name'):
+                    enriched['agrupamento'] = rd_grp['name']
+        except Exception:
+            pass
+    enriched.pop('grouping_id', None)
+
+    # Remove outros campos de FK que não foram resolvidos
+    for leftover in ('activity_id', 'presence_id', 'target_id'):
+        enriched.pop(leftover, None)
+
+    return enriched
 
 
 def _itoca_find_tesseract_cmd():
@@ -2353,15 +2449,24 @@ def _itoca_compose_context_text(context_rows, history_rows=None):
     lines.append('=== CONTEXTO INTERNO DO SISTEMA TOCA DO COELHO ===')
     lines.append(f'DATA E HORA ATUAL: {data_str}, {hora_str}')
     lines.append('')
-    lines.append('INSTRUÇÕES DE FORMATAÇÃO DA RESPOSTA:')
+    lines.append('INSTRUÇÕES DE FORMATAÇÃO E PROFUNDIDADE DA RESPOSTA:')
     lines.append('- Use linguagem natural, profissional e direta. Evite termos técnicos do banco de dados.')
-    lines.append('- Para listas com 3 ou mais itens, use tópicos com "\u2022" (bullet) ou números.')
-    lines.append('- Para comparar dados (ex: múltiplos contatos, contas, datas), organize em formato de tabela Markdown.')
+    lines.append('- Não repita os rótulos internos (ex: "titulo:", "conta:", "nome_contato:") na resposta final; traduza para linguagem natural.')
+    lines.append('- Para listas com 3 ou mais itens, use tópicos com "•" (bullet) ou números.')
+    lines.append('- Para comparar dados (ex: múltiplos contatos, contas, datas), organize em tabela Markdown com cabeçalhos descritivos em português.')
     lines.append('- Datas devem ser apresentadas no formato DD/MM/AAAA. Horários no formato HH:MM.')
     lines.append('- Valores monetários devem usar o formato R$ X.XXX,XX.')
     lines.append('- Ao citar um compromisso, sempre informe: título, data, horário e contato/empresa envolvidos.')
     lines.append('- Se a pergunta envolver "próximos eventos" ou "esta semana", use a DATA ATUAL acima como referência.')
-    lines.append('- Não repita os rótulos internos (ex: "titulo:", "conta:") na resposta final; use linguagem natural.')
+    lines.append('- PROFUNDIDADE: quando perguntado sobre relacionamento com clientes, não seja genérico. Cite:')
+    lines.append('  * O nome completo do contato e empresa')
+    lines.append('  * O último contato realizado (data, canal, conteúdo resumido)')
+    lines.append('  * Próximos compromissos agendados (se houver)')
+    lines.append('  * Situação atual no pipeline/Kanban (se houver)')
+    lines.append('  * Follow-ups pendentes ou sugeridos (se houver)')
+    lines.append('- NOMES: sempre use o nome da pessoa e da empresa, nunca IDs numéricos.')
+    lines.append('- TABELAS: quando montar tabela de clientes/contatos, as colunas devem ter nomes legíveis como "Cliente", "Empresa", "Último contato", "Canal", "Situação" — nunca "ID", "client_id" etc.')
+    lines.append('- COMPLETUDE: se houver dados de múltiplos clientes, apresente todos, não apenas os primeiros.')
     lines.append('')
 
     # Histórico da sessão (se fornecido)
@@ -2958,17 +3063,58 @@ def _default_llm_summary(sections):
 
 
 def _extract_json_object_from_text(text):
+    """Extrai o primeiro objeto JSON válido de uma string usando balanceamento de chaves.
+    Mais robusto que rfind('}') para JSONs aninhados ou com múltiplos objetos.
+    Também tenta detectar e limpar prefixos de texto antes do JSON.
+    """
     if not text:
         return None
-    first = text.find('{')
-    last = text.rfind('}')
-    if first == -1 or last == -1 or last <= first:
+    # Tenta parse direto primeiro (caso mais comum e mais rápido)
+    stripped = text.strip()
+    if stripped.startswith('{'):
+        try:
+            return json.loads(stripped)
+        except Exception:
+            pass
+
+    # Busca o primeiro '{' e tenta balancear as chaves
+    start = text.find('{')
+    if start == -1:
         return None
-    chunk = text[first:last+1]
-    try:
-        return json.loads(chunk)
-    except Exception:
-        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(text[start:], start=start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                chunk = text[start:i+1]
+                try:
+                    return json.loads(chunk)
+                except Exception:
+                    # Se falhou, tenta o próximo '{'
+                    next_start = text.find('{', start + 1)
+                    if next_start == -1:
+                        return None
+                    start = next_start
+                    depth = 0
+                    in_string = False
+                    escape_next = False
+    return None
 
 
 def _validate_openrouter_api_key(api_key):
