@@ -436,6 +436,15 @@ def init_db():
         UNIQUE(presence_id)
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS account_activities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        description TEXT NOT NULL,
+        activity_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+    )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS message_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
@@ -6969,6 +6978,64 @@ def delete_account_presence(account_id, presence_id):
         return jsonify({'message': 'Presença removida'})
     except Exception as e:
         print(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>/activities', methods=['GET'])
+def get_account_activities(account_id):
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
+        if not c.fetchone():
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        c.execute('''SELECT id, account_id, description, activity_date, created_at
+                     FROM account_activities
+                     WHERE account_id = ?
+                     ORDER BY activity_date DESC, created_at DESC
+                     LIMIT 100''', (account_id,))
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close(); return jsonify(rows)
+    except Exception as e:
+        print(f'[ERROR] GET /api/accounts/{account_id}/activities: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>/activities', methods=['POST'])
+def create_account_activity(account_id):
+    try:
+        data = request.get_json() or {}
+        description = (data.get('description') or '').strip()
+        activity_date = (data.get('activity_date') or '').strip() or None
+        if not description:
+            return jsonify({'error': 'Descrição é obrigatória'}), 400
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
+        if not c.fetchone():
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if activity_date:
+            c.execute('''INSERT INTO account_activities (account_id, description, activity_date)
+                         VALUES (?, ?, ?)''', (account_id, description, activity_date))
+        else:
+            c.execute('''INSERT INTO account_activities (account_id, description)
+                         VALUES (?, ?)''', (account_id, description))
+        conn.commit()
+        activity_id = c.lastrowid
+        conn.close()
+        return jsonify({'id': activity_id, 'message': 'Atividade registrada'}), 201
+    except Exception as e:
+        print(f'[ERROR] POST /api/accounts/{account_id}/activities: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>/activities/<int:activity_id>', methods=['DELETE'])
+def delete_account_activity(account_id, activity_id):
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('DELETE FROM account_activities WHERE id = ? AND account_id = ?', (activity_id, account_id))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Atividade removida'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/accounts/{account_id}/activities/{activity_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 

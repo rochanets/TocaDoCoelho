@@ -5349,6 +5349,23 @@
             return newWindow;
         }
 
+        // Abre o WhatsApp Web sempre na mesma aba, identificada pelo nome fixo 'toca_whatsapp_web'.
+        // Se a aba já estiver aberta (mesmo após recarregar a página), o browser a reutiliza
+        // automaticamente em vez de criar uma nova.
+        function openWhatsAppTab(url) {
+            if (whatsappWindowRef && !whatsappWindowRef.closed) {
+                try {
+                    whatsappWindowRef.location.href = url;
+                    whatsappWindowRef.focus();
+                    return whatsappWindowRef;
+                } catch (e) { /* cross-origin: deixa o browser resolver pelo nome */ }
+            }
+            const win = window.open(url, 'toca_whatsapp_web');
+            if (win) win.focus();
+            whatsappWindowRef = win;
+            return win;
+        }
+
 
         function openMissingContactModal() {
             let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
@@ -5406,7 +5423,7 @@
             }
 
             const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-            whatsappWindowRef = openOrReuseExternalTab(whatsappWindowRef, url);
+            whatsappWindowRef = openWhatsAppTab(url);
             closeWhatsAppModal();
             askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
@@ -7922,24 +7939,108 @@
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
             const totalMonthlyCents = (account.presences || []).reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
             html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMonthlyCents)}</strong></div>${(account.presences||[]).length?`<div style='display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;'>${(account.presences||[]).map(p=>`<button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`).join('')}</div>`:'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
-            html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><h4 style="color:#065f46; margin-bottom:8px;">Histórico de Atividades</h4><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
+            html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><h4 style="color:#065f46; margin:0;">Histórico de Atividades</h4><button class="btn btn-primary btn-small" style="padding:2px 10px; border-radius:999px; font-size:18px; line-height:1; font-weight:700;" onclick="openAccountActivityModal(${account.id})" title="Registrar atividade da conta">+</button></div><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
+            await refreshAccountActivitiesWrap(accountId, account);
+        }
+
+        async function refreshAccountActivitiesWrap(accountId, account) {
+            const wrap = document.getElementById('accountActivitiesWrap');
+            if (!wrap) return;
             try {
-                const r = await fetch(`${API_BASE}/atividades`);
-                const acts = r.ok ? await r.json() : [];
+                // Carregar atividades de contatos vinculados à conta
+                const [rContacts, rAccount] = await Promise.all([
+                    fetch(`${API_BASE}/atividades`),
+                    fetch(`${API_BASE}/accounts/${accountId}/activities`)
+                ]);
+                const acts = rContacts.ok ? await rContacts.json() : [];
+                const accountGenericActs = rAccount.ok ? await rAccount.json() : [];
                 const contactIds = new Set((account.contacts || []).map(c => Number(c.id)));
-                const accountActivities = acts.filter(a => contactIds.has(Number(a.client_id))).sort((a,b)=> new Date(b.activity_date || b.created_at) - new Date(a.activity_date || a.created_at));
-                const wrap = document.getElementById('accountActivitiesWrap');
-                if (wrap) {
-                    wrap.innerHTML = accountActivities.length
-                      ? accountActivities.slice(0, 50).map(a => { const contactName = a.client_name || (account.contacts || []).find(c => Number(c.id) === Number(a.client_id))?.name || '-'; return `<div class='history-item' style='margin-bottom:8px;'><div class='history-meta'>${formatDateBr((a.activity_date||'').slice(0,10) || '')} • ${escapeHtml(contactName)}</div><div>${escapeHtml(a.description || a.information || '-')}</div></div>`; }).join('')
-                      : '<div style="color:#6b7280;">Nenhuma atividade para esta conta.</div>';
+                // Atividades de contatos da conta
+                const contactActs = acts
+                    .filter(a => contactIds.has(Number(a.client_id)))
+                    .map(a => ({
+                        _date: new Date(a.activity_date || a.created_at),
+                        _dateStr: (a.activity_date || '').slice(0, 10),
+                        _label: a.client_name || (account.contacts || []).find(c => Number(c.id) === Number(a.client_id))?.name || '-',
+                        _type: 'contact',
+                        _id: null,
+                        description: a.description || a.information || '-'
+                    }));
+                // Atividades genéricas da conta
+                const genericActs = accountGenericActs.map(a => ({
+                    _date: new Date(a.activity_date || a.created_at),
+                    _dateStr: (a.activity_date || '').slice(0, 10),
+                    _label: 'Conta',
+                    _type: 'account',
+                    _id: a.id,
+                    description: a.description || '-'
+                }));
+                // Mesclar e ordenar por data decrescente
+                const allActs = [...contactActs, ...genericActs]
+                    .sort((a, b) => b._date - a._date)
+                    .slice(0, 50);
+                if (allActs.length) {
+                    wrap.innerHTML = allActs.map(a => {
+                        const badge = a._type === 'account'
+                            ? `<span style="display:inline-block; background:rgba(16,185,129,.18); color:#065f46; border-radius:999px; font-size:10px; font-weight:700; padding:1px 7px; margin-left:4px;">Conta</span>`
+                            : '';
+                        const deleteBtn = a._type === 'account' && a._id
+                            ? `<button class="btn btn-danger btn-small" style="padding:1px 7px; font-size:11px; margin-top:4px;" onclick="deleteAccountActivityItem(${accountId}, ${a._id})"><i class="fas fa-trash"></i></button>`
+                            : '';
+                        return `<div class='history-item' style='margin-bottom:8px;'><div class='history-meta'>${formatDateBr(a._dateStr)} • ${escapeHtml(a._label)}${badge}</div><div>${escapeHtml(a.description)}</div>${deleteBtn}</div>`;
+                    }).join('');
+                } else {
+                    wrap.innerHTML = '<div style="color:#6b7280;">Nenhuma atividade para esta conta.</div>';
                 }
-            } catch {
-                const wrap = document.getElementById('accountActivitiesWrap');
-                if (wrap) wrap.innerHTML = '<div style="color:#6b7280;">Não foi possível carregar atividades.</div>';
+            } catch (e) {
+                wrap.innerHTML = '<div style="color:#6b7280;">Não foi possível carregar atividades.</div>';
             }
+        }
+
+        async function deleteAccountActivityItem(accountId, activityId) {
+            if (!confirm('Excluir esta atividade da conta?')) return;
+            const r = await fetch(`${API_BASE}/accounts/${accountId}/activities/${activityId}`, { method: 'DELETE' });
+            if (!r.ok) return showError('Erro ao excluir atividade');
+            const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
+            await refreshAccountActivitiesWrap(accountId, account);
+        }
+
+        function openAccountActivityModal(accountId) {
+            const today = new Date().toISOString().slice(0, 10);
+            let html = `<div class="modal active" id="accountActivityModal" onclick="if(event.target===this) closeAccountActivityModal()">`;
+            html += `<div class="modal-content" style="max-width:480px;">`;
+            html += `<h2 style="color:#047857; margin-bottom:12px;">Registrar Atividade da Conta</h2>`;
+            html += `<div class="form-group"><label>Data</label><input type="date" id="accountActivityDate" value="${today}"></div>`;
+            html += `<div class="form-group"><label>Descrição *</label><textarea id="accountActivityDesc" rows="5" placeholder="Descreva o que aconteceu, reuniões, contatos, percepções..."></textarea></div>`;
+            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeAccountActivityModal()">Cancelar</button><button class="btn btn-primary" onclick="saveAccountActivity(${accountId})">Salvar</button></div>`;
+            html += `</div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+            setTimeout(() => document.getElementById('accountActivityDesc')?.focus(), 80);
+        }
+
+        function closeAccountActivityModal() {
+            const m = document.getElementById('accountActivityModal');
+            if (m) m.remove();
+        }
+
+        async function saveAccountActivity(accountId) {
+            const description = document.getElementById('accountActivityDesc')?.value?.trim() || '';
+            const activity_date = document.getElementById('accountActivityDate')?.value || '';
+            if (!description) return showError('Informe a descrição da atividade');
+            const payload = { description };
+            if (activity_date) payload.activity_date = activity_date;
+            const r = await fetch(`${API_BASE}/accounts/${accountId}/activities`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!r.ok) return showError('Erro ao registrar atividade');
+            closeAccountActivityModal();
+            showSuccess('Atividade registrada com sucesso');
+            const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
+            await refreshAccountActivitiesWrap(accountId, account);
         }
 
         function closeAccountViewModal(){ const m=document.getElementById('accountViewModal'); if(m)m.remove(); }
