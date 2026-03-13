@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "AutoToca Helper",
+  "version": "0.1.0",
+  "description": "Extensão auxiliar do AutoToca para detectar disponibilidade e preparar automações do Microsoft Forms.",
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": [
+    "https://forms.office.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "file:///*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "AutoToca Helper"
+  }
+}

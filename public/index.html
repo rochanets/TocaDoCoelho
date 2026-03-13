@@ -1976,6 +1976,26 @@
                 <h1>AutoToca</h1>
                 <p>Automações internas com execução assistida e logs.</p>
             </div>
+            <div id="autotocaExtensionNotice" style="display:none; margin-bottom:16px; background:#fff7ed; border:1px solid #fdba74; color:#9a3412; border-radius:12px; padding:16px;">
+                <div style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+                    <div style="flex:1; min-width:280px;">
+                        <div style="font-weight:700; margin-bottom:6px;">Extensão do AutoToca necessária</div>
+                        <div id="autotocaExtensionNoticeText" style="font-size:13px; line-height:1.5;">As automações deste módulo dependem da extensão do navegador para preencher o Microsoft Forms com segurança.</div>
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <a id="autotocaExtensionDownloadBtn" class="btn btn-auto-mapping" href="/autotoca-extension/autotoca-chrome-extension.zip" download>
+                            <i class="fas fa-download"></i> Baixar Extensão
+                        </a>
+                        <button class="btn btn-secondary" type="button" onclick="showAutoTocaExtensionInstallGuide()">
+                            <i class="fas fa-puzzle-piece"></i> Como instalar
+                        </button>
+                        <button class="btn btn-secondary" type="button" onclick="checkAutoTocaExtension(true)">
+                            <i class="fas fa-rotate-right"></i> Verificar novamente
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div id="autotocaExtensionStatus" style="display:none; margin-bottom:16px; background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46; border-radius:12px; padding:12px 16px; font-size:13px;"></div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
             </div>
@@ -2658,6 +2678,105 @@
             });
         }
 
+        const AUTOTOCA_EXTENSION_PING_EVENT = 'autotoca-extension-pong';
+        const AUTOTOCA_EXTENSION_REQUEST_EVENT = 'autotoca-extension-ping';
+        let autoTocaExtensionInstalled = false;
+        let autoTocaExtensionLastSeenAt = null;
+
+        function _autoTocaGetExtensionNoticeEl() {
+            return document.getElementById('autotocaExtensionNotice');
+        }
+
+        function _autoTocaGetExtensionStatusEl() {
+            return document.getElementById('autotocaExtensionStatus');
+        }
+
+        function _autoTocaGetChamadoFormEl() {
+            return document.getElementById('autotocaChamadoForm');
+        }
+
+        function _autoTocaSetAutomationEnabled(enabled) {
+            const form = _autoTocaGetChamadoFormEl();
+            const button = document.getElementById('autotocaSubmitBtn');
+            if (!form) return;
+            const fields = form.querySelectorAll('input, select, textarea, button');
+            fields.forEach(field => {
+                if (field.id === 'autotocaSubmitBtn') return;
+                if (field.type === 'hidden') return;
+                field.disabled = !enabled;
+            });
+            if (button) {
+                button.disabled = !enabled;
+                button.title = enabled ? '' : 'Instale e ative a extensão do AutoToca para usar esta automação.';
+            }
+        }
+
+        function renderAutoTocaExtensionState() {
+            const notice = _autoTocaGetExtensionNoticeEl();
+            const status = _autoTocaGetExtensionStatusEl();
+            const text = document.getElementById('autotocaExtensionNoticeText');
+            if (autoTocaExtensionInstalled) {
+                if (notice) notice.style.display = 'none';
+                if (status) {
+                    status.style.display = 'block';
+                    status.innerHTML = `<strong>Extensão do AutoToca ativa.</strong> Última verificação: ${escapeHtml(autoTocaExtensionLastSeenAt || 'agora')}.`;
+                }
+                _autoTocaSetAutomationEnabled(true);
+                return;
+            }
+            if (notice) notice.style.display = 'block';
+            if (status) status.style.display = 'none';
+            if (text) {
+                text.textContent = 'As funções deste módulo só funcionam após instalar e ativar a extensão do AutoToca no Chrome. Baixe a extensão abaixo, instale em modo desenvolvedor e depois clique em “Verificar novamente”.';
+            }
+            _autoTocaSetAutomationEnabled(false);
+        }
+
+        function handleAutoTocaExtensionPong(event) {
+            const detail = event?.detail || {};
+            autoTocaExtensionInstalled = true;
+            autoTocaExtensionLastSeenAt = new Date().toLocaleTimeString('pt-BR');
+            window.__AUTOTOCA_EXTENSION_INFO__ = detail;
+            renderAutoTocaExtensionState();
+        }
+
+        async function checkAutoTocaExtension(showFeedback = false) {
+            autoTocaExtensionInstalled = false;
+            renderAutoTocaExtensionState();
+            window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_REQUEST_EVENT, {
+                detail: {
+                    source: 'autotoca-web',
+                    timestamp: Date.now(),
+                }
+            }));
+            await new Promise(resolve => setTimeout(resolve, 900));
+            if (!autoTocaExtensionInstalled && showFeedback) {
+                await openSystemDialog({
+                    title: 'Extensão não detectada',
+                    message: 'A extensão do AutoToca ainda não foi detectada no navegador. Instale a extensão, ative-a no Chrome e clique novamente em “Verificar novamente”.',
+                    showCancel: false,
+                });
+            }
+            renderAutoTocaExtensionState();
+            return autoTocaExtensionInstalled;
+        }
+
+        async function showAutoTocaExtensionInstallGuide() {
+            await openSystemDialog({
+                title: 'Como instalar a extensão do AutoToca',
+                message: [
+                    '1. Clique em “Baixar Extensão”.',
+                    '2. Extraia o arquivo ZIP em uma pasta do seu computador.',
+                    '3. Abra chrome://extensions no Google Chrome.',
+                    '4. Ative o “Modo do desenvolvedor”.',
+                    '5. Clique em “Carregar sem compactação”.',
+                    '6. Selecione a pasta extraída da extensão.',
+                    '7. Volte ao AutoToca e clique em “Verificar novamente”.',
+                ].join('\n'),
+                showCancel: false,
+            });
+        }
+
         async function loadAutoToca() {
             autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [], aprovacaoCEO: [] };
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
@@ -2672,6 +2791,8 @@
                 };
             }
             toggleAutoTocaContratoOriginal();
+            renderAutoTocaExtensionState();
+            await checkAutoTocaExtension(false);
         }
 
         function toggleAutoTocaAutomation(key) {
