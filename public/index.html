@@ -2680,6 +2680,8 @@
 
         const AUTOTOCA_EXTENSION_PING_EVENT = 'autotoca-extension-pong';
         const AUTOTOCA_EXTENSION_REQUEST_EVENT = 'autotoca-extension-ping';
+        const AUTOTOCA_EXTENSION_COMMAND_EVENT = 'autotoca-extension-command';
+        const AUTOTOCA_EXTENSION_RESULT_EVENT = 'autotoca-extension-result';
         let autoTocaExtensionInstalled = false;
         let autoTocaExtensionLastSeenAt = null;
 
@@ -2738,6 +2740,28 @@
             autoTocaExtensionLastSeenAt = new Date().toLocaleTimeString('pt-BR');
             window.__AUTOTOCA_EXTENSION_INFO__ = detail;
             renderAutoTocaExtensionState();
+        }
+
+        function handleAutoTocaExtensionResult(event) {
+            const detail = event?.detail || {};
+            window.__AUTOTOCA_EXTENSION_LAST_RESULT__ = detail;
+            if (detail.command === 'store_payload' && detail.ok) {
+                _autoTocaAppendLog('Extensão confirmou o recebimento do payload do Chamado Jurídico.', 'success');
+                return;
+            }
+            if (detail.command === 'fill_current_forms' || detail.command === 'ping_forms_autofill') {
+                const appliedCount = Array.isArray(detail.results) ? detail.results.filter(item => item.applied).length : 0;
+                if (detail.ok) {
+                    _autoTocaAppendLog(`Extensão preencheu ${appliedCount} campo(s) no Microsoft Forms.`, 'success');
+                    showSuccess(`Forms preenchido automaticamente pela extensão (${appliedCount} campo(s)). Revise e envie.`);
+                } else if (detail.reason === 'missing_payload') {
+                    _autoTocaAppendLog('A extensão abriu o Forms, mas não encontrou payload salvo para preencher.', 'warning');
+                } else if (detail.reason === 'not_forms_page' || detail.reason === 'unavailable') {
+                    _autoTocaAppendLog('A extensão está ativa, aguardando a aba do Microsoft Forms carregar completamente.', 'info');
+                } else {
+                    _autoTocaAppendLog(detail.message || 'A extensão não conseguiu preencher automaticamente os campos nesta tentativa.', 'warning');
+                }
+            }
         }
 
         async function checkAutoTocaExtension(showFeedback = false) {
@@ -3094,6 +3118,18 @@
             return chamadoJuridicoWindowRef;
         }
 
+        function _autoTocaSendExtensionCommand(command, envelope = null, meta = {}) {
+            window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_COMMAND_EVENT, {
+                detail: {
+                    command,
+                    envelope,
+                    meta,
+                    source: 'autotoca-web',
+                    timestamp: Date.now(),
+                }
+            }));
+        }
+
         function _autoTocaGetStoredChamadoPayload() {
             try {
                 return JSON.parse(localStorage.getItem(_autoTocaGetChamadoPayloadStorage()) || 'null');
@@ -3194,21 +3230,31 @@
                 return;
             }
 
+            const extensionReady = await checkAutoTocaExtension(true);
+            if (!extensionReady) {
+                showError('Instale e ative a extensão do AutoToca antes de executar esta automação.');
+                return;
+            }
+
             try {
                 if (submitBtn) submitBtn.disabled = true;
                 if (spinner) spinner.style.display = 'inline-block';
-                _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação assistida do Chamado Jurídico...</span>']);
+                _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação do Chamado Jurídico com a extensão do AutoToca...</span>']);
 
                 const payloadEnvelope = _autoTocaPersistChamadoPayload(payload);
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_PAYLOAD__ = payloadEnvelope;
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__ = {
+                payloadEnvelope.summary = _buildResumoMarkdown(payload);
+                payloadEnvelope.filePaths = {
                     contratoOriginal: payload.arquivosContratoOriginal || [],
                     aditivosAnteriores: payload.arquivosAditivosAnteriores || [],
                     minutaCliente: payload.arquivosMinutaCliente || [],
                     aprovacaoCEO: payload.arquivosAprovacaoCEO || [],
                 };
+                window.__AUTO_TOCA_CHAMADO_JURIDICO_PAYLOAD__ = payloadEnvelope;
+                window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__ = payloadEnvelope.filePaths;
 
                 _autoTocaAppendLog('Payload salvo no navegador para reutilização entre abas.', 'success');
+                _autoTocaAppendLog('Enviando payload para a extensão do AutoToca.', 'info');
+                _autoTocaSendExtensionCommand('store_payload', payloadEnvelope, { formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL });
 
                 const win = _autoTocaOpenChamadoJuridicoForms();
                 if (win) {
@@ -3217,25 +3263,21 @@
                     _autoTocaAppendLog('O navegador bloqueou a abertura automática da aba. Permita pop-ups e tente novamente.', 'warning');
                 }
 
-                const fillStatus = win ? await _autoTocaTryAutoFillForms(win, payloadEnvelope) : { ok: false, message: 'A aba do Forms não pôde ser aberta automaticamente.' };
-                const instructions = _autoTocaBuildOperatorInstructions(payloadEnvelope, fillStatus);
-
-                if (fillStatus.ok) {
-                    _autoTocaAppendLog('Campos de texto do Microsoft Forms preenchidos automaticamente.', 'success');
-                } else {
-                    _autoTocaAppendLog(fillStatus.message || 'Não foi possível preencher automaticamente o Forms.', 'warning');
-                }
-
+                _autoTocaAppendLog('Com a extensão ativa, o preenchimento deve ocorrer na própria aba do Forms após o carregamento.', 'info');
                 _autoTocaAppendLog('Os caminhos dos arquivos ficaram disponíveis em window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__.', 'info');
                 console.log('[AutoToca][ChamadoJuridico] payloadEnvelope:', payloadEnvelope);
-                console.log('[AutoToca][ChamadoJuridico] fillStatus:', fillStatus);
                 await openSystemDialog({
-                    title: fillStatus.ok ? 'Chamado Jurídico — Formulário preenchido' : 'Chamado Jurídico — Preenchimento parcial',
-                    message: instructions,
+                    title: 'Chamado Jurídico — Automação iniciada',
+                    message: [
+                        'O Microsoft Forms foi aberto e a extensão recebeu o payload desta execução.',
+                        'Se o Forms exigir login Microsoft, conclua o login na própria aba do formulário e aguarde alguns segundos.',
+                        'Com a extensão ativa, o preenchimento automático deve ocorrer dentro da aba do Forms.',
+                        'Se algum campo ou upload não for reconhecido, o próximo ajuste será no mapeamento específico desse formulário.'
+                    ].join(' '),
                     showCancel: false,
                 });
             } catch (error) {
-                console.error('[AutoToca][ChamadoJuridico] erro na automação assistida', error);
+                console.error('[AutoToca][ChamadoJuridico] erro na automação via extensão', error);
                 _autoTocaAppendLog(error.message || 'Falha inesperada ao preparar a automação.', 'error');
                 showError(error.message || 'Falha ao preparar a automação do Chamado Jurídico.');
             } finally {
@@ -8973,6 +9015,8 @@
 
         window.addEventListener('DOMContentLoaded', async () => {
             ensureAutoTocaPresence();
+            window.addEventListener(AUTOTOCA_EXTENSION_PING_EVENT, handleAutoTocaExtensionPong);
+            window.addEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, handleAutoTocaExtensionResult);
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadITocaBaseStatus()]);
             const wikiSearchInput = document.getElementById('wikiSearchInput');
             if (wikiSearchInput) {
