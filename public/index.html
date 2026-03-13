@@ -2828,12 +2828,248 @@
             });
         }
 
+        const AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu';
+
+        function _autoTocaGetLogsEl() {
+            return document.getElementById('autotocaLogs');
+        }
+
+        function _autoTocaRenderLogLines(lines = []) {
+            const el = _autoTocaGetLogsEl();
+            if (!el) return;
+            const html = lines.map(line => `<div style="margin-bottom:6px;">${line}</div>`).join('');
+            el.innerHTML = html || '<span style="color:#6b7280;">Sem logs.</span>';
+        }
+
+        function _autoTocaAppendLog(message, tone = 'info') {
+            const el = _autoTocaGetLogsEl();
+            if (!el) return;
+            const palette = {
+                info: '#374151',
+                success: '#065f46',
+                warning: '#92400e',
+                error: '#b91c1c',
+            };
+            const color = palette[tone] || palette.info;
+            const stamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            el.insertAdjacentHTML('beforeend', `<div style="margin-bottom:6px; color:${color};">[${stamp}] ${escapeHtml(message)}</div>`);
+        }
+
+        function _autoTocaGetChamadoPayloadStorage() {
+            return 'autotoca.chamado_juridico.payload.v1';
+        }
+
+        function _autoTocaPersistChamadoPayload(payload) {
+            const normalized = {
+                savedAt: new Date().toISOString(),
+                formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL,
+                payload,
+            };
+            localStorage.setItem(_autoTocaGetChamadoPayloadStorage(), JSON.stringify(normalized));
+            return normalized;
+        }
+
+        function _autoTocaBuildFormsFieldHints(payload) {
+            const dataAssinatura = (payload.dataAssinaturaContratoOriginal || '').trim() || new Date().toLocaleDateString('pt-BR');
+            const reajusteResumo = payload.haveraReajusteValores === 'Sim'
+                ? `Sim. ${payload.indiceReajuste || 'Índice/valor não informado.'}`
+                : 'Não';
+            return {
+                conta: payload.contaSelecionada || '',
+                tipoMinuta: payload.tipoMinuta || '',
+                numeroContratoSalesforce: payload.numeroContratoSalesforce || '',
+                dataAssinaturaContratoOriginal: dataAssinatura,
+                endereco: payload.enderecoFinalConfirmado || payload.enderecoSedeEncontrado || '',
+                clienteEncaminhouMinuta: payload.clienteEncaminhouMinuta || 'Não',
+                contratoOriginal: payload.contratoOriginalModo === 'nao_se_aplica' ? 'Não se aplica' : 'Arquivo enviado pelo usuário',
+                reajuste: reajusteResumo,
+                aditivosAnterioresQuantidade: String((payload.arquivosAditivosAnteriores || []).length),
+                observacoesArquivos: [
+                    payload.arquivosContratoOriginal?.length ? `Contrato original: ${payload.arquivosContratoOriginal.length} arquivo(s)` : 'Contrato original: sem arquivo',
+                    payload.arquivosAditivosAnteriores?.length ? `Aditivos anteriores: ${payload.arquivosAditivosAnteriores.length} arquivo(s)` : 'Aditivos anteriores: sem arquivo',
+                    payload.arquivosMinutaCliente?.length ? `Minuta do cliente: ${payload.arquivosMinutaCliente.length} arquivo(s)` : 'Minuta do cliente: sem arquivo',
+                    payload.arquivosAprovacaoCEO?.length ? `Aprovação CEO: ${payload.arquivosAprovacaoCEO.length} arquivo(s)` : 'Aprovação CEO: sem arquivo',
+                ].join(' | '),
+            };
+        }
+
+        function _autoTocaBuildFormsAutomationScript(payloadEnvelope) {
+            const hints = _autoTocaBuildFormsFieldHints(payloadEnvelope.payload || {});
+            const jsonHints = JSON.stringify(hints);
+            const jsonEnvelope = JSON.stringify(payloadEnvelope);
+            return `(() => {
+                const hints = ${jsonHints};
+                const envelope = ${jsonEnvelope};
+                const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+                const labelMap = {
+                    conta: ['conta', 'cliente', 'razao social'],
+                    tipoMinuta: ['tipo de minuta', 'minuta'],
+                    numeroContratoSalesforce: ['numero contrato sf', 'numero do contrato sf', 'salesforce', 'contrato sf'],
+                    dataAssinaturaContratoOriginal: ['data assinatura', 'assinatura', 'data do contrato'],
+                    endereco: ['endereco'],
+                    clienteEncaminhouMinuta: ['minuta do cliente', 'cliente encaminhou minuta'],
+                    contratoOriginal: ['contrato original'],
+                    reajuste: ['reajuste', 'indice utilizado', 'valor pos reajuste'],
+                    aditivosAnterioresQuantidade: ['aditivos anteriores'],
+                    observacoesArquivos: ['observacoes', 'anexos', 'arquivos'],
+                };
+                const candidates = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
+                const getQuestionText = (el) => {
+                    const direct = el.closest('[role="listitem"], [data-automation-id], .office-form-question, .question-content, .question-body');
+                    const texts = [];
+                    if (direct) texts.push(direct.innerText || '');
+                    if (el.labels) texts.push(...Array.from(el.labels).map(label => label.innerText || ''));
+                    const aria = el.getAttribute('aria-label') || '';
+                    const placeholder = el.getAttribute('placeholder') || '';
+                    texts.push(aria, placeholder);
+                    return normalize(texts.join(' | '));
+                };
+                const setValue = (el, value) => {
+                    if (!el || value == null) return false;
+                    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+                        el.focus();
+                        el.value = value;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        return true;
+                    }
+                    if (el.getAttribute('contenteditable') === 'true') {
+                        el.focus();
+                        el.innerText = value;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        return true;
+                    }
+                    return false;
+                };
+                const matchesKey = (text, key) => (labelMap[key] || []).some(term => text.includes(normalize(term)));
+                const results = [];
+                Object.entries(hints).forEach(([key, value]) => {
+                    if (!value) return;
+                    const target = candidates.find(el => matchesKey(getQuestionText(el), key));
+                    const applied = setValue(target, value);
+                    results.push({ key, value, applied, matchedText: target ? getQuestionText(target) : '' });
+                });
+                const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map((el, index) => ({
+                    index,
+                    multiple: !!el.multiple,
+                    disabled: !!el.disabled,
+                    questionText: getQuestionText(el),
+                }));
+                const response = {
+                    ok: true,
+                    savedAt: envelope.savedAt,
+                    results,
+                    fileInputs,
+                    message: 'Preenchimento de texto executado. Revise os campos e envie os arquivos manualmente ou por automação de upload dedicada.',
+                };
+                console.log('[AutoToca][ChamadoJuridico][FormsAssist]', response);
+                return response;
+            })();`;
+        }
+
+        async function _autoTocaCopyText(text) {
+            const safeText = String(text || '');
+            if (!safeText) return false;
+            try {
+                await navigator.clipboard.writeText(safeText);
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function _autoTocaOpenChamadoJuridicoForms() {
+            chamadoJuridicoWindowRef = openOrReuseExternalTab(chamadoJuridicoWindowRef, AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL);
+            return chamadoJuridicoWindowRef;
+        }
+
+        function _autoTocaBuildOperatorInstructions(payloadEnvelope) {
+            const payload = payloadEnvelope.payload || {};
+            const fileSummary = [
+                payload.arquivosContratoOriginal?.length ? `Contrato original: ${payload.arquivosContratoOriginal.join(', ')}` : 'Contrato original: nenhum arquivo salvo',
+                payload.arquivosAditivosAnteriores?.length ? `Aditivos anteriores: ${payload.arquivosAditivosAnteriores.join(', ')}` : 'Aditivos anteriores: nenhum arquivo salvo',
+                payload.arquivosMinutaCliente?.length ? `Minuta do cliente: ${payload.arquivosMinutaCliente.join(', ')}` : 'Minuta do cliente: nenhum arquivo salvo',
+                payload.arquivosAprovacaoCEO?.length ? `Aprovação do CEO: ${payload.arquivosAprovacaoCEO.join(', ')}` : 'Aprovação do CEO: nenhum arquivo salvo',
+            ].join('\n');
+            return [
+                '1. O Microsoft Forms foi aberto ou reutilizado em outra aba.',
+                '2. Se o Forms pedir autenticação Microsoft, conclua o login nessa aba e depois volte ao Toca para continuar.',
+                '3. Após o formulário carregar, abra o console da aba do Forms e cole o script salvo em window.__AUTO_TOCA_CHAMADO_JURIDICO_SCRIPT__. Isso fará o preenchimento assistido dos campos de texto quando os labels corresponderem.',
+                '4. Para upload, use os caminhos já processados pelo AutoToca. Esses caminhos foram preservados no payload local e podem ser usados em inputs do tipo arquivo quando o navegador permitir automação direta.',
+                '5. Se algum campo não for reconhecido automaticamente, use o resumo e o texto copiado para completar manualmente.',
+                '',
+                'Arquivos disponíveis nesta execução:',
+                fileSummary,
+            ].join('\n');
+        }
+
         async function runChamadoJuridico(event) {
             event.preventDefault();
-            // TODO: nova estratégia de integração a ser implementada
             const payload = buildAutoTocaPayload();
-            document.getElementById('autotocaLogs').innerHTML = `<span style="color:#6b7280;">Payload coletado. Aguardando nova estratégia de envio.</span>`;
-            console.log('[ChamadoJuridico] payload:', payload);
+            const submitBtn = document.getElementById('autotocaSubmitBtn');
+            const spinner = document.getElementById('autotocaLoadingSpinner');
+            const logsEl = _autoTocaGetLogsEl();
+            if (logsEl) logsEl.innerHTML = '';
+
+            if (!payload.contaSelecionada || !payload.numeroContratoSalesforce || !payload.enderecoFinalConfirmado) {
+                showError('Preencha Conta, Número Contrato SF e Endereço antes de executar.');
+                return;
+            }
+
+            if (payload.haveraReajusteValores === 'Sim' && !payload.indiceReajuste) {
+                showError('Informe os dados do reajuste antes de executar.');
+                return;
+            }
+
+            try {
+                if (submitBtn) submitBtn.disabled = true;
+                if (spinner) spinner.style.display = 'inline-block';
+                _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação assistida do Chamado Jurídico...</span>']);
+
+                const payloadEnvelope = _autoTocaPersistChamadoPayload(payload);
+                const formsScript = _autoTocaBuildFormsAutomationScript(payloadEnvelope);
+                window.__AUTO_TOCA_CHAMADO_JURIDICO_PAYLOAD__ = payloadEnvelope;
+                window.__AUTO_TOCA_CHAMADO_JURIDICO_SCRIPT__ = formsScript;
+                window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__ = {
+                    contratoOriginal: payload.arquivosContratoOriginal || [],
+                    aditivosAnteriores: payload.arquivosAditivosAnteriores || [],
+                    minutaCliente: payload.arquivosMinutaCliente || [],
+                    aprovacaoCEO: payload.arquivosAprovacaoCEO || [],
+                };
+
+                const copied = await _autoTocaCopyText(_buildResumoMarkdown(payload));
+                _autoTocaAppendLog('Payload salvo no navegador para reutilização entre abas.', 'success');
+                _autoTocaAppendLog(copied ? 'Resumo copiado para a área de transferência como fallback manual.' : 'Não foi possível copiar o resumo para a área de transferência; seguiremos com payload persistido.', copied ? 'success' : 'warning');
+
+                const win = _autoTocaOpenChamadoJuridicoForms();
+                if (win) {
+                    _autoTocaAppendLog('Microsoft Forms aberto/reutilizado em aba dedicada.', 'success');
+                } else {
+                    _autoTocaAppendLog('O navegador bloqueou a abertura automática da aba. Permita pop-ups e tente novamente.', 'warning');
+                }
+
+                const instructions = _autoTocaBuildOperatorInstructions(payloadEnvelope);
+                _autoTocaAppendLog('Script de preenchimento salvo em window.__AUTO_TOCA_CHAMADO_JURIDICO_SCRIPT__.', 'info');
+                _autoTocaAppendLog('Use o console da aba do Forms para executar o script assim que a página estiver autenticada e carregada.', 'info');
+                _autoTocaAppendLog('Os caminhos dos arquivos ficaram disponíveis em window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__.', 'info');
+                console.log('[AutoToca][ChamadoJuridico] payloadEnvelope:', payloadEnvelope);
+                console.log('[AutoToca][ChamadoJuridico] formsScript:', formsScript);
+                console.log('[AutoToca][ChamadoJuridico] operatorInstructions:\n' + instructions);
+                await openSystemDialog({
+                    title: 'Chamado Jurídico — Execução Assistida',
+                    message: instructions,
+                    showCancel: false,
+                });
+            } catch (error) {
+                console.error('[AutoToca][ChamadoJuridico] erro na automação assistida', error);
+                _autoTocaAppendLog(error.message || 'Falha inesperada ao preparar a automação.', 'error');
+                showError(error.message || 'Falha ao preparar a automação do Chamado Jurídico.');
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+                if (spinner) spinner.style.display = 'none';
+            }
         }
 
         async function loadIntegrationConfig() {
@@ -5337,6 +5573,7 @@
 
         let whatsappWindowRef = null;
         let emailWindowRef = null;
+        let chamadoJuridicoWindowRef = null;
 
         function openOrReuseExternalTab(windowRef, url) {
             if (windowRef && !windowRef.closed) {
