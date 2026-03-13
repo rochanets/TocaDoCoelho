@@ -2926,9 +2926,10 @@
                 };
                 const setValue = (el, value) => {
                     if (!el || value == null) return false;
+                    const stringValue = String(value);
                     if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
                         el.focus();
-                        el.value = value;
+                        el.value = stringValue;
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                         el.dispatchEvent(new Event('blur', { bubbles: true }));
@@ -2936,7 +2937,7 @@
                     }
                     if (el.getAttribute('contenteditable') === 'true') {
                         el.focus();
-                        el.innerText = value;
+                        el.innerText = stringValue;
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('blur', { bubbles: true }));
                         return true;
@@ -2957,27 +2958,14 @@
                     disabled: !!el.disabled,
                     questionText: getQuestionText(el),
                 }));
-                const response = {
+                return {
                     ok: true,
                     savedAt: envelope.savedAt,
                     results,
                     fileInputs,
-                    message: 'Preenchimento de texto executado. Revise os campos e envie os arquivos manualmente ou por automação de upload dedicada.',
+                    message: 'Preenchimento automático de texto executado.',
                 };
-                console.log('[AutoToca][ChamadoJuridico][FormsAssist]', response);
-                return response;
             })();`;
-        }
-
-        async function _autoTocaCopyText(text) {
-            const safeText = String(text || '');
-            if (!safeText) return false;
-            try {
-                await navigator.clipboard.writeText(safeText);
-                return true;
-            } catch (_) {
-                return false;
-            }
         }
 
         function _autoTocaOpenChamadoJuridicoForms() {
@@ -2985,7 +2973,57 @@
             return chamadoJuridicoWindowRef;
         }
 
-        function _autoTocaBuildOperatorInstructions(payloadEnvelope) {
+        function _autoTocaGetStoredChamadoPayload() {
+            try {
+                return JSON.parse(localStorage.getItem(_autoTocaGetChamadoPayloadStorage()) || 'null');
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function _autoTocaWait(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function _autoTocaTryAutoFillForms(win, payloadEnvelope, options = {}) {
+            const attempts = Number(options.attempts || 12);
+            const delayMs = Number(options.delayMs || 1200);
+            const formsScript = _autoTocaBuildFormsAutomationScript(payloadEnvelope);
+            let lastError = null;
+
+            for (let attempt = 1; attempt <= attempts; attempt++) {
+                if (!win || win.closed) {
+                    return { ok: false, reason: 'window_closed', attempt, message: 'A aba do Microsoft Forms foi fechada antes do preenchimento.' };
+                }
+                try {
+                    const href = win.location.href || '';
+                    const readyState = win.document?.readyState || 'loading';
+                    if (!href || href === 'about:blank' || readyState !== 'complete') {
+                        await _autoTocaWait(delayMs);
+                        continue;
+                    }
+                    const result = win.eval(formsScript);
+                    return { ok: true, attempt, href, result };
+                } catch (error) {
+                    lastError = error;
+                    const msg = String(error?.message || error || 'erro desconhecido');
+                    const crossOrigin = msg.includes('cross-origin') || msg.includes('Permission denied') || msg.includes('Blocked a frame with origin');
+                    if (crossOrigin) {
+                        return { ok: false, reason: 'cross_origin', attempt, message: 'O navegador isolou a aba do Microsoft Forms e bloqueou o preenchimento automático direto entre abas.' };
+                    }
+                    await _autoTocaWait(delayMs);
+                }
+            }
+
+            return {
+                ok: false,
+                reason: 'timeout',
+                message: 'Não foi possível identificar a página do Forms pronta para preenchimento automático.',
+                error: String(lastError?.message || lastError || ''),
+            };
+        }
+
+        function _autoTocaBuildOperatorInstructions(payloadEnvelope, fillStatus) {
             const payload = payloadEnvelope.payload || {};
             const fileSummary = [
                 payload.arquivosContratoOriginal?.length ? `Contrato original: ${payload.arquivosContratoOriginal.join(', ')}` : 'Contrato original: nenhum arquivo salvo',
@@ -2993,12 +3031,24 @@
                 payload.arquivosMinutaCliente?.length ? `Minuta do cliente: ${payload.arquivosMinutaCliente.join(', ')}` : 'Minuta do cliente: nenhum arquivo salvo',
                 payload.arquivosAprovacaoCEO?.length ? `Aprovação do CEO: ${payload.arquivosAprovacaoCEO.join(', ')}` : 'Aprovação do CEO: nenhum arquivo salvo',
             ].join('\n');
+
+            if (fillStatus?.ok) {
+                return [
+                    'O Microsoft Forms foi aberto e o preenchimento automático dos campos de texto foi executado.',
+                    'Revise visualmente os campos preenchidos antes de enviar.',
+                    'Se houver campos de upload, anexe os arquivos e conclua o envio manualmente.',
+                    '',
+                    'Arquivos disponíveis nesta execução:',
+                    fileSummary,
+                ].join('\n');
+            }
+
             return [
-                '1. O Microsoft Forms foi aberto ou reutilizado em outra aba.',
-                '2. Se o Forms pedir autenticação Microsoft, conclua o login nessa aba e depois volte ao Toca para continuar.',
-                '3. Após o formulário carregar, abra o console da aba do Forms e cole o script salvo em window.__AUTO_TOCA_CHAMADO_JURIDICO_SCRIPT__. Isso fará o preenchimento assistido dos campos de texto quando os labels corresponderem.',
-                '4. Para upload, use os caminhos já processados pelo AutoToca. Esses caminhos foram preservados no payload local e podem ser usados em inputs do tipo arquivo quando o navegador permitir automação direta.',
-                '5. Se algum campo não for reconhecido automaticamente, use o resumo e o texto copiado para completar manualmente.',
+                'O Microsoft Forms foi aberto, mas o navegador não permitiu preenchimento automático completo entre abas nesta tentativa.',
+                'Se o Forms pediu autenticação Microsoft, conclua o login e execute novamente a automação.',
+                'Se os uploads forem necessários, eles ainda dependem de mapeamento específico ou seleção manual, conforme as restrições do próprio navegador.',
+                '',
+                `Motivo técnico detectado: ${fillStatus?.message || 'não identificado'}`,
                 '',
                 'Arquivos disponíveis nesta execução:',
                 fileSummary,
@@ -3029,9 +3079,7 @@
                 _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação assistida do Chamado Jurídico...</span>']);
 
                 const payloadEnvelope = _autoTocaPersistChamadoPayload(payload);
-                const formsScript = _autoTocaBuildFormsAutomationScript(payloadEnvelope);
                 window.__AUTO_TOCA_CHAMADO_JURIDICO_PAYLOAD__ = payloadEnvelope;
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_SCRIPT__ = formsScript;
                 window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__ = {
                     contratoOriginal: payload.arquivosContratoOriginal || [],
                     aditivosAnteriores: payload.arquivosAditivosAnteriores || [],
@@ -3039,9 +3087,7 @@
                     aprovacaoCEO: payload.arquivosAprovacaoCEO || [],
                 };
 
-                const copied = await _autoTocaCopyText(_buildResumoMarkdown(payload));
                 _autoTocaAppendLog('Payload salvo no navegador para reutilização entre abas.', 'success');
-                _autoTocaAppendLog(copied ? 'Resumo copiado para a área de transferência como fallback manual.' : 'Não foi possível copiar o resumo para a área de transferência; seguiremos com payload persistido.', copied ? 'success' : 'warning');
 
                 const win = _autoTocaOpenChamadoJuridicoForms();
                 if (win) {
@@ -3050,15 +3096,20 @@
                     _autoTocaAppendLog('O navegador bloqueou a abertura automática da aba. Permita pop-ups e tente novamente.', 'warning');
                 }
 
-                const instructions = _autoTocaBuildOperatorInstructions(payloadEnvelope);
-                _autoTocaAppendLog('Script de preenchimento salvo em window.__AUTO_TOCA_CHAMADO_JURIDICO_SCRIPT__.', 'info');
-                _autoTocaAppendLog('Use o console da aba do Forms para executar o script assim que a página estiver autenticada e carregada.', 'info');
+                const fillStatus = win ? await _autoTocaTryAutoFillForms(win, payloadEnvelope) : { ok: false, message: 'A aba do Forms não pôde ser aberta automaticamente.' };
+                const instructions = _autoTocaBuildOperatorInstructions(payloadEnvelope, fillStatus);
+
+                if (fillStatus.ok) {
+                    _autoTocaAppendLog('Campos de texto do Microsoft Forms preenchidos automaticamente.', 'success');
+                } else {
+                    _autoTocaAppendLog(fillStatus.message || 'Não foi possível preencher automaticamente o Forms.', 'warning');
+                }
+
                 _autoTocaAppendLog('Os caminhos dos arquivos ficaram disponíveis em window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__.', 'info');
                 console.log('[AutoToca][ChamadoJuridico] payloadEnvelope:', payloadEnvelope);
-                console.log('[AutoToca][ChamadoJuridico] formsScript:', formsScript);
-                console.log('[AutoToca][ChamadoJuridico] operatorInstructions:\n' + instructions);
+                console.log('[AutoToca][ChamadoJuridico] fillStatus:', fillStatus);
                 await openSystemDialog({
-                    title: 'Chamado Jurídico — Execução Assistida',
+                    title: fillStatus.ok ? 'Chamado Jurídico — Formulário preenchido' : 'Chamado Jurídico — Preenchimento parcial',
                     message: instructions,
                     showCancel: false,
                 });
