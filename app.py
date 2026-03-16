@@ -20,6 +20,7 @@ import html
 import time
 import ssl
 import base64
+import mimetypes
 import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -1709,23 +1710,37 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
     def _local_image_from_url(url):
         if not url:
             return None
+        raw_url = str(url).strip()
+        if not raw_url:
+            return None
         try:
-            parsed = urlparse(url)
-            path = (parsed.path or url).strip()
+            parsed = urlparse(raw_url)
+            path = (parsed.path or raw_url).strip()
         except Exception:
-            path = str(url).strip()
+            parsed = None
+            path = raw_url
+        if raw_url.startswith('file://') and parsed and parsed.path:
+            file_path = Path(parsed.path)
+            return file_path if file_path.exists() else None
         if not path:
             return None
-        if path.startswith('/uploads/'):
-            local = UPLOAD_DIR / path.replace('/uploads/', '', 1)
+        normalized = path.replace('\\', '/').strip()
+        if normalized.startswith('/uploads/'):
+            local = UPLOAD_DIR / normalized.replace('/uploads/', '', 1)
             return local if local.exists() else None
-        if path.startswith('/'):
-            local = Path(BASE_DIR) / 'public' / path.lstrip('/')
+        if normalized.startswith('uploads/'):
+            local = UPLOAD_DIR / normalized.replace('uploads/', '', 1)
             return local if local.exists() else None
-        local = Path(path)
+        if normalized.startswith('/public/'):
+            local = Path(BASE_DIR) / normalized.lstrip('/')
+            return local if local.exists() else None
+        if normalized.startswith('/'):
+            local = Path(BASE_DIR) / 'public' / normalized.lstrip('/')
+            return local if local.exists() else None
+        local = Path(normalized)
         if local.exists():
             return local
-        local_public = Path(BASE_DIR) / 'public' / path
+        local_public = Path(BASE_DIR) / 'public' / normalized
         return local_public if local_public.exists() else None
 
     def _inline_image_url(url):
@@ -1939,7 +1954,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
   <div class='rr-toolbar-actions'>
     <button class='rr-btn rr-btn-secondary' onclick='window.close()'>✕ Fechar</button>
     <button class='rr-btn rr-btn-secondary' onclick='window.location.href=window.location.pathname.replace("/view","/export-html") + window.location.search'>Exportar HTML</button>
-    <button class='rr-btn rr-btn-primary' onclick='window.print()'>Imprimir / Salvar em PDF</button>
+    <button class='rr-btn rr-btn-primary' onclick="window.location.href='/api/report/relation' + window.location.search">Exportar PDF</button>
   </div>
 </div>
 <div class='rr-shell'>
