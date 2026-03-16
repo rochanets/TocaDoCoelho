@@ -1884,6 +1884,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
   <div class='rr-toolbar-title'>Relation Report · {esc(account_name)}</div>
   <div class='rr-toolbar-actions'>
     <button class='rr-btn rr-btn-secondary' onclick='window.close()'><i class="fas fa-times"></i> Fechar</button>
+    <button class='rr-btn rr-btn-secondary' onclick='window.location.href=window.location.pathname.replace("/view","/export-html") + window.location.search'><i class="fas fa-file-code"></i> Exportar HTML</button>
     <button class='rr-btn rr-btn-primary' onclick='window.print()'><i class="fas fa-print"></i> Imprimir / Salvar em PDF</button>
   </div>
 </div>
@@ -2215,6 +2216,36 @@ def view_relation_report_browser():
     except Exception as e:
         logger.exception(f'[RelationReport] Falha ao montar visualização HTML: {e}')
         return f'<h1>Erro ao gerar relatório</h1><pre>{html.escape(str(e))}</pre>', 500
+
+
+@app.route('/report/relation/export-html', methods=['GET'])
+def export_relation_report_html():
+    try:
+        account_id_raw = (request.args.get('account_id') or '').strip()
+        if not account_id_raw.isdigit():
+            return 'account_id é obrigatório', 400
+        account_id = int(account_id_raw)
+        full_period = (request.args.get('full_period', 'false') or 'false').lower() == 'true'
+        start_date = (request.args.get('start_date') or '').strip() or None
+        end_date = (request.args.get('end_date') or '').strip() or None
+        if full_period:
+            start_date = None
+            end_date = None
+        report_data = _relation_report_collect_data(account_id, start_date=start_date, end_date=end_date)
+        if not report_data:
+            return 'Conta não encontrada', 404
+        report_data['narrative'] = _relation_report_generate_narrative(report_data)
+        profile_response = get_profile_config()
+        profile = profile_response.get_json(silent=True) if hasattr(profile_response, 'get_json') else {}
+        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {})
+        account_name = (report_data.get('account') or {}).get('name') or f'account-{account_id}'
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]+', '-', account_name.strip()).strip('-').lower() or f'account-{account_id}'
+        response = Response(html_doc, mimetype='text/html; charset=utf-8')
+        response.headers['Content-Disposition'] = f'attachment; filename=relation-report-{safe_name}.html'
+        return response
+    except Exception as e:
+        logger.exception(f'[RelationReport] Falha ao exportar HTML: {e}')
+        return f'<h1>Erro ao exportar relatório</h1><pre>{html.escape(str(e))}</pre>', 500
 
 
 @app.route('/api/report/relation/preview', methods=['GET'])
