@@ -1694,8 +1694,29 @@ def _relation_report_build_browser_html(report_data, profile=None):
     if latest:
         latest_text = f"{_relation_report_format_dt(latest.get('date'))} · {latest.get('with') or 'Contato não identificado'}"
 
+    def company_rank(position):
+        p = str(position or '').strip().lower()
+        if p == 'ceo':
+            return 1
+        if p == 'cio':
+            return 2
+        if p.startswith('c') and len(p) <= 5:
+            return 3
+        if 'diretor' in p or 'superintendente' in p:
+            return 4
+        if 'gerente' in p:
+            return 5
+        if 'coordenador' in p:
+            return 6
+        return 7
+
+    sorted_contacts = sorted(
+        report_data.get('contacts') or [],
+        key=lambda c: (company_rank(c.get('position')), str(c.get('name') or '').lower())
+    )
+
     contacts_html = []
-    for contact in report_data.get('contacts') or []:
+    for contact in sorted_contacts:
         photo = contact.get('photo_url') or ''
         initials = (str(contact.get('name') or '?').strip()[:1] or '?').upper()
         badges = []
@@ -1710,6 +1731,8 @@ def _relation_report_build_browser_html(report_data, profile=None):
             meta.append(esc(contact.get('position')))
         if contact.get('email'):
             meta.append(esc(contact.get('email')))
+        if contact.get('phone'):
+            meta.append(esc(contact.get('phone')))
         activities = [a for a in (report_data.get('activities') or []) if a.get('client_id') == contact.get('id')]
         last_contact = activities[0] if activities else None
         last_contact_line = f"Última interação: {esc(_relation_report_format_dt(last_contact.get('activity_date')))}" if last_contact else 'Última interação: não registrada'
@@ -1753,14 +1776,14 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-brand-mark img {{ width:100%; height:100%; object-fit:cover; }}
 .rr-title {{ font-size:34px; font-weight:800; line-height:1.05; margin:0 0 8px; }}
 .rr-subtitle {{ margin:0; color:rgba(255,255,255,.88); font-size:15px; max-width:760px; line-height:1.6; }}
-.rr-user {{ display:flex; gap:12px; align-items:center; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:10px 12px; border-radius:18px; backdrop-filter:blur(8px); }}
-.rr-user-photo {{ width:52px; height:52px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,.35); background:rgba(255,255,255,.16); }}
+.rr-user {{ display:flex; gap:14px; align-items:center; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); padding:12px 14px; border-radius:20px; backdrop-filter:blur(8px); min-width:260px; }}
+.rr-user-photo {{ width:72px; height:72px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,.35); background:rgba(255,255,255,.16); }}
 .rr-user-fallback {{ display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; }}
 .rr-user-name {{ font-size:16px; font-weight:700; margin:0; }}
 .rr-user-role {{ margin:4px 0 0; font-size:12px; color:rgba(255,255,255,.82); }}
 .rr-hero-grid {{ display:grid; grid-template-columns:1.15fr .85fr; gap:18px; margin-top:24px; }}
 .rr-panel {{ background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.14); border-radius:22px; padding:18px; backdrop-filter:blur(8px); }}
-.rr-panel h3 {{ margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:rgba(255,255,255,.8); }}
+.rr-panel h3 {{ margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:rgba(255,255,255,.98); }}
 .rr-kpis {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-top:24px; }}
 .rr-kpi {{ background:var(--card); border:1px solid var(--line); border-radius:22px; padding:18px; box-shadow:0 10px 30px rgba(16,185,129,.08); }}
 .rr-kpi-label {{ font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }}
@@ -1769,11 +1792,11 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-section {{ background:rgba(255,255,255,.86); border:1px solid rgba(209,250,229,.9); border-radius:24px; padding:24px; box-shadow:0 18px 55px rgba(15,118,110,.08); }}
 .rr-section h2 {{ margin:0 0 14px; font-size:22px; color:var(--green-dark); }}
 .rr-lead {{ color:#374151; font-size:15px; line-height:1.75; white-space:pre-line; }}
-.rr-info-list {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }}
-.rr-info-item {{ background:#fff; border:1px solid #ecfdf5; border-radius:16px; padding:14px; }}
-.rr-info-item-label {{ font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }}
-.rr-info-item-value {{ font-size:15px; font-weight:700; color:#111827; }}
-.rr-contact-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }}
+.rr-info-list {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }}
+.rr-info-item {{ background:#fff; border:1px solid #ecfdf5; border-radius:14px; padding:10px 12px; }}
+.rr-info-item-label {{ font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }}
+.rr-info-item-value {{ font-size:13px; font-weight:700; color:#111827; }}
+.rr-contact-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; align-items:start; }}
 .rr-contact-card {{ background:#fff; border:1px solid #e5e7eb; border-radius:20px; padding:16px; box-shadow:0 8px 24px rgba(15,23,42,.05); }}
 .rr-contact-head {{ display:flex; gap:12px; align-items:center; margin-bottom:12px; }}
 .rr-contact-photo {{ width:58px; height:58px; border-radius:18px; object-fit:cover; background:#ecfdf5; }}
@@ -1798,7 +1821,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-btn-primary {{ background:#10b981; color:#fff; }}
 .rr-btn-secondary {{ background:#e5e7eb; color:#111827; }}
 @media (max-width: 1024px) {{ .rr-hero-grid,.rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ grid-template-columns:1fr; }} }}
-@media print {{ .rr-toolbar {{ display:none; }} body {{ background:#fff; }} .rr-shell {{ max-width:none; padding:0; }} .rr-section,.rr-kpi,.rr-panel,.rr-hero {{ box-shadow:none !important; break-inside:avoid; }} }}
+@media print {{ .rr-toolbar {{ display:none; }} body {{ background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }} .rr-shell {{ max-width:none; padding:0; }} .rr-hero {{ min-height:auto; }} .rr-section,.rr-kpi,.rr-panel,.rr-hero,.rr-contact-card,.rr-topic-card,.rr-info-item {{ box-shadow:none !important; break-inside:avoid; page-break-inside:avoid; }} .rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list,.rr-hero-grid {{ display:block; }} .rr-kpi,.rr-section,.rr-contact-card,.rr-topic-card,.rr-info-item,.rr-panel {{ margin-bottom:14px; }} }}
 </style>
 </head>
 <body>
@@ -1817,7 +1840,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
         <div>
           <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relation Report</p>
           <h1 class='rr-title'>{esc(account_name)}</h1>
-          <p class='rr-subtitle'>Visão executiva do relacionamento da conta, combinando powermapping, histórico de interação, presença operacional, leitura temática e próximos passos recomendados.</p>
+          <p class='rr-subtitle'>Visão executiva do relacionamento da conta, combinando Power Mapping, histórico de interação, presença operacional, leitura temática e próximos passos recomendados.</p>
         </div>
       </div>
       <div class='rr-user'>{profile_photo_html}
@@ -1851,7 +1874,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
   </section>
   <section class='rr-grid'>
     <div class='rr-section'>
-      <h2>Power mapping e contatos-chave</h2>
+      <h2>Power Mapping e contatos-chave</h2>
       <div class='rr-contact-grid'>{''.join(contacts_html) or '<div class="rr-contact-card">Nenhum contato encontrado para a conta.</div>'}</div>
     </div>
     <div class='rr-section'>
