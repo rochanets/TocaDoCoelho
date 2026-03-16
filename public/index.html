@@ -3865,21 +3865,76 @@
         // Load Report
         async function loadReport() {
             try {
+                const accountsResponse = await fetch(`${API_BASE}/accounts`);
+                const accountsData = await accountsResponse.json();
                 const response = await fetch(`${API_BASE}/clientes`);
                 const data = await response.json();
                 clients = data;
 
-                let html = '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
-                
-                // Export Clients
-                html += '<div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; border: 1px solid rgba(52,211,153,0.2);">';
+                let html = '<div style="display:flex; flex-direction:column; gap:20px;">';
+
+                html += '<div style="background: linear-gradient(135deg, rgba(4,120,87,0.96), rgba(6,95,70,0.96)); color: white; padding: 24px; border-radius: 16px; box-shadow: 0 14px 40px rgba(4,120,87,0.16);">';
+                html += '<div style="display:flex; justify-content:space-between; gap:20px; align-items:flex-start; flex-wrap:wrap;">';
+                html += '<div style="max-width:680px;">';
+                html += '<div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.9; margin-bottom:8px;">Report & Backup</div>';
+                html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relation Report</h2>';
+                html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Gere um PDF executivo de relacionamento com identidade visual do sistema, logo do cliente, powermapping resumido, última interação, visão de Kanban, resumo em linguagem natural e leitura temática por IA, Cyber, Aplicações, Marketing, Cloud e Outros.</p>';
+                html += '</div>';
+                html += '<div style="min-width:240px; background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.16); border-radius:14px; padding:16px;">';
+                html += '<div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; opacity:0.9; margin-bottom:10px;">Saída</div>';
+                html += '<div style="font-size:14px; line-height:1.6;">PDF bonito, executivo e pronto para compartilhar.</div>';
+                html += '</div>';
+                html += '</div>';
+                html += '</div>';
+
+                html += '<div style="display:grid; grid-template-columns:minmax(340px, 1.4fr) minmax(320px, 1fr); gap:20px; align-items:start;">';
+
+                html += '<div style="background: rgba(255,255,255,0.92); padding: 22px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.24); box-shadow: 0 12px 34px rgba(15,23,42,0.05);">';
+                html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; flex-wrap:wrap;">';
+                html += '<div><h3 style="color:#047857; margin:0 0 6px 0;">Gerar Relation Report</h3><p style="color:#6b7280; margin:0; font-size:14px;">Selecione a conta e o período para montar o PDF completo.</p></div>';
+                html += '<div style="background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; border-radius:999px; padding:8px 12px; font-size:12px; font-weight:600;">Resumo com IA incluído</div>';
+                html += '</div>';
+                html += '<div class="form-group" style="margin-bottom:14px;">';
+                html += '<label style="display:block; margin-bottom:8px; font-weight:600; color:#065f46;">Cliente / Conta</label>';
+                html += '<select id="relationReportAccount" style="width:100%; border:2px solid #d1fae5; padding:12px; border-radius:10px; background:white;">';
+                html += '<option value="">Selecione uma conta</option>';
+                (Array.isArray(accountsData) ? accountsData : []).forEach(account => {
+                    html += `<option value="${account.id}">${escapeHtml(account.name || 'Conta sem nome')}</option>`;
+                });
+                html += '</select>';
+                html += '</div>';
+                html += '<div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">';
+                html += '<div class="form-group">';
+                html += '<label style="display:block; margin-bottom:8px; font-weight:600; color:#065f46;">Data Inicial</label>';
+                html += '<input type="date" id="relationReportStart" style="width:100%; border:2px solid #e5e7eb; padding:12px; border-radius:10px; background:white;">';
+                html += '</div>';
+                html += '<div class="form-group">';
+                html += '<label style="display:block; margin-bottom:8px; font-weight:600; color:#065f46;">Data Final</label>';
+                html += '<input type="date" id="relationReportEnd" style="width:100%; border:2px solid #e5e7eb; padding:12px; border-radius:10px; background:white;">';
+                html += '</div>';
+                html += '</div>';
+                html += '<div style="margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">';
+                html += '<label style="display:flex; align-items:center; gap:8px; color:#374151; font-size:14px; cursor:pointer;">';
+                html += '<input type="checkbox" id="relationReportFullPeriod" onchange="toggleRelationReportPeriod()">';
+                html += '<span>Usar todo o período</span>';
+                html += '</label>';
+                html += '<span style="font-size:12px; color:#6b7280;">Ao marcar, o relatório ignora o filtro de datas.</span>';
+                html += '</div>';
+                html += '<div style="margin-top:18px; display:flex; gap:12px; flex-wrap:wrap;">';
+                html += '<button class="btn btn-primary" onclick="downloadRelationReport()"><i class="fas fa-file-pdf"></i> Gerar PDF</button>';
+                html += '<button class="btn btn-secondary" onclick="previewRelationReport()"><i class="fas fa-eye"></i> Pré-visualizar resumo</button>';
+                html += '</div>';
+                html += '<div id="relationReportPreview" style="display:none; margin-top:18px;"></div>';
+                html += '</div>';
+
+                html += '<div style="display:grid; gap:20px;">';
+                html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
                 html += '<h3 style="color: #047857; margin-bottom: 10px;">Exportar Base de Clientes</h3>';
                 html += '<p style="color: #6b7280; margin-bottom: 15px;">Exporte todos os dados cadastrais dos clientes em CSV</p>';
                 html += '<button class="btn btn-primary" onclick="exportClients()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>';
                 html += '</div>';
 
-                // Export Activities
-                html += '<div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; border: 1px solid rgba(52,211,153,0.2);">';
+                html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
                 html += '<h3 style="color: #047857; margin-bottom: 10px;">Exportar Atividades</h3>';
                 html += '<p style="color: #6b7280; margin-bottom: 15px;">Exporte atividades com filtro de período</p>';
                 html += '<div class="form-group" style="margin-bottom: 10px;">';
@@ -3892,35 +3947,123 @@
                 html += '</div>';
                 html += '<button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>';
                 html += '</div>';
-
                 html += '</div>';
 
-                // Seção de Backup do Banco de Dados
-                html += '<div style="margin-top: 20px; background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; border: 1px solid rgba(52,211,153,0.2);">';
+                html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
                 html += '<h3 style="color: #047857; margin-bottom: 10px;"><i class="fas fa-database"></i> Backup do Banco de Dados</h3>';
                 html += '<p style="color: #6b7280; margin-bottom: 15px;">Faça backup completo ou restaure o banco de dados</p>';
                 html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">';
-                
-                // Exportar Banco
                 html += '<div>';
                 html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Exportar Banco</h4>';
                 html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Baixe uma cópia completa do banco de dados</p>';
                 html += '<button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>';
                 html += '</div>';
-                
-                // Importar Banco
                 html += '<div>';
                 html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Importar Banco</h4>';
                 html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Restaure um backup anterior (cria backup automático antes)</p>';
                 html += '<input type="file" id="restoreDbInput" accept=".db" style="display: none;" onchange="restoreDatabase(event)">';
                 html += '<button class="btn btn-secondary" onclick="document.getElementById(\'restoreDbInput\').click()"><i class="fas fa-upload"></i> Importar Banco</button>';
                 html += '</div>';
-                
                 html += '</div></div>';
 
                 document.getElementById('reportContent').innerHTML = html;
+                toggleRelationReportPeriod();
             } catch (error) {
                 showError('Erro ao carregar report');
+            }
+        }
+
+        function toggleRelationReportPeriod() {
+            const full = document.getElementById('relationReportFullPeriod')?.checked;
+            const start = document.getElementById('relationReportStart');
+            const end = document.getElementById('relationReportEnd');
+            if (!start || !end) return;
+            start.disabled = !!full;
+            end.disabled = !!full;
+            start.style.opacity = full ? '0.55' : '1';
+            end.style.opacity = full ? '0.55' : '1';
+        }
+
+        function getRelationReportParams() {
+            const accountId = document.getElementById('relationReportAccount')?.value;
+            const fullPeriod = document.getElementById('relationReportFullPeriod')?.checked;
+            const startDate = document.getElementById('relationReportStart')?.value;
+            const endDate = document.getElementById('relationReportEnd')?.value;
+            if (!accountId) {
+                throw new Error('Selecione uma conta para gerar o Relation Report.');
+            }
+            if (!fullPeriod && (!startDate || !endDate)) {
+                throw new Error('Selecione data inicial e final ou marque todo o período.');
+            }
+            return { accountId, fullPeriod, startDate, endDate };
+        }
+
+        async function downloadRelationReport() {
+            try {
+                const { accountId, fullPeriod, startDate, endDate } = getRelationReportParams();
+                const params = new URLSearchParams({ account_id: accountId, full_period: fullPeriod ? 'true' : 'false' });
+                if (!fullPeriod) {
+                    params.set('start_date', startDate);
+                    params.set('end_date', endDate);
+                }
+                const response = await fetch(`${API_BASE}/report/relation?${params.toString()}`);
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error || 'Erro ao gerar o Relation Report');
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                a.download = `relation-report-${stamp}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                showSuccess('Relation Report gerado com sucesso!');
+            } catch (error) {
+                showError(error.message || 'Erro ao gerar o Relation Report');
+            }
+        }
+
+        async function previewRelationReport() {
+            const container = document.getElementById('relationReportPreview');
+            try {
+                const { accountId, fullPeriod, startDate, endDate } = getRelationReportParams();
+                container.style.display = 'block';
+                container.innerHTML = '<div style="padding:16px; border-radius:12px; background:#f9fafb; color:#6b7280; border:1px solid #e5e7eb;">Gerando prévia...</div>';
+                const params = new URLSearchParams({ account_id: accountId, full_period: fullPeriod ? 'true' : 'false' });
+                if (!fullPeriod) {
+                    params.set('start_date', startDate);
+                    params.set('end_date', endDate);
+                }
+                const response = await fetch(`${API_BASE}/report/relation/preview?${params.toString()}`);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Erro ao gerar prévia');
+                const counts = data.summary_counts || {};
+                const highlights = (data.narrative?.highlights || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+                let previewHtml = '';
+                previewHtml += '<div style="padding:18px; border-radius:14px; background:linear-gradient(180deg,#f0fdf4,#ffffff); border:1px solid #bbf7d0;">';
+                previewHtml += `<div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; margin-bottom:14px;"><div><h4 style="margin:0; color:#065f46;">Prévia do resumo</h4><p style="margin:6px 0 0 0; color:#6b7280; font-size:13px;">${escapeHtml(data.account?.name || '')}</p></div><div style="font-size:12px; color:#047857; background:#dcfce7; border:1px solid #a7f3d0; border-radius:999px; padding:6px 10px;">${data.period?.full_period ? 'Período completo' : `${escapeHtml(data.period?.start_date || '')} a ${escapeHtml(data.period?.end_date || '')}`}</div></div>`;
+                previewHtml += '<div style="display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; margin-bottom:14px;">';
+                previewHtml += `<div style="padding:12px; background:white; border:1px solid #d1fae5; border-radius:12px;"><div style="font-size:11px; color:#6b7280;">Contatos</div><div style="font-size:20px; font-weight:700; color:#065f46;">${counts.contacts || 0}</div></div>`;
+                previewHtml += `<div style="padding:12px; background:white; border:1px solid #d1fae5; border-radius:12px;"><div style="font-size:11px; color:#6b7280;">Atividades</div><div style="font-size:20px; font-weight:700; color:#065f46;">${(counts.activities || 0) + (counts.account_activities || 0)}</div></div>`;
+                previewHtml += `<div style="padding:12px; background:white; border:1px solid #d1fae5; border-radius:12px;"><div style="font-size:11px; color:#6b7280;">Kanban</div><div style="font-size:20px; font-weight:700; color:#065f46;">${counts.kanban_cards || 0}</div></div>`;
+                previewHtml += `<div style="padding:12px; background:white; border:1px solid #d1fae5; border-radius:12px;"><div style="font-size:11px; color:#6b7280;">Mapeamentos</div><div style="font-size:20px; font-weight:700; color:#065f46;">${counts.mapping_items || 0}</div></div>`;
+                previewHtml += '</div>';
+                previewHtml += `<div style="background:white; border:1px solid #e5e7eb; border-radius:12px; padding:14px; margin-bottom:12px;"><div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#047857; margin-bottom:8px;">Resumo executivo</div><div style="color:#374151; line-height:1.6; white-space:pre-line;">${escapeHtml(data.narrative?.executive_summary || 'Sem resumo disponível.')}</div></div>`;
+                previewHtml += '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">';
+                previewHtml += `<div style="background:white; border:1px solid #e5e7eb; border-radius:12px; padding:14px;"><div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#047857; margin-bottom:8px;">Destaques</div><ul style="margin:0; padding-left:18px; color:#374151; line-height:1.6;">${highlights || '<li>Sem destaques.</li>'}</ul></div>`;
+                previewHtml += '<div style="background:white; border:1px solid #e5e7eb; border-radius:12px; padding:14px;">';
+                previewHtml += '<div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#047857; margin-bottom:8px;">Tópicos</div>';
+                previewHtml += Object.entries(data.topics || {}).map(([key, value]) => `<div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #f3f4f6;"><span style="color:#374151;">${escapeHtml(key)}</span><strong style="color:#065f46;">${value}</strong></div>`).join('');
+                previewHtml += '</div>';
+                previewHtml += '</div></div>';
+                container.innerHTML = previewHtml;
+            } catch (error) {
+                container.style.display = 'block';
+                container.innerHTML = `<div style="padding:16px; border-radius:12px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;">${escapeHtml(error.message || 'Erro ao gerar prévia')}</div>`;
             }
         }
 

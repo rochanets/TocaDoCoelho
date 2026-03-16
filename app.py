@@ -22,6 +22,8 @@ import ssl
 import base64
 import uuid
 from datetime import datetime, timedelta
+from io import BytesIO
+from urllib.parse import urlparse
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context
@@ -68,6 +70,37 @@ try:
 except ImportError:
     convert_from_path = None
     PDF2IMAGE_AVAILABLE = False
+
+try:
+    from PIL import Image as PILImage
+    from PIL import ImageOps
+    PIL_AVAILABLE = True
+except ImportError:
+    PILImage = None
+    ImageOps = None
+    PIL_AVAILABLE = False
+
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from reportlab.platypus import Paragraph
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    colors = None
+    TA_LEFT = TA_CENTER = None
+    A4 = None
+    ParagraphStyle = None
+    getSampleStyleSheet = None
+    mm = None
+    ImageReader = None
+    stringWidth = None
+    Paragraph = None
+    REPORTLAB_AVAILABLE = False
 
 WHISPER_IMPORT_ERROR = None
 WHISPER_IMPORT_ATTEMPTED = False
@@ -1026,6 +1059,844 @@ def parse_currency_to_cents(value):
     except Exception:
         digits = re.sub(r'\D', '', str(value))
         return int(digits) if digits else None
+
+
+def format_currency_br(cents):
+    if cents is None:
+        return 'Não informado'
+    try:
+        value = (int(cents) or 0) / 100.0
+    except Exception:
+        return 'Não informado'
+    formatted = f"{value:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f'R$ {formatted}'
+
+
+def _relation_report_hex_to_color(value, fallback='#047857'):
+    if not REPORTLAB_AVAILABLE:
+        return None
+    text = (value or fallback or '').strip()
+    if not text:
+        text = fallback
+    if not text.startswith('#'):
+        text = f'#{text}'
+    if not re.fullmatch(r'#[0-9a-fA-F]{6}', text):
+        text = fallback
+    return colors.HexColor(text)
+
+
+def _relation_report_pick_system_colors():
+    settings = _load_app_settings_map([
+        'theme_primary_color', 'theme_secondary_color', 'theme_accent_color',
+        'brand_primary_color', 'brand_secondary_color', 'brand_accent_color'
+    ])
+    primary = settings.get('theme_primary_color') or settings.get('brand_primary_color') or '#047857'
+    secondary = settings.get('theme_secondary_color') or settings.get('brand_secondary_color') or '#065f46'
+    accent = settings.get('theme_accent_color') or settings.get('brand_accent_color') or '#34d399'
+    return {
+        'primary': _relation_report_hex_to_color(primary, '#047857'),
+        'secondary': _relation_report_hex_to_color(secondary, '#065f46'),
+        'accent': _relation_report_hex_to_color(accent, '#34d399'),
+        'primary_hex': primary if str(primary).startswith('#') else f'#{primary}',
+        'secondary_hex': secondary if str(secondary).startswith('#') else f'#{secondary}',
+        'accent_hex': accent if str(accent).startswith('#') else f'#{accent}'
+    }
+
+
+def _relation_report_resolve_local_image(candidate_url):
+    if not candidate_url:
+        return None
+    try:
+        parsed = urlparse(candidate_url)
+        path = parsed.path or candidate_url
+    except Exception:
+        path = candidate_url
+    path = str(path).strip()
+    if not path:
+        return None
+    if path.startswith('/uploads/accounts/'):
+        local = ACCOUNT_UPLOAD_DIR / Path(path).name
+        return local if local.exists() else None
+    if path.startswith('/uploads/'):
+        local = UPLOAD_DIR / path.replace('/uploads/', '', 1)
+        return local if local.exists() else None
+    local_path = Path(path)
+    if local_path.exists():
+        return local_path
+    project_public = Path(__file__).resolve().parent / 'public'
+    for rel in ['logo-coelho.png', 'favicon.png', 'coelho-sugestoes.png']:
+        probe = project_public / rel
+        if probe.exists() and Path(path).name == rel:
+            return probe
+    return None
+
+
+def _relation_report_system_logo_path():
+    project_public = Path(__file__).resolve().parent / 'public'
+    for rel in ['logo-coelho.png', 'favicon.png']:
+        probe = project_public / rel
+        if probe.exists():
+            return probe
+    return None
+
+
+def _relation_report_safe_image(image_path, max_width=220, max_height=120):
+    if not image_path or not PIL_AVAILABLE:
+        return None
+    try:
+        img = PILImage.open(str(image_path)).convert('RGBA')
+        img.thumbnail((max_width, max_height))
+        background = PILImage.new('RGBA', img.size, (255, 255, 255, 255))
+        background.alpha_composite(img)
+        return ImageReader(background.convert('RGB'))
+    except Exception:
+        return None
+
+
+def _relation_report_parse_dt(value):
+    if not value:
+        return None
+    raw = str(value).strip()
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d', '%Y-%m', '%Y-%m-%d %H:%M'):
+        try:
+            sample = raw[:19] if ('%H' in fmt or 'T' in fmt) else raw[:10]
+            return datetime.strptime(sample, fmt)
+        except Exception:
+            continue
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+def _relation_report_format_dt(value):
+    dt = _relation_report_parse_dt(value)
+    if not dt:
+        return 'Não informado'
+    raw = str(value).strip()
+    if len(raw) <= 10:
+        return dt.strftime('%d/%m/%Y')
+    return dt.strftime('%d/%m/%Y %H:%M')
+
+
+def _relation_report_period_clause(date_column, start_date=None, end_date=None):
+    clauses = []
+    params = []
+    if start_date:
+        clauses.append(f"date({date_column}) >= date(?)")
+        params.append(start_date)
+    if end_date:
+        clauses.append(f"date({date_column}) <= date(?)")
+        params.append(end_date)
+    return (' AND ' + ' AND '.join(clauses)) if clauses else '', params
+
+
+def _relation_report_topic_from_text(text):
+    content = f" {str(text or '').lower()} "
+    topic_rules = [
+        ('IA', [' ia ', 'inteligência artificial', 'inteligencia artificial', ' ai ', 'openai', 'copilot', 'gemini', 'claude', 'llm', 'machine learning']),
+        ('Cyber', ['cyber', 'segurança', 'seguranca', 'security', 'soc', 'siem', 'firewall', 'iam', 'identity', 'phishing', 'ransomware']),
+        ('Aplicações', ['aplica', 'aplicações', 'aplicacoes', 'software', 'sistema', ' app ', 'erp', 'crm', 'sap', 'oracle', 'totvs', 'desenvolvimento']),
+        ('Marketing', ['marketing', 'campanha', 'mídia', 'midia', 'lead', 'brand', 'marca', 'comunicação', 'comunicacao']),
+        ('Cloud', ['cloud', 'nuvem', 'aws', 'azure', 'gcp', 'google cloud', 'oracle cloud', 'multicloud', 'finops', 'kubernetes']),
+    ]
+    for topic, keywords in topic_rules:
+        for keyword in keywords:
+            if keyword in content:
+                return topic
+    return 'Outros'
+
+
+def _relation_report_collect_data(account_id, start_date=None, end_date=None):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+    account = dict_from_row(c.fetchone())
+    if not account:
+        conn.close()
+        return None
+
+    c.execute("""SELECT c.*, CASE WHEN amc.client_id IS NOT NULL THEN 1 ELSE 0 END AS is_main_contact
+                 FROM clients c
+                 LEFT JOIN account_main_contacts amc ON amc.client_id = c.id AND amc.account_id = ?
+                 WHERE LOWER(TRIM(c.company)) = LOWER(TRIM(?))
+                 ORDER BY is_main_contact DESC, c.name COLLATE NOCASE""", (account_id, account['name']))
+    contacts = [dict_from_row(r) for r in c.fetchall()]
+    contact_ids = [row['id'] for row in contacts]
+
+    c.execute("""SELECT ap.*, fc.name AS focal_client_name
+                 FROM account_presences ap
+                 LEFT JOIN clients fc ON fc.id = ap.focal_client_id
+                 WHERE ap.account_id = ?
+                 ORDER BY ap.delivery_name COLLATE NOCASE""", (account_id,))
+    presences = [dict_from_row(r) for r in c.fetchall()]
+
+    period_sql_activities, activity_params = _relation_report_period_clause('a.activity_date', start_date, end_date)
+    activities = []
+    if contact_ids:
+        placeholders = ','.join(['?'] * len(contact_ids))
+        c.execute(f"""SELECT a.*, cl.name AS client_name, cl.position AS client_position, cl.company AS client_company
+                      FROM activities a
+                      JOIN clients cl ON cl.id = a.client_id
+                      WHERE a.client_id IN ({placeholders}) {period_sql_activities}
+                      ORDER BY datetime(a.activity_date) DESC, a.id DESC""", tuple(contact_ids) + tuple(activity_params))
+        activities = [dict_from_row(r) for r in c.fetchall()]
+
+    period_sql_account_acts, account_activity_params = _relation_report_period_clause('activity_date', start_date, end_date)
+    c.execute(f"""SELECT id, account_id, description, activity_date, created_at
+                  FROM account_activities
+                  WHERE account_id = ? {period_sql_account_acts}
+                  ORDER BY datetime(activity_date) DESC, created_at DESC""", (account_id, *account_activity_params))
+    account_activities = [dict_from_row(r) for r in c.fetchall()]
+
+    environment_responses = []
+    if contact_ids:
+        placeholders = ','.join(['?'] * len(contact_ids))
+        c.execute(f"""SELECT er.*, ec.title AS card_title, ec.description AS card_description,
+                             cl.name AS client_name, cl.position AS client_position
+                      FROM environment_responses er
+                      JOIN environment_cards ec ON ec.id = er.card_id
+                      JOIN clients cl ON cl.id = er.client_id
+                      WHERE er.client_id IN ({placeholders})
+                      ORDER BY ec.display_order ASC, ec.title COLLATE NOCASE, cl.name COLLATE NOCASE""", tuple(contact_ids))
+        environment_responses = [dict_from_row(r) for r in c.fetchall()]
+
+    period_sql_kanban, kanban_params = _relation_report_period_clause('kc.updated_at', start_date, end_date)
+    contact_condition = ''
+    params = [account_id]
+    if contact_ids:
+        contact_condition = ' OR kc.contact_id IN ({})'.format(','.join(['?'] * len(contact_ids)))
+        params.extend(contact_ids)
+    c.execute(f"""SELECT kc.*, kcol.title AS column_title, cl.name AS contact_name, ac.name AS account_name
+                  FROM kanban_cards kc
+                  LEFT JOIN kanban_columns kcol ON kcol.id = kc.column_id
+                  LEFT JOIN clients cl ON cl.id = kc.contact_id
+                  LEFT JOIN accounts ac ON ac.id = kc.account_id
+                  WHERE (kc.account_id = ? {contact_condition}) {period_sql_kanban}
+                  ORDER BY datetime(kc.updated_at) DESC, kc.id DESC""", tuple(params) + tuple(kanban_params))
+    kanban_cards = [dict_from_row(r) for r in c.fetchall()]
+
+    for card in kanban_cards:
+        c.execute("SELECT content, created_at FROM kanban_card_activities WHERE card_id = ? ORDER BY created_at DESC", (card['id'],))
+        card['activities'] = [dict_from_row(r) for r in c.fetchall()]
+
+    latest_interaction = None
+    latest_candidates = []
+    for item in activities:
+        latest_candidates.append({
+            'date': item.get('activity_date') or item.get('created_at'),
+            'person': item.get('client_name'),
+            'source': 'Atividade',
+            'description': item.get('description') or item.get('information')
+        })
+    for item in account_activities:
+        latest_candidates.append({
+            'date': item.get('activity_date') or item.get('created_at'),
+            'person': account.get('name'),
+            'source': 'Atividade da conta',
+            'description': item.get('description')
+        })
+    latest_candidates = [x for x in latest_candidates if x.get('date')]
+    latest_candidates.sort(key=lambda x: _relation_report_parse_dt(x.get('date')) or datetime.min, reverse=True)
+    if latest_candidates:
+        latest_interaction = latest_candidates[0]
+
+    relationship_cards = []
+    for contact in contacts:
+        contact_activities = [a for a in activities if a.get('client_id') == contact.get('id')]
+        contact_responses = [r for r in environment_responses if r.get('client_id') == contact.get('id')]
+        contact_kanban = [k for k in kanban_cards if k.get('contact_id') == contact.get('id')]
+        last_contact = None
+        if contact_activities:
+            act = sorted(contact_activities, key=lambda x: _relation_report_parse_dt(x.get('activity_date')) or datetime.min, reverse=True)[0]
+            last_contact = {
+                'date': act.get('activity_date') or act.get('created_at'),
+                'summary': act.get('description') or act.get('information') or 'Interação registrada'
+            }
+        relationship_cards.append({
+            'contact': contact,
+            'activities_count': len(contact_activities),
+            'mapping_count': len(contact_responses),
+            'kanban_count': len(contact_kanban),
+            'last_contact': last_contact,
+            'topics': sorted(set(_relation_report_topic_from_text(' '.join(filter(None, [a.get('description') or '', a.get('information') or '']))) for a in contact_activities if (a.get('description') or a.get('information'))))
+        })
+
+    topic_buckets = {key: [] for key in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']}
+    topic_sources = []
+    for item in activities:
+        topic_sources.append({
+            'text': ' '.join(filter(None, [item.get('description'), item.get('information')])),
+            'date': item.get('activity_date') or item.get('created_at'),
+            'person': item.get('client_name'),
+            'source': 'atividade'
+        })
+    for item in account_activities:
+        topic_sources.append({
+            'text': item.get('description') or '',
+            'date': item.get('activity_date') or item.get('created_at'),
+            'person': account.get('name'),
+            'source': 'atividade_conta'
+        })
+    for item in kanban_cards:
+        topic_sources.append({
+            'text': ' '.join(filter(None, [item.get('title'), item.get('description'), item.get('activity')])),
+            'date': item.get('updated_at') or item.get('created_at'),
+            'person': item.get('contact_name') or account.get('name'),
+            'source': 'kanban'
+        })
+    for item in environment_responses:
+        topic_sources.append({
+            'text': ' '.join(filter(None, [item.get('card_title'), item.get('card_description'), item.get('response')])),
+            'date': item.get('updated_at'),
+            'person': item.get('client_name'),
+            'source': 'mapeamento'
+        })
+    for source in topic_sources:
+        topic = _relation_report_topic_from_text(source.get('text'))
+        topic_buckets[topic].append(source)
+
+    summary_counts = {
+        'contacts': len(contacts),
+        'main_contacts': len([c for c in contacts if c.get('is_main_contact')]),
+        'activities': len(activities),
+        'account_activities': len(account_activities),
+        'mapping_items': len(environment_responses),
+        'kanban_cards': len(kanban_cards),
+        'presences': len(presences)
+    }
+
+    conn.close()
+    return {
+        'account': account,
+        'contacts': contacts,
+        'presences': presences,
+        'activities': activities,
+        'account_activities': account_activities,
+        'environment_responses': environment_responses,
+        'kanban_cards': kanban_cards,
+        'latest_interaction': latest_interaction,
+        'relationship_cards': relationship_cards,
+        'topics': topic_buckets,
+        'summary_counts': summary_counts,
+        'start_date': start_date,
+        'end_date': end_date,
+        'full_period': not start_date and not end_date
+    }
+
+
+def _relation_report_build_llm_context(report_data):
+    account = report_data['account']
+    lines = []
+    lines.append(f"Conta: {account.get('name')}")
+    lines.append(f"Setor: {account.get('sector') or 'Não informado'}")
+    lines.append(f"Receita média: {format_currency_br(account.get('average_revenue_cents'))}")
+    lines.append(f"Profissionais: {account.get('professionals_count') or 'Não informado'}")
+    lines.append(f"Presença global: {account.get('global_presence') or 'Não informado'}")
+    lines.append('')
+    lines.append('Resumo quantitativo:')
+    for key, value in report_data['summary_counts'].items():
+        lines.append(f"- {key}: {value}")
+    lines.append('')
+    lines.append('Contatos da conta:')
+    for contact in report_data['contacts'][:50]:
+        lines.append(f"- {contact.get('name')} | cargo: {contact.get('position') or 'Não informado'} | área: {contact.get('area_of_activity') or 'Não informado'} | email: {contact.get('email') or 'Não informado'} | principal: {'sim' if contact.get('is_main_contact') else 'não'}")
+    lines.append('')
+    lines.append('Powermapping / cards resumidos por contato:')
+    for card in report_data['relationship_cards'][:50]:
+        c = card['contact']
+        lines.append(f"- {c.get('name')}: atividades={card.get('activities_count',0)}, mapeamentos={card.get('mapping_count',0)}, kanban={card.get('kanban_count',0)}, último contato={_relation_report_format_dt((card.get('last_contact') or {}).get('date'))}")
+    lines.append('')
+    lines.append('Presenças / entregas:')
+    for presence in report_data['presences'][:50]:
+        lines.append(f"- {presence.get('delivery_name')}: owner={presence.get('stf_owner') or 'Não informado'}, receita atual={format_currency_br(presence.get('current_revenue_cents'))}, validade={presence.get('validity_month') or 'Não informado'}, focal={presence.get('focal_client_name') or 'Não informado'}")
+    lines.append('')
+    lines.append('Últimas interações:')
+    for item in report_data['activities'][:25]:
+        lines.append(f"- {item.get('client_name')} em {_relation_report_format_dt(item.get('activity_date') or item.get('created_at'))}: {item.get('description') or item.get('information') or 'Sem detalhe'}")
+    for item in report_data['account_activities'][:15]:
+        lines.append(f"- Conta em {_relation_report_format_dt(item.get('activity_date') or item.get('created_at'))}: {item.get('description') or 'Sem detalhe'}")
+    lines.append('')
+    lines.append('Kanban:')
+    for item in report_data['kanban_cards'][:25]:
+        lines.append(f"- [{item.get('column_title') or 'Sem coluna'}] {item.get('title')} | contato={item.get('contact_name') or 'Não informado'} | urgência={item.get('urgency') or 'Não informada'} | descrição={item.get('description') or 'Sem descrição'}")
+    lines.append('')
+    lines.append('Mapeamento de ambiente:')
+    for item in report_data['environment_responses'][:30]:
+        lines.append(f"- {item.get('client_name')} | card={item.get('card_title')} | resposta={item.get('response') or 'Sem resposta'}")
+    lines.append('')
+    lines.append('Tópicos estratégicos:')
+    for topic, items in report_data['topics'].items():
+        lines.append(f"- {topic}: {len(items)} evidência(s)")
+        for sample in items[:5]:
+            lines.append(f"  * {_relation_report_format_dt(sample.get('date'))} | {sample.get('person') or 'Não informado'} | {str(sample.get('text') or '')[:240]}")
+    return '\n'.join(lines)
+
+
+def _relation_report_build_account_snapshot(report_data):
+    account = report_data.get('account') or {}
+    counts = report_data.get('summary_counts') or {}
+    latest = report_data.get('latest_interaction') or {}
+    parts = []
+    segment = account.get('sector') or account.get('segment') or 'Não informado'
+    parts.append(f"Conta do segmento {segment}.")
+    parts.append(
+        f"{counts.get('contacts', 0)} contatos relacionados. "
+        f"{counts.get('activities', 0) + counts.get('account_activities', 0)} atividades registradas no período. "
+        f"{counts.get('kanban_cards', 0)} cards no Kanban. "
+        f"{counts.get('mapping_items', 0)} itens de mapeamento de ambiente. "
+        f"{counts.get('presences', 0)} presenças/entregas ativas ou históricas."
+    )
+    parts.append(
+        f"Última interação identificada em {_relation_report_format_dt(latest.get('date'))} "
+        f"com {latest.get('person') or 'contato não identificado'}, via {latest.get('source') or 'registro interno'}."
+    )
+    extra = []
+    if account.get('average_revenue'):
+        extra.append(f"Receita média estimada: {account.get('average_revenue')}")
+    elif account.get('average_revenue_cents') is not None:
+        extra.append(f"Receita média estimada: {format_currency_br(account.get('average_revenue_cents'))}")
+    if account.get('number_of_professionals'):
+        extra.append(f"Profissionais: {account.get('number_of_professionals')}")
+    if account.get('presence'):
+        extra.append(f"Presença geográfica: {account.get('presence')}")
+    if extra:
+        parts.append('. '.join(extra) + '.')
+    return '\n'.join([p for p in parts if p])
+
+
+def _relation_report_build_relationship_snapshot(report_data):
+    cards = report_data.get('relationship_cards') or []
+    lines = []
+    for card in cards[:8]:
+        contact = card.get('contact') or {}
+        lines.append(
+            f"{contact.get('name') or 'Contato sem nome'}, {contact.get('position') or 'cargo não informado'}, "
+            f"atua em {contact.get('area_of_activity') or 'área não informada'}; "
+            f"{card.get('activities_count', 0)} atividades, {card.get('mapping_count', 0)} mapeamentos, "
+            f"{card.get('kanban_count', 0)} itens no Kanban; último contato em {_relation_report_format_dt((card.get('last_contact') or {}).get('date'))}."
+        )
+    if not lines:
+        lines.append('Não há contatos suficientes mapeados para descrever o powermapping da conta.')
+    lines.append('Considere a densidade de interação, sinais de influência e cobertura dos stakeholders ao redigir a análise.')
+    return '\n'.join(lines)
+
+
+def _relation_report_build_topic_evidence(report_data):
+    sections = []
+    for topic in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']:
+        items = (report_data.get('topics') or {}).get(topic) or []
+        if not items:
+            sections.append(f"{topic}:\nSem evidências relevantes identificadas no período.")
+            continue
+        lines = []
+        for item in items[:5]:
+            when = _relation_report_format_dt(item.get('date'))
+            who = item.get('person') or 'não informado'
+            source = item.get('source') or 'registro interno'
+            snippet = str(item.get('text') or '').strip().replace('\n', ' ')
+            if len(snippet) > 220:
+                snippet = snippet[:217] + '...'
+            lines.append(f"- {when} | {who} | {source}: {snippet}")
+        sections.append(f"{topic}:\n" + '\n'.join(lines))
+    return '\n\n'.join(sections)
+
+
+def _relation_report_generate_narrative(report_data):
+    account = report_data.get('account') or {}
+    period = report_data.get('period') or {}
+    account_name = (account.get('name') or 'Conta sem nome').strip()
+    report_period = 'Todo o período' if period.get('full_period') else f"{period.get('start_date') or 'Início não informado'} a {period.get('end_date') or 'Fim não informado'}"
+    account_snapshot = _relation_report_build_account_snapshot(report_data)
+    relationship_snapshot = _relation_report_build_relationship_snapshot(report_data)
+    topic_evidence = _relation_report_build_topic_evidence(report_data)
+    output_style = 'Tom executivo, objetivo, claro, elegante e sem inventar fatos.'
+
+    settings_map = _load_app_settings_map([
+        'relation_report_sai_api_key',
+        'relation_report_sai_template_id',
+        'relation_report_sai_base_url'
+    ])
+    api_key = (settings_map.get('relation_report_sai_api_key') or '').strip() or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip() or 'RuWKlxg1Sk+/3PpzUKof+w'
+    template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '69b83e37025459101ee6735d'
+    base_url = (settings_map.get('relation_report_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    if api_key:
+        url = f'{base_url}/api/templates/{template_id}/execute'
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Api-Key': api_key
+        }
+        payload = {
+            'inputs': {
+                'account_name': account_name,
+                'report_period': report_period,
+                'account_snapshot': account_snapshot,
+                'relationship_snapshot': relationship_snapshot,
+                'topic_evidence': topic_evidence,
+                'output_style': output_style,
+            }
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers=headers,
+            method='POST'
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode('utf-8')
+            logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
+            parsed_outer = None
+            try:
+                parsed_outer = json.loads(raw)
+            except Exception:
+                parsed_outer = None
+            candidate_texts = []
+            if isinstance(parsed_outer, dict):
+                for key in ['answer', 'output', 'result', 'text', 'response', 'data']:
+                    value = parsed_outer.get(key)
+                    if isinstance(value, str):
+                        candidate_texts.append(value)
+                    elif isinstance(value, dict):
+                        candidate_texts.append(json.dumps(value, ensure_ascii=False))
+                candidate_texts.append(raw)
+            else:
+                candidate_texts.append(raw)
+
+            parsed = None
+            for candidate in candidate_texts:
+                try:
+                    obj = json.loads((candidate or '').strip())
+                    if isinstance(obj, dict):
+                        parsed = obj
+                        break
+                except Exception:
+                    obj = _extract_json_object_from_text(candidate or '')
+                    if isinstance(obj, dict):
+                        parsed = obj
+                        break
+            if isinstance(parsed, dict):
+                return {
+                    'executive_summary': (parsed.get('executive_summary') or '').strip(),
+                    'relationship_maturity': (parsed.get('relationship_maturity') or 'Em evolução').strip(),
+                    'next_steps': [str(x).strip() for x in (parsed.get('next_steps') or []) if str(x).strip()][:5],
+                    'topic_breakdown': parsed.get('topic_breakdown') or {},
+                    'highlights': [str(x).strip() for x in (parsed.get('highlights') or []) if str(x).strip()][:6],
+                    'llm_used': True
+                }
+        except Exception as e:
+            logger.warning(f'[RelationReport] Falha ao gerar narrativa com SAI: {e}')
+
+    latest = report_data.get('latest_interaction') or {}
+    counts = report_data.get('summary_counts') or {}
+    executive_summary = (
+        f"A conta {report_data['account'].get('name')} possui {counts.get('contacts', 0)} contato(s) relacionado(s), "
+        f"{counts.get('presences', 0)} presença(s)/entrega(s) mapeada(s), {counts.get('activities', 0)} atividade(s) de relacionamento "
+        f"e {counts.get('kanban_cards', 0)} card(s) ativos ou históricos no Kanban dentro do recorte consultado. "
+        f"O conjunto de registros indica um relacionamento {'mais estruturado' if counts.get('activities', 0) >= 5 or counts.get('mapping_items', 0) >= 5 else 'em consolidação'}, "
+        f"com evidências distribuídas entre interações registradas, mapeamentos de ambiente e acompanhamento operacional.\n\n"
+        f"A interação mais recente identificada ocorreu em {_relation_report_format_dt(latest.get('date'))}, "
+        f"associada a {latest.get('person') or report_data['account'].get('name')}, via {latest.get('source') or 'registro interno'}. "
+        f"Isso sugere {'continuidade recente do relacionamento' if latest.get('date') else 'baixa clareza temporal sobre a última interação'}, "
+        f"e reforça a importância de manter cadência de contato, atualização do Kanban e aprofundamento do powermapping por contato-chave."
+    )
+    topic_breakdown = {}
+    for topic, items in report_data['topics'].items():
+        if items:
+            sample = items[0]
+            topic_breakdown[topic] = f"Há {len(items)} evidência(s) relacionadas a {topic.lower()} no período, com destaque para registros de {sample.get('source')} e menções envolvendo {sample.get('person') or 'contatos da conta'}."
+        else:
+            topic_breakdown[topic] = f"Não foram encontradas evidências relevantes sobre {topic.lower()} no período analisado."
+    return {
+        'executive_summary': executive_summary,
+        'relationship_maturity': 'Em evolução' if counts.get('activities', 0) < 8 else 'Estruturado',
+        'next_steps': [
+            'Validar os contatos principais e atualizar os responsáveis por influência e decisão.',
+            'Revisar os cards do Kanban com foco em prioridades e próximos passos claros.',
+            'Usar o resumo temático para orientar novas conversas consultivas com a conta.'
+        ],
+        'topic_breakdown': topic_breakdown,
+        'highlights': [
+            f"{counts.get('contacts', 0)} contato(s) associado(s) à conta.",
+            f"{counts.get('mapping_items', 0)} item(ns) de mapeamento de ambiente registrados.",
+            f"Última interação em {_relation_report_format_dt(latest.get('date'))}."
+        ],
+        'llm_used': False
+    }
+
+
+def _relation_report_draw_paragraph(c, text, x, y, width, style):
+    para = Paragraph(text or '', style)
+    _, h = para.wrap(width, 10000)
+    para.drawOn(c, x, y - h)
+    return y - h
+
+
+def _relation_report_draw_header(c, report_data, colors_map, page_width, page_height):
+    c.setFillColor(colors_map['primary'])
+    c.roundRect(18 * mm, page_height - 42 * mm, page_width - 36 * mm, 24 * mm, 6 * mm, fill=1, stroke=0)
+    account = report_data['account']
+    system_logo = _relation_report_safe_image(_relation_report_system_logo_path(), 180, 90)
+    account_logo = _relation_report_safe_image(_relation_report_resolve_local_image(account.get('logo_url')), 180, 90)
+    if system_logo:
+        c.drawImage(system_logo, 22 * mm, page_height - 38 * mm, width=18 * mm, height=18 * mm, mask='auto', preserveAspectRatio=True)
+    if account_logo:
+        c.drawImage(account_logo, page_width - 40 * mm, page_height - 38 * mm, width=18 * mm, height=18 * mm, mask='auto', preserveAspectRatio=True)
+    c.setFillColor(colors.white)
+    c.setFont('Helvetica-Bold', 18)
+    c.drawString(44 * mm, page_height - 27 * mm, 'Relation Report')
+    c.setFont('Helvetica', 10)
+    c.drawString(44 * mm, page_height - 33 * mm, 'Toca do Coelho')
+    c.setFont('Helvetica-Bold', 14)
+    title = account.get('name') or 'Cliente'
+    max_width = 90 * mm
+    while stringWidth(title, 'Helvetica-Bold', 14) > max_width and len(title) > 20:
+        title = title[:-4] + '...'
+    c.drawRightString(page_width - 44 * mm, page_height - 27 * mm, title)
+    c.setFont('Helvetica', 9)
+    subtitle = 'Período completo' if report_data.get('full_period') else f"{report_data.get('start_date') or '...'} a {report_data.get('end_date') or '...'}"
+    c.drawRightString(page_width - 44 * mm, page_height - 33 * mm, subtitle)
+
+
+def _relation_report_render_pdf(report_data):
+    if not REPORTLAB_AVAILABLE:
+        raise RuntimeError('ReportLab não está disponível para gerar o PDF.')
+    narrative = _relation_report_generate_narrative(report_data)
+    colors_map = _relation_report_pick_system_colors()
+    buffer = BytesIO()
+    from reportlab.pdfgen import canvas
+    page_width, page_height = A4
+    c = canvas.Canvas(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    body_style = ParagraphStyle('RelationBody', parent=styles['BodyText'], fontName='Helvetica', fontSize=9.5, leading=13, textColor=colors.HexColor('#1f2937'))
+    small_style = ParagraphStyle('RelationSmall', parent=body_style, fontSize=8.5, leading=11.5)
+
+    def new_page():
+        c.showPage()
+        _relation_report_draw_header(c, report_data, colors_map, page_width, page_height)
+        return page_height - 52 * mm
+
+    def ensure_space(y, needed):
+        return new_page() if y - needed < 18 * mm else y
+
+    _relation_report_draw_header(c, report_data, colors_map, page_width, page_height)
+    y = page_height - 52 * mm
+
+    account = report_data['account']
+    latest = report_data.get('latest_interaction') or {}
+    counts = report_data.get('summary_counts') or {}
+
+    cards = [
+        ('Contatos', str(counts.get('contacts', 0))),
+        ('Atividades', str(counts.get('activities', 0) + counts.get('account_activities', 0))),
+        ('Kanban', str(counts.get('kanban_cards', 0))),
+        ('Mapeamentos', str(counts.get('mapping_items', 0))),
+    ]
+    x_positions = [18 * mm, 67 * mm, 116 * mm, 165 * mm]
+    for idx, (label, value) in enumerate(cards):
+        c.setFillColor(colors.white)
+        c.setStrokeColor(colors_map['accent'])
+        c.roundRect(x_positions[idx], y - 16 * mm, 42 * mm, 14 * mm, 4 * mm, fill=1, stroke=1)
+        c.setFillColor(colors_map['secondary'])
+        c.setFont('Helvetica-Bold', 14)
+        c.drawCentredString(x_positions[idx] + 21 * mm, y - 8 * mm, value)
+        c.setFont('Helvetica', 8.5)
+        c.drawCentredString(x_positions[idx] + 21 * mm, y - 12 * mm, label)
+    y -= 22 * mm
+
+    c.setFillColor(colors_map['secondary'])
+    c.setFont('Helvetica-Bold', 12)
+    c.drawString(18 * mm, y, 'Visão geral da conta')
+    y -= 5 * mm
+    c.setStrokeColor(colors.HexColor('#d1d5db'))
+    c.line(18 * mm, y, page_width - 18 * mm, y)
+    y -= 6 * mm
+
+    general_lines = [
+        f"Setor: {account.get('sector') or 'Não informado'}",
+        f"Receita média: {format_currency_br(account.get('average_revenue_cents'))}",
+        f"Profissionais: {account.get('professionals_count') or 'Não informado'}",
+        f"Presença global: {account.get('global_presence') or 'Não informado'}",
+        f"Última interação: {_relation_report_format_dt(latest.get('date'))}",
+        f"Com quem: {latest.get('person') or 'Não identificado'}"
+    ]
+    for idx, line in enumerate(general_lines):
+        col = 18 * mm if idx < 3 else 110 * mm
+        row_y = y - (idx % 3) * 6 * mm
+        c.setFillColor(colors.HexColor('#111827'))
+        c.setFont('Helvetica', 9.2)
+        c.drawString(col, row_y, line)
+    y -= 22 * mm
+
+    y = ensure_space(y, 40 * mm)
+    c.setFillColor(colors_map['secondary'])
+    c.setFont('Helvetica-Bold', 12)
+    c.drawString(18 * mm, y, 'Resumo executivo do relacionamento')
+    y -= 4 * mm
+    c.setStrokeColor(colors_map['accent'])
+    c.line(18 * mm, y, page_width - 18 * mm, y)
+    y -= 5 * mm
+    y = _relation_report_draw_paragraph(c, narrative.get('executive_summary') or 'Sem resumo disponível.', 18 * mm, y, page_width - 36 * mm, body_style)
+    y -= 6 * mm
+
+    if narrative.get('highlights'):
+        y = ensure_space(y, 24 * mm)
+        c.setFillColor(colors.HexColor('#ecfdf5'))
+        c.roundRect(18 * mm, y - 18 * mm, page_width - 36 * mm, 16 * mm, 4 * mm, fill=1, stroke=0)
+        c.setFillColor(colors_map['secondary'])
+        c.setFont('Helvetica-Bold', 9.5)
+        c.drawString(22 * mm, y - 6 * mm, 'Destaques')
+        c.setFillColor(colors.HexColor('#065f46'))
+        c.setFont('Helvetica', 8.5)
+        for i, item in enumerate(narrative['highlights'][:3]):
+            c.drawString(22 * mm, y - (10 + i * 4) * mm, f'• {item[:120]}')
+        y -= 22 * mm
+
+    y = ensure_space(y, 52 * mm)
+    c.setFillColor(colors_map['secondary'])
+    c.setFont('Helvetica-Bold', 12)
+    c.drawString(18 * mm, y, 'Powermapping da conta')
+    y -= 4 * mm
+    c.line(18 * mm, y, page_width - 18 * mm, y)
+    y -= 6 * mm
+    for rel in report_data['relationship_cards'][:18]:
+        y = ensure_space(y, 22 * mm)
+        c.setFillColor(colors.white)
+        c.setStrokeColor(colors.HexColor('#d1d5db'))
+        c.roundRect(18 * mm, y - 17 * mm, page_width - 36 * mm, 15 * mm, 4 * mm, fill=1, stroke=1)
+        contact = rel['contact']
+        c.setFillColor(colors.HexColor('#111827'))
+        c.setFont('Helvetica-Bold', 10)
+        c.drawString(22 * mm, y - 6 * mm, f"{contact.get('name') or 'Contato'} — {contact.get('position') or 'Cargo não informado'}")
+        c.setFont('Helvetica', 8.3)
+        c.setFillColor(colors.HexColor('#4b5563'))
+        c.drawString(22 * mm, y - 10 * mm, f"Área: {contact.get('area_of_activity') or 'Não informada'} | Email: {contact.get('email') or 'Não informado'}")
+        c.drawString(22 * mm, y - 14 * mm, f"Cards: atividades {rel.get('activities_count',0)} | mapeamento {rel.get('mapping_count',0)} | kanban {rel.get('kanban_count',0)} | último contato {_relation_report_format_dt((rel.get('last_contact') or {}).get('date'))}")
+        y -= 19 * mm
+
+    y = ensure_space(y, 45 * mm)
+    c.setFillColor(colors_map['secondary'])
+    c.setFont('Helvetica-Bold', 12)
+    c.drawString(18 * mm, y, 'Entregas, presenças e Kanban')
+    y -= 4 * mm
+    c.line(18 * mm, y, page_width - 18 * mm, y)
+    y -= 5 * mm
+    for presence in report_data['presences'][:8]:
+        y = ensure_space(y, 9 * mm)
+        txt = f"• {presence.get('delivery_name')} | owner {presence.get('stf_owner') or 'N/I'} | receita {format_currency_br(presence.get('current_revenue_cents'))} | validade {presence.get('validity_month') or 'N/I'} | focal {presence.get('focal_client_name') or 'N/I'}"
+        y = _relation_report_draw_paragraph(c, txt, 18 * mm, y, page_width - 36 * mm, small_style) - 2 * mm
+    if not report_data['presences']:
+        y = _relation_report_draw_paragraph(c, 'Nenhuma presença/entrega mapeada para esta conta.', 18 * mm, y, page_width - 36 * mm, small_style) - 2 * mm
+    y -= 2 * mm
+    y = _relation_report_draw_paragraph(c, f"Kanban mapeado: {len(report_data['kanban_cards'])} card(s).", 18 * mm, y, page_width - 36 * mm, body_style) - 3 * mm
+    for card in report_data['kanban_cards'][:10]:
+        y = ensure_space(y, 8 * mm)
+        txt = f"• [{card.get('column_title') or 'Sem coluna'}] {card.get('title')} — contato: {card.get('contact_name') or 'N/I'} — urgência: {card.get('urgency') or 'N/I'}"
+        y = _relation_report_draw_paragraph(c, txt, 22 * mm, y, page_width - 40 * mm, small_style) - 1 * mm
+
+    y = ensure_space(y, 55 * mm)
+    c.setFillColor(colors_map['secondary'])
+    c.setFont('Helvetica-Bold', 12)
+    c.drawString(18 * mm, y, 'Quebra resumida por tópico')
+    y -= 4 * mm
+    c.line(18 * mm, y, page_width - 18 * mm, y)
+    y -= 6 * mm
+    for topic in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']:
+        y = ensure_space(y, 15 * mm)
+        c.setFillColor(colors.HexColor('#ecfeff') if topic in ('IA', 'Cloud') else colors.HexColor('#f9fafb'))
+        c.roundRect(18 * mm, y - 12 * mm, page_width - 36 * mm, 10 * mm, 3 * mm, fill=1, stroke=0)
+        c.setFillColor(colors_map['secondary'])
+        c.setFont('Helvetica-Bold', 9.5)
+        c.drawString(21 * mm, y - 6 * mm, topic)
+        c.setFillColor(colors.HexColor('#374151'))
+        topic_text = (narrative.get('topic_breakdown') or {}).get(topic) or f"Sem evidências relevantes para {topic.lower()}."
+        y = _relation_report_draw_paragraph(c, topic_text, 42 * mm, y - 2 * mm, page_width - 60 * mm, small_style) - 4 * mm
+
+    y = ensure_space(y, 30 * mm)
+    c.setFillColor(colors_map['secondary'])
+    c.setFont('Helvetica-Bold', 12)
+    c.drawString(18 * mm, y, 'Próximos passos sugeridos')
+    y -= 4 * mm
+    c.line(18 * mm, y, page_width - 18 * mm, y)
+    y -= 6 * mm
+    for item in narrative.get('next_steps') or []:
+        y = ensure_space(y, 8 * mm)
+        y = _relation_report_draw_paragraph(c, f"• {item}", 18 * mm, y, page_width - 36 * mm, body_style) - 2 * mm
+
+    c.setFont('Helvetica', 8)
+    c.setFillColor(colors.HexColor('#6b7280'))
+    c.drawRightString(page_width - 18 * mm, 12 * mm, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    c.save()
+    buffer.seek(0)
+    return buffer
+
+
+@app.route('/api/report/relation', methods=['GET'])
+def export_relation_report():
+    try:
+        account_id_raw = (request.args.get('account_id') or '').strip()
+        if not account_id_raw.isdigit():
+            return jsonify({'error': 'account_id é obrigatório'}), 400
+        account_id = int(account_id_raw)
+        full_period = (request.args.get('full_period', 'false') or 'false').lower() == 'true'
+        start_date = (request.args.get('start_date') or '').strip() or None
+        end_date = (request.args.get('end_date') or '').strip() or None
+        if not full_period and (not start_date or not end_date):
+            return jsonify({'error': 'Informe start_date e end_date ou marque full_period=true'}), 400
+        if full_period:
+            start_date = None
+            end_date = None
+        report_data = _relation_report_collect_data(account_id, start_date=start_date, end_date=end_date)
+        if not report_data:
+            return jsonify({'error': 'Conta não encontrada'}), 404
+        pdf_buffer = _relation_report_render_pdf(report_data)
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]+', '-', (report_data['account'].get('name') or 'cliente').strip()).strip('-').lower() or 'cliente'
+        file_name = f'relation-report-{safe_name}-{datetime.now().strftime("%Y%m%d-%H%M%S")}.pdf'
+        return send_file(
+            pdf_buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=file_name
+        )
+    except Exception as e:
+        logger.exception(f'[RelationReport] Falha ao gerar relatório: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/report/relation/preview', methods=['GET'])
+def preview_relation_report_data():
+    try:
+        account_id_raw = (request.args.get('account_id') or '').strip()
+        if not account_id_raw.isdigit():
+            return jsonify({'error': 'account_id é obrigatório'}), 400
+        account_id = int(account_id_raw)
+        full_period = (request.args.get('full_period', 'false') or 'false').lower() == 'true'
+        start_date = (request.args.get('start_date') or '').strip() or None
+        end_date = (request.args.get('end_date') or '').strip() or None
+        if full_period:
+            start_date = None
+            end_date = None
+        report_data = _relation_report_collect_data(account_id, start_date=start_date, end_date=end_date)
+        if not report_data:
+            return jsonify({'error': 'Conta não encontrada'}), 404
+        narrative = _relation_report_generate_narrative(report_data)
+        return jsonify({
+            'account': report_data['account'],
+            'summary_counts': report_data['summary_counts'],
+            'latest_interaction': report_data['latest_interaction'],
+            'relationship_cards': report_data['relationship_cards'][:12],
+            'topics': {k: len(v) for k, v in report_data['topics'].items()},
+            'narrative': narrative,
+            'period': {
+                'full_period': report_data['full_period'],
+                'start_date': report_data['start_date'],
+                'end_date': report_data['end_date']
+            }
+        })
+    except Exception as e:
+        logger.exception(f'[RelationReport] Falha ao gerar preview: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 ITOCA_EXCLUDED_TABLES = {
