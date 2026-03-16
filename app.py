@@ -1661,6 +1661,235 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
     c.drawRightString(page_width - 44 * mm, page_height - 33 * mm, subtitle)
 
 
+def _relation_report_build_browser_html(report_data, profile=None):
+    narrative = report_data.get('narrative') or _relation_report_generate_narrative(report_data)
+    report_data['narrative'] = narrative
+    account = report_data.get('account') or {}
+    latest = report_data.get('latest_interaction') or {}
+    counts = report_data.get('summary_counts') or {}
+    profile = profile or {}
+
+    def esc(value):
+        return html.escape(str(value or ''))
+
+    def fmt_money(value):
+        try:
+            if value in (None, ''):
+                return 'Não informado'
+            cents = int(value)
+            return f"R$ {cents/100:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+        except Exception:
+            return 'Não informado'
+
+    def topic_card(topic, bg):
+        txt = ((narrative.get('topic_breakdown') or {}).get(topic) or f'Sem evidências relevantes para {topic.lower()}.').strip()
+        return f"<div class='rr-topic-card' style='background:{bg};'><div class='rr-topic-title'>{esc(topic)}</div><div class='rr-topic-text'>{esc(txt)}</div></div>"
+
+    profile_name = profile.get('nickname') or profile.get('full_name') or 'Usuário'
+    profile_photo = profile.get('photo_url') or ''
+    account_logo = account.get('logo_url') or ''
+    account_name = account.get('name') or 'Conta'
+    period_label = 'Todo o período' if report_data.get('full_period') else f"{report_data.get('start_date') or '...'} a {report_data.get('end_date') or '...'}"
+    latest_text = 'Sem interações registradas'
+    if latest:
+        latest_text = f"{_relation_report_format_dt(latest.get('date'))} · {latest.get('with') or 'Contato não identificado'}"
+
+    contacts_html = []
+    for contact in report_data.get('contacts') or []:
+        photo = contact.get('photo_url') or ''
+        initials = (str(contact.get('name') or '?').strip()[:1] or '?').upper()
+        badges = []
+        if contact.get('is_main_contact'):
+            badges.append("<span class='rr-badge rr-badge-primary'>Contato-chave</span>")
+        if contact.get('is_target'):
+            badges.append("<span class='rr-badge rr-badge-soft'>Target</span>")
+        if contact.get('is_cold_contact'):
+            badges.append("<span class='rr-badge rr-badge-cold'>Cold</span>")
+        meta = []
+        if contact.get('position'):
+            meta.append(esc(contact.get('position')))
+        if contact.get('email'):
+            meta.append(esc(contact.get('email')))
+        activities = [a for a in (report_data.get('activities') or []) if a.get('client_id') == contact.get('id')]
+        last_contact = activities[0] if activities else None
+        last_contact_line = f"Última interação: {esc(_relation_report_format_dt(last_contact.get('activity_date')))}" if last_contact else 'Última interação: não registrada'
+        photo_html = f"<img src='{esc(photo)}' class='rr-contact-photo'/>" if photo else f"<div class='rr-contact-photo rr-contact-photo-fallback'>{esc(initials)}</div>"
+        contacts_html.append(f"""
+        <div class='rr-contact-card'>
+            <div class='rr-contact-head'>
+                {photo_html}
+                <div>
+                    <div class='rr-contact-name'>{esc(contact.get('name'))}</div>
+                    <div class='rr-contact-meta'>{' · '.join(meta) if meta else 'Sem detalhes complementares'}</div>
+                </div>
+            </div>
+            <div class='rr-badge-row'>{''.join(badges)}</div>
+            <div class='rr-contact-kpi'>{esc(last_contact_line)}</div>
+        </div>
+        """)
+
+    highlights_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('highlights') or [])]) or '<li>Sem destaques adicionais.</li>'
+    next_steps_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('next_steps') or [])]) or '<li>Sem próximos passos sugeridos.</li>'
+    account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "<i class='fas fa-chart-network'></i>"
+    profile_photo_html = f"<img src='{esc(profile_photo)}' class='rr-user-photo' alt='Foto do usuário'>" if profile_photo else f"<div class='rr-user-photo rr-user-fallback'>{esc(str(profile_name)[:1].upper())}</div>"
+
+    return f"""<!DOCTYPE html>
+<html lang='pt-BR'>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>Relation Report - {esc(account_name)}</title>
+<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'>
+<style>
+:root {{ --green:#059669; --green-dark:#065f46; --mint:#d1fae5; --bg:#f6fffb; --text:#1f2937; --muted:#6b7280; --card:#ffffff; --line:#d1fae5; }}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear-gradient(180deg,#ecfdf5 0%, #ffffff 38%, #f8fafc 100%); color:var(--text); }}
+.rr-shell {{ max-width:1360px; margin:0 auto; padding:32px 28px 60px; }}
+.rr-hero {{ background:linear-gradient(135deg,#064e3b 0%, #047857 50%, #10b981 100%); color:#fff; border-radius:28px; padding:28px; box-shadow:0 24px 80px rgba(5,150,105,.22); position:relative; overflow:hidden; }}
+.rr-hero:after {{ content:''; position:absolute; inset:auto -80px -80px auto; width:240px; height:240px; background:rgba(255,255,255,.08); border-radius:50%; }}
+.rr-top {{ display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; align-items:flex-start; }}
+.rr-brand {{ display:flex; gap:16px; align-items:center; }}
+.rr-brand-mark {{ width:72px; height:72px; border-radius:22px; background:rgba(255,255,255,.12); display:flex; align-items:center; justify-content:center; font-size:28px; border:1px solid rgba(255,255,255,.18); backdrop-filter:blur(8px); overflow:hidden; }}
+.rr-brand-mark img {{ width:100%; height:100%; object-fit:cover; }}
+.rr-title {{ font-size:34px; font-weight:800; line-height:1.05; margin:0 0 8px; }}
+.rr-subtitle {{ margin:0; color:rgba(255,255,255,.88); font-size:15px; max-width:760px; line-height:1.6; }}
+.rr-user {{ display:flex; gap:12px; align-items:center; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:10px 12px; border-radius:18px; backdrop-filter:blur(8px); }}
+.rr-user-photo {{ width:52px; height:52px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,.35); background:rgba(255,255,255,.16); }}
+.rr-user-fallback {{ display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; }}
+.rr-user-name {{ font-size:16px; font-weight:700; margin:0; }}
+.rr-user-role {{ margin:4px 0 0; font-size:12px; color:rgba(255,255,255,.82); }}
+.rr-hero-grid {{ display:grid; grid-template-columns:1.15fr .85fr; gap:18px; margin-top:24px; }}
+.rr-panel {{ background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.14); border-radius:22px; padding:18px; backdrop-filter:blur(8px); }}
+.rr-panel h3 {{ margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:rgba(255,255,255,.8); }}
+.rr-kpis {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-top:24px; }}
+.rr-kpi {{ background:var(--card); border:1px solid var(--line); border-radius:22px; padding:18px; box-shadow:0 10px 30px rgba(16,185,129,.08); }}
+.rr-kpi-label {{ font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }}
+.rr-kpi-value {{ font-size:28px; font-weight:800; color:var(--green-dark); }}
+.rr-grid {{ display:grid; grid-template-columns:1.2fr .8fr; gap:22px; margin-top:24px; }}
+.rr-section {{ background:rgba(255,255,255,.86); border:1px solid rgba(209,250,229,.9); border-radius:24px; padding:24px; box-shadow:0 18px 55px rgba(15,118,110,.08); }}
+.rr-section h2 {{ margin:0 0 14px; font-size:22px; color:var(--green-dark); }}
+.rr-lead {{ color:#374151; font-size:15px; line-height:1.75; white-space:pre-line; }}
+.rr-info-list {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }}
+.rr-info-item {{ background:#fff; border:1px solid #ecfdf5; border-radius:16px; padding:14px; }}
+.rr-info-item-label {{ font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }}
+.rr-info-item-value {{ font-size:15px; font-weight:700; color:#111827; }}
+.rr-contact-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }}
+.rr-contact-card {{ background:#fff; border:1px solid #e5e7eb; border-radius:20px; padding:16px; box-shadow:0 8px 24px rgba(15,23,42,.05); }}
+.rr-contact-head {{ display:flex; gap:12px; align-items:center; margin-bottom:12px; }}
+.rr-contact-photo {{ width:58px; height:58px; border-radius:18px; object-fit:cover; background:#ecfdf5; }}
+.rr-contact-photo-fallback {{ display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--green-dark); font-size:22px; }}
+.rr-contact-name {{ font-size:17px; font-weight:800; color:#111827; }}
+.rr-contact-meta {{ font-size:13px; color:#6b7280; margin-top:3px; line-height:1.4; }}
+.rr-badge-row {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }}
+.rr-badge {{ font-size:11px; font-weight:700; border-radius:999px; padding:6px 10px; display:inline-flex; align-items:center; }}
+.rr-badge-primary {{ background:#dcfce7; color:#166534; }}
+.rr-badge-soft {{ background:#ecfeff; color:#155e75; }}
+.rr-badge-cold {{ background:#eff6ff; color:#1d4ed8; }}
+.rr-contact-kpi {{ font-size:13px; color:#4b5563; line-height:1.5; }}
+.rr-topic-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }}
+.rr-topic-card {{ border-radius:18px; padding:16px; border:1px solid rgba(255,255,255,.35); min-height:132px; }}
+.rr-topic-title {{ font-size:16px; font-weight:800; margin-bottom:10px; color:#0f172a; }}
+.rr-topic-text {{ font-size:14px; line-height:1.65; color:#334155; }}
+.rr-list {{ padding-left:20px; margin:0; color:#374151; line-height:1.8; }}
+.rr-toolbar {{ position:sticky; top:0; z-index:20; backdrop-filter:blur(12px); background:rgba(255,255,255,.74); border-bottom:1px solid rgba(209,250,229,.9); padding:12px 28px; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
+.rr-toolbar-title {{ font-weight:700; color:var(--green-dark); }}
+.rr-toolbar-actions {{ display:flex; gap:10px; flex-wrap:wrap; }}
+.rr-btn {{ border:none; border-radius:14px; padding:10px 16px; font-weight:700; cursor:pointer; }}
+.rr-btn-primary {{ background:#10b981; color:#fff; }}
+.rr-btn-secondary {{ background:#e5e7eb; color:#111827; }}
+@media (max-width: 1024px) {{ .rr-hero-grid,.rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ grid-template-columns:1fr; }} }}
+@media print {{ .rr-toolbar {{ display:none; }} body {{ background:#fff; }} .rr-shell {{ max-width:none; padding:0; }} .rr-section,.rr-kpi,.rr-panel,.rr-hero {{ box-shadow:none !important; break-inside:avoid; }} }}
+</style>
+</head>
+<body>
+<div class='rr-toolbar'>
+  <div class='rr-toolbar-title'>Relation Report · {esc(account_name)}</div>
+  <div class='rr-toolbar-actions'>
+    <button class='rr-btn rr-btn-secondary' onclick='window.close()'><i class="fas fa-times"></i> Fechar</button>
+    <button class='rr-btn rr-btn-primary' onclick='window.print()'><i class="fas fa-print"></i> Imprimir / Salvar em PDF</button>
+  </div>
+</div>
+<div class='rr-shell'>
+  <section class='rr-hero'>
+    <div class='rr-top'>
+      <div class='rr-brand'>
+        <div class='rr-brand-mark'>{account_logo_html}</div>
+        <div>
+          <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relation Report</p>
+          <h1 class='rr-title'>{esc(account_name)}</h1>
+          <p class='rr-subtitle'>Visão executiva do relacionamento da conta, combinando powermapping, histórico de interação, presença operacional, leitura temática e próximos passos recomendados.</p>
+        </div>
+      </div>
+      <div class='rr-user'>{profile_photo_html}
+        <div>
+          <p class='rr-user-name'>{esc(profile_name)}</p>
+          <p class='rr-user-role'>Relatório gerado em {esc(datetime.now().strftime('%d/%m/%Y %H:%M'))}</p>
+        </div>
+      </div>
+    </div>
+    <div class='rr-hero-grid'>
+      <div class='rr-panel'>
+        <h3>Resumo executivo</h3>
+        <div class='rr-lead'>{esc(narrative.get('executive_summary') or 'Sem resumo gerado.')}</div>
+      </div>
+      <div class='rr-panel'>
+        <h3>Contexto da análise</h3>
+        <div class='rr-info-list'>
+          <div class='rr-info-item'><div class='rr-info-item-label'>Período</div><div class='rr-info-item-value'>{esc(period_label)}</div></div>
+          <div class='rr-info-item'><div class='rr-info-item-label'>Última interação</div><div class='rr-info-item-value'>{esc(latest_text)}</div></div>
+          <div class='rr-info-item'><div class='rr-info-item-label'>Maturidade relacional</div><div class='rr-info-item-value'>{esc(narrative.get('relationship_maturity') or 'Não classificada')}</div></div>
+          <div class='rr-info-item'><div class='rr-info-item-label'>Presença global</div><div class='rr-info-item-value'>{esc(account.get('global_presence') or 'Não informada')}</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class='rr-kpis'>
+    <div class='rr-kpi'><div class='rr-kpi-label'>Contatos</div><div class='rr-kpi-value'>{counts.get('contacts', 0)}</div></div>
+    <div class='rr-kpi'><div class='rr-kpi-label'>Atividades</div><div class='rr-kpi-value'>{counts.get('activities', 0) + counts.get('account_activities', 0)}</div></div>
+    <div class='rr-kpi'><div class='rr-kpi-label'>Kanban</div><div class='rr-kpi-value'>{counts.get('kanban_cards', 0)}</div></div>
+    <div class='rr-kpi'><div class='rr-kpi-label'>Mapeamentos</div><div class='rr-kpi-value'>{counts.get('mapping_items', 0)}</div></div>
+  </section>
+  <section class='rr-grid'>
+    <div class='rr-section'>
+      <h2>Power mapping e contatos-chave</h2>
+      <div class='rr-contact-grid'>{''.join(contacts_html) or '<div class="rr-contact-card">Nenhum contato encontrado para a conta.</div>'}</div>
+    </div>
+    <div class='rr-section'>
+      <h2>Contexto da conta</h2>
+      <div class='rr-info-list'>
+        <div class='rr-info-item'><div class='rr-info-item-label'>Setor</div><div class='rr-info-item-value'>{esc(account.get('sector') or 'Não informado')}</div></div>
+        <div class='rr-info-item'><div class='rr-info-item-label'>Receita média</div><div class='rr-info-item-value'>{esc(fmt_money(account.get('average_revenue_cents')))}</div></div>
+        <div class='rr-info-item'><div class='rr-info-item-label'>Profissionais</div><div class='rr-info-item-value'>{esc(account.get('professionals_count') or 'Não informado')}</div></div>
+        <div class='rr-info-item'><div class='rr-info-item-label'>Conta-alvo</div><div class='rr-info-item-value'>{'Sim' if account.get('is_target') else 'Não'}</div></div>
+      </div>
+      <div style='margin-top:18px;'>
+        <h2 style='font-size:18px;'>Destaques</h2>
+        <ul class='rr-list'>{highlights_html}</ul>
+      </div>
+    </div>
+  </section>
+  <section class='rr-grid'>
+    <div class='rr-section'>
+      <h2>Leitura temática</h2>
+      <div class='rr-topic-grid'>
+        {topic_card('IA', '#ecfeff')}
+        {topic_card('Cyber', '#f8fafc')}
+        {topic_card('Aplicações', '#f0fdf4')}
+        {topic_card('Marketing', '#fff7ed')}
+        {topic_card('Cloud', '#eff6ff')}
+        {topic_card('Outros', '#f9fafb')}
+      </div>
+    </div>
+    <div class='rr-section'>
+      <h2>Próximos passos sugeridos</h2>
+      <ul class='rr-list'>{next_steps_html}</ul>
+    </div>
+  </section>
+</div>
+</body>
+</html>"""
+
+
 def _relation_report_render_pdf(report_data):
     global REPORTLAB_AVAILABLE, REPORTLAB_IMPORT_ERROR, colors, TA_LEFT, TA_CENTER, A4, ParagraphStyle, getSampleStyleSheet, mm, ImageReader, stringWidth, Paragraph
     if not REPORTLAB_AVAILABLE:
@@ -1889,6 +2118,32 @@ def export_relation_report():
     except Exception as e:
         logger.exception(f'[RelationReport] Falha ao gerar relatório: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/report/relation/view', methods=['GET'])
+def view_relation_report_browser():
+    try:
+        account_id_raw = (request.args.get('account_id') or '').strip()
+        if not account_id_raw.isdigit():
+            return 'account_id é obrigatório', 400
+        account_id = int(account_id_raw)
+        full_period = (request.args.get('full_period', 'false') or 'false').lower() == 'true'
+        start_date = (request.args.get('start_date') or '').strip() or None
+        end_date = (request.args.get('end_date') or '').strip() or None
+        if full_period:
+            start_date = None
+            end_date = None
+        report_data = _relation_report_collect_data(account_id, start_date=start_date, end_date=end_date)
+        if not report_data:
+            return 'Conta não encontrada', 404
+        report_data['narrative'] = _relation_report_generate_narrative(report_data)
+        profile_response = get_profile_config()
+        profile = profile_response.get_json(silent=True) if hasattr(profile_response, 'get_json') else {}
+        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {})
+        return Response(html_doc, mimetype='text/html; charset=utf-8')
+    except Exception as e:
+        logger.exception(f'[RelationReport] Falha ao montar visualização HTML: {e}')
+        return f'<h1>Erro ao gerar relatório</h1><pre>{html.escape(str(e))}</pre>', 500
 
 
 @app.route('/api/report/relation/preview', methods=['GET'])

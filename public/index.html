@@ -3878,7 +3878,7 @@
                 html += '<div style="max-width:680px;">';
                 html += '<div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.9; margin-bottom:8px;">Report & Backup</div>';
                 html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relation Report</h2>';
-                html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Gere um PDF executivo de relacionamento com identidade visual do sistema, logo do cliente, powermapping resumido, última interação, visão de Kanban, resumo em linguagem natural e leitura temática por IA, Cyber, Aplicações, Marketing, Cloud e Outros.</p>';
+                html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Abra um report executivo visual no navegador com identidade da conta, foto do usuário, cards dos contatos, contexto relacional, leitura temática e botão para imprimir ou salvar em PDF.</p>';
                 html += '</div>';
                 html += '<div style="min-width:240px; background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.16); border-radius:14px; padding:16px;">';
                 html += '<div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; opacity:0.9; margin-bottom:10px;">Saída</div>';
@@ -3921,7 +3921,7 @@
                 html += '<span style="font-size:12px; color:#6b7280;">Ao marcar, o relatório ignora o filtro de datas.</span>';
                 html += '</div>';
                 html += '<div style="margin-top:18px; display:flex; gap:12px; flex-wrap:wrap;">';
-                html += '<button class="btn btn-primary" id="relationReportDownloadBtn" onclick="downloadRelationReport()"><i class="fas fa-file-pdf"></i> Gerar PDF</button>';
+                html += '<button class="btn btn-primary" id="relationReportOpenBtn" onclick="openRelationReportView()"><i class="fas fa-chart-line"></i> Abrir Report Executivo</button>';
                 html += '<button class="btn btn-secondary" onclick="previewRelationReport()"><i class="fas fa-eye"></i> Pré-visualizar resumo</button>';
                 html += '</div>';
                 html += '<div id="relationReportPreview" style="display:none; margin-top:18px;"></div>';
@@ -3998,8 +3998,8 @@
             return { accountId, fullPeriod, startDate, endDate };
         }
 
-        async function downloadRelationReport() {
-            const btn = document.getElementById('relationReportDownloadBtn');
+        function openRelationReportView() {
+            const btn = document.getElementById('relationReportOpenBtn');
             const originalHtml = btn ? btn.innerHTML : '';
             try {
                 const { accountId, fullPeriod, startDate, endDate } = getRelationReportParams();
@@ -4010,31 +4010,18 @@
                 }
                 if (btn) {
                     btn.disabled = true;
-                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Gerando PDF...';
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Abrindo report...';
                 }
-                const response = await fetch(`${API_BASE}/report/relation?${params.toString()}`);
-                if (!response.ok) {
-                    const error = await response.json().catch(() => ({ error: 'Falha ao gerar relatório' }));
-                    throw new Error(error.error || 'Falha ao gerar relatório');
-                }
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
-                a.href = url;
-                a.download = `relation-report-${stamp}.pdf`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                window.URL.revokeObjectURL(url);
-                showToast('Relation Report gerado com sucesso!', 'success');
+                const targetUrl = `/report/relation/view?${params.toString()}`;
+                window.open(targetUrl, '_blank', 'noopener');
+                showToast('Abrindo Relation Report executivo...', 'success');
             } catch (error) {
                 console.error(error);
-                showToast(error.message || 'Erro ao gerar Relation Report', 'error');
+                showToast(error.message || 'Erro ao abrir Relation Report', 'error');
             } finally {
                 if (btn) {
                     btn.disabled = false;
-                    btn.innerHTML = originalHtml || '<i class="fas fa-file-pdf"></i> Gerar PDF';
+                    btn.innerHTML = originalHtml || '<i class="fas fa-chart-line"></i> Abrir Report Executivo';
                 }
             }
         }
