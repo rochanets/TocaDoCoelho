@@ -3921,7 +3921,7 @@
                 html += '<span style="font-size:12px; color:#6b7280;">Ao marcar, o relatório ignora o filtro de datas.</span>';
                 html += '</div>';
                 html += '<div style="margin-top:18px; display:flex; gap:12px; flex-wrap:wrap;">';
-                html += '<button class="btn btn-primary" onclick="downloadRelationReport()"><i class="fas fa-file-pdf"></i> Gerar PDF</button>';
+                html += '<button class="btn btn-primary" id="relationReportDownloadBtn" onclick="downloadRelationReport()"><i class="fas fa-file-pdf"></i> Gerar PDF</button>';
                 html += '<button class="btn btn-secondary" onclick="previewRelationReport()"><i class="fas fa-eye"></i> Pré-visualizar resumo</button>';
                 html += '</div>';
                 html += '<div id="relationReportPreview" style="display:none; margin-top:18px;"></div>';
@@ -3999,6 +3999,8 @@
         }
 
         async function downloadRelationReport() {
+            const btn = document.getElementById('relationReportDownloadBtn');
+            const originalHtml = btn ? btn.innerHTML : '';
             try {
                 const { accountId, fullPeriod, startDate, endDate } = getRelationReportParams();
                 const params = new URLSearchParams({ account_id: accountId, full_period: fullPeriod ? 'true' : 'false' });
@@ -4006,24 +4008,34 @@
                     params.set('start_date', startDate);
                     params.set('end_date', endDate);
                 }
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Gerando PDF...';
+                }
                 const response = await fetch(`${API_BASE}/report/relation?${params.toString()}`);
                 if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.error || 'Erro ao gerar o Relation Report');
+                    const error = await response.json().catch(() => ({ error: 'Falha ao gerar relatório' }));
+                    throw new Error(error.error || 'Falha ao gerar relatório');
                 }
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
+                const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
                 a.href = url;
-                const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
                 a.download = `relation-report-${stamp}.pdf`;
                 document.body.appendChild(a);
                 a.click();
+                a.remove();
                 window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-                showSuccess('Relation Report gerado com sucesso!');
+                showToast('Relation Report gerado com sucesso!', 'success');
             } catch (error) {
-                showError(error.message || 'Erro ao gerar o Relation Report');
+                console.error(error);
+                showToast(error.message || 'Erro ao gerar Relation Report', 'error');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml || '<i class="fas fa-file-pdf"></i> Gerar PDF';
+                }
             }
         }
 

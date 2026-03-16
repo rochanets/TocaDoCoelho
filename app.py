@@ -1712,6 +1712,7 @@ def _relation_report_render_pdf(report_data):
     account = report_data['account']
     latest = report_data.get('latest_interaction') or {}
     counts = report_data.get('summary_counts') or {}
+    narrative = report_data.get('narrative') or _relation_report_generate_narrative(report_data)
 
     cards = [
         ('Contatos', str(counts.get('contacts', 0))),
