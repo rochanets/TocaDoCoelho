@@ -80,6 +80,7 @@ except ImportError:
     ImageOps = None
     PIL_AVAILABLE = False
 
+REPORTLAB_IMPORT_ERROR = None
 try:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT, TA_CENTER
@@ -90,7 +91,7 @@ try:
     from reportlab.pdfbase.pdfmetrics import stringWidth
     from reportlab.platypus import Paragraph
     REPORTLAB_AVAILABLE = True
-except ImportError:
+except Exception as e:
     colors = None
     TA_LEFT = TA_CENTER = None
     A4 = None
@@ -101,6 +102,7 @@ except ImportError:
     stringWidth = None
     Paragraph = None
     REPORTLAB_AVAILABLE = False
+    REPORTLAB_IMPORT_ERROR = e
 
 WHISPER_IMPORT_ERROR = None
 WHISPER_IMPORT_ATTEMPTED = False
@@ -1660,12 +1662,36 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
 
 
 def _relation_report_render_pdf(report_data):
+    global REPORTLAB_AVAILABLE, REPORTLAB_IMPORT_ERROR, colors, TA_LEFT, TA_CENTER, A4, ParagraphStyle, getSampleStyleSheet, mm, ImageReader, stringWidth, Paragraph
     if not REPORTLAB_AVAILABLE:
-        raise RuntimeError('ReportLab não está disponível para gerar o PDF.')
-    narrative = _relation_report_generate_narrative(report_data)
+        try:
+            from reportlab.lib import colors as _colors
+            from reportlab.lib.enums import TA_LEFT as _TA_LEFT, TA_CENTER as _TA_CENTER
+            from reportlab.lib.pagesizes import A4 as _A4
+            from reportlab.lib.styles import ParagraphStyle as _ParagraphStyle, getSampleStyleSheet as _getSampleStyleSheet
+            from reportlab.lib.units import mm as _mm
+            from reportlab.lib.utils import ImageReader as _ImageReader
+            from reportlab.pdfbase.pdfmetrics import stringWidth as _stringWidth
+            from reportlab.platypus import Paragraph as _Paragraph
+            colors = _colors
+            TA_LEFT = _TA_LEFT
+            TA_CENTER = _TA_CENTER
+            A4 = _A4
+            ParagraphStyle = _ParagraphStyle
+            getSampleStyleSheet = _getSampleStyleSheet
+            mm = _mm
+            ImageReader = _ImageReader
+            stringWidth = _stringWidth
+            Paragraph = _Paragraph
+            REPORTLAB_AVAILABLE = True
+            REPORTLAB_IMPORT_ERROR = None
+        except Exception as e:
+            REPORTLAB_IMPORT_ERROR = e
+            raise RuntimeError(f'ReportLab não está disponível para gerar o PDF. Detalhe: {e}')
+
+    from reportlab.pdfgen import canvas
     colors_map = _relation_report_pick_system_colors()
     buffer = BytesIO()
-    from reportlab.pdfgen import canvas
     page_width, page_height = A4
     c = canvas.Canvas(buffer, pagesize=A4)
     styles = getSampleStyleSheet()
