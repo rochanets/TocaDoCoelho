@@ -1703,7 +1703,31 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
     c.drawRightString(page_width - 44 * mm, page_height - 33 * mm, subtitle)
 
 
-def _relation_report_build_browser_html(report_data, profile=None):
+def _relation_report_build_browser_html(report_data, profile=None, embed_images=False):
+    profile = profile or {}
+
+    def _inline_image_url(url):
+        url = (url or '').strip()
+        if not url or url.startswith('data:') or not embed_images:
+            return url
+        try:
+            if url.startswith('/static/'):
+                local_path = os.path.join(BASE_DIR, url.lstrip('/'))
+                if os.path.exists(local_path):
+                    with open(local_path, 'rb') as fh:
+                        raw = fh.read()
+                    mime, _ = mimetypes.guess_type(local_path)
+                    mime = mime or 'application/octet-stream'
+                    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+            if url.startswith('http://') or url.startswith('https://'):
+                resp = requests.get(url, timeout=10)
+                resp.raise_for_status()
+                mime = resp.headers.get('Content-Type', '').split(';')[0].strip() or mimetypes.guess_type(url)[0] or 'application/octet-stream'
+                return f"data:{mime};base64,{base64.b64encode(resp.content).decode('ascii')}"
+        except Exception:
+            return url
+        return url
+
     narrative = report_data.get('narrative') or _relation_report_generate_narrative(report_data)
     report_data['narrative'] = narrative
     account = report_data.get('account') or {}
@@ -1760,7 +1784,7 @@ def _relation_report_build_browser_html(report_data, profile=None):
 
     contacts_html = []
     for contact in sorted_contacts:
-        photo = contact.get('photo_url') or ''
+        photo = _inline_image_url(contact.get('photo_url') or '')
         initials = (str(contact.get('name') or '?').strip()[:1] or '?').upper()
         badges = []
         if contact.get('is_main_contact'):
@@ -1796,6 +1820,7 @@ def _relation_report_build_browser_html(report_data, profile=None):
 
     highlights_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('highlights') or [])]) or '<li>Sem destaques adicionais.</li>'
     next_steps_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('next_steps') or [])]) or '<li>Sem próximos passos sugeridos.</li>'
+    account_logo = _inline_image_url(account_logo)
     account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "<i class='fas fa-chart-network'></i>"
     context_badges_html = ''.join([
         f"<span class='rr-context-pill'><strong>Período</strong> {esc(period_label)}</span>",
@@ -1803,6 +1828,7 @@ def _relation_report_build_browser_html(report_data, profile=None):
         f"<span class='rr-context-pill'><strong>Maturidade</strong> {esc(narrative.get('relationship_maturity') or 'Não classificada')}</span>",
         f"<span class='rr-context-pill'><strong>Presença</strong> {esc(account.get('global_presence') or 'Não informada')}</span>"
     ])
+    profile_photo = _inline_image_url(profile_photo)
     profile_photo_html = f"<img src='{esc(profile_photo)}' class='rr-user-photo' alt='Foto do usuário'>" if profile_photo else f"<div class='rr-user-photo rr-user-fallback'>{esc(str(profile_name)[:1].upper())}</div>"
 
     return f"""<!DOCTYPE html>
@@ -2211,7 +2237,7 @@ def view_relation_report_browser():
         report_data['narrative'] = _relation_report_generate_narrative(report_data)
         profile_response = get_profile_config()
         profile = profile_response.get_json(silent=True) if hasattr(profile_response, 'get_json') else {}
-        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {})
+        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {}, embed_images=False)
         return Response(html_doc, mimetype='text/html; charset=utf-8')
     except Exception as e:
         logger.exception(f'[RelationReport] Falha ao montar visualização HTML: {e}')
@@ -2237,7 +2263,7 @@ def export_relation_report_html():
         report_data['narrative'] = _relation_report_generate_narrative(report_data)
         profile_response = get_profile_config()
         profile = profile_response.get_json(silent=True) if hasattr(profile_response, 'get_json') else {}
-        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {})
+        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {}, embed_images=True)
         account_name = (report_data.get('account') or {}).get('name') or f'account-{account_id}'
         safe_name = re.sub(r'[^a-zA-Z0-9_-]+', '-', account_name.strip()).strip('-').lower() or f'account-{account_id}'
         response = Response(html_doc, mimetype='text/html; charset=utf-8')
