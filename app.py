@@ -1439,6 +1439,8 @@ def _relation_report_build_account_snapshot(report_data):
     account = report_data.get('account') or {}
     counts = report_data.get('summary_counts') or {}
     latest = report_data.get('latest_interaction') or {}
+    presences = report_data.get('presences') or []
+    total_stefanini_cents = sum(int(p.get('current_revenue_cents') or 0) for p in presences if p.get('current_revenue_cents') is not None)
     parts = []
     segment = account.get('sector') or account.get('segment') or 'Não informado'
     parts.append(f"Conta do segmento {segment}.")
@@ -1455,21 +1457,44 @@ def _relation_report_build_account_snapshot(report_data):
     )
     extra = []
     if account.get('average_revenue'):
-        extra.append(f"Receita média estimada: {account.get('average_revenue')}")
+        extra.append(f"Faturamento de mercado da conta: {account.get('average_revenue')}")
     elif account.get('average_revenue_cents') is not None:
-        extra.append(f"Receita média estimada: {format_currency_br(account.get('average_revenue_cents'))}")
+        extra.append(f"Faturamento de mercado da conta: {format_currency_br(account.get('average_revenue_cents'))}")
+    if total_stefanini_cents > 0:
+        extra.append(f"Serviços Stefanini atualmente mapeados: {format_currency_br(total_stefanini_cents)}")
     if account.get('number_of_professionals'):
         extra.append(f"Profissionais: {account.get('number_of_professionals')}")
+    elif account.get('professionals_count'):
+        extra.append(f"Profissionais: {account.get('professionals_count')}")
     if account.get('presence'):
         extra.append(f"Presença geográfica: {account.get('presence')}")
+    elif account.get('global_presence'):
+        extra.append(f"Presença geográfica: {account.get('global_presence')}")
     if extra:
         parts.append('. '.join(extra) + '.')
+    parts.append('Ao interpretar a conta, trate faturamento de mercado da conta e receita de Serviços Stefanini como informações distintas.')
     return '\n'.join([p for p in parts if p])
 
 
 def _relation_report_build_relationship_snapshot(report_data):
     cards = report_data.get('relationship_cards') or []
+    activities = report_data.get('activities') or []
+    account_activities = report_data.get('account_activities') or []
+    kanban_cards = report_data.get('kanban_cards') or []
     lines = []
+    concrete_signals = 0
+    scheduling_signals = 0
+    for item in activities[:40] + account_activities[:20]:
+        text = ' '.join([
+            str(item.get('activity_type') or ''),
+            str(item.get('description') or ''),
+            str(item.get('notes') or ''),
+            str(item.get('subject') or '')
+        ]).lower()
+        if any(token in text for token in ['agenda', 'agendar', 'tentativa', 'follow-up', 'follow up', 'cobrança']) and not any(token in text for token in ['reunião realizada', 'workshop', 'apresentação', 'assessment', 'kickoff', 'discussão', 'definição', 'próximo passo definido', 'proposta apresentada']):
+            scheduling_signals += 1
+        if any(token in text for token in ['reunião realizada', 'workshop', 'apresentação', 'assessment', 'kickoff', 'discussão', 'alinhamento', 'proposta', 'entrega', 'roadmap', 'diagnóstico']):
+            concrete_signals += 1
     for card in cards[:8]:
         contact = card.get('contact') or {}
         lines.append(
@@ -1479,8 +1504,25 @@ def _relation_report_build_relationship_snapshot(report_data):
             f"{card.get('kanban_count', 0)} itens no Kanban; último contato em {_relation_report_format_dt((card.get('last_contact') or {}).get('date'))}."
         )
     if not lines:
-        lines.append('Não há contatos suficientes mapeados para descrever o powermapping da conta.')
-    lines.append('Considere a densidade de interação, sinais de influência e cobertura dos stakeholders ao redigir a análise.')
+        lines.append('Não há contatos suficientes mapeados para descrever o Power Mapping da conta.')
+    lines.append(
+        f"Sinais de profundidade relacional: {concrete_signals} registro(s) de interação concreta e {scheduling_signals} registro(s) predominantemente voltados a pedido de agenda ou tentativa de contato. "
+        f"Não trate volume de interação como sinônimo automático de relacionamento profundo."
+    )
+    if kanban_cards:
+        kanban_lines = []
+        for card in kanban_cards[:6]:
+            title = str(card.get('title') or 'Card sem título').strip()
+            col = str(card.get('column_name') or 'coluna não informada').strip()
+            desc = str(card.get('description') or '').strip().replace('\n', ' ')
+            if len(desc) > 140:
+                desc = desc[:137] + '...'
+            snippet = f"{title} [{col}]"
+            if desc:
+                snippet += f": {desc}"
+            kanban_lines.append(snippet)
+        lines.append('Leitura de Kanban: ' + ' | '.join(kanban_lines))
+    lines.append('Considere a densidade de interação, sinais de influência, cobertura dos stakeholders e conteúdo real das interações ao redigir a análise.')
     return '\n'.join(lines)
 
 
@@ -1512,7 +1554,7 @@ def _relation_report_generate_narrative(report_data):
     account_snapshot = _relation_report_build_account_snapshot(report_data)
     relationship_snapshot = _relation_report_build_relationship_snapshot(report_data)
     topic_evidence = _relation_report_build_topic_evidence(report_data)
-    output_style = 'Tom executivo, objetivo, claro, elegante e sem inventar fatos.'
+    output_style = 'Tom executivo, objetivo, claro, elegante e sem inventar fatos. Use sempre a expressão Power Mapping. Não trate faturamento de mercado da conta como receita da Stefanini. Só classifique o relacionamento como profundo quando houver evidências concretas de avanço, reuniões realizadas, discussões de conteúdo, entregas, proposta, assessment, workshop, roadmap ou desdobramentos objetivos. Se o histórico indicar apenas tentativa de agenda, cobrança ou follow-up sem avanço real, deixe isso explícito. Considere também o conteúdo dos cards de Kanban para explicar como eles se relacionam com a conta.'
 
     settings_map = _load_app_settings_map([
         'relation_report_sai_api_key',
@@ -1687,6 +1729,7 @@ def _relation_report_build_browser_html(report_data, profile=None):
 
     profile_name = profile.get('nickname') or profile.get('full_name') or 'Usuário'
     profile_photo = profile.get('photo_url') or ''
+    profile_role = profile.get('role') or profile.get('job_title') or profile.get('position') or 'Responsável pelo relacionamento'
     account_logo = account.get('logo_url') or ''
     account_name = account.get('name') or 'Conta'
     period_label = 'Todo o período' if report_data.get('full_period') else f"{report_data.get('start_date') or '...'} a {report_data.get('end_date') or '...'}"
@@ -1754,6 +1797,12 @@ def _relation_report_build_browser_html(report_data, profile=None):
     highlights_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('highlights') or [])]) or '<li>Sem destaques adicionais.</li>'
     next_steps_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('next_steps') or [])]) or '<li>Sem próximos passos sugeridos.</li>'
     account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "<i class='fas fa-chart-network'></i>"
+    context_badges_html = ''.join([
+        f"<span class='rr-context-pill'><strong>Período</strong> {esc(period_label)}</span>",
+        f"<span class='rr-context-pill'><strong>Última interação</strong> {esc(latest_text)}</span>",
+        f"<span class='rr-context-pill'><strong>Maturidade</strong> {esc(narrative.get('relationship_maturity') or 'Não classificada')}</span>",
+        f"<span class='rr-context-pill'><strong>Presença</strong> {esc(account.get('global_presence') or 'Não informada')}</span>"
+    ])
     profile_photo_html = f"<img src='{esc(profile_photo)}' class='rr-user-photo' alt='Foto do usuário'>" if profile_photo else f"<div class='rr-user-photo rr-user-fallback'>{esc(str(profile_name)[:1].upper())}</div>"
 
     return f"""<!DOCTYPE html>
@@ -1772,12 +1821,12 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-hero:after {{ content:''; position:absolute; inset:auto -80px -80px auto; width:240px; height:240px; background:rgba(255,255,255,.08); border-radius:50%; }}
 .rr-top {{ display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; align-items:flex-start; }}
 .rr-brand {{ display:flex; gap:16px; align-items:center; }}
-.rr-brand-mark {{ width:72px; height:72px; border-radius:22px; background:rgba(255,255,255,.12); display:flex; align-items:center; justify-content:center; font-size:28px; border:1px solid rgba(255,255,255,.18); backdrop-filter:blur(8px); overflow:hidden; }}
-.rr-brand-mark img {{ width:100%; height:100%; object-fit:cover; }}
+.rr-brand-mark {{ min-width:72px; width:auto; height:72px; border-radius:22px; background:rgba(255,255,255,.12); display:flex; align-items:center; justify-content:center; font-size:28px; border:1px solid rgba(255,255,255,.18); backdrop-filter:blur(8px); overflow:hidden; padding:8px 12px; max-width:240px; }}
+.rr-brand-mark img {{ max-width:216px; max-height:56px; width:auto; height:auto; object-fit:contain; }}
 .rr-title {{ font-size:34px; font-weight:800; line-height:1.05; margin:0 0 8px; }}
 .rr-subtitle {{ margin:0; color:rgba(255,255,255,.88); font-size:15px; max-width:760px; line-height:1.6; }}
 .rr-user {{ display:flex; gap:14px; align-items:center; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); padding:12px 14px; border-radius:20px; backdrop-filter:blur(8px); min-width:260px; }}
-.rr-user-photo {{ width:72px; height:72px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,.35); background:rgba(255,255,255,.16); }}
+.rr-user-photo {{ width:88px; height:88px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,.35); background:rgba(255,255,255,.16); }}
 .rr-user-fallback {{ display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; }}
 .rr-user-name {{ font-size:16px; font-weight:700; margin:0; }}
 .rr-user-role {{ margin:4px 0 0; font-size:12px; color:rgba(255,255,255,.82); }}
@@ -1791,7 +1840,10 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-grid {{ display:grid; grid-template-columns:1.2fr .8fr; gap:22px; margin-top:24px; }}
 .rr-section {{ background:rgba(255,255,255,.86); border:1px solid rgba(209,250,229,.9); border-radius:24px; padding:24px; box-shadow:0 18px 55px rgba(15,118,110,.08); }}
 .rr-section h2 {{ margin:0 0 14px; font-size:22px; color:var(--green-dark); }}
-.rr-lead {{ color:#374151; font-size:15px; line-height:1.75; white-space:pre-line; }}
+.rr-lead {{ color:rgba(255,255,255,.96); font-size:15px; line-height:1.75; white-space:pre-line; }}
+.rr-context-pills {{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }}
+.rr-context-pill {{ display:inline-flex; align-items:center; gap:8px; padding:9px 12px; border-radius:999px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.18); color:#f8fafc; font-size:12px; line-height:1.35; }}
+.rr-context-pill strong {{ color:#ffffff; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }}
 .rr-info-list {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }}
 .rr-info-item {{ background:#fff; border:1px solid #ecfdf5; border-radius:14px; padding:10px 12px; }}
 .rr-info-item-label {{ font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }}
@@ -1846,23 +1898,16 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
       <div class='rr-user'>{profile_photo_html}
         <div>
           <p class='rr-user-name'>{esc(profile_name)}</p>
+          <p class='rr-user-role'>{esc(profile_role)}</p>
           <p class='rr-user-role'>Relatório gerado em {esc(datetime.now().strftime('%d/%m/%Y %H:%M'))}</p>
         </div>
       </div>
     </div>
     <div class='rr-hero-grid'>
-      <div class='rr-panel'>
+      <div class='rr-panel' style='grid-column:1 / -1;'>
         <h3>Resumo executivo</h3>
-        <div class='rr-lead'>{esc(narrative.get('executive_summary') or 'Sem resumo gerado.')}</div>
-      </div>
-      <div class='rr-panel'>
-        <h3>Contexto da análise</h3>
-        <div class='rr-info-list'>
-          <div class='rr-info-item'><div class='rr-info-item-label'>Período</div><div class='rr-info-item-value'>{esc(period_label)}</div></div>
-          <div class='rr-info-item'><div class='rr-info-item-label'>Última interação</div><div class='rr-info-item-value'>{esc(latest_text)}</div></div>
-          <div class='rr-info-item'><div class='rr-info-item-label'>Maturidade relacional</div><div class='rr-info-item-value'>{esc(narrative.get('relationship_maturity') or 'Não classificada')}</div></div>
-          <div class='rr-info-item'><div class='rr-info-item-label'>Presença global</div><div class='rr-info-item-value'>{esc(account.get('global_presence') or 'Não informada')}</div></div>
-        </div>
+        <div class='rr-context-pills'>{context_badges_html}</div>
+        <div class='rr-lead'>{esc((narrative.get('executive_summary') or 'Sem resumo gerado.').replace('powermapping', 'Power Mapping').replace('Powermapping', 'Power Mapping'))}</div>
       </div>
     </div>
   </section>
