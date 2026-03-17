@@ -2015,6 +2015,7 @@
             <div id="autotocaExtensionStatus" style="display:none; margin-bottom:16px; background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46; border-radius:12px; padding:12px 16px; font-size:13px;"></div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
+                <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('teste-linkedin')"><span class="ai-star-icon">✦</span> Teste Linkedin</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
@@ -2125,6 +2126,18 @@
                     </div>
                 </form>
                 <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
+            </div>
+            <div id="autotocaTesteLinkedinPanel" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:16px;">
+                <h3 style="margin-bottom:8px; color:#065f46;">Teste Linkedin</h3>
+                <p style="color:#4b5563; margin-bottom:12px;">Digite nome e empresa para retornar 3 perfis compatíveis com nome, link e foto.</p>
+                <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px;">
+                    <div class="form-group"><label>Nome</label><input type="text" id="linkedinTesteNome" placeholder="Ex: João Silva"></div>
+                    <div class="form-group"><label>Empresa</label><input type="text" id="linkedinTesteEmpresa" placeholder="Ex: Empresa X"></div>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:12px;">
+                    <button class="btn btn-auto-mapping" type="button" onclick="executarTesteLinkedin()"><span class="ai-star-icon">✦</span> Buscar perfis</button>
+                </div>
+                <div id="linkedinTesteResultados" style="margin-top:16px;"></div>
             </div>
         </div>
 
@@ -3303,6 +3316,56 @@
             }
         }
 
+        function toggleAutoTocaAutomation(mode) {
+            const chamadoPanel = document.getElementById('autoTocaChamadoJuridico');
+            const linkedinPanel = document.getElementById('autotocaTesteLinkedinPanel');
+            if (mode === 'teste-linkedin') {
+                if (chamadoPanel) chamadoPanel.style.display = 'none';
+                if (linkedinPanel) linkedinPanel.style.display = 'block';
+                return;
+            }
+            if (chamadoPanel) chamadoPanel.style.display = 'block';
+            if (linkedinPanel) linkedinPanel.style.display = 'none';
+        }
+        function renderLinkedinTesteResults(items = []) {
+            const el = document.getElementById('linkedinTesteResultados');
+            if (!el) return;
+            if (!items.length) {
+                el.innerHTML = '<div style="color:#6b7280;">Nenhum perfil encontrado.</div>';
+                return;
+            }
+            el.innerHTML = items.map(item => `
+                <div style="display:flex; gap:12px; align-items:center; border:1px solid #d1fae5; border-radius:10px; padding:12px; background:white; margin-bottom:10px;">
+                    <img src="${escapeHtml(item.photo || '')}" alt="Foto" style="width:56px; height:56px; border-radius:999px; object-fit:cover; background:#ecfdf5;">
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:600; color:#065f46;">${escapeHtml(item.name || 'Sem nome')}</div>
+                        <div style="font-size:12px; color:#4b5563; word-break:break-all;"><a href="${escapeHtml(item.link || '#')}" target="_blank">${escapeHtml(item.link || '')}</a></div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        async function executarTesteLinkedin() {
+            try {
+                const name = document.getElementById('linkedinTesteNome')?.value?.trim() || '';
+                const company = document.getElementById('linkedinTesteEmpresa')?.value?.trim() || '';
+                if (!name || !company) {
+                    showError('Informe nome e empresa para executar o Teste Linkedin.');
+                    return;
+                }
+                const el = document.getElementById('linkedinTesteResultados');
+                if (el) el.innerHTML = '<div style="color:#6b7280;">Buscando perfis...</div>';
+                const response = await fetch(`${API_BASE}/autotoca/linkedin/teste`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, company })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) throw new Error(data.error || 'Falha ao buscar perfis do Linkedin.');
+                renderLinkedinTesteResults(data.items || []);
+            } catch (error) {
+                showError(error.message || 'Falha ao executar o Teste Linkedin.');
+            }
+        }
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
@@ -6023,7 +6086,7 @@
             if (modal) modal.remove();
         }
 
-        function openWhatsAppWeb(clientId) {
+        async function openWhatsAppWeb(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.phone) {
                 closeWhatsAppModal();
@@ -6040,8 +6103,23 @@
                 return;
             }
 
-            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-            whatsappWindowRef = openWhatsAppTab(url);
+            try {
+                const response = await fetch(`${API_BASE}/whatsapp/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone, message })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                    const fallbackUrl = data.fallback_url || `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                    whatsappWindowRef = openWhatsAppTab(fallbackUrl);
+                    showError('WAHA indisponível no momento. Abrimos o WhatsApp Web como contingência.');
+                }
+            } catch (error) {
+                const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                whatsappWindowRef = openWhatsAppTab(url);
+                showError('Falha ao acionar o envio automatizado. Abrimos o WhatsApp Web como contingência.');
+            }
             closeWhatsAppModal();
             askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }

@@ -1,0 +1,31 @@
+public/index.html:2017:                <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
+public/index.html:2020:                <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
+public/index.html:2698:        const AUTOTOCA_EXTENSION_PING_EVENT = 'autotoca-extension-pong';
+public/index.html:2699:        const AUTOTOCA_EXTENSION_REQUEST_EVENT = 'autotoca-extension-ping';
+public/index.html:2700:        const AUTOTOCA_EXTENSION_COMMAND_EVENT = 'autotoca-extension-command';
+public/index.html:2701:        const AUTOTOCA_EXTENSION_RESULT_EVENT = 'autotoca-extension-result';
+public/index.html:2758:            window.__AUTOTOCA_EXTENSION_INFO__ = detail;
+public/index.html:2764:            window.__AUTOTOCA_EXTENSION_LAST_RESULT__ = detail;
+public/index.html:2766:                _autoTocaAppendLog('Extensão confirmou o recebimento do payload do Chamado Jurídico.', 'success');
+public/index.html:2787:            window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_REQUEST_EVENT, {
+public/index.html:2993:        const AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu';
+public/index.html:3027:                formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL,
+public/index.html:3134:            chamadoJuridicoWindowRef = openOrReuseExternalTab(chamadoJuridicoWindowRef, AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL);
+public/index.html:3139:            window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_COMMAND_EVENT, {
+public/index.html:3259:                _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação do Chamado Jurídico com a extensão do AutoToca...</span>']);
+public/index.html:3274:                _autoTocaSendExtensionCommand('store_payload', payloadEnvelope, { formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL });
+public/index.html:3287:                    title: 'Chamado Jurídico — Automação iniciada',
+public/index.html:3299:                showError(error.message || 'Falha ao preparar a automação do Chamado Jurídico.');
+public/index.html:5973:        function openWhatsAppTab(url) {
+public/index.html:6043:            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+public/index.html:6044:            whatsappWindowRef = openWhatsAppTab(url);
+public/index.html:9185:            window.addEventListener(AUTOTOCA_EXTENSION_PING_EVENT, handleAutoTocaExtensionPong);
+public/index.html:9186:            window.addEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, handleAutoTocaExtensionResult);
+app.py:149:AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
+app.py:150:AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.py:9058:                temp_path = AUTOTOCA_UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{original_filename}"
+app.py:9064:                target = AUTOTOCA_UPLOAD_DIR / safe_name
+app.py:9078:                        target = AUTOTOCA_UPLOAD_DIR / f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{original_filename}"
+app.py:9122:                target = AUTOTOCA_UPLOAD_DIR / safe_name
+app.py:9129:            target = AUTOTOCA_UPLOAD_DIR / safe_name
+app.py:9163:    return send_from_directory(str(AUTOTOCA_UPLOAD_DIR), filename)
