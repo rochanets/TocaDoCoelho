@@ -156,9 +156,6 @@ WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-AUTOTOCA_PLAYWRIGHT_DIR = BASE_DIR / 'autotoca_playwright'
-AUTOTOCA_PLAYWRIGHT_DIR.mkdir(parents=True, exist_ok=True)
-
 def _detect_edge_binary():
     for path in ['/usr/bin/microsoft-edge','/usr/bin/microsoft-edge-stable','/usr/bin/msedge','/usr/bin/chromium','/usr/bin/chromium-browser','/snap/bin/microsoft-edge']:
         if Path(path).exists():
