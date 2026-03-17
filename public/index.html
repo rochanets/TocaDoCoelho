@@ -2747,21 +2747,12 @@
             const notice = _autoTocaGetExtensionNoticeEl();
             const status = _autoTocaGetExtensionStatusEl();
             const text = document.getElementById('autotocaExtensionNoticeText');
-            if (autoTocaExtensionInstalled) {
-                if (notice) notice.style.display = 'none';
-                if (status) {
-                    status.style.display = 'block';
-                    status.innerHTML = `<strong>Extensão do AutoToca ativa.</strong> Última verificação: ${escapeHtml(autoTocaExtensionLastSeenAt || 'agora')}.`;
-                }
-                _autoTocaSetAutomationEnabled(true);
-                return;
-            }
-            if (notice) notice.style.display = 'block';
+            if (notice) notice.style.display = 'none';
             if (status) status.style.display = 'none';
             if (text) {
-                text.textContent = 'As funções deste módulo só funcionam após instalar e ativar a extensão do AutoToca no Chrome. Baixe a extensão abaixo, instale em modo desenvolvedor e depois clique em “Verificar novamente”.';
+                text.textContent = 'O fluxo do Formulário Jurídico agora usa somente a automação interna iniciada pelo botão Executar Automação.';
             }
-            _autoTocaSetAutomationEnabled(false);
+            _autoTocaSetAutomationEnabled(true);
         }
 
         function handleAutoTocaExtensionPong(event) {
@@ -2845,17 +2836,20 @@
                 };
             }
             toggleAutoTocaContratoOriginal();
-            renderAutoTocaExtensionState();
-            await checkAutoTocaExtension(false);
         }
 
         function toggleAutoTocaAutomation(key) {
-            const el = document.getElementById('autoTocaChamadoJuridico');
-            if (!el) return;
-            el.style.display = el.style.display === 'none' ? 'block' : 'none';
-            if (el.style.display === 'block') {
-                toggleAutoTocaContratoOriginal();
+            const chamado = document.getElementById('autoTocaChamadoJuridico');
+            const linkedin = document.getElementById('autotocaTesteLinkedinPanel');
+            if (key === 'teste-linkedin') {
+                if (chamado) chamado.style.display = 'none';
+                if (linkedin) linkedin.style.display = 'block';
+                return;
             }
+            if (linkedin) linkedin.style.display = 'none';
+            if (!chamado) return;
+            chamado.style.display = 'block';
+            toggleAutoTocaContratoOriginal();
         }
 
         function toggleAutoTocaContratoOriginal() {
