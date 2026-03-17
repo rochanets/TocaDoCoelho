@@ -1997,7 +1997,7 @@
                 <div style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap;">
                     <div style="flex:1; min-width:280px;">
                         <div style="font-weight:700; margin-bottom:6px;">Extensão do AutoToca necessária</div>
-                        <div id="autotocaExtensionNoticeText" style="font-size:13px; line-height:1.5;">As automações deste módulo dependem da extensão do navegador para preencher o Microsoft Forms com segurança.</div>
+                        <div id="autotocaExtensionNoticeText" style="font-size:13px; line-height:1.5;">Este aviso não é mais necessário para o Chamado Jurídico.</div>
                     </div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap;">
                         <a id="autotocaExtensionDownloadBtn" class="btn btn-auto-mapping" href="/autotoca-extension/autotoca-chrome-extension.zip" download>
@@ -2018,10 +2018,9 @@
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
-                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Preencha os dados e revise um resumo rápido antes de executar.</p>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Selecione a conta, busque o endereço e preencha o formulário abaixo.</p>
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
-                    <!-- Linha 1: Conta, Tipo de Minuta, Minuta do Cliente -->
-                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:repeat(1,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
                         <div class="form-group">
                             <label>Conta <span style="color:#dc2626;">*</span></label>
                             <select id="autotocaConta" required></select>
@@ -2029,76 +2028,12 @@
                                 <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Tipo de Minuta <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaTipoMinuta" required>
-                                <option>Minuta padrão Stefanini - sem ajustes</option>
-                                <option>Minuta padrão Stefanini - com ajustes do cliente</option>
-                                <option>Minuta enviada pelo cliente</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Minuta do Cliente</label>
-                            <input id="autotocaArquivos9" type="file" onchange="uploadAutoTocaFiles(this,'arquivos9')">
-                        </div>
                     </div>
 
-                    <!-- Linha 2: Contrato Original, Aditivos Anteriores -->
-                    <div style="display:grid; grid-template-columns:repeat(2,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
-                        <div class="form-group">
-                            <label>Contrato Original <span style="color:#dc2626;">*</span></label>
-                            <div style="display:flex; gap:12px; align-items:flex-start;">
-                                <input id="autotocaArquivos8" type="file" onchange="uploadAutoTocaFiles(this,'arquivos8')" style="flex:1;">
-                                <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; margin-top:8px; white-space:nowrap;">
-                                    <input type="checkbox" id="autotocaContratoOriginalNaoAplica" onchange="toggleAutoTocaContratoOriginal()"> Não se aplica
-                                </label>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Aditivos Anteriores</label>
-                            <input id="autotocaArquivos7" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos7')">
-                        </div>
-                    </div>
-
-                    <!-- Linha 3: Dados gerais -->
-                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
-                        <div class="form-group">
-                            <label>Número Contrato SF <span style="color:#dc2626;">*</span></label>
-                            <input id="autotocaContratoSF" type="text" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Data Assinatura</label>
-                            <input id="autotocaDataAssinatura" type="text" placeholder="Vazio = Hoje (dd/MM/yyyy)">
-                        </div>
-                        <div class="form-group">
-                            <label>Haverá Reajuste? <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaReajuste" onchange="toggleAutoTocaReajuste()">
-                                <option>Não</option>
-                                <option>Sim</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Campos de Reajuste (ocultos por padrão) -->
-                    <div id="autotocaReajusteFields" style="display:none; border:1px solid #fcd34d; border-radius:8px; padding:12px; background:#fffbeb; margin-bottom:12px;">
-                        <div style="display:grid; grid-template-columns:1fr; gap:12px;">
-                            <div class="form-group">
-                                <label>Informe o Índice Utilizado e Valor Pós Reajuste <span style="color:#dc2626;">*</span></label>
-                                <textarea id="autotocaIndiceReajuste" rows="3" placeholder="Ex: IPCA 2024 + 2%, valor anterior R$ 1.000, novo valor R$ 1.050"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label>Se Diferente do Previsto, Anexar Aprovação do CEO <span style="color:#dc2626;">*</span></label>
-                                <input id="autotocaArquivosAprovacaoCEO" type="file" onchange="uploadAutoTocaFiles(this,'aprovacaoCEO')">
-                                <small style="color:#6b7280; display:block; margin-top:4px;">Será convertido para PDF automaticamente</small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Endereço -->
                     <div class="form-group" style="margin-bottom:12px;">
                         <label style="display:flex; justify-content:space-between; align-items:center;">
                             Endereço <span style="color:#dc2626;">*</span>
-                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca()" style="padding:6px 12px; font-size:12px; margin:0;">
+                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
                                 <span class="ai-star-icon">✦</span> Buscar Sede
                             </button>
                         </label>
@@ -2107,24 +2042,27 @@
                         <input type="hidden" id="autotocaEnderecoFonte">
                     </div>
 
-                    <!-- Botões de ação -->
                     <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
-                        <button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()" style="padding:10px 16px;">
-                            <i class="fas fa-list-check"></i> Gerar Resumo
+                        <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px;">
+                            <span class="ai-star-icon">✦</span> Abrir Formulário
                         </button>
-                        <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px; position:relative;">
-                            <span class="ai-star-icon">✦</span> Executar Automação
-                            <span id="autotocaLoadingSpinner" style="display:none; margin-left:8px; width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top:2px solid white; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle;"></span>
-                        </button>
-                        <style>
-                            @keyframes spin {
-                                0% { transform: rotate(0deg); }
-                                100% { transform: rotate(360deg); }
-                            }
-                        </style>
                     </div>
                 </form>
-                <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
+                <div id="autotocaFormsContainer" style="display:none; margin-top:16px; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden;">
+                    <div style="display:flex; justify-content:flex-end; padding:10px 12px; background:#f9fafb; border-bottom:1px solid #e5e7eb;">
+                        <a class="btn btn-secondary btn-small" href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" rel="noopener noreferrer">
+                            Abrir em nova aba
+                        </a>
+                    </div>
+                    <iframe
+                        id="autotocaFormsIframe"
+                        title="Formulário Chamado Jurídico"
+                        src=""
+                        style="width:100%; min-height:760px; border:0;"
+                        loading="lazy"
+                        referrerpolicy="strict-origin-when-cross-origin">
+                    </iframe>
+                </div>
             </div>
         </div>
 
@@ -2565,7 +2503,6 @@
         let kanbanCards = [];
         let kanbanAccounts = [];
         let kanbanContacts = [];
-        let autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [] };
 
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
@@ -2819,7 +2756,6 @@
         }
 
         async function loadAutoToca() {
-            autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [], aprovacaoCEO: [] };
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
             if (response.ok && select) {
@@ -2831,73 +2767,30 @@
                     document.getElementById('autotocaContaOutroWrap').style.display = select.value === 'OUTRO' ? 'block' : 'none';
                 };
             }
-            toggleAutoTocaContratoOriginal();
-            renderAutoTocaExtensionState();
-            await checkAutoTocaExtension(false);
+            const extensionNotice = document.getElementById('autotocaExtensionNotice');
+            const extensionStatus = document.getElementById('autotocaExtensionStatus');
+            if (extensionNotice) extensionNotice.style.display = 'none';
+            if (extensionStatus) extensionStatus.style.display = 'none';
         }
 
         function toggleAutoTocaAutomation(key) {
             const el = document.getElementById('autoTocaChamadoJuridico');
             if (!el) return;
             el.style.display = el.style.display === 'none' ? 'block' : 'none';
-            if (el.style.display === 'block') {
-                toggleAutoTocaContratoOriginal();
-            }
         }
 
-        function toggleAutoTocaContratoOriginal() {
-            const isNaoAplica = document.getElementById('autotocaContratoOriginalNaoAplica')?.checked;
-            const input = document.getElementById('autotocaArquivos8');
-            if (input) {
-                input.disabled = isNaoAplica;
-                if (isNaoAplica) {
-                    input.value = '';
-                    autoTocaUploadedFiles.arquivos8 = [];
-                }
-            }
-        }
-
-        function toggleAutoTocaReajuste() {
-            const reajuste = document.getElementById('autotocaReajuste').value;
-            const reajusteFields = document.getElementById('autotocaReajusteFields');
-            if (reajusteFields) {
-                reajusteFields.style.display = reajuste === 'Sim' ? 'block' : 'none';
-            }
-        }
-
-        async function uploadAutoTocaFiles(input, bucket) {
-            const files = Array.from(input.files || []);
-            if (!files.length) {
-                autoTocaUploadedFiles[bucket] = [];
-                return;
-            }
-            const uploaded = [];
-            for (const file of files) {
-                const fd = new FormData();
-                fd.append('file', file);
-                // Se for arquivo de aprovação do CEO, converter para PDF
-                if (bucket === 'aprovacaoCEO') {
-                    fd.append('convert_to_pdf', 'true');
-                }
-                const response = await fetch(`${API_BASE}/autotoca/upload`, { method: 'POST', body: fd });
-                if (!response.ok) { showError(`Falha no upload de ${file.name}`); return; }
-                const body = await response.json();
-                uploaded.push(body.path);
-            }
-            autoTocaUploadedFiles[bucket] = uploaded;
-            showSuccess(`${uploaded.length} arquivo(s) enviado(s).`);
-        }
-
-        async function buscarEnderecoAutoToca() {
+        async function buscarEnderecoAutoToca(evt) {
             const conta = document.getElementById('autotocaConta').value === 'OUTRO'
                 ? document.getElementById('autotocaContaOutro').value.trim()
                 : document.getElementById('autotocaConta').value;
             if (!conta) return showError('Informe a conta para buscar endereço.');
             
-            const btn = event?.currentTarget || document.querySelector('button[onclick="buscarEnderecoAutoToca()"]');
-            const originalHtml = btn.innerHTML;
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Buscando...';
+            const btn = evt?.currentTarget || document.querySelector('button[onclick*="buscarEnderecoAutoToca"]');
+            const originalHtml = btn?.innerHTML;
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Buscando...';
+            }
 
             try {
                 const response = await fetch(`${API_BASE}/autotoca/address-suggestion`, {
@@ -2918,76 +2811,11 @@
             } catch (e) {
                 showError(e.message);
             } finally {
-                btn.disabled = false;
-                btn.innerHTML = originalHtml;
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
             }
-        }
-
-        function buildAutoTocaPayload() {
-            const conta = document.getElementById('autotocaConta').value === 'OUTRO'
-                ? document.getElementById('autotocaContaOutro').value.trim()
-                : document.getElementById('autotocaConta').value;
-
-            const dataAssinaturaRaw = (document.getElementById('autotocaDataAssinatura').value || '').trim();
-            const contratoOriginalNaoAplica = document.getElementById('autotocaContratoOriginalNaoAplica')?.checked;
-            const haveraReajuste = document.getElementById('autotocaReajuste').value;
-            const indiceReajuste = haveraReajuste === 'Sim' ? (document.getElementById('autotocaIndiceReajuste').value || '').trim() : '';
-
-            return {
-                contaSelecionada: conta,
-                enderecoSedeEncontrado: document.getElementById('autotocaEnderecoSugerido').value,
-                enderecoFonte: document.getElementById('autotocaEnderecoFonte').value,
-                enderecoFinalConfirmado: document.getElementById('autotocaEnderecoFinal').value,
-                tipoMinuta: document.getElementById('autotocaTipoMinuta').value,
-                numeroContratoSalesforce: document.getElementById('autotocaContratoSF').value,
-                dataContratoModo: 'informada',
-                dataAssinaturaContratoOriginal: dataAssinaturaRaw,
-                arquivosAditivosAnteriores: autoTocaUploadedFiles.arquivos7,
-                contratoOriginalModo: contratoOriginalNaoAplica ? 'nao_se_aplica' : 'upload_usuario',
-                arquivosContratoOriginal: autoTocaUploadedFiles.arquivos8,
-                clienteEncaminhouMinuta: autoTocaUploadedFiles.arquivos9.length > 0 ? 'Sim' : 'Não',
-                arquivosMinutaCliente: autoTocaUploadedFiles.arquivos9,
-                haveraReajusteValores: haveraReajuste,
-                indiceReajuste: indiceReajuste,
-                arquivosAprovacaoCEO: autoTocaUploadedFiles.aprovacaoCEO || [],
-            };
-        }
-
-        function _buildResumoMarkdown(payload) {
-            const dataAssinatura = payload.dataAssinaturaContratoOriginal || 'Hoje (Automático)';
-            const contratoOriginal = payload.contratoOriginalModo === 'nao_se_aplica' 
-                ? '📄 Arquivo Genérico (Não se aplica)' 
-                : (payload.arquivosContratoOriginal.length > 0 ? `✅ ${payload.arquivosContratoOriginal.length} arquivo(s) enviado(s)` : '⚠️ Nenhum arquivo (será usado genérico)');
-            
-            const minutaCliente = payload.arquivosMinutaCliente.length > 0 
-                ? `✅ ${payload.arquivosMinutaCliente.length} arquivo(s) enviado(s)` 
-                : '📄 Arquivo Genérico (Padrão)';
-
-            return `
-### 📝 Resumo da Requisição Jurídica
-
-*   **🏢 Conta:** ${payload.contaSelecionada || 'Não informada'}
-*   **📍 Endereço:** ${payload.enderecoFinalConfirmado || 'Não informado'}
-*   **📄 Tipo de Minuta:** ${payload.tipoMinuta}
-*   **🔢 Contrato Salesforce:** ${payload.numeroContratoSalesforce || 'Não informado'}
-*   **📅 Data Assinatura:** ${dataAssinatura}
-*   **📑 Contrato Original:** ${contratoOriginal}
-*   **📎 Aditivos Anteriores:** ${payload.arquivosAditivosAnteriores.length} arquivo(s)
-*   **📝 Minuta do Cliente:** ${minutaCliente}
-*   **🔄 Reajuste:** ${payload.haveraReajusteValores}
-
----
-*Pronto para executar a automação!* 🚀
-            `.trim();
-        }
-
-        async function gerarResumoAutoToca() {
-            const payload = buildAutoTocaPayload();
-            await openSystemDialog({
-                title: 'Resumo da Automação',
-                message: _buildResumoMarkdown(payload),
-                showCancel: false,
-            });
         }
 
         const AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu';
@@ -3231,77 +3059,32 @@
 
         async function runChamadoJuridico(event) {
             event.preventDefault();
-            const payload = buildAutoTocaPayload();
-            const submitBtn = document.getElementById('autotocaSubmitBtn');
-            const spinner = document.getElementById('autotocaLoadingSpinner');
-            const logsEl = _autoTocaGetLogsEl();
-            if (logsEl) logsEl.innerHTML = '';
 
-            if (!payload.contaSelecionada || !payload.numeroContratoSalesforce || !payload.enderecoFinalConfirmado) {
-                showError('Preencha Conta, Número Contrato SF e Endereço antes de executar.');
+            const conta = document.getElementById('autotocaConta').value === 'OUTRO'
+                ? document.getElementById('autotocaContaOutro').value.trim()
+                : document.getElementById('autotocaConta').value;
+            const endereco = document.getElementById('autotocaEnderecoFinal').value.trim();
+
+            if (!conta || !endereco) {
+                showError('Preencha Conta e Endereço antes de abrir o formulário.');
                 return;
             }
 
-            if (payload.haveraReajusteValores === 'Sim' && !payload.indiceReajuste) {
-                showError('Informe os dados do reajuste antes de executar.');
+            const container = document.getElementById('autotocaFormsContainer');
+            const iframe = document.getElementById('autotocaFormsIframe');
+            if (!container || !iframe) {
+                showError('Não foi possível carregar o formulário nesta tela.');
                 return;
             }
 
-            const extensionReady = await checkAutoTocaExtension(true);
-            if (!extensionReady) {
-                showError('Instale e ative a extensão do AutoToca antes de executar esta automação.');
-                return;
+            container.style.display = 'block';
+            if (!iframe.src) {
+                iframe.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL;
             }
 
-            try {
-                if (submitBtn) submitBtn.disabled = true;
-                if (spinner) spinner.style.display = 'inline-block';
-                _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação do Chamado Jurídico com a extensão do AutoToca...</span>']);
-
-                const payloadEnvelope = _autoTocaPersistChamadoPayload(payload);
-                payloadEnvelope.summary = _buildResumoMarkdown(payload);
-                payloadEnvelope.filePaths = {
-                    contratoOriginal: payload.arquivosContratoOriginal || [],
-                    aditivosAnteriores: payload.arquivosAditivosAnteriores || [],
-                    minutaCliente: payload.arquivosMinutaCliente || [],
-                    aprovacaoCEO: payload.arquivosAprovacaoCEO || [],
-                };
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_PAYLOAD__ = payloadEnvelope;
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__ = payloadEnvelope.filePaths;
-
-                _autoTocaAppendLog('Payload salvo no navegador para reutilização entre abas.', 'success');
-                _autoTocaAppendLog('Enviando payload para a extensão do AutoToca.', 'info');
-                _autoTocaSendExtensionCommand('store_payload', payloadEnvelope, { formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL });
-
-                const win = _autoTocaOpenChamadoJuridicoForms();
-                if (win) {
-                    _autoTocaAppendLog('Microsoft Forms aberto/reutilizado em aba dedicada.', 'success');
-                } else {
-                    _autoTocaAppendLog('O navegador bloqueou a abertura automática da aba. Permita pop-ups e tente novamente.', 'warning');
-                }
-
-                _autoTocaAppendLog('Com a extensão ativa, o preenchimento deve ocorrer na própria aba do Forms após o carregamento.', 'info');
-                _autoTocaAppendLog('Os caminhos dos arquivos ficaram disponíveis em window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__.', 'info');
-                console.log('[AutoToca][ChamadoJuridico] payloadEnvelope:', payloadEnvelope);
-                await openSystemDialog({
-                    title: 'Chamado Jurídico — Automação iniciada',
-                    message: [
-                        'O Microsoft Forms foi aberto e a extensão recebeu o payload desta execução.',
-                        'Se o Forms exigir login Microsoft, conclua o login na própria aba do formulário e aguarde alguns segundos.',
-                        'Com a extensão ativa, o preenchimento automático deve ocorrer dentro da aba do Forms.',
-                        'Se algum campo ou upload não for reconhecido, o próximo ajuste será no mapeamento específico desse formulário.'
-                    ].join(' '),
-                    showCancel: false,
-                });
-            } catch (error) {
-                console.error('[AutoToca][ChamadoJuridico] erro na automação via extensão', error);
-                _autoTocaAppendLog(error.message || 'Falha inesperada ao preparar a automação.', 'error');
-                showError(error.message || 'Falha ao preparar a automação do Chamado Jurídico.');
-            } finally {
-                if (submitBtn) submitBtn.disabled = false;
-                if (spinner) spinner.style.display = 'none';
-            }
+            showInfo('Formulário aberto abaixo para preenchimento manual. Se o navegador bloquear a exibição, abra em uma nova aba.');
         }
+
 
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
