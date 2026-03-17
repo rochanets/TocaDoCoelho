@@ -20,13 +20,14 @@ import html
 import time
 import ssl
 import base64
+import mimetypes
 import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
 from urllib.parse import urlparse
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
@@ -1706,17 +1707,63 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
 def _relation_report_build_browser_html(report_data, profile=None, embed_images=False):
     profile = profile or {}
 
+    def _local_image_from_url(url):
+        if not url:
+            return None
+        raw_url = str(url).strip()
+        if not raw_url:
+            return None
+        try:
+            parsed = urlparse(raw_url)
+            path = (parsed.path or raw_url).strip()
+        except Exception:
+            parsed = None
+            path = raw_url
+        if raw_url.startswith('file://') and parsed and parsed.path:
+            file_path = Path(parsed.path)
+            return file_path if file_path.exists() else None
+        if not path:
+            return None
+        normalized = path.replace('\\', '/').strip()
+        if normalized.startswith('/uploads/'):
+            local = UPLOAD_DIR / normalized.replace('/uploads/', '', 1)
+            return local if local.exists() else None
+        if normalized.startswith('uploads/'):
+            local = UPLOAD_DIR / normalized.replace('uploads/', '', 1)
+            return local if local.exists() else None
+        if normalized.startswith('/public/'):
+            local = Path(BASE_DIR) / normalized.lstrip('/')
+            return local if local.exists() else None
+        if normalized.startswith('/'):
+            local = Path(BASE_DIR) / 'public' / normalized.lstrip('/')
+            return local if local.exists() else None
+        local = Path(normalized)
+        if local.exists():
+            return local
+        local_public = Path(BASE_DIR) / 'public' / normalized
+        if local_public.exists():
+            return local_public
+        resolved = _relation_report_resolve_local_image(raw_url) or _relation_report_resolve_local_image(path)
+        return resolved if resolved and Path(resolved).exists() else None
+
     def _inline_image_url(url):
         url = (url or '').strip()
         if not url or url.startswith('data:') or not embed_images:
             return url
         try:
+            local_path = _local_image_from_url(url)
+            if local_path:
+                with open(local_path, 'rb') as fh:
+                    raw = fh.read()
+                mime, _ = mimetypes.guess_type(str(local_path))
+                mime = mime or 'application/octet-stream'
+                return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
             if url.startswith('/static/'):
-                local_path = os.path.join(BASE_DIR, url.lstrip('/'))
-                if os.path.exists(local_path):
-                    with open(local_path, 'rb') as fh:
+                static_path = os.path.join(BASE_DIR, url.lstrip('/'))
+                if os.path.exists(static_path):
+                    with open(static_path, 'rb') as fh:
                         raw = fh.read()
-                    mime, _ = mimetypes.guess_type(local_path)
+                    mime, _ = mimetypes.guess_type(static_path)
                     mime = mime or 'application/octet-stream'
                     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
             if url.startswith('http://') or url.startswith('https://'):
@@ -1821,7 +1868,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
     highlights_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('highlights') or [])]) or '<li>Sem destaques adicionais.</li>'
     next_steps_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('next_steps') or [])]) or '<li>Sem próximos passos sugeridos.</li>'
     account_logo = _inline_image_url(account_logo)
-    account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "<i class='fas fa-chart-network'></i>"
+    account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "📊"
     context_badges_html = ''.join([
         f"<span class='rr-context-pill'><strong>Período</strong> {esc(period_label)}</span>",
         f"<span class='rr-context-pill'><strong>Última interação</strong> {esc(latest_text)}</span>",
@@ -1837,7 +1884,6 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
 <title>Relation Report - {esc(account_name)}</title>
-<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'>
 <style>
 :root {{ --green:#059669; --green-dark:#065f46; --mint:#d1fae5; --bg:#f6fffb; --text:#1f2937; --muted:#6b7280; --card:#ffffff; --line:#d1fae5; }}
 * {{ box-sizing:border-box; }}
@@ -1901,17 +1947,17 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-btn-primary {{ background:#10b981; color:#fff; }}
 .rr-btn-secondary {{ background:#e5e7eb; color:#111827; }}
 @media (max-width: 1024px) {{ .rr-hero-grid,.rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ grid-template-columns:1fr; }} }}
-@page {{ size: landscape; margin: 10mm; }}
-@media print {{ .rr-toolbar {{ display:none !important; }} html, body {{ background:#fff !important; width:100%; height:auto; margin:0 !important; padding:0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }} body {{ zoom:.78; }} .rr-shell {{ max-width:none !important; width:100% !important; padding:0 !important; margin:0 !important; }} .rr-hero {{ min-height:auto !important; padding:16px !important; border-radius:18px !important; overflow:visible !important; }} .rr-hero:after {{ display:none !important; }} .rr-top {{ display:grid !important; grid-template-columns:minmax(0,1fr) 220px !important; gap:14px !important; align-items:start !important; }} .rr-brand {{ gap:12px !important; align-items:flex-start !important; min-width:0 !important; }} .rr-user {{ justify-self:end !important; align-self:start !important; width:220px !important; }} .rr-brand-copy p {{ max-width:none !important; }} .rr-section,.rr-kpi,.rr-panel,.rr-contact-card,.rr-topic-card,.rr-info-item {{ box-shadow:none !important; break-inside:avoid; page-break-inside:avoid; }} .rr-hero {{ break-inside:auto !important; page-break-inside:auto !important; }} .rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ display:grid !important; }} .rr-kpis {{ grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:10px !important; margin-top:12px !important; }} .rr-grid {{ grid-template-columns:1.1fr .9fr !important; gap:14px !important; margin-top:16px !important; }} .rr-hero-grid {{ display:block !important; margin-top:10px !important; }} .rr-panel-summary {{ display:block !important; width:100% !important; background:rgba(255,255,255,.14) !important; border:1px solid rgba(255,255,255,.18) !important; padding:14px !important; border-radius:18px !important; margin-top:8px !important; break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-contact-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-topic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-info-list {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:10px !important; }} .rr-kpi,.rr-section,.rr-contact-card,.rr-topic-card,.rr-info-item,.rr-panel {{ margin-bottom:10px !important; }} .rr-section {{ padding:16px !important; border-radius:18px !important; }} .rr-contact-card {{ min-height:0 !important; padding:14px !important; }} .rr-topic-card {{ min-height:0 !important; padding:14px !important; }} .rr-kpi {{ padding:14px !important; }} .rr-user-photo {{ width:68px !important; height:68px !important; }} .rr-brand-mark {{ max-width:170px !important; height:52px !important; border-radius:16px !important; }} .rr-brand-mark img {{ max-width:150px !important; max-height:38px !important; }} .rr-title {{ font-size:26px !important; line-height:1.08 !important; margin-bottom:6px !important; }} .rr-subtitle {{ font-size:12px !important; line-height:1.4 !important; margin-top:4px !important; max-width:none !important; }} .rr-panel-summary h3 {{ margin:0 0 10px !important; font-size:16px !important; color:#ffffff !important; }} .rr-lead {{ font-size:12px !important; line-height:1.5 !important; color:#ffffff !important; display:block !important; visibility:visible !important; opacity:1 !important; }} .rr-context-pills {{ gap:8px !important; margin-bottom:10px !important; }} .rr-context-pill {{ padding:6px 9px !important; font-size:10px !important; }} .rr-contact-meta, .rr-muted, .rr-user-role, .rr-info-item-value {{ font-size:10px !important; }} .rr-page-break-before {{ break-before:page; page-break-before:always; }} }}
+@page {{ size: landscape; margin: 12mm 10mm; }}
+@media print {{ .rr-toolbar {{ display:none !important; }} html, body {{ background:#fff !important; width:100%; height:auto; margin:0 !important; padding:0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }} .rr-shell {{ max-width:none !important; width:100% !important; padding:0 !important; margin:0 !important; }} .rr-hero {{ min-height:auto !important; padding:16px !important; margin-top:0 !important; border-radius:18px !important; overflow:visible !important; }} .rr-hero:after {{ display:none !important; }} .rr-top {{ display:grid !important; grid-template-columns:minmax(0,1fr) 220px !important; gap:14px !important; align-items:start !important; }} .rr-brand {{ gap:12px !important; align-items:flex-start !important; min-width:0 !important; }} .rr-user {{ justify-self:end !important; align-self:start !important; width:220px !important; }} .rr-brand-copy p {{ max-width:none !important; }} .rr-section,.rr-kpi,.rr-panel,.rr-contact-card,.rr-topic-card,.rr-info-item {{ box-shadow:none !important; break-inside:avoid; page-break-inside:avoid; }} .rr-hero {{ break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ display:grid !important; }} .rr-kpis {{ grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:10px !important; margin-top:12px !important; }} .rr-grid {{ grid-template-columns:1.1fr .9fr !important; gap:14px !important; margin-top:16px !important; }} .rr-hero-grid {{ display:block !important; margin-top:10px !important; }} .rr-panel-summary {{ display:block !important; width:100% !important; background:rgba(255,255,255,.14) !important; border:1px solid rgba(255,255,255,.18) !important; padding:14px !important; border-radius:18px !important; margin-top:8px !important; break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-contact-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-topic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-info-list {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:10px !important; }} .rr-kpi,.rr-section,.rr-contact-card,.rr-topic-card,.rr-info-item,.rr-panel {{ margin-bottom:10px !important; }} .rr-section {{ padding:16px !important; border-radius:18px !important; }} .rr-contact-card {{ min-height:0 !important; padding:14px !important; }} .rr-topic-card {{ min-height:0 !important; padding:14px !important; }} .rr-kpi {{ padding:14px !important; }} .rr-user-photo {{ width:68px !important; height:68px !important; }} .rr-brand-mark {{ max-width:170px !important; height:52px !important; border-radius:16px !important; }} .rr-brand-mark img {{ max-width:150px !important; max-height:38px !important; }} .rr-title {{ font-size:26px !important; line-height:1.08 !important; margin-bottom:6px !important; }} .rr-subtitle {{ font-size:12px !important; line-height:1.4 !important; margin-top:4px !important; max-width:none !important; }} .rr-panel-summary h3 {{ margin:0 0 10px !important; font-size:16px !important; color:#ffffff !important; }} .rr-lead {{ font-size:12px !important; line-height:1.5 !important; color:#ffffff !important; display:block !important; visibility:visible !important; opacity:1 !important; }} .rr-context-pills {{ gap:8px !important; margin-bottom:10px !important; }} .rr-context-pill {{ padding:6px 9px !important; font-size:10px !important; }} .rr-contact-meta, .rr-muted, .rr-user-role, .rr-info-item-value {{ font-size:10px !important; }} .rr-page-break-before {{ break-before:page; page-break-before:always; }} }}
 </style>
 </head>
 <body>
 <div class='rr-toolbar'>
   <div class='rr-toolbar-title'>Relation Report · {esc(account_name)}</div>
   <div class='rr-toolbar-actions'>
-    <button class='rr-btn rr-btn-secondary' onclick='window.close()'><i class="fas fa-times"></i> Fechar</button>
-    <button class='rr-btn rr-btn-secondary' onclick='window.location.href=window.location.pathname.replace("/view","/export-html") + window.location.search'><i class="fas fa-file-code"></i> Exportar HTML</button>
-    <button class='rr-btn rr-btn-primary' onclick='window.print()'><i class="fas fa-print"></i> Imprimir / Salvar em PDF</button>
+    <button class='rr-btn rr-btn-secondary' onclick='window.close()'>✕ Fechar</button>
+    <button class='rr-btn rr-btn-secondary' onclick='window.location.href=window.location.pathname.replace("/view","/export-html") + window.location.search'>Exportar HTML</button>
+    <button class='rr-btn rr-btn-primary' onclick="window.location.href='/api/report/relation' + window.location.search">Exportar PDF</button>
   </div>
 </div>
 <div class='rr-shell'>
@@ -2237,7 +2283,7 @@ def view_relation_report_browser():
         report_data['narrative'] = _relation_report_generate_narrative(report_data)
         profile_response = get_profile_config()
         profile = profile_response.get_json(silent=True) if hasattr(profile_response, 'get_json') else {}
-        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {}, embed_images=False)
+        html_doc = _relation_report_build_browser_html(report_data, profile=profile or {}, embed_images=True)
         return Response(html_doc, mimetype='text/html; charset=utf-8')
     except Exception as e:
         logger.exception(f'[RelationReport] Falha ao montar visualização HTML: {e}')
