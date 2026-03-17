@@ -2019,113 +2019,46 @@
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
-                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Preencha os dados e revise um resumo rápido antes de executar.</p>
+                <p style="color:#4b5563; margin-bottom:16px;">Selecione a conta, busque o endereço e preencha o formulário diretamente abaixo, sem abrir navegador externo.</p>
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
-                    <!-- Linha 1: Conta, Tipo de Minuta, Minuta do Cliente -->
-                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:16px; margin-bottom:12px;">
                         <div class="form-group">
-                            <label>Conta <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaConta" required></select>
-                            <div id="autotocaContaOutroWrap" style="display:none; margin-top:8px;">
-                                <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Tipo de Minuta <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaTipoMinuta" required>
-                                <option>Minuta padrão Stefanini - sem ajustes</option>
-                                <option>Minuta padrão Stefanini - com ajustes do cliente</option>
-                                <option>Minuta enviada pelo cliente</option>
+                            <label for="autotocaConta">Conta *</label>
+                            <select id="autotocaConta" onchange="toggleAutoTocaContaOutro()" required>
+                                <option value="">Selecione</option>
+                                <option value="OUTRO">Outro (digitar manualmente)</option>
                             </select>
+                            <input type="text" id="autotocaContaOutro" placeholder="Digite o nome da conta" style="display:none; margin-top:8px;">
                         </div>
                         <div class="form-group">
-                            <label>Minuta do Cliente</label>
-                            <input id="autotocaArquivos9" type="file" onchange="uploadAutoTocaFiles(this,'arquivos9')">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-secondary" type="button" onclick="buscarEnderecoAutoToca()" style="width:100%;">Buscar Endereço</button>
                         </div>
                     </div>
-
-                    <!-- Linha 2: Contrato Original, Aditivos Anteriores -->
-                    <div style="display:grid; grid-template-columns:repeat(2,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:1fr; gap:16px; margin-bottom:12px;">
                         <div class="form-group">
-                            <label>Contrato Original <span style="color:#dc2626;">*</span></label>
-                            <div style="display:flex; gap:12px; align-items:flex-start;">
-                                <input id="autotocaArquivos8" type="file" onchange="uploadAutoTocaFiles(this,'arquivos8')" style="flex:1;">
-                                <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; margin-top:8px; white-space:nowrap;">
-                                    <input type="checkbox" id="autotocaContratoOriginalNaoAplica" onchange="toggleAutoTocaContratoOriginal()"> Não se aplica
-                                </label>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Aditivos Anteriores</label>
-                            <input id="autotocaArquivos7" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos7')">
+                            <label for="autotocaEnderecoFinal">Endereço</label>
+                            <textarea id="autotocaEnderecoFinal" rows="3" placeholder="O endereço localizado aparecerá aqui, mas pode ser ajustado manualmente."></textarea>
                         </div>
                     </div>
-
-                    <!-- Linha 3: Dados gerais -->
-                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
-                        <div class="form-group">
-                            <label>Número Contrato SF <span style="color:#dc2626;">*</span></label>
-                            <input id="autotocaContratoSF" type="text" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Data Assinatura</label>
-                            <input id="autotocaDataAssinatura" type="text" placeholder="Vazio = Hoje (dd/MM/yyyy)">
-                        </div>
-                        <div class="form-group">
-                            <label>Haverá Reajuste? <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaReajuste" onchange="toggleAutoTocaReajuste()">
-                                <option>Não</option>
-                                <option>Sim</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Campos de Reajuste (ocultos por padrão) -->
-                    <div id="autotocaReajusteFields" style="display:none; border:1px solid #fcd34d; border-radius:8px; padding:12px; background:#fffbeb; margin-bottom:12px;">
-                        <div style="display:grid; grid-template-columns:1fr; gap:12px;">
-                            <div class="form-group">
-                                <label>Informe o Índice Utilizado e Valor Pós Reajuste <span style="color:#dc2626;">*</span></label>
-                                <textarea id="autotocaIndiceReajuste" rows="3" placeholder="Ex: IPCA 2024 + 2%, valor anterior R$ 1.000, novo valor R$ 1.050"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label>Se Diferente do Previsto, Anexar Aprovação do CEO <span style="color:#dc2626;">*</span></label>
-                                <input id="autotocaArquivosAprovacaoCEO" type="file" onchange="uploadAutoTocaFiles(this,'aprovacaoCEO')">
-                                <small style="color:#6b7280; display:block; margin-top:4px;">Será convertido para PDF automaticamente</small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Endereço -->
-                    <div class="form-group" style="margin-bottom:12px;">
-                        <label style="display:flex; justify-content:space-between; align-items:center;">
-                            Endereço <span style="color:#dc2626;">*</span>
-                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca()" style="padding:6px 12px; font-size:12px; margin:0;">
-                                <span class="ai-star-icon">✦</span> Buscar Sede
-                            </button>
-                        </label>
-                        <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
-                        <input type="hidden" id="autotocaEnderecoSugerido">
-                        <input type="hidden" id="autotocaEnderecoFonte">
-                    </div>
-
-                    <!-- Botões de ação -->
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
-                        <button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()" style="padding:10px 16px;">
-                            <i class="fas fa-list-check"></i> Gerar Resumo
-                        </button>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:8px;">
                         <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px; position:relative;">
-                            <span class="ai-star-icon">✦</span> Executar Automação
-                            <span id="autotocaLoadingSpinner" style="display:none; margin-left:8px; width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top:2px solid white; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle;"></span>
+                            <span class="ai-star-icon">✦</span> Exibir Formulário
+                            <span id="autotocaLoadingSpinner" style="display:none; margin-left:8px;"><i class="fas fa-spinner fa-spin"></i></span>
                         </button>
-                        <style>
-                            @keyframes spin {
-                                0% { transform: rotate(0deg); }
-                                100% { transform: rotate(360deg); }
-                            }
-                        </style>
                     </div>
+                    <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
                 </form>
-                <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
+                <div id="autotocaEmbeddedFormsWrapper" style="display:none; margin-top:18px; border:1px solid #d1d5db; border-radius:12px; overflow:hidden; background:#f9fafb;">
+                    <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; background:#f3f4f6; display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <div>
+                            <div style="font-weight:600; color:#111827;">Formulário Microsoft Forms embutido</div>
+                            <div style="font-size:12px; color:#6b7280;">Se o Microsoft bloquear o iframe por política do tenant, use o link de abertura em nova aba exibido abaixo.</div>
+                        </div>
+                        <a href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" class="btn btn-secondary">Abrir em nova aba</a>
+                    </div>
+                    <iframe id="autotocaEmbeddedFormsFrame" src="" style="width:100%; min-height:900px; border:0; background:white;" referrerpolicy="no-referrer"></iframe>
+                </div>
             </div>
             <div id="autotocaTesteLinkedinPanel" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Teste Linkedin</h3>
@@ -3242,50 +3175,32 @@
             const submitBtn = document.getElementById('autotocaSubmitBtn');
             const spinner = document.getElementById('autotocaLoadingSpinner');
             const logsEl = _autoTocaGetLogsEl();
+            const wrapper = document.getElementById('autotocaEmbeddedFormsWrapper');
+            const frame = document.getElementById('autotocaEmbeddedFormsFrame');
             if (logsEl) logsEl.innerHTML = '';
-            if (!payload.contaSelecionada || !payload.numeroContratoSalesforce || !payload.enderecoFinalConfirmado) {
-                showError('Preencha Conta, Número Contrato SF e Endereço antes de executar.');
-                return;
-            }
-            if (payload.haveraReajusteValores === 'Sim' && !payload.indiceReajuste) {
-                showError('Informe os dados do reajuste antes de executar.');
+            if (!payload.contaSelecionada) {
+                showError('Selecione uma conta antes de exibir o formulário.');
                 return;
             }
             try {
                 if (submitBtn) submitBtn.disabled = true;
                 if (spinner) spinner.style.display = 'inline-block';
-                _autoTocaRenderLogLines(['<span style="color:#374151;">Tentando preencher o Microsoft Forms via Playwright no Edge com fallback para Selenium.</span>']);
-                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/playwright`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ conta: payload.contaSelecionada, forms_url: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL })
-                });
-                const data = await response.json();
-                if (data.ok) {
-                    _autoTocaAppendLog(`Campo preenchido com sucesso via ${data.strategy || 'playwright'}.`, 'success');
-                } else {
-                    _autoTocaAppendLog(`Playwright não concluiu (${data.reason || 'falha desconhecida'}).`, 'warning');
-                    if (data.fallback?.ok) {
-                        _autoTocaAppendLog('Fallback Selenium executado com sucesso.', 'success');
-                    } else if (data.fallback) {
-                        _autoTocaAppendLog(`Fallback Selenium não concluiu: ${data.fallback.reason || data.fallback.error || 'sem detalhes'}.`, 'warning');
-                    }
+                _autoTocaRenderLogLines(['<span style="color:#374151;">Carregando o Microsoft Forms embutido no sistema...</span>']);
+                if (frame) {
+                    frame.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL;
                 }
-                await openSystemDialog({
-                    title: 'Chamado Jurídico — teste executado',
-                    message: [
-                        'O sistema tentou preencher o campo “Razão Social - Parte Contrária” com o valor de “Conta”.',
-                        data.ok ? `Resultado: sucesso via ${data.strategy || 'playwright'}.` : `Resultado: ${data.reason || 'não foi possível concluir automaticamente'}.`,
-                        data.reason === 'login_required' || data.fallback?.reason === 'login_required'
-                            ? 'Observação: o Microsoft Forms exigiu autenticação Microsoft antes do preenchimento.'
-                            : 'Observação: se o seletor do formulário mudar, será necessário ajustar o mapeamento.'
-                    ].join(' '),
-                    showCancel: false,
-                });
+                if (wrapper) {
+                    wrapper.style.display = 'block';
+                }
+                _autoTocaAppendLog('Formulário carregado na área embutida abaixo.', 'success');
+                _autoTocaAppendLog('Conta selecionada: ' + escapeHtml(payload.contaSelecionada), 'info');
+                if (payload.enderecoFinalConfirmado) {
+                    _autoTocaAppendLog('Endereço disponível para apoio no preenchimento manual do formulário.', 'info');
+                }
             } catch (error) {
-                console.error('[AutoToca][ChamadoJuridico] erro na automação Playwright/Selenium', error);
-                _autoTocaAppendLog(error.message || 'Falha inesperada ao executar a automação.', 'error');
-                showError(error.message || 'Falha ao executar a automação do Chamado Jurídico.');
+                console.error('[AutoToca][ChamadoJuridico] erro ao embutir formulário', error);
+                _autoTocaAppendLog(error.message || 'Falha inesperada ao carregar o formulário.', 'error');
+                showError(error.message || 'Falha ao exibir o formulário do Chamado Jurídico.');
             } finally {
                 if (submitBtn) submitBtn.disabled = false;
                 if (spinner) spinner.style.display = 'none';
