@@ -3243,67 +3243,49 @@
             const spinner = document.getElementById('autotocaLoadingSpinner');
             const logsEl = _autoTocaGetLogsEl();
             if (logsEl) logsEl.innerHTML = '';
-
             if (!payload.contaSelecionada || !payload.numeroContratoSalesforce || !payload.enderecoFinalConfirmado) {
                 showError('Preencha Conta, Número Contrato SF e Endereço antes de executar.');
                 return;
             }
-
             if (payload.haveraReajusteValores === 'Sim' && !payload.indiceReajuste) {
                 showError('Informe os dados do reajuste antes de executar.');
                 return;
             }
-
-            const extensionReady = await checkAutoTocaExtension(true);
-            if (!extensionReady) {
-                showError('Instale e ative a extensão do AutoToca antes de executar esta automação.');
-                return;
-            }
-
             try {
                 if (submitBtn) submitBtn.disabled = true;
                 if (spinner) spinner.style.display = 'inline-block';
-                _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação do Chamado Jurídico com a extensão do AutoToca...</span>']);
-
-                const payloadEnvelope = _autoTocaPersistChamadoPayload(payload);
-                payloadEnvelope.summary = _buildResumoMarkdown(payload);
-                payloadEnvelope.filePaths = {
-                    contratoOriginal: payload.arquivosContratoOriginal || [],
-                    aditivosAnteriores: payload.arquivosAditivosAnteriores || [],
-                    minutaCliente: payload.arquivosMinutaCliente || [],
-                    aprovacaoCEO: payload.arquivosAprovacaoCEO || [],
-                };
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_PAYLOAD__ = payloadEnvelope;
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__ = payloadEnvelope.filePaths;
-
-                _autoTocaAppendLog('Payload salvo no navegador para reutilização entre abas.', 'success');
-                _autoTocaAppendLog('Enviando payload para a extensão do AutoToca.', 'info');
-                _autoTocaSendExtensionCommand('store_payload', payloadEnvelope, { formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL });
-
-                const win = _autoTocaOpenChamadoJuridicoForms();
-                if (win) {
-                    _autoTocaAppendLog('Microsoft Forms aberto/reutilizado em aba dedicada.', 'success');
+                _autoTocaRenderLogLines(['<span style="color:#374151;">Tentando preencher o Microsoft Forms via Playwright no Edge com fallback para Selenium.</span>']);
+                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/playwright`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ conta: payload.contaSelecionada, forms_url: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL })
+                });
+                const data = await response.json();
+                if (data.ok) {
+                    _autoTocaAppendLog(`Campo preenchido com sucesso via ${data.strategy || 'playwright'}.`, 'success');
                 } else {
-                    _autoTocaAppendLog('O navegador bloqueou a abertura automática da aba. Permita pop-ups e tente novamente.', 'warning');
+                    _autoTocaAppendLog(`Playwright não concluiu (${data.reason || 'falha desconhecida'}).`, 'warning');
+                    if (data.fallback?.ok) {
+                        _autoTocaAppendLog('Fallback Selenium executado com sucesso.', 'success');
+                    } else if (data.fallback) {
+                        _autoTocaAppendLog(`Fallback Selenium não concluiu: ${data.fallback.reason || data.fallback.error || 'sem detalhes'}.`, 'warning');
+                    }
                 }
-
-                _autoTocaAppendLog('Com a extensão ativa, o preenchimento deve ocorrer na própria aba do Forms após o carregamento.', 'info');
-                _autoTocaAppendLog('Os caminhos dos arquivos ficaram disponíveis em window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__.', 'info');
-                console.log('[AutoToca][ChamadoJuridico] payloadEnvelope:', payloadEnvelope);
                 await openSystemDialog({
-                    title: 'Chamado Jurídico — Automação iniciada',
+                    title: 'Chamado Jurídico — teste executado',
                     message: [
-                        'O Microsoft Forms foi aberto e a extensão recebeu o payload desta execução.',
-                        'Se o Forms exigir login Microsoft, conclua o login na própria aba do formulário e aguarde alguns segundos.',
-                        'Com a extensão ativa, o preenchimento automático deve ocorrer dentro da aba do Forms.',
-                        'Se algum campo ou upload não for reconhecido, o próximo ajuste será no mapeamento específico desse formulário.'
+                        'O sistema tentou preencher o campo “Razão Social - Parte Contrária” com o valor de “Conta”.',
+                        data.ok ? `Resultado: sucesso via ${data.strategy || 'playwright'}.` : `Resultado: ${data.reason || 'não foi possível concluir automaticamente'}.`,
+                        data.reason === 'login_required' || data.fallback?.reason === 'login_required'
+                            ? 'Observação: o Microsoft Forms exigiu autenticação Microsoft antes do preenchimento.'
+                            : 'Observação: se o seletor do formulário mudar, será necessário ajustar o mapeamento.'
                     ].join(' '),
                     showCancel: false,
                 });
             } catch (error) {
-                console.error('[AutoToca][ChamadoJuridico] erro na automação via extensão', error);
-                _autoTocaAppendLog(error.message || 'Falha inesperada ao preparar a automação.', 'error');
-                showError(error.message || 'Falha ao preparar a automação do Chamado Jurídico.');
+                console.error('[AutoToca][ChamadoJuridico] erro na automação Playwright/Selenium', error);
+                _autoTocaAppendLog(error.message || 'Falha inesperada ao executar a automação.', 'error');
+                showError(error.message || 'Falha ao executar a automação do Chamado Jurídico.');
             } finally {
                 if (submitBtn) submitBtn.disabled = false;
                 if (spinner) spinner.style.display = 'none';
