@@ -2015,116 +2015,62 @@
             <div id="autotocaExtensionStatus" style="display:none; margin-bottom:16px; background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46; border-radius:12px; padding:12px 16px; font-size:13px;"></div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
+                <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('teste-linkedin')"><span class="ai-star-icon">✦</span> Teste Linkedin</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
-                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Preencha os dados e revise um resumo rápido antes de executar.</p>
+                <p style="color:#4b5563; margin-bottom:16px;">Selecione a conta, busque o endereço e preencha o formulário diretamente abaixo, sem abrir navegador externo.</p>
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
-                    <!-- Linha 1: Conta, Tipo de Minuta, Minuta do Cliente -->
-                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:16px; margin-bottom:12px;">
                         <div class="form-group">
-                            <label>Conta <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaConta" required></select>
-                            <div id="autotocaContaOutroWrap" style="display:none; margin-top:8px;">
-                                <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Tipo de Minuta <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaTipoMinuta" required>
-                                <option>Minuta padrão Stefanini - sem ajustes</option>
-                                <option>Minuta padrão Stefanini - com ajustes do cliente</option>
-                                <option>Minuta enviada pelo cliente</option>
+                            <label for="autotocaConta">Conta *</label>
+                            <select id="autotocaConta" onchange="toggleAutoTocaContaOutro()" required>
+                                <option value="">Selecione</option>
+                                <option value="OUTRO">Outro (digitar manualmente)</option>
                             </select>
+                            <input type="text" id="autotocaContaOutro" placeholder="Digite o nome da conta" style="display:none; margin-top:8px;">
                         </div>
                         <div class="form-group">
-                            <label>Minuta do Cliente</label>
-                            <input id="autotocaArquivos9" type="file" onchange="uploadAutoTocaFiles(this,'arquivos9')">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-secondary" type="button" onclick="buscarEnderecoAutoToca()" style="width:100%;">Buscar Endereço</button>
                         </div>
                     </div>
-
-                    <!-- Linha 2: Contrato Original, Aditivos Anteriores -->
-                    <div style="display:grid; grid-template-columns:repeat(2,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:1fr; gap:16px; margin-bottom:12px;">
                         <div class="form-group">
-                            <label>Contrato Original <span style="color:#dc2626;">*</span></label>
-                            <div style="display:flex; gap:12px; align-items:flex-start;">
-                                <input id="autotocaArquivos8" type="file" onchange="uploadAutoTocaFiles(this,'arquivos8')" style="flex:1;">
-                                <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; margin-top:8px; white-space:nowrap;">
-                                    <input type="checkbox" id="autotocaContratoOriginalNaoAplica" onchange="toggleAutoTocaContratoOriginal()"> Não se aplica
-                                </label>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Aditivos Anteriores</label>
-                            <input id="autotocaArquivos7" type="file" multiple onchange="uploadAutoTocaFiles(this,'arquivos7')">
+                            <label for="autotocaEnderecoFinal">Endereço</label>
+                            <textarea id="autotocaEnderecoFinal" rows="3" placeholder="O endereço localizado aparecerá aqui, mas pode ser ajustado manualmente."></textarea>
                         </div>
                     </div>
-
-                    <!-- Linha 3: Dados gerais -->
-                    <div style="display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
-                        <div class="form-group">
-                            <label>Número Contrato SF <span style="color:#dc2626;">*</span></label>
-                            <input id="autotocaContratoSF" type="text" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Data Assinatura</label>
-                            <input id="autotocaDataAssinatura" type="text" placeholder="Vazio = Hoje (dd/MM/yyyy)">
-                        </div>
-                        <div class="form-group">
-                            <label>Haverá Reajuste? <span style="color:#dc2626;">*</span></label>
-                            <select id="autotocaReajuste" onchange="toggleAutoTocaReajuste()">
-                                <option>Não</option>
-                                <option>Sim</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Campos de Reajuste (ocultos por padrão) -->
-                    <div id="autotocaReajusteFields" style="display:none; border:1px solid #fcd34d; border-radius:8px; padding:12px; background:#fffbeb; margin-bottom:12px;">
-                        <div style="display:grid; grid-template-columns:1fr; gap:12px;">
-                            <div class="form-group">
-                                <label>Informe o Índice Utilizado e Valor Pós Reajuste <span style="color:#dc2626;">*</span></label>
-                                <textarea id="autotocaIndiceReajuste" rows="3" placeholder="Ex: IPCA 2024 + 2%, valor anterior R$ 1.000, novo valor R$ 1.050"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label>Se Diferente do Previsto, Anexar Aprovação do CEO <span style="color:#dc2626;">*</span></label>
-                                <input id="autotocaArquivosAprovacaoCEO" type="file" onchange="uploadAutoTocaFiles(this,'aprovacaoCEO')">
-                                <small style="color:#6b7280; display:block; margin-top:4px;">Será convertido para PDF automaticamente</small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Endereço -->
-                    <div class="form-group" style="margin-bottom:12px;">
-                        <label style="display:flex; justify-content:space-between; align-items:center;">
-                            Endereço <span style="color:#dc2626;">*</span>
-                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca()" style="padding:6px 12px; font-size:12px; margin:0;">
-                                <span class="ai-star-icon">✦</span> Buscar Sede
-                            </button>
-                        </label>
-                        <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
-                        <input type="hidden" id="autotocaEnderecoSugerido">
-                        <input type="hidden" id="autotocaEnderecoFonte">
-                    </div>
-
-                    <!-- Botões de ação -->
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
-                        <button class="btn btn-secondary" type="button" onclick="gerarResumoAutoToca()" style="padding:10px 16px;">
-                            <i class="fas fa-list-check"></i> Gerar Resumo
-                        </button>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:8px;">
                         <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px; position:relative;">
-                            <span class="ai-star-icon">✦</span> Executar Automação
-                            <span id="autotocaLoadingSpinner" style="display:none; margin-left:8px; width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top:2px solid white; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle;"></span>
+                            <span class="ai-star-icon">✦</span> Exibir Formulário
+                            <span id="autotocaLoadingSpinner" style="display:none; margin-left:8px;"><i class="fas fa-spinner fa-spin"></i></span>
                         </button>
-                        <style>
-                            @keyframes spin {
-                                0% { transform: rotate(0deg); }
-                                100% { transform: rotate(360deg); }
-                            }
-                        </style>
                     </div>
+                    <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
                 </form>
-                <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
+                <div id="autotocaEmbeddedFormsWrapper" style="display:none; margin-top:18px; border:1px solid #d1d5db; border-radius:12px; overflow:hidden; background:#f9fafb;">
+                    <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; background:#f3f4f6; display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <div>
+                            <div style="font-weight:600; color:#111827;">Formulário Microsoft Forms embutido</div>
+                            <div style="font-size:12px; color:#6b7280;">Se o Microsoft bloquear o iframe por política do tenant, use o link de abertura em nova aba exibido abaixo.</div>
+                        </div>
+                        <a href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" class="btn btn-secondary">Abrir em nova aba</a>
+                    </div>
+                    <iframe id="autotocaEmbeddedFormsFrame" src="" style="width:100%; min-height:900px; border:0; background:white;" referrerpolicy="no-referrer"></iframe>
+                </div>
+            </div>
+            <div id="autotocaTesteLinkedinPanel" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:16px;">
+                <h3 style="margin-bottom:8px; color:#065f46;">Teste Linkedin</h3>
+                <p style="color:#4b5563; margin-bottom:12px;">Digite nome e empresa para retornar 3 perfis compatíveis com nome, link e foto.</p>
+                <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px;">
+                    <div class="form-group"><label>Nome</label><input type="text" id="linkedinTesteNome" placeholder="Ex: João Silva"></div>
+                    <div class="form-group"><label>Empresa</label><input type="text" id="linkedinTesteEmpresa" placeholder="Ex: Empresa X"></div>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:12px;">
+                    <button class="btn btn-auto-mapping" type="button" onclick="executarTesteLinkedin()"><span class="ai-star-icon">✦</span> Buscar perfis</button>
+                </div>
+                <div id="linkedinTesteResultados" style="margin-top:16px;"></div>
             </div>
         </div>
 
@@ -2734,21 +2680,12 @@
             const notice = _autoTocaGetExtensionNoticeEl();
             const status = _autoTocaGetExtensionStatusEl();
             const text = document.getElementById('autotocaExtensionNoticeText');
-            if (autoTocaExtensionInstalled) {
-                if (notice) notice.style.display = 'none';
-                if (status) {
-                    status.style.display = 'block';
-                    status.innerHTML = `<strong>Extensão do AutoToca ativa.</strong> Última verificação: ${escapeHtml(autoTocaExtensionLastSeenAt || 'agora')}.`;
-                }
-                _autoTocaSetAutomationEnabled(true);
-                return;
-            }
-            if (notice) notice.style.display = 'block';
+            if (notice) notice.style.display = 'none';
             if (status) status.style.display = 'none';
             if (text) {
-                text.textContent = 'As funções deste módulo só funcionam após instalar e ativar a extensão do AutoToca no Chrome. Baixe a extensão abaixo, instale em modo desenvolvedor e depois clique em “Verificar novamente”.';
+                text.textContent = 'O fluxo do Formulário Jurídico agora usa somente a automação interna iniciada pelo botão Executar Automação.';
             }
-            _autoTocaSetAutomationEnabled(false);
+            _autoTocaSetAutomationEnabled(true);
         }
 
         function handleAutoTocaExtensionPong(event) {
@@ -2832,17 +2769,20 @@
                 };
             }
             toggleAutoTocaContratoOriginal();
-            renderAutoTocaExtensionState();
-            await checkAutoTocaExtension(false);
         }
 
         function toggleAutoTocaAutomation(key) {
-            const el = document.getElementById('autoTocaChamadoJuridico');
-            if (!el) return;
-            el.style.display = el.style.display === 'none' ? 'block' : 'none';
-            if (el.style.display === 'block') {
-                toggleAutoTocaContratoOriginal();
+            const chamado = document.getElementById('autoTocaChamadoJuridico');
+            const linkedin = document.getElementById('autotocaTesteLinkedinPanel');
+            if (key === 'teste-linkedin') {
+                if (chamado) chamado.style.display = 'none';
+                if (linkedin) linkedin.style.display = 'block';
+                return;
             }
+            if (linkedin) linkedin.style.display = 'none';
+            if (!chamado) return;
+            chamado.style.display = 'block';
+            toggleAutoTocaContratoOriginal();
         }
 
         function toggleAutoTocaContratoOriginal() {
@@ -3235,74 +3175,88 @@
             const submitBtn = document.getElementById('autotocaSubmitBtn');
             const spinner = document.getElementById('autotocaLoadingSpinner');
             const logsEl = _autoTocaGetLogsEl();
+            const wrapper = document.getElementById('autotocaEmbeddedFormsWrapper');
+            const frame = document.getElementById('autotocaEmbeddedFormsFrame');
             if (logsEl) logsEl.innerHTML = '';
-
-            if (!payload.contaSelecionada || !payload.numeroContratoSalesforce || !payload.enderecoFinalConfirmado) {
-                showError('Preencha Conta, Número Contrato SF e Endereço antes de executar.');
+            if (!payload.contaSelecionada) {
+                showError('Selecione uma conta antes de exibir o formulário.');
                 return;
             }
-
-            if (payload.haveraReajusteValores === 'Sim' && !payload.indiceReajuste) {
-                showError('Informe os dados do reajuste antes de executar.');
-                return;
-            }
-
-            const extensionReady = await checkAutoTocaExtension(true);
-            if (!extensionReady) {
-                showError('Instale e ative a extensão do AutoToca antes de executar esta automação.');
-                return;
-            }
-
             try {
                 if (submitBtn) submitBtn.disabled = true;
                 if (spinner) spinner.style.display = 'inline-block';
-                _autoTocaRenderLogLines(['<span style="color:#374151;">Preparando automação do Chamado Jurídico com a extensão do AutoToca...</span>']);
-
-                const payloadEnvelope = _autoTocaPersistChamadoPayload(payload);
-                payloadEnvelope.summary = _buildResumoMarkdown(payload);
-                payloadEnvelope.filePaths = {
-                    contratoOriginal: payload.arquivosContratoOriginal || [],
-                    aditivosAnteriores: payload.arquivosAditivosAnteriores || [],
-                    minutaCliente: payload.arquivosMinutaCliente || [],
-                    aprovacaoCEO: payload.arquivosAprovacaoCEO || [],
-                };
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_PAYLOAD__ = payloadEnvelope;
-                window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__ = payloadEnvelope.filePaths;
-
-                _autoTocaAppendLog('Payload salvo no navegador para reutilização entre abas.', 'success');
-                _autoTocaAppendLog('Enviando payload para a extensão do AutoToca.', 'info');
-                _autoTocaSendExtensionCommand('store_payload', payloadEnvelope, { formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL });
-
-                const win = _autoTocaOpenChamadoJuridicoForms();
-                if (win) {
-                    _autoTocaAppendLog('Microsoft Forms aberto/reutilizado em aba dedicada.', 'success');
-                } else {
-                    _autoTocaAppendLog('O navegador bloqueou a abertura automática da aba. Permita pop-ups e tente novamente.', 'warning');
+                _autoTocaRenderLogLines(['<span style="color:#374151;">Carregando o Microsoft Forms embutido no sistema...</span>']);
+                if (frame) {
+                    frame.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL;
                 }
-
-                _autoTocaAppendLog('Com a extensão ativa, o preenchimento deve ocorrer na própria aba do Forms após o carregamento.', 'info');
-                _autoTocaAppendLog('Os caminhos dos arquivos ficaram disponíveis em window.__AUTO_TOCA_CHAMADO_JURIDICO_FILE_PATHS__.', 'info');
-                console.log('[AutoToca][ChamadoJuridico] payloadEnvelope:', payloadEnvelope);
-                await openSystemDialog({
-                    title: 'Chamado Jurídico — Automação iniciada',
-                    message: [
-                        'O Microsoft Forms foi aberto e a extensão recebeu o payload desta execução.',
-                        'Se o Forms exigir login Microsoft, conclua o login na própria aba do formulário e aguarde alguns segundos.',
-                        'Com a extensão ativa, o preenchimento automático deve ocorrer dentro da aba do Forms.',
-                        'Se algum campo ou upload não for reconhecido, o próximo ajuste será no mapeamento específico desse formulário.'
-                    ].join(' '),
-                    showCancel: false,
-                });
+                if (wrapper) {
+                    wrapper.style.display = 'block';
+                }
+                _autoTocaAppendLog('Formulário carregado na área embutida abaixo.', 'success');
+                _autoTocaAppendLog('Conta selecionada: ' + escapeHtml(payload.contaSelecionada), 'info');
+                if (payload.enderecoFinalConfirmado) {
+                    _autoTocaAppendLog('Endereço disponível para apoio no preenchimento manual do formulário.', 'info');
+                }
             } catch (error) {
-                console.error('[AutoToca][ChamadoJuridico] erro na automação via extensão', error);
-                _autoTocaAppendLog(error.message || 'Falha inesperada ao preparar a automação.', 'error');
-                showError(error.message || 'Falha ao preparar a automação do Chamado Jurídico.');
+                console.error('[AutoToca][ChamadoJuridico] erro ao embutir formulário', error);
+                _autoTocaAppendLog(error.message || 'Falha inesperada ao carregar o formulário.', 'error');
+                showError(error.message || 'Falha ao exibir o formulário do Chamado Jurídico.');
             } finally {
                 if (submitBtn) submitBtn.disabled = false;
                 if (spinner) spinner.style.display = 'none';
             }
         }
 
+        function toggleAutoTocaAutomation(mode) {
+            const chamadoPanel = document.getElementById('autoTocaChamadoJuridico');
+            const linkedinPanel = document.getElementById('autotocaTesteLinkedinPanel');
+            if (mode === 'teste-linkedin') {
+                if (chamadoPanel) chamadoPanel.style.display = 'none';
+                if (linkedinPanel) linkedinPanel.style.display = 'block';
+                return;
+            }
+            if (chamadoPanel) chamadoPanel.style.display = 'block';
+            if (linkedinPanel) linkedinPanel.style.display = 'none';
+        }
+        function renderLinkedinTesteResults(items = []) {
+            const el = document.getElementById('linkedinTesteResultados');
+            if (!el) return;
+            if (!items.length) {
+                el.innerHTML = '<div style="color:#6b7280;">Nenhum perfil encontrado.</div>';
+                return;
+            }
+            el.innerHTML = items.map(item => `
+                <div style="display:flex; gap:12px; align-items:center; border:1px solid #d1fae5; border-radius:10px; padding:12px; background:white; margin-bottom:10px;">
+                    <img src="${escapeHtml(item.photo || '')}" alt="Foto" style="width:56px; height:56px; border-radius:999px; object-fit:cover; background:#ecfdf5;">
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:600; color:#065f46;">${escapeHtml(item.name || 'Sem nome')}</div>
+                        <div style="font-size:12px; color:#4b5563; word-break:break-all;"><a href="${escapeHtml(item.link || '#')}" target="_blank">${escapeHtml(item.link || '')}</a></div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        async function executarTesteLinkedin() {
+            try {
+                const name = document.getElementById('linkedinTesteNome')?.value?.trim() || '';
+                const company = document.getElementById('linkedinTesteEmpresa')?.value?.trim() || '';
+                if (!name || !company) {
+                    showError('Informe nome e empresa para executar o Teste Linkedin.');
+                    return;
+                }
+                const el = document.getElementById('linkedinTesteResultados');
+                if (el) el.innerHTML = '<div style="color:#6b7280;">Buscando perfis...</div>';
+                const response = await fetch(`${API_BASE}/autotoca/linkedin/teste`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, company })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) throw new Error(data.error || 'Falha ao buscar perfis do Linkedin.');
+                renderLinkedinTesteResults(data.items || []);
+            } catch (error) {
+                showError(error.message || 'Falha ao executar o Teste Linkedin.');
+            }
+        }
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
@@ -6023,7 +5977,7 @@
             if (modal) modal.remove();
         }
 
-        function openWhatsAppWeb(clientId) {
+        async function openWhatsAppWeb(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.phone) {
                 closeWhatsAppModal();
@@ -6040,8 +5994,23 @@
                 return;
             }
 
-            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-            whatsappWindowRef = openWhatsAppTab(url);
+            try {
+                const response = await fetch(`${API_BASE}/whatsapp/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone, message })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                    const fallbackUrl = data.fallback_url || `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                    whatsappWindowRef = openWhatsAppTab(fallbackUrl);
+                    showError('WAHA indisponível no momento. Abrimos o WhatsApp Web como contingência.');
+                }
+            } catch (error) {
+                const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                whatsappWindowRef = openWhatsAppTab(url);
+                showError('Falha ao acionar o envio automatizado. Abrimos o WhatsApp Web como contingência.');
+            }
             closeWhatsAppModal();
             askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
