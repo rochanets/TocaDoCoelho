@@ -1029,6 +1029,23 @@
             box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
         }
 
+        .filter-input {
+            width: 100%;
+            padding: 8px 10px;
+            border: 2px solid rgba(52, 211, 153, 0.25);
+            border-radius: 10px;
+            background: white;
+            color: #065f46;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .filter-input:focus {
+            outline: none;
+            border-color: #10B981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+        }
+
         .filter-clear-btn {
             height: 42px;
             border: none;
@@ -3567,6 +3584,7 @@
         let dashboardTargetFilter = '';
         let clientsCompanyFilter = '';
         let clientsPositionFilter = '';
+        let clientsNameSearch = '';
         let agendaCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
 
@@ -3578,10 +3596,14 @@
         function renderFilters(prefix, allClients, currentCompany, currentPosition) {
             const companies = uniqueValues(allClients, 'company');
             const positions = uniqueValues(allClients, 'position');
+            const currentSearch = prefix === 'Clients' ? clientsNameSearch : '';
 
             let html = '<div class="filters-bar">';
             html += '<div class="filters-row">';
             html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
+            if (prefix === 'Clients') {
+                html += `<div class="filter-group"><label class="filter-label">Pesquisar Nome</label><input class="filter-input" type="text" placeholder="Digite o nome do cliente" value="${escapeHtml(currentSearch)}" oninput="setClientsNameSearch(this.value)"></div>`;
+            }
             html += `<div class="filter-group"><label class="filter-label">Cargo</label><select class="filter-select" onchange="set${prefix}Filter('position', this.value)"><option value="">Todos os cargos</option>${positions.map(p=>`<option value="${escapeHtml(p)}" ${p===currentPosition?'selected':''}>${escapeHtml(p)}</option>`).join('')}</select></div>`;
             if (prefix === 'Dashboard') {
                 html += `<div class="filter-group"><label class="filter-label">Target</label><select class="filter-select" onchange="setDashboardFilter('target', this.value)"><option value="">Todos</option><option value="target" ${dashboardTargetFilter==='target'?'selected':''}>Target</option><option value="nao_target" ${dashboardTargetFilter==='nao_target'?'selected':''}>Não Target</option></select></div>`;
@@ -3611,12 +3633,18 @@
         function clearClientsFilters() {
             clientsCompanyFilter = '';
             clientsPositionFilter = '';
+            clientsNameSearch = '';
             loadClients();
         }
 
         function setClientsFilter(type, value) {
             if (type === 'company') clientsCompanyFilter = value;
             if (type === 'position') clientsPositionFilter = value;
+            loadClients();
+        }
+
+        function setClientsNameSearch(value) {
+            clientsNameSearch = value || '';
             loadClients();
         }
 
@@ -3780,7 +3808,8 @@
                     let filteredClients = clients.filter(client => {
                         const byCompany = !clientsCompanyFilter || (client.company || '') === clientsCompanyFilter;
                         const byPosition = !clientsPositionFilter || (client.position || '') === clientsPositionFilter;
-                        return byCompany && byPosition;
+                        const byName = !clientsNameSearch || String(client.name || '').toLowerCase().includes(clientsNameSearch.toLowerCase());
+                        return byCompany && byPosition && byName;
                     });
 
                     const sortedClients = sortClients(filteredClients, clientsSortField, clientsSortOrder);
@@ -3879,10 +3908,6 @@
                 html += '<div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.9; margin-bottom:8px;">Report & Backup</div>';
                 html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relation Report</h2>';
                 html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Abra um report executivo visual no navegador com identidade da conta, foto do usuário, cards dos contatos, contexto relacional, leitura temática e botão para imprimir ou salvar em PDF.</p>';
-                html += '</div>';
-                html += '<div style="min-width:240px; background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.16); border-radius:14px; padding:16px;">';
-                html += '<div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; opacity:0.9; margin-bottom:10px;">Saída</div>';
-                html += '<div style="font-size:14px; line-height:1.6;">PDF bonito, executivo e pronto para compartilhar.</div>';
                 html += '</div>';
                 html += '</div>';
                 html += '</div>';
