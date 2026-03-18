@@ -24,12 +24,20 @@ import mimetypes
 import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+try:
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.edge.options import Options as EdgeOptions
+    from selenium.webdriver.edge.service import Service as EdgeService
+    SELENIUM_AVAILABLE = True
+except Exception:
+    SELENIUM_AVAILABLE = False
 from werkzeug.exceptions import HTTPException
 from autotoca import AccountAddressService
 try:
@@ -9284,6 +9292,61 @@ def _autotoca_suggest_address_via_sai(account_name: str, heuristic_address: str 
     }
 
 
+
+@app.route('/api/autotoca/chamado-juridico/playwright', methods=['POST'])
+def autotoca_chamado_juridico_playwright():
+    try:
+        data = request.get_json(force=True) or {}
+        conta = (data.get('conta') or '').strip()
+        if not conta:
+            return jsonify({'ok': False, 'error': 'Conta é obrigatória.'}), 400
+        payload = {'forms_url': data.get('forms_url'), 'target_value': conta}
+        try:
+            result = _run_autotoca_playwright_fill(payload)
+        except Exception as exc:
+            logger.exception('[AutoToca] Falha no Playwright')
+            result = {'ok': False, 'strategy': 'playwright', 'reason': 'playwright_failed', 'error': str(exc)}
+        if not result.get('ok'):
+            result['fallback'] = _run_autotoca_selenium_fill(payload)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception(f'[AutoToca] POST /api/autotoca/chamado-juridico/playwright: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/autotoca/linkedin/teste', methods=['POST'])
+def autotoca_teste_linkedin():
+    try:
+        data = request.get_json(force=True) or {}
+        name = (data.get('name') or '').strip()
+        company = (data.get('company') or '').strip()
+        if not name or not company:
+            return jsonify({'ok': False, 'error': 'Informe nome e empresa.'}), 400
+        return jsonify({'ok': True, 'items': _linkedin_mock_candidates(name, company), 'mode': 'safe_fallback'})
+    except Exception as e:
+        logger.exception(f'[AutoToca] POST /api/autotoca/linkedin/teste: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/whatsapp/send', methods=['POST'])
+def send_whatsapp_message():
+    try:
+        data = request.get_json(force=True) or {}
+        phone = ''.join(ch for ch in str(data.get('phone') or '') if ch.isdigit())
+        message_text = (data.get('message') or '').strip()
+        if not phone or not message_text:
+            return jsonify({'ok': False, 'error': 'Telefone e mensagem são obrigatórios.'}), 400
+        waha_base = os.environ.get('WAHA_BASE_URL', 'http://localhost:3000')
+        session_name = os.environ.get('WAHA_SESSION', 'default')
+        try:
+            response = requests.post(f'{waha_base}/api/sendText', json={'session': session_name, 'chatId': f'{phone}@c.us', 'text': message_text}, timeout=20)
+            if response.ok:
+                body = response.json() if 'application/json' in response.headers.get('content-type', '') else {'raw': response.text}
+                return jsonify({'ok': True, 'provider': 'waha', 'response': body})
+            return jsonify({'ok': False, 'provider': 'waha', 'status_code': response.status_code, 'response': response.text, 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'})
+        except Exception as exc:
+            return jsonify({'ok': False, 'provider': 'waha', 'error': str(exc), 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'})
+    except Exception as e:
+        logger.exception(f'[Dashboard] POST /api/whatsapp/send: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 # Servir arquivos estaticos
 
