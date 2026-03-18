@@ -5874,7 +5874,8 @@
                 if (!response.ok || !data.ok) {
                     const fallbackUrl = data.fallback_url || `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
                     whatsappWindowRef = openWhatsAppTab(fallbackUrl);
-                    showError('WAHA indisponível no momento. Abrimos o WhatsApp Web como contingência.');
+                    const diagnostic = data.diagnostic ? ` Detalhe: ${data.diagnostic}` : '';
+                    showError(`WAHA indisponível no momento. Abrimos o WhatsApp Web como contingência.${diagnostic}`);
                 }
             } catch (error) {
                 const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;

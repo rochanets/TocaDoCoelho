@@ -84,6 +84,11 @@ Na release atual, a recomendação é **incluir FFmpeg no bundle** (via `--colle
 ### Porta 3000 em uso
 - Feche instâncias antigas do app e tente novamente.
 
+### WhatsApp sempre abre o WhatsApp Web
+- O app roda em `http://localhost:3000`.
+- O WAHA deve rodar em outra porta no host, por padrão `http://localhost:3001`.
+- Se `WAHA_BASE_URL` apontar para `http://localhost:3000`, o backend tentará chamar o próprio app em vez do WAHA e cairá sempre no fallback do WhatsApp Web.
+
 ### Dados não salvam
 - Verifique permissão de escrita em `%AppData%\toca-do-coelho`.
 

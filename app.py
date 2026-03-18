@@ -22,6 +22,7 @@ import ssl
 import base64
 import mimetypes
 import uuid
+import requests
 from datetime import datetime, timedelta
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
@@ -9334,14 +9335,37 @@ def send_whatsapp_message():
         message_text = (data.get('message') or '').strip()
         if not phone or not message_text:
             return jsonify({'ok': False, 'error': 'Telefone e mensagem são obrigatórios.'}), 400
-        waha_base = os.environ.get('WAHA_BASE_URL', 'http://localhost:3000')
+        waha_base = os.environ.get('WAHA_BASE_URL', 'http://localhost:3001').rstrip('/')
         session_name = os.environ.get('WAHA_SESSION', 'default')
+        api_key = (os.environ.get('WAHA_API_KEY') or '').strip()
+        headers = {'Content-Type': 'application/json'}
+        if api_key:
+            headers['X-Api-Key'] = api_key
         try:
-            response = requests.post(f'{waha_base}/api/sendText', json={'session': session_name, 'chatId': f'{phone}@c.us', 'text': message_text}, timeout=20)
+            response = requests.post(
+                f'{waha_base}/api/sendText',
+                json={'session': session_name, 'chatId': f'{phone}@c.us', 'text': message_text},
+                headers=headers,
+                timeout=20
+            )
             if response.ok:
                 body = response.json() if 'application/json' in response.headers.get('content-type', '') else {'raw': response.text}
                 return jsonify({'ok': True, 'provider': 'waha', 'response': body})
-            return jsonify({'ok': False, 'provider': 'waha', 'status_code': response.status_code, 'response': response.text, 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'})
+            diagnostic = None
+            content_type = response.headers.get('content-type', '')
+            if response.status_code == 404 and 'text/html' in content_type:
+                diagnostic = (
+                    'WAHA_BASE_URL parece apontar para outra aplicação HTTP (ex.: o próprio '
+                    'Toca do Coelho na porta 3000) e não para o servidor WAHA.'
+                )
+            return jsonify({
+                'ok': False,
+                'provider': 'waha',
+                'status_code': response.status_code,
+                'response': response.text,
+                'diagnostic': diagnostic,
+                'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'
+            })
         except Exception as exc:
             return jsonify({'ok': False, 'provider': 'waha', 'error': str(exc), 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'})
     except Exception as e:
