@@ -2032,7 +2032,7 @@
 
                     <div class="form-group" style="margin-bottom:12px;">
                         <label style="display:flex; justify-content:space-between; align-items:center;">
-                            Endereço <span style="color:#dc2626;">*</span>
+                            <span>Endereço <span style="color:#dc2626;">*</span></span>
                             <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
                                 <span class="ai-star-icon">✦</span> Buscar Sede
                             </button>
@@ -2048,20 +2048,8 @@
                         </button>
                     </div>
                 </form>
-                <div id="autotocaFormsContainer" style="display:none; margin-top:16px; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden;">
-                    <div style="display:flex; justify-content:flex-end; padding:10px 12px; background:#f9fafb; border-bottom:1px solid #e5e7eb;">
-                        <a class="btn btn-secondary btn-small" href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" rel="noopener noreferrer">
-                            Abrir em nova aba
-                        </a>
-                    </div>
-                    <iframe
-                        id="autotocaFormsIframe"
-                        title="Formulário Chamado Jurídico"
-                        src=""
-                        style="width:100%; min-height:760px; border:0;"
-                        loading="lazy"
-                        referrerpolicy="strict-origin-when-cross-origin">
-                    </iframe>
+                <div id="autotocaFormsContainer" style="display:none; margin-top:16px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff; padding:12px 14px; color:#1e3a8a; font-size:13px;">
+                    O Microsoft Forms bloqueia incorporação em iframe neste cenário. O formulário foi aberto em uma nova aba para preenchimento.
                 </div>
             </div>
         </div>
@@ -3071,18 +3059,24 @@
             }
 
             const container = document.getElementById('autotocaFormsContainer');
-            const iframe = document.getElementById('autotocaFormsIframe');
-            if (!container || !iframe) {
-                showError('Não foi possível carregar o formulário nesta tela.');
+            if (container) {
+                container.style.display = 'block';
+            }
+
+            const newTab = window.open(AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL, '_blank', 'noopener,noreferrer');
+            if (!newTab) {
+                showError('O navegador bloqueou a abertura automática. Clique em "Abrir em nova aba" no aviso abaixo.');
+                if (container) {
+                    container.innerHTML = `
+                        O navegador bloqueou pop-up automático.
+
+                        <a class="btn btn-secondary btn-small" href="${AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL}" target="_blank" rel="noopener noreferrer" style="margin-left:8px;">Abrir em nova aba</a>
+                    `;
+                }
                 return;
             }
 
-            container.style.display = 'block';
-            if (!iframe.src) {
-                iframe.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL;
-            }
-
-            showInfo('Formulário aberto abaixo para preenchimento manual. Se o navegador bloquear a exibição, abra em uma nova aba.');
+            showInfo('Formulário aberto em nova aba para preenchimento (evita a tela em branco do iframe).');
         }
 
 
