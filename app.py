@@ -148,6 +148,8 @@ WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / 'chamado-juridico'
+AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -9160,6 +9162,25 @@ def autotoca_address_suggestion():
         return jsonify(result)
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/address-suggestion: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/support-files', methods=['GET'])
+def autotoca_support_files():
+    try:
+        files = []
+        for path in sorted(AUTOTOCA_SUPPORT_FILES_DIR.glob('*')):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() != '.pdf':
+                continue
+            files.append({
+                'name': path.name,
+                'url': f'/assets/autotoca/chamado-juridico/{urllib.parse.quote(path.name)}'
+            })
+        return jsonify(files)
+    except Exception as e:
+        logger.exception(f'[AutoToca] GET /api/autotoca/support-files: {e}')
         return jsonify({'error': str(e)}), 500
 
 

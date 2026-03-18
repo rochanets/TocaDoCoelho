@@ -2020,7 +2020,7 @@
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
                 <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Selecione a conta, busque o endereço e preencha o formulário abaixo.</p>
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
-                    <div style="display:grid; grid-template-columns:repeat(1,minmax(180px,1fr)); gap:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px; margin-bottom:12px;">
                         <div class="form-group">
                             <label>Conta <span style="color:#dc2626;">*</span></label>
                             <select id="autotocaConta" required></select>
@@ -2028,18 +2028,30 @@
                                 <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
                             </div>
                         </div>
+
+                        <div class="form-group" style="margin-bottom:0;">
+                            <label style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+                                <span>Endereço <span style="color:#dc2626;">*</span></span>
+                                <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
+                                    <span class="ai-star-icon">✦</span> Buscar Sede
+                                </button>
+                            </label>
+                            <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
+                            <input type="hidden" id="autotocaEnderecoSugerido">
+                            <input type="hidden" id="autotocaEnderecoFonte">
+                        </div>
                     </div>
 
-                    <div class="form-group" style="margin-bottom:12px;">
-                        <label style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-                            <span>Endereço <span style="color:#dc2626;">*</span></span>
-                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
-                                <span class="ai-star-icon">✦</span> Buscar Sede
-                            </button>
-                        </label>
-                        <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
-                        <input type="hidden" id="autotocaEnderecoSugerido">
-                        <input type="hidden" id="autotocaEnderecoFonte">
+                    <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px; margin-bottom:12px;">
+                        <div class="form-group">
+                            <label>Empresa do Grupo Stefanini</label>
+                            <textarea id="autotocaEmpresaGrupoStefanini" rows="2" readonly style="background:#f9fafb; color:#374151;">STEFANINI CONSULTORIA E ASSESSORIA EM INFORMATICA S A</textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Arquivos de Apoio (se necessário)</label>
+                            <div id="autotocaSupportFilesList" style="display:flex; flex-direction:column; gap:8px; min-height:84px;"></div>
+                        </div>
                     </div>
 
                     <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
@@ -2770,6 +2782,7 @@
             const extensionStatus = document.getElementById('autotocaExtensionStatus');
             if (extensionNotice) extensionNotice.style.display = 'none';
             if (extensionStatus) extensionStatus.style.display = 'none';
+            await loadAutoTocaSupportFiles();
         }
 
         function toggleAutoTocaAutomation(key) {
@@ -2814,6 +2827,30 @@
                     btn.disabled = false;
                     btn.innerHTML = originalHtml;
                 }
+            }
+        }
+
+        async function loadAutoTocaSupportFiles() {
+            const container = document.getElementById('autotocaSupportFilesList');
+            if (!container) return;
+
+            container.innerHTML = '<div style="color:#6b7280; font-size:13px;">Carregando arquivos...</div>';
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/support-files`);
+                const files = response.ok ? await response.json() : [];
+                if (!Array.isArray(files) || !files.length) {
+                    container.innerHTML = '<div style="color:#6b7280; font-size:13px;">Adicione os PDFs da pasta de apoio para exibi-los aqui.</div>';
+                    return;
+                }
+
+                container.innerHTML = files.map(file => `
+                    <a href="${escapeHtml(file.url || '#')}" download class="btn btn-secondary" style="justify-content:flex-start; gap:10px; text-decoration:none;">
+                        <i class="fas fa-file-pdf" style="color:#dc2626;"></i>
+                        <span style="white-space:normal; text-align:left;">${escapeHtml(file.name || 'Arquivo.pdf')}</span>
+                    </a>
+                `).join('');
+            } catch (error) {
+                container.innerHTML = '<div style="color:#b91c1c; font-size:13px;">Não foi possível carregar os arquivos de apoio.</div>';
             }
         }
 
