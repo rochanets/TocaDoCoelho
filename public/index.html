@@ -1997,7 +1997,7 @@
                 <div style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap;">
                     <div style="flex:1; min-width:280px;">
                         <div style="font-weight:700; margin-bottom:6px;">Extensão do AutoToca necessária</div>
-                        <div id="autotocaExtensionNoticeText" style="font-size:13px; line-height:1.5;">As automações deste módulo dependem da extensão do navegador para preencher o Microsoft Forms com segurança.</div>
+                        <div id="autotocaExtensionNoticeText" style="font-size:13px; line-height:1.5;">Este aviso não é mais necessário para o Chamado Jurídico.</div>
                     </div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap;">
                         <a id="autotocaExtensionDownloadBtn" class="btn btn-auto-mapping" href="/autotoca-extension/autotoca-chrome-extension.zip" download>
@@ -2019,58 +2019,63 @@
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
-                <p style="color:#4b5563; margin-bottom:16px;">Selecione a conta, busque o endereço e preencha o formulário diretamente abaixo, sem abrir navegador externo.</p>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Selecione a conta, busque o endereço e preencha o formulário abaixo.</p>
                 <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
-                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:16px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px; margin-bottom:12px;">
                         <div class="form-group">
-                            <label for="autotocaConta">Conta *</label>
-                            <select id="autotocaConta" onchange="toggleAutoTocaContaOutro()" required>
-                                <option value="">Selecione</option>
-                                <option value="OUTRO">Outro (digitar manualmente)</option>
-                            </select>
-                            <input type="text" id="autotocaContaOutro" placeholder="Digite o nome da conta" style="display:none; margin-top:8px;">
+                            <label>Conta <span style="color:#dc2626;">*</span></label>
+                            <select id="autotocaConta" required></select>
+                            <div id="autotocaContaOutroWrap" style="display:none; margin-top:8px;">
+                                <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>&nbsp;</label>
-                            <button class="btn btn-secondary" type="button" onclick="buscarEnderecoAutoToca()" style="width:100%;">Buscar Endereço</button>
+
+                        <div class="form-group" style="margin-bottom:0;">
+                            <label style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+                                <span>Endereço <span style="color:#dc2626;">*</span></span>
+                                <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
+                                    <span class="ai-star-icon">✦</span> Buscar Sede
+                                </button>
+                            </label>
+                            <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
+                            <input type="hidden" id="autotocaEnderecoSugerido">
+                            <input type="hidden" id="autotocaEnderecoFonte">
                         </div>
                     </div>
-                    <div style="display:grid; grid-template-columns:1fr; gap:16px; margin-bottom:12px;">
+
+                    <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px; margin-bottom:12px;">
                         <div class="form-group">
-                            <label for="autotocaEnderecoFinal">Endereço</label>
-                            <textarea id="autotocaEnderecoFinal" rows="3" placeholder="O endereço localizado aparecerá aqui, mas pode ser ajustado manualmente."></textarea>
+                            <label>Empresa do Grupo Stefanini</label>
+                            <textarea id="autotocaEmpresaGrupoStefanini" rows="2" readonly style="background:#f9fafb; color:#374151;">STEFANINI CONSULTORIA E ASSESSORIA EM INFORMATICA S A</textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Arquivos de Apoio (se necessário)</label>
+                            <div id="autotocaSupportFilesList" style="display:flex; flex-direction:column; gap:8px; min-height:84px;"></div>
                         </div>
                     </div>
-                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:8px;">
-                        <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px; position:relative;">
-                            <span class="ai-star-icon">✦</span> Exibir Formulário
-                            <span id="autotocaLoadingSpinner" style="display:none; margin-left:8px;"><i class="fas fa-spinner fa-spin"></i></span>
+
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
+                        <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px;">
+                            <span class="ai-star-icon">✦</span> Abrir Formulário
                         </button>
                     </div>
                     <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
                 </form>
-                <div id="autotocaEmbeddedFormsWrapper" style="display:none; margin-top:18px; border:1px solid #d1d5db; border-radius:12px; overflow:hidden; background:#f9fafb;">
-                    <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; background:#f3f4f6; display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
-                        <div>
-                            <div style="font-weight:600; color:#111827;">Formulário Microsoft Forms embutido</div>
-                            <div style="font-size:12px; color:#6b7280;">Se o Microsoft bloquear o iframe por política do tenant, use o link de abertura em nova aba exibido abaixo.</div>
-                        </div>
-                        <a href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" class="btn btn-secondary">Abrir em nova aba</a>
+                <div id="autotocaFormsContainer" style="display:none; margin-top:16px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff; overflow:hidden;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px; color:#1e3a8a; font-size:13px; border-bottom:1px solid #bfdbfe; flex-wrap:wrap;">
+                        <span>O formulário abaixo usa o modo incorporado do Microsoft Forms. Se o navegador ou o tenant bloquear a incorporação, use o atalho ao lado.</span>
+                        <a class="btn btn-secondary btn-small" href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" rel="noopener noreferrer">Abrir em nova aba</a>
                     </div>
-                    <iframe id="autotocaEmbeddedFormsFrame" src="" style="width:100%; min-height:900px; border:0; background:white;" referrerpolicy="no-referrer"></iframe>
+                    <iframe
+                        id="autotocaFormsIframe"
+                        title="Formulário Chamado Jurídico"
+                        src=""
+                        style="width:100%; min-height:760px; border:0; background:#ffffff;"
+                        loading="lazy"
+                        referrerpolicy="strict-origin-when-cross-origin">
+                    </iframe>
                 </div>
-            </div>
-            <div id="autotocaTesteLinkedinPanel" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:16px;">
-                <h3 style="margin-bottom:8px; color:#065f46;">Teste Linkedin</h3>
-                <p style="color:#4b5563; margin-bottom:12px;">Digite nome e empresa para retornar 3 perfis compatíveis com nome, link e foto.</p>
-                <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px;">
-                    <div class="form-group"><label>Nome</label><input type="text" id="linkedinTesteNome" placeholder="Ex: João Silva"></div>
-                    <div class="form-group"><label>Empresa</label><input type="text" id="linkedinTesteEmpresa" placeholder="Ex: Empresa X"></div>
-                </div>
-                <div style="display:flex; gap:8px; margin-top:12px;">
-                    <button class="btn btn-auto-mapping" type="button" onclick="executarTesteLinkedin()"><span class="ai-star-icon">✦</span> Buscar perfis</button>
-                </div>
-                <div id="linkedinTesteResultados" style="margin-top:16px;"></div>
             </div>
         </div>
 
@@ -2511,7 +2516,6 @@
         let kanbanCards = [];
         let kanbanAccounts = [];
         let kanbanContacts = [];
-        let autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [] };
 
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
@@ -2756,7 +2760,6 @@
         }
 
         async function loadAutoToca() {
-            autoTocaUploadedFiles = { arquivos7: [], arquivos8: [], arquivos9: [], aprovacaoCEO: [] };
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
             if (response.ok && select) {
@@ -2768,76 +2771,31 @@
                     document.getElementById('autotocaContaOutroWrap').style.display = select.value === 'OUTRO' ? 'block' : 'none';
                 };
             }
-            toggleAutoTocaContratoOriginal();
+            const extensionNotice = document.getElementById('autotocaExtensionNotice');
+            const extensionStatus = document.getElementById('autotocaExtensionStatus');
+            if (extensionNotice) extensionNotice.style.display = 'none';
+            if (extensionStatus) extensionStatus.style.display = 'none';
+            await loadAutoTocaSupportFiles();
         }
 
         function toggleAutoTocaAutomation(key) {
-            const chamado = document.getElementById('autoTocaChamadoJuridico');
-            const linkedin = document.getElementById('autotocaTesteLinkedinPanel');
-            if (key === 'teste-linkedin') {
-                if (chamado) chamado.style.display = 'none';
-                if (linkedin) linkedin.style.display = 'block';
-                return;
-            }
-            if (linkedin) linkedin.style.display = 'none';
-            if (!chamado) return;
-            chamado.style.display = 'block';
-            toggleAutoTocaContratoOriginal();
+            const el = document.getElementById('autoTocaChamadoJuridico');
+            if (!el) return;
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
         }
 
-        function toggleAutoTocaContratoOriginal() {
-            const isNaoAplica = document.getElementById('autotocaContratoOriginalNaoAplica')?.checked;
-            const input = document.getElementById('autotocaArquivos8');
-            if (input) {
-                input.disabled = isNaoAplica;
-                if (isNaoAplica) {
-                    input.value = '';
-                    autoTocaUploadedFiles.arquivos8 = [];
-                }
-            }
-        }
-
-        function toggleAutoTocaReajuste() {
-            const reajuste = document.getElementById('autotocaReajuste').value;
-            const reajusteFields = document.getElementById('autotocaReajusteFields');
-            if (reajusteFields) {
-                reajusteFields.style.display = reajuste === 'Sim' ? 'block' : 'none';
-            }
-        }
-
-        async function uploadAutoTocaFiles(input, bucket) {
-            const files = Array.from(input.files || []);
-            if (!files.length) {
-                autoTocaUploadedFiles[bucket] = [];
-                return;
-            }
-            const uploaded = [];
-            for (const file of files) {
-                const fd = new FormData();
-                fd.append('file', file);
-                // Se for arquivo de aprovação do CEO, converter para PDF
-                if (bucket === 'aprovacaoCEO') {
-                    fd.append('convert_to_pdf', 'true');
-                }
-                const response = await fetch(`${API_BASE}/autotoca/upload`, { method: 'POST', body: fd });
-                if (!response.ok) { showError(`Falha no upload de ${file.name}`); return; }
-                const body = await response.json();
-                uploaded.push(body.path);
-            }
-            autoTocaUploadedFiles[bucket] = uploaded;
-            showSuccess(`${uploaded.length} arquivo(s) enviado(s).`);
-        }
-
-        async function buscarEnderecoAutoToca() {
+        async function buscarEnderecoAutoToca(evt) {
             const conta = document.getElementById('autotocaConta').value === 'OUTRO'
                 ? document.getElementById('autotocaContaOutro').value.trim()
                 : document.getElementById('autotocaConta').value;
             if (!conta) return showError('Informe a conta para buscar endereço.');
             
-            const btn = event?.currentTarget || document.querySelector('button[onclick="buscarEnderecoAutoToca()"]');
-            const originalHtml = btn.innerHTML;
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Buscando...';
+            const btn = evt?.currentTarget || document.querySelector('button[onclick*="buscarEnderecoAutoToca"]');
+            const originalHtml = btn?.innerHTML;
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Buscando...';
+            }
 
             try {
                 const response = await fetch(`${API_BASE}/autotoca/address-suggestion`, {
@@ -2858,79 +2816,39 @@
             } catch (e) {
                 showError(e.message);
             } finally {
-                btn.disabled = false;
-                btn.innerHTML = originalHtml;
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
             }
         }
 
-        function buildAutoTocaPayload() {
-            const conta = document.getElementById('autotocaConta').value === 'OUTRO'
-                ? document.getElementById('autotocaContaOutro').value.trim()
-                : document.getElementById('autotocaConta').value;
+        async function loadAutoTocaSupportFiles() {
+            const container = document.getElementById('autotocaSupportFilesList');
+            if (!container) return;
 
-            const dataAssinaturaRaw = (document.getElementById('autotocaDataAssinatura').value || '').trim();
-            const contratoOriginalNaoAplica = document.getElementById('autotocaContratoOriginalNaoAplica')?.checked;
-            const haveraReajuste = document.getElementById('autotocaReajuste').value;
-            const indiceReajuste = haveraReajuste === 'Sim' ? (document.getElementById('autotocaIndiceReajuste').value || '').trim() : '';
+            container.innerHTML = '<div style="color:#6b7280; font-size:13px;">Carregando arquivos...</div>';
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/support-files`);
+                const files = response.ok ? await response.json() : [];
+                if (!Array.isArray(files) || !files.length) {
+                    container.innerHTML = '<div style="color:#6b7280; font-size:13px;">Adicione os PDFs da pasta de apoio para exibi-los aqui.</div>';
+                    return;
+                }
 
-            return {
-                contaSelecionada: conta,
-                enderecoSedeEncontrado: document.getElementById('autotocaEnderecoSugerido').value,
-                enderecoFonte: document.getElementById('autotocaEnderecoFonte').value,
-                enderecoFinalConfirmado: document.getElementById('autotocaEnderecoFinal').value,
-                tipoMinuta: document.getElementById('autotocaTipoMinuta').value,
-                numeroContratoSalesforce: document.getElementById('autotocaContratoSF').value,
-                dataContratoModo: 'informada',
-                dataAssinaturaContratoOriginal: dataAssinaturaRaw,
-                arquivosAditivosAnteriores: autoTocaUploadedFiles.arquivos7,
-                contratoOriginalModo: contratoOriginalNaoAplica ? 'nao_se_aplica' : 'upload_usuario',
-                arquivosContratoOriginal: autoTocaUploadedFiles.arquivos8,
-                clienteEncaminhouMinuta: autoTocaUploadedFiles.arquivos9.length > 0 ? 'Sim' : 'Não',
-                arquivosMinutaCliente: autoTocaUploadedFiles.arquivos9,
-                haveraReajusteValores: haveraReajuste,
-                indiceReajuste: indiceReajuste,
-                arquivosAprovacaoCEO: autoTocaUploadedFiles.aprovacaoCEO || [],
-            };
-        }
-
-        function _buildResumoMarkdown(payload) {
-            const dataAssinatura = payload.dataAssinaturaContratoOriginal || 'Hoje (Automático)';
-            const contratoOriginal = payload.contratoOriginalModo === 'nao_se_aplica' 
-                ? '📄 Arquivo Genérico (Não se aplica)' 
-                : (payload.arquivosContratoOriginal.length > 0 ? `✅ ${payload.arquivosContratoOriginal.length} arquivo(s) enviado(s)` : '⚠️ Nenhum arquivo (será usado genérico)');
-            
-            const minutaCliente = payload.arquivosMinutaCliente.length > 0 
-                ? `✅ ${payload.arquivosMinutaCliente.length} arquivo(s) enviado(s)` 
-                : '📄 Arquivo Genérico (Padrão)';
-
-            return `
-### 📝 Resumo da Requisição Jurídica
-
-*   **🏢 Conta:** ${payload.contaSelecionada || 'Não informada'}
-*   **📍 Endereço:** ${payload.enderecoFinalConfirmado || 'Não informado'}
-*   **📄 Tipo de Minuta:** ${payload.tipoMinuta}
-*   **🔢 Contrato Salesforce:** ${payload.numeroContratoSalesforce || 'Não informado'}
-*   **📅 Data Assinatura:** ${dataAssinatura}
-*   **📑 Contrato Original:** ${contratoOriginal}
-*   **📎 Aditivos Anteriores:** ${payload.arquivosAditivosAnteriores.length} arquivo(s)
-*   **📝 Minuta do Cliente:** ${minutaCliente}
-*   **🔄 Reajuste:** ${payload.haveraReajusteValores}
-
----
-*Pronto para executar a automação!* 🚀
-            `.trim();
-        }
-
-        async function gerarResumoAutoToca() {
-            const payload = buildAutoTocaPayload();
-            await openSystemDialog({
-                title: 'Resumo da Automação',
-                message: _buildResumoMarkdown(payload),
-                showCancel: false,
-            });
+                container.innerHTML = files.map(file => `
+                    <a href="${escapeHtml(file.url || '#')}" download class="btn btn-secondary" style="justify-content:flex-start; gap:10px; text-decoration:none;">
+                        <i class="fas fa-file-pdf" style="color:#dc2626;"></i>
+                        <span style="white-space:normal; text-align:left;">${escapeHtml(file.name || 'Arquivo.pdf')}</span>
+                    </a>
+                `).join('');
+            } catch (error) {
+                container.innerHTML = '<div style="color:#b91c1c; font-size:13px;">Não foi possível carregar os arquivos de apoio.</div>';
+            }
         }
 
         const AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu';
+        const AUTOTOCA_CHAMADO_JURIDICO_FORMS_EMBED_URL = `${AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL}&embed=true`;
 
         function _autoTocaGetLogsEl() {
             return document.getElementById('autotocaLogs');
@@ -3171,92 +3089,31 @@
 
         async function runChamadoJuridico(event) {
             event.preventDefault();
-            const payload = buildAutoTocaPayload();
-            const submitBtn = document.getElementById('autotocaSubmitBtn');
-            const spinner = document.getElementById('autotocaLoadingSpinner');
-            const logsEl = _autoTocaGetLogsEl();
-            const wrapper = document.getElementById('autotocaEmbeddedFormsWrapper');
-            const frame = document.getElementById('autotocaEmbeddedFormsFrame');
-            if (logsEl) logsEl.innerHTML = '';
-            if (!payload.contaSelecionada) {
-                showError('Selecione uma conta antes de exibir o formulário.');
+
+            const conta = document.getElementById('autotocaConta').value === 'OUTRO'
+                ? document.getElementById('autotocaContaOutro').value.trim()
+                : document.getElementById('autotocaConta').value;
+            const endereco = document.getElementById('autotocaEnderecoFinal').value.trim();
+
+            if (!conta || !endereco) {
+                showError('Preencha Conta e Endereço antes de abrir o formulário.');
                 return;
             }
-            try {
-                if (submitBtn) submitBtn.disabled = true;
-                if (spinner) spinner.style.display = 'inline-block';
-                _autoTocaRenderLogLines(['<span style="color:#374151;">Carregando o Microsoft Forms embutido no sistema...</span>']);
-                if (frame) {
-                    frame.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL;
-                }
-                if (wrapper) {
-                    wrapper.style.display = 'block';
-                }
-                _autoTocaAppendLog('Formulário carregado na área embutida abaixo.', 'success');
-                _autoTocaAppendLog('Conta selecionada: ' + escapeHtml(payload.contaSelecionada), 'info');
-                if (payload.enderecoFinalConfirmado) {
-                    _autoTocaAppendLog('Endereço disponível para apoio no preenchimento manual do formulário.', 'info');
-                }
-            } catch (error) {
-                console.error('[AutoToca][ChamadoJuridico] erro ao embutir formulário', error);
-                _autoTocaAppendLog(error.message || 'Falha inesperada ao carregar o formulário.', 'error');
-                showError(error.message || 'Falha ao exibir o formulário do Chamado Jurídico.');
-            } finally {
-                if (submitBtn) submitBtn.disabled = false;
-                if (spinner) spinner.style.display = 'none';
+
+            const container = document.getElementById('autotocaFormsContainer');
+            const iframe = document.getElementById('autotocaFormsIframe');
+            if (!container || !iframe) {
+                showError('Não foi possível carregar o formulário nesta tela.');
+                return;
             }
+
+            container.style.display = 'block';
+            iframe.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_EMBED_URL;
+
+            showInfo('Formulário carregado no container. Se o Microsoft Forms bloquear a incorporação, use “Abrir em nova aba”.');
         }
 
-        function toggleAutoTocaAutomation(mode) {
-            const chamadoPanel = document.getElementById('autoTocaChamadoJuridico');
-            const linkedinPanel = document.getElementById('autotocaTesteLinkedinPanel');
-            if (mode === 'teste-linkedin') {
-                if (chamadoPanel) chamadoPanel.style.display = 'none';
-                if (linkedinPanel) linkedinPanel.style.display = 'block';
-                return;
-            }
-            if (chamadoPanel) chamadoPanel.style.display = 'block';
-            if (linkedinPanel) linkedinPanel.style.display = 'none';
-        }
-        function renderLinkedinTesteResults(items = []) {
-            const el = document.getElementById('linkedinTesteResultados');
-            if (!el) return;
-            if (!items.length) {
-                el.innerHTML = '<div style="color:#6b7280;">Nenhum perfil encontrado.</div>';
-                return;
-            }
-            el.innerHTML = items.map(item => `
-                <div style="display:flex; gap:12px; align-items:center; border:1px solid #d1fae5; border-radius:10px; padding:12px; background:white; margin-bottom:10px;">
-                    <img src="${escapeHtml(item.photo || '')}" alt="Foto" style="width:56px; height:56px; border-radius:999px; object-fit:cover; background:#ecfdf5;">
-                    <div style="flex:1; min-width:0;">
-                        <div style="font-weight:600; color:#065f46;">${escapeHtml(item.name || 'Sem nome')}</div>
-                        <div style="font-size:12px; color:#4b5563; word-break:break-all;"><a href="${escapeHtml(item.link || '#')}" target="_blank">${escapeHtml(item.link || '')}</a></div>
-                    </div>
-                </div>
-            `).join('');
-        }
-        async function executarTesteLinkedin() {
-            try {
-                const name = document.getElementById('linkedinTesteNome')?.value?.trim() || '';
-                const company = document.getElementById('linkedinTesteEmpresa')?.value?.trim() || '';
-                if (!name || !company) {
-                    showError('Informe nome e empresa para executar o Teste Linkedin.');
-                    return;
-                }
-                const el = document.getElementById('linkedinTesteResultados');
-                if (el) el.innerHTML = '<div style="color:#6b7280;">Buscando perfis...</div>';
-                const response = await fetch(`${API_BASE}/autotoca/linkedin/teste`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, company })
-                });
-                const data = await response.json();
-                if (!response.ok || !data.ok) throw new Error(data.error || 'Falha ao buscar perfis do Linkedin.');
-                renderLinkedinTesteResults(data.items || []);
-            } catch (error) {
-                showError(error.message || 'Falha ao executar o Teste Linkedin.');
-            }
-        }
+
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
@@ -3536,6 +3393,7 @@
         let dashboardCompanyFilter = '';
         let dashboardPositionFilter = '';
         let dashboardTargetFilter = '';
+        let dashboardContactSearch = '';
         let clientsCompanyFilter = '';
         let clientsPositionFilter = '';
         let clientsNameSearch = '';
@@ -3551,9 +3409,13 @@
             const companies = uniqueValues(allClients, 'company');
             const positions = uniqueValues(allClients, 'position');
             const currentSearch = prefix === 'Clients' ? clientsNameSearch : '';
+            const dashboardSearch = prefix === 'Dashboard' ? dashboardContactSearch : '';
 
             let html = '<div class="filters-bar">';
             html += '<div class="filters-row">';
+            if (prefix === 'Dashboard') {
+                html += `<div class="filter-group"><label class="filter-label">Pesquisa</label><input class="filter-input" type="text" placeholder="Pesquisar contato" value="${escapeHtml(dashboardSearch)}" oninput="setDashboardContactSearch(this.value)"></div>`;
+            }
             html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
             if (prefix === 'Clients') {
                 html += `<div class="filter-group"><label class="filter-label">Pesquisar Nome</label><input class="filter-input" type="text" placeholder="Digite o nome do cliente" value="${escapeHtml(currentSearch)}" oninput="setClientsNameSearch(this.value)"></div>`;
@@ -3573,6 +3435,7 @@
             dashboardCompanyFilter = '';
             dashboardPositionFilter = '';
             dashboardTargetFilter = '';
+            dashboardContactSearch = '';
             loadDashboard();
         }
 
@@ -3580,6 +3443,11 @@
             if (type === 'company') dashboardCompanyFilter = value;
             if (type === 'position') dashboardPositionFilter = value;
             if (type === 'target') dashboardTargetFilter = value;
+            loadDashboard();
+        }
+
+        function setDashboardContactSearch(value) {
+            dashboardContactSearch = (value || '').trimStart();
             loadDashboard();
         }
 
@@ -3688,11 +3556,13 @@
                     html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 } else {
                     const weekCount = await loadWeekSummary();
+                    const contactSearchTerm = (dashboardContactSearch || '').trim().toLocaleLowerCase('pt-BR');
                     let filteredClients = clients.filter(client => {
                         const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
                         const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
                         const byTarget = !dashboardTargetFilter || (dashboardTargetFilter === 'target' ? Number(client.is_target) === 1 : Number(client.is_target) !== 1);
-                        return byCompany && byPosition && byTarget;
+                        const byContact = !contactSearchTerm || String(client.name || '').toLocaleLowerCase('pt-BR').includes(contactSearchTerm);
+                        return byCompany && byPosition && byTarget && byContact;
                     });
 
                     const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);

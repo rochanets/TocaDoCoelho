@@ -156,104 +156,8 @@ WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-def _detect_edge_binary():
-    for path in ['/usr/bin/microsoft-edge','/usr/bin/microsoft-edge-stable','/usr/bin/msedge','/usr/bin/chromium','/usr/bin/chromium-browser','/snap/bin/microsoft-edge']:
-        if Path(path).exists():
-            return path
-    return None
-
-def _write_autotoca_playwright_script():
-    script_path = AUTOTOCA_PLAYWRIGHT_DIR / 'fill_forms.py'
-    script_path.write_text("""import json, os
-from playwright.sync_api import sync_playwright
-FORMS_URL=os.environ.get('AUTOTOCA_FORMS_URL','')
-VALUE=os.environ.get('AUTOTOCA_TARGET_VALUE','')
-EDGE_PATH=os.environ.get('AUTOTOCA_EDGE_PATH') or None
-def pick(page):
-    sels=['input[type=\"text\"]','textarea','[role=\"textbox\"]','input:not([type])']
-    for s in sels:
-        for el in page.locator(s).all():
-            try:
-                label=' '.join(filter(None,[el.get_attribute('aria-label') or '',el.get_attribute('placeholder') or '',el.get_attribute('name') or '',el.evaluate("e => { const c = e.closest('div'); return c ? (c.innerText || '') : ''; }") or ''])).lower()
-                if 'parte contr' in label or 'razão social' in label:
-                    return el,label
-            except Exception:
-                pass
-    return None,''
-res={'ok':False,'strategy':'playwright','url':FORMS_URL}
-with sync_playwright() as p:
-    browser=(p.chromium.launch(headless=True, executable_path=EDGE_PATH) if EDGE_PATH else p.chromium.launch(headless=True))
-    page=browser.new_page()
-    page.goto(FORMS_URL, wait_until='domcontentloaded', timeout=60000)
-    page.wait_for_timeout(3000)
-    if 'login.microsoftonline.com' in page.url:
-        res['reason']='login_required'; res['current_url']=page.url; print(json.dumps(res, ensure_ascii=False)); browser.close(); raise SystemExit
-    el,matched=pick(page)
-    if not el:
-        res['reason']='field_not_found'; res['current_url']=page.url; print(json.dumps(res, ensure_ascii=False)); browser.close(); raise SystemExit
-    el.fill(VALUE, timeout=15000)
-    res.update({'ok':True,'matched_context':matched,'current_url':page.url})
-    print(json.dumps(res, ensure_ascii=False))
-    browser.close()
-""", encoding='utf-8')
-    return script_path
-
-def _run_autotoca_playwright_fill(payload):
-    script_path = _write_autotoca_playwright_script()
-    env = os.environ.copy()
-    env['AUTOTOCA_FORMS_URL'] = payload.get('forms_url') or 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu'
-    env['AUTOTOCA_TARGET_VALUE'] = payload.get('target_value') or ''
-    edge_path = _detect_edge_binary()
-    if edge_path: env['AUTOTOCA_EDGE_PATH'] = edge_path
-    proc = subprocess.run(['python3.11', str(script_path)], capture_output=True, text=True, env=env, timeout=120)
-    lines = [ln for ln in (proc.stdout or '').splitlines() if ln.strip()]
-    if not lines: raise RuntimeError((proc.stderr or 'Playwright sem saída')[-3000:])
-    import json as _json
-    result = _json.loads(lines[-1])
-    result['stdout'] = (proc.stdout or '')[-3000:]
-    result['stderr'] = (proc.stderr or '')[-3000:]
-    return result
-
-def _run_autotoca_selenium_fill(payload):
-    if not SELENIUM_AVAILABLE:
-        return {'ok': False, 'strategy': 'selenium', 'reason': 'selenium_unavailable'}
-    options = EdgeOptions()
-    edge_binary = _detect_edge_binary()
-    if edge_binary: options.binary_location = edge_binary
-    options.add_argument('--headless=new'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage')
-    driver = None
-    try:
-        driver = webdriver.Edge(options=options, service=EdgeService())
-        driver.get(payload.get('forms_url') or 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu')
-        if 'login.microsoftonline.com' in driver.current_url:
-            return {'ok': False, 'strategy': 'selenium', 'reason': 'login_required', 'current_url': driver.current_url}
-        target = None; matched=''
-        for el in driver.find_elements(By.CSS_SELECTOR, 'input[type=\"text\"], textarea, [role=\"textbox\"], input:not([type])'):
-            try:
-                txt=' '.join(filter(None,[el.get_attribute('aria-label') or '',el.get_attribute('placeholder') or '',el.get_attribute('name') or '',driver.execute_script("const c = arguments[0].closest('div'); return c ? (c.innerText || '') : '';", el) or ''])).lower()
-                if 'parte contr' in txt or 'razão social' in txt: target=el; matched=txt; break
-            except Exception:
-                pass
-        if not target: return {'ok': False, 'strategy': 'selenium', 'reason': 'field_not_found', 'current_url': driver.current_url}
-        target.clear(); target.send_keys(payload.get('target_value') or '')
-        return {'ok': True, 'strategy': 'selenium', 'matched_context': matched, 'current_url': driver.current_url}
-    except Exception as exc:
-        return {'ok': False, 'strategy': 'selenium', 'reason': 'unexpected_error', 'error': str(exc)}
-    finally:
-        if driver:
-            try: driver.quit()
-            except Exception: pass
-
-def _linkedin_mock_candidates(name, company):
-    query = quote_plus(f"{name} {company} linkedin")
-    base = f"https://www.linkedin.com/search/results/people/?keywords={query}"
-    photo = 'https://static.licdn.com/aero-v1/sc/h/13m4dq9c31s1sl7p7h82gh1vh'
-    return [
-        {'name': f'{name} — opção 1', 'link': base, 'photo': photo, 'source': 'fallback'},
-        {'name': f'{name} — opção 2', 'link': base + '&page=2', 'photo': photo, 'source': 'fallback'},
-        {'name': f'{name} — opção 3', 'link': base + '&page=3', 'photo': photo, 'source': 'fallback'},
-    ]
-
+AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / 'chamado-juridico'
+AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -9245,12 +9149,147 @@ def autotoca_address_suggestion():
     try:
         data = request.get_json(force=True) or {}
         account_name = (data.get('account_name') or '').strip()
+        if not account_name:
+            return jsonify({'error': 'Conta inválida para busca de endereço.'}), 400
+
         service = AccountAddressService()
-        result = service.find_headquarter_address(account_name)
+        heuristic_result = service.find_headquarter_address(account_name)
+
+        sai_result = _autotoca_suggest_address_via_sai(
+            account_name,
+            heuristic_address=heuristic_result.get('suggested_address', ''),
+            heuristic_source=heuristic_result.get('source', '')
+        )
+
+        if sai_result and sai_result.get('suggested_address'):
+            sai_confidence = (sai_result.get('confidence') or 'medium').lower().strip()
+            if sai_confidence != 'low' or not heuristic_result.get('suggested_address'):
+                return jsonify(sai_result)
+
+        result = heuristic_result
         return jsonify(result)
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/address-suggestion: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/support-files', methods=['GET'])
+def autotoca_support_files():
+    try:
+        files = []
+        for path in sorted(AUTOTOCA_SUPPORT_FILES_DIR.glob('*')):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() != '.pdf':
+                continue
+            files.append({
+                'name': path.name,
+                'url': f'/assets/autotoca/chamado-juridico/{urllib.parse.quote(path.name)}'
+            })
+        return jsonify(files)
+    except Exception as e:
+        logger.exception(f'[AutoToca] GET /api/autotoca/support-files: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _autotoca_suggest_address_via_sai(account_name: str, heuristic_address: str = '', heuristic_source: str = ''):
+    """Tenta obter endereço de sede via SAI LLM; retorna dict padronizado ou None."""
+    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
+    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+    template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    if not api_key:
+        return None
+
+    question = (
+        f"Qual é o endereço da sede/matriz no Brasil da empresa '{account_name}'? "
+        "Retorne SOMENTE um JSON válido no formato: "
+        "{\"suggested_address\":\"...\",\"confidence\":\"high|medium|low\",\"source\":\"...\"}. "
+        "Se não encontrar com segurança, retorne suggested_address vazio e confidence low."
+    )
+    context_sources = (
+        f"Empresa: {account_name}.\n"
+        f"Sugestão heurística anterior: {heuristic_address or 'nenhuma'}.\n"
+        f"Fonte heurística: {heuristic_source or 'n/a'}."
+    )
+
+    url = f'{base_url}/api/templates/{template_id}/execute'
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Api-Key': api_key,
+    }
+    payload = {
+        'inputs': {
+            'question': question,
+            'context_sources': context_sources,
+        }
+    }
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers=headers,
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            raw = resp.read().decode('utf-8', errors='ignore')
+    except Exception as e:
+        logger.warning(f'[AutoToca][Address][SAI] falha na chamada SAI: {e}')
+        return None
+
+    def _try_parse_json(value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = json.loads(value.strip())
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+        return None
+
+    parsed = _try_parse_json(raw) or {}
+    if 'answer' not in parsed:
+        for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message'):
+            candidate = parsed.get(key)
+            nested = _try_parse_json(candidate)
+            if nested:
+                parsed = nested
+                break
+
+    answer = parsed.get('answer') if isinstance(parsed, dict) else ''
+    answer_obj = _try_parse_json(answer) if isinstance(answer, str) else None
+    if answer_obj:
+        parsed = answer_obj
+
+    suggested = (parsed.get('suggested_address') or '').strip() if isinstance(parsed, dict) else ''
+    confidence = (parsed.get('confidence') or 'medium').strip().lower() if isinstance(parsed, dict) else 'medium'
+    source = (parsed.get('source') or '').strip() if isinstance(parsed, dict) else ''
+
+    # fallback: quando o template devolve texto livre em "answer"
+    if not suggested and isinstance(answer, str):
+        for line in [ln.strip(' -•\t') for ln in answer.splitlines() if ln.strip()]:
+            if AccountAddressService._is_candidate_address(line):
+                suggested = line
+                break
+
+    if not suggested or not AccountAddressService._is_candidate_address(suggested):
+        return None
+
+    if confidence not in ('high', 'medium', 'low'):
+        confidence = 'medium'
+
+    return {
+        'suggested_address': suggested,
+        'source': source or 'SAI LLM (iToca)',
+        'confidence': confidence,
+    }
 
 
 
