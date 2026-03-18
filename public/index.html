@@ -2031,7 +2031,7 @@
                     </div>
 
                     <div class="form-group" style="margin-bottom:12px;">
-                        <label style="display:flex; justify-content:space-between; align-items:center;">
+                        <label style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
                             <span>Endereço <span style="color:#dc2626;">*</span></span>
                             <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
                                 <span class="ai-star-icon">✦</span> Buscar Sede
@@ -2048,8 +2048,19 @@
                         </button>
                     </div>
                 </form>
-                <div id="autotocaFormsContainer" style="display:none; margin-top:16px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff; padding:12px 14px; color:#1e3a8a; font-size:13px;">
-                    O Microsoft Forms bloqueia incorporação em iframe neste cenário. O formulário foi aberto em uma nova aba para preenchimento.
+                <div id="autotocaFormsContainer" style="display:none; margin-top:16px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff; overflow:hidden;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px; color:#1e3a8a; font-size:13px; border-bottom:1px solid #bfdbfe; flex-wrap:wrap;">
+                        <span>O formulário abaixo usa o modo incorporado do Microsoft Forms. Se o navegador ou o tenant bloquear a incorporação, use o atalho ao lado.</span>
+                        <a class="btn btn-secondary btn-small" href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" rel="noopener noreferrer">Abrir em nova aba</a>
+                    </div>
+                    <iframe
+                        id="autotocaFormsIframe"
+                        title="Formulário Chamado Jurídico"
+                        src=""
+                        style="width:100%; min-height:760px; border:0; background:#ffffff;"
+                        loading="lazy"
+                        referrerpolicy="strict-origin-when-cross-origin">
+                    </iframe>
                 </div>
             </div>
         </div>
@@ -2807,6 +2818,7 @@
         }
 
         const AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu';
+        const AUTOTOCA_CHAMADO_JURIDICO_FORMS_EMBED_URL = `${AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL}&embed=true`;
 
         function _autoTocaGetLogsEl() {
             return document.getElementById('autotocaLogs');
@@ -3059,24 +3071,16 @@
             }
 
             const container = document.getElementById('autotocaFormsContainer');
-            if (container) {
-                container.style.display = 'block';
-            }
-
-            const newTab = window.open(AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL, '_blank', 'noopener,noreferrer');
-            if (!newTab) {
-                showError('O navegador bloqueou a abertura automática. Clique em "Abrir em nova aba" no aviso abaixo.');
-                if (container) {
-                    container.innerHTML = `
-                        O navegador bloqueou pop-up automático.
-
-                        <a class="btn btn-secondary btn-small" href="${AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL}" target="_blank" rel="noopener noreferrer" style="margin-left:8px;">Abrir em nova aba</a>
-                    `;
-                }
+            const iframe = document.getElementById('autotocaFormsIframe');
+            if (!container || !iframe) {
+                showError('Não foi possível carregar o formulário nesta tela.');
                 return;
             }
 
-            showInfo('Formulário aberto em nova aba para preenchimento (evita a tela em branco do iframe).');
+            container.style.display = 'block';
+            iframe.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_EMBED_URL;
+
+            showInfo('Formulário carregado no container. Se o Microsoft Forms bloquear a incorporação, use “Abrir em nova aba”.');
         }
 
 
@@ -3359,6 +3363,7 @@
         let dashboardCompanyFilter = '';
         let dashboardPositionFilter = '';
         let dashboardTargetFilter = '';
+        let dashboardContactSearch = '';
         let clientsCompanyFilter = '';
         let clientsPositionFilter = '';
         let clientsNameSearch = '';
@@ -3374,9 +3379,13 @@
             const companies = uniqueValues(allClients, 'company');
             const positions = uniqueValues(allClients, 'position');
             const currentSearch = prefix === 'Clients' ? clientsNameSearch : '';
+            const dashboardSearch = prefix === 'Dashboard' ? dashboardContactSearch : '';
 
             let html = '<div class="filters-bar">';
             html += '<div class="filters-row">';
+            if (prefix === 'Dashboard') {
+                html += `<div class="filter-group"><label class="filter-label">Pesquisa</label><input class="filter-input" type="text" placeholder="Pesquisar contato" value="${escapeHtml(dashboardSearch)}" oninput="setDashboardContactSearch(this.value)"></div>`;
+            }
             html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
             if (prefix === 'Clients') {
                 html += `<div class="filter-group"><label class="filter-label">Pesquisar Nome</label><input class="filter-input" type="text" placeholder="Digite o nome do cliente" value="${escapeHtml(currentSearch)}" oninput="setClientsNameSearch(this.value)"></div>`;
@@ -3396,6 +3405,7 @@
             dashboardCompanyFilter = '';
             dashboardPositionFilter = '';
             dashboardTargetFilter = '';
+            dashboardContactSearch = '';
             loadDashboard();
         }
 
@@ -3403,6 +3413,11 @@
             if (type === 'company') dashboardCompanyFilter = value;
             if (type === 'position') dashboardPositionFilter = value;
             if (type === 'target') dashboardTargetFilter = value;
+            loadDashboard();
+        }
+
+        function setDashboardContactSearch(value) {
+            dashboardContactSearch = (value || '').trimStart();
             loadDashboard();
         }
 
@@ -3511,11 +3526,13 @@
                     html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 } else {
                     const weekCount = await loadWeekSummary();
+                    const contactSearchTerm = (dashboardContactSearch || '').trim().toLocaleLowerCase('pt-BR');
                     let filteredClients = clients.filter(client => {
                         const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
                         const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
                         const byTarget = !dashboardTargetFilter || (dashboardTargetFilter === 'target' ? Number(client.is_target) === 1 : Number(client.is_target) !== 1);
-                        return byCompany && byPosition && byTarget;
+                        const byContact = !contactSearchTerm || String(client.name || '').toLocaleLowerCase('pt-BR').includes(contactSearchTerm);
+                        return byCompany && byPosition && byTarget && byContact;
                     });
 
                     const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
