@@ -5808,6 +5808,45 @@
             return win;
         }
 
+        function prepareWhatsAppTab() {
+            if (whatsappWindowRef && !whatsappWindowRef.closed) {
+                try {
+                    whatsappWindowRef.focus();
+                    return whatsappWindowRef;
+                } catch (e) { /* segue para tentar reabrir */ }
+            }
+            const win = window.open('about:blank', 'toca_whatsapp_web');
+            if (win) {
+                try {
+                    win.document.title = 'Abrindo WhatsApp...';
+                    win.document.body.innerHTML = '<div style="font-family: Arial, sans-serif; padding: 24px; color: #111827;">Preparando WhatsApp...</div>';
+                } catch (e) { /* cross-origin ou bloqueio parcial */ }
+                win.focus();
+            }
+            whatsappWindowRef = win;
+            return win;
+        }
+
+        function resolveWhatsAppFallbackUrl(phone, message, fallbackUrl) {
+            const defaultUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+            if (!fallbackUrl || typeof fallbackUrl !== 'string') return defaultUrl;
+            const normalized = fallbackUrl.trim();
+            if (normalized.startsWith('https://web.whatsapp.com/') || normalized.startsWith('https://wa.me/')) {
+                return normalized;
+            }
+            return defaultUrl;
+        }
+
+        function closePreparedWhatsAppTabIfIdle() {
+            if (!whatsappWindowRef || whatsappWindowRef.closed) return;
+            try {
+                if (whatsappWindowRef.location.href === 'about:blank') {
+                    whatsappWindowRef.close();
+                    whatsappWindowRef = null;
+                }
+            } catch (e) { /* janela já navegou para outro domínio */ }
+        }
+
 
         function openMissingContactModal() {
             let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
@@ -5864,6 +5903,8 @@
                 return;
             }
 
+            prepareWhatsAppTab();
+
             try {
                 const response = await fetch(`${API_BASE}/whatsapp/send`, {
                     method: 'POST',
@@ -5871,8 +5912,10 @@
                     body: JSON.stringify({ phone, message })
                 });
                 const data = await response.json();
-                if (!response.ok || !data.ok) {
-                    const fallbackUrl = data.fallback_url || `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                if (response.ok && data.ok) {
+                    closePreparedWhatsAppTabIfIdle();
+                } else {
+                    const fallbackUrl = resolveWhatsAppFallbackUrl(phone, message, data.fallback_url);
                     const diagnostic = data.diagnostic || data.error || 'O WAHA não retornou sucesso.';
                     console.error('[WAHA] Falha ao enviar mensagem; usando fallback no WhatsApp Web.', data);
                     await openSystemDialog({
@@ -5883,7 +5926,7 @@
                     showError(`WAHA indisponível. Detalhes: ${diagnostic}`);
                 }
             } catch (error) {
-                const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                const url = resolveWhatsAppFallbackUrl(phone, message);
                 console.error('[WAHA] Erro inesperado ao acionar /api/whatsapp/send.', error);
                 await openSystemDialog({
                     title: 'Falha ao acionar WAHA',
