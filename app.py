@@ -11,6 +11,7 @@ import re
 import zipfile
 import tempfile
 import threading
+import concurrent.futures
 import traceback
 import shutil
 import urllib.request
@@ -6259,6 +6260,63 @@ def check_duplicate_client():
         print(f'[ERROR] POST /api/clients/check-duplicate: {e}')
         return jsonify({'error': str(e)}), 500
 
+def _autopic_get_role_via_llm(name, company):
+    """Usa o SAI (ou OpenRouter como fallback) para descobrir o cargo da pessoa na empresa.
+    Retorna string com o cargo, ou None se não conseguir.
+    """
+    llm_prompt = (
+        f"Qual é o cargo ou função profissional de '{name}' na empresa '{company}'? "
+        "Retorne SOMENTE o cargo em português, sem texto adicional, sem aspas, sem ponto final. "
+        "Exemplos de resposta: CEO, Diretor Comercial, Gerente de Marketing, Engenheiro de Software. "
+        "Se não souber com certeza, retorne null."
+    )
+    raw = _sai_simple_prompt(llm_prompt)
+    if raw:
+        role = raw.strip().split('\n')[0].strip(' "\'.')
+        if role.lower() not in ('null', 'none', '', 'não sei', 'desconhecido'):
+            logger.info(f'[AutoPic][LLM] Cargo encontrado via SAI: {role!r}')
+            return role[:80]
+
+    # Fallback: OpenRouter
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um especialista em mercado corporativo. Responda SOMENTE com o cargo, sem texto adicional.'},
+                    {'role': 'user', 'content': llm_prompt}
+                ],
+                'temperature': 0.1
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            role = ((choices[0].get('message') or {}).get('content', '') if choices else '').strip().split('\n')[0].strip(' "\'.')
+            if role and role.lower() not in ('null', 'none', '', 'não sei', 'desconhecido'):
+                logger.info(f'[AutoPic][LLM] Cargo encontrado via OpenRouter: {role!r}')
+                return role[:80]
+        except Exception as e:
+            logger.warning(f'[AutoPic][LLM] Falha ao buscar cargo via OpenRouter: {e}')
+
+    return None
+
+
 @app.route('/api/clients/autofind-photo-candidates', methods=['GET'])
 def clients_autofind_photo_candidates():
     try:
@@ -6273,48 +6331,70 @@ def clients_autofind_photo_candidates():
         candidates = []
         queries_tried = []
 
-        # Estratégia 1 (mais precisa): nome entre aspas + empresa entre aspas
-        # Força o Bing a encontrar páginas que contenham EXATAMENTE o nome e a empresa
+        # Enriquecimento via LLM: descobrir o cargo da pessoa — limitado a 10s para não travar a UI.
+        # O _sai_simple_prompt tem timeout de 45s; usamos concurrent.futures para encurtar.
+        role = None
         if name and company:
-            q1 = f'"{name}" "{company}"'
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(_autopic_get_role_via_llm, name, company)
+                    try:
+                        role = _fut.result(timeout=10)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f'[AutoPic] Timeout 10s ao buscar cargo via LLM para {name!r}, prosseguindo sem cargo.')
+            except Exception as e:
+                logger.warning(f'[AutoPic] Falha ao obter cargo via LLM: {e}')
+
+        def _merge_candidates(existing, new_urls, limit=6):
+            seen = set(existing)
+            result = list(existing)
+            for u in new_urls:
+                if u not in seen:
+                    seen.add(u)
+                    result.append(u)
+            return result[:limit]
+
+        # Estratégia 1 (primária): nome ENTRE ASPAS + empresa sem aspas.
+        # As aspas no nome são essenciais: sem elas "Henrique Netto" vira dois tokens separados
+        # e o Bing pode combinar com a dupla sertaneja "Netto & Henrique" ou similares.
+        # Com aspas, o Bing exige a frase exata e prioriza o profissional da empresa.
+        if name and company:
+            q1 = f'"{name}" {company}'
             queries_tried.append(q1)
-            logger.info(f'[AutoPic] Estratégia 1 (aspas duplas): query={q1!r}')
+            logger.info(f'[AutoPic] Estratégia 1 (nome entre aspas + empresa): query={q1!r}')
             candidates = _find_image_candidates_on_web(q1, limit=6)
             logger.info(f'[AutoPic] Estratégia 1 retornou {len(candidates)} candidato(s)')
 
-        # Estratégia 2: nome + empresa sem aspas (mais abrangente)
-        # Usada quando a estratégia 1 não encontrou candidatos suficientes
-        if len(candidates) < 3 and name and company:
-            q2 = f'{name} {company}'
+        # Estratégia 2: nome entre aspas + cargo (LLM) + empresa — mais precisa quando há namesakes
+        if len(candidates) < 3 and name and company and role:
+            q2 = f'"{name}" {role} {company}'
             queries_tried.append(q2)
-            logger.info(f'[AutoPic] Estratégia 2 (sem aspas, nome+empresa): query={q2!r}')
+            logger.info(f'[AutoPic] Estratégia 2 (nome aspas + cargo LLM + empresa): query={q2!r}')
             extra = _find_image_candidates_on_web(q2, limit=6)
             logger.info(f'[AutoPic] Estratégia 2 retornou {len(extra)} candidato(s)')
-            # Adicionar apenas candidatos novos (sem duplicar)
-            seen = set(candidates)
-            for u in extra:
-                if u not in seen:
-                    seen.add(u)
-                    candidates.append(u)
-            candidates = candidates[:6]
+            candidates = _merge_candidates(candidates, extra)
 
-        # Estratégia 3: apenas nome (último recurso, quando não há empresa ou as anteriores falharam)
-        if len(candidates) < 3:
-            q3 = name or company
+        # Estratégia 3: nome + empresa sem aspas (mais abrangente, pode trazer mais resultados)
+        if len(candidates) < 3 and name and company:
+            q3 = f'{name} {company}'
             queries_tried.append(q3)
-            logger.info(f'[AutoPic] Estratégia 3 (apenas nome/empresa): query={q3!r}')
+            logger.info(f'[AutoPic] Estratégia 3 (sem aspas): query={q3!r}')
             extra = _find_image_candidates_on_web(q3, limit=6)
             logger.info(f'[AutoPic] Estratégia 3 retornou {len(extra)} candidato(s)')
-            seen = set(candidates)
-            for u in extra:
-                if u not in seen:
-                    seen.add(u)
-                    candidates.append(u)
-            candidates = candidates[:6]
+            candidates = _merge_candidates(candidates, extra)
+
+        # Estratégia 4: apenas nome (último recurso)
+        if len(candidates) < 3:
+            q4 = name or company
+            queries_tried.append(q4)
+            logger.info(f'[AutoPic] Estratégia 4 (apenas nome): query={q4!r}')
+            extra = _find_image_candidates_on_web(q4, limit=6)
+            logger.info(f'[AutoPic] Estratégia 4 retornou {len(extra)} candidato(s)')
+            candidates = _merge_candidates(candidates, extra)
 
         logger.info(f'[AutoPic] Total final: {len(candidates)} candidato(s) após {len(queries_tried)} estratégia(s). '
-                    f'Queries tentadas: {queries_tried}')
-        return jsonify({'query': queries_tried[0] if queries_tried else '', 'candidates': candidates})
+                    f'Queries tentadas: {queries_tried}. Cargo LLM: {role!r}')
+        return jsonify({'query': queries_tried[0] if queries_tried else '', 'candidates': candidates, 'role': role})
     except Exception as e:
         logger.exception(f'[AutoPic] ERRO em GET /autofind-photo-candidates: {e}')
         return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
