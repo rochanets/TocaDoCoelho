@@ -8513,6 +8513,164 @@ def account_autofill():
         return jsonify({'error': str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# LinkedIn Profile Summarizer
+# ---------------------------------------------------------------------------
+
+def _linkedin_try_fetch_public(url):
+    """Tenta buscar dados públicos de um perfil LinkedIn. Retorna texto ou None."""
+    if not url or 'linkedin.com' not in url:
+        return None
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        })
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            raw_html = resp.read().decode('utf-8', errors='ignore')
+        # Extrai texto visível removendo tags HTML
+        clean = re.sub(r'<style[^>]*>.*?</style>', ' ', raw_html, flags=re.DOTALL | re.IGNORECASE)
+        clean = re.sub(r'<script[^>]*>.*?</script>', ' ', clean, flags=re.DOTALL | re.IGNORECASE)
+        clean = re.sub(r'<[^>]+>', ' ', clean)
+        clean = html.unescape(clean)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        # Se LinkedIn redirecionou para login, o conteúdo tem pouca informação útil
+        if len(clean) < 300 or 'Sign in' in clean or 'authwall' in url:
+            return None
+        return clean[:8000]  # Limita para não exceder contexto do LLM
+    except Exception as e:
+        logger.debug(f'[LinkedIn] Falha ao buscar URL pública: {e}')
+        return None
+
+
+def _linkedin_generate_summary_via_llm(profile_content, meeting_context=''):
+    """Gera resumo executivo do perfil LinkedIn via LLM (SAI → OpenRouter)."""
+    ctx_part = f'\n\nCONTEXTO DA REUNIÃO: {meeting_context}' if meeting_context.strip() else ''
+    llm_prompt = (
+        'Analise as informações abaixo de um perfil profissional do LinkedIn e gere um resumo executivo '
+        'para preparar uma reunião de negócios com esta pessoa. '
+        f'PERFIL LINKEDIN:\n{profile_content}{ctx_part}\n\n'
+        'Retorne SOMENTE um JSON válido, sem texto adicional, com exatamente estes campos: '
+        '{"nome": "Nome completo", '
+        '"cargo_atual": "Cargo e empresa atual", '
+        '"trajetoria": ["ponto 1", "ponto 2", "ponto 3"], '
+        '"formacao": ["formação 1", "formação 2"], '
+        '"competencias": ["competência 1", "competência 2", "competência 3", "competência 4", "competência 5"], '
+        '"pontos_conversa": ["ponto 1", "ponto 2", "ponto 3", "ponto 4"], '
+        '"insights": ["insight 1", "insight 2"], '
+        '"tom_sugerido": "descrição do tom recomendado para a reunião"} '
+        'Use null para campos não encontrados nas informações. Responda em português (BR).'
+    )
+
+    # Tentativa 1: SAI
+    raw = _sai_simple_prompt(llm_prompt)
+    if raw:
+        logger.info('[LinkedIn][SAI] Resumo gerado com sucesso')
+        return raw, 'SAI'
+
+    # Tentativa 2: OpenRouter
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista de inteligência executiva. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
+                    {'role': 'user', 'content': llm_prompt}
+                ],
+                'temperature': 0.3
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            if raw:
+                logger.info('[LinkedIn][OpenRouter] Resumo gerado com sucesso')
+                return raw, 'OpenRouter'
+        except Exception as e:
+            logger.warning(f'[LinkedIn][OpenRouter] Falha: {e}')
+
+    return None, 'sem_llm'
+
+
+def _linkedin_parse_summary(raw):
+    """Extrai e valida JSON do resumo gerado pelo LLM."""
+    if not raw:
+        return None
+    # Tenta JSON direto
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    # Tenta extrair JSON do texto
+    m = re.search(r'\{[\s\S]*\}', raw)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    return None
+
+
+@app.route('/api/linkedin/summarize', methods=['POST'])
+def linkedin_summarize():
+    """Gera resumo executivo de um perfil LinkedIn para preparação de reunião."""
+    try:
+        data = request.get_json() or {}
+        linkedin_url = (data.get('linkedin_url') or '').strip()
+        profile_text = (data.get('profile_text') or '').strip()
+        meeting_context = (data.get('meeting_context') or '').strip()
+
+        if not linkedin_url and not profile_text:
+            return jsonify({'error': 'Informe a URL do LinkedIn ou cole o texto do perfil.'}), 400
+
+        # Tenta buscar perfil público se URL fornecida e texto não informado
+        fetched_text = None
+        if linkedin_url and not profile_text:
+            fetched_text = _linkedin_try_fetch_public(linkedin_url)
+
+        profile_content = profile_text or fetched_text or ''
+        if not profile_content and linkedin_url:
+            # Usa apenas a URL como referência para o LLM
+            profile_content = f'URL do perfil LinkedIn: {linkedin_url}'
+
+        raw, source = _linkedin_generate_summary_via_llm(profile_content, meeting_context)
+        if not raw:
+            return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+
+        parsed = _linkedin_parse_summary(raw)
+        return jsonify({
+            'summary': parsed,
+            'raw': raw if not parsed else None,
+            'source': source,
+            'fetched_from_url': fetched_text is not None
+        })
+    except Exception as e:
+        logger.exception(f'[LinkedIn] Erro: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+
 @app.route('/api/accounts', methods=['POST'])
 def create_account():
     try:
