@@ -8228,6 +8228,155 @@ def get_account(account_id):
         return jsonify({'error': str(e)}), 500
 
 
+def _account_autofill_via_sai(account_name):
+    """Busca dados corporativos da empresa via SAI LLM. Retorna dict com average_revenue_brl, professionals_count, global_presence, source."""
+    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
+    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+    template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    empty = {'average_revenue_brl': None, 'professionals_count': None, 'global_presence': '', 'source': 'sem_sai'}
+    if not api_key:
+        return empty
+
+    question = (
+        f"Quais são os dados corporativos da empresa '{account_name}'? "
+        "Retorne SOMENTE um JSON válido, sem texto adicional, no formato: "
+        '{"average_revenue_brl": 3500000000, "professionals_count": 50000, "global_presence": "Global"} '
+        "Onde average_revenue_brl é o faturamento médio anual em reais (número inteiro, sem símbolos), "
+        "professionals_count é o número de funcionários/profissionais (número inteiro), "
+        "global_presence é 'Brasil' se opera principalmente no Brasil, 'Latam' se opera em países da América Latina além do Brasil, "
+        "'Global' se opera em múltiplos continentes. "
+        "Use null para campos dos quais não tem certeza."
+    )
+    context_sources = f"Empresa: {account_name}. Buscar dados públicos sobre esta empresa."
+
+    url = f'{base_url}/api/templates/{template_id}/execute'
+    headers = {'Content-Type': 'application/json', 'X-Api-Key': api_key}
+    payload = {'inputs': {'question': question, 'context_sources': context_sources}}
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers=headers,
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            raw = resp.read().decode('utf-8', errors='ignore')
+    except Exception as e:
+        logger.warning(f'[AccountAutoFill][SAI] falha na chamada SAI: {e}')
+        return {**empty, 'source': 'erro_sai'}
+
+    def _try_parse_json(value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = json.loads(value.strip())
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        m = re.search(r'\{[^{}]*\}', value, re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+        return None
+
+    parsed = _try_parse_json(raw) or {}
+    if 'answer' not in parsed and 'average_revenue_brl' not in parsed:
+        for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message'):
+            candidate = parsed.get(key)
+            nested = _try_parse_json(candidate)
+            if nested:
+                parsed = nested
+                break
+
+    answer = parsed.get('answer') if isinstance(parsed, dict) else ''
+    answer_obj = _try_parse_json(answer) if isinstance(answer, str) else None
+    if answer_obj:
+        parsed = answer_obj
+
+    average_revenue_brl = parsed.get('average_revenue_brl') if isinstance(parsed, dict) else None
+    professionals_count = parsed.get('professionals_count') if isinstance(parsed, dict) else None
+    global_presence_raw = (parsed.get('global_presence') or '') if isinstance(parsed, dict) else ''
+
+    global_presence = ''
+    if global_presence_raw:
+        gp_lower = str(global_presence_raw).strip().lower()
+        if 'global' in gp_lower:
+            global_presence = 'Global'
+        elif 'latam' in gp_lower or 'latina' in gp_lower:
+            global_presence = 'Latam'
+        elif 'brasil' in gp_lower or 'brazil' in gp_lower:
+            global_presence = 'Brasil'
+
+    try:
+        pc = int(professionals_count) if professionals_count is not None else None
+    except Exception:
+        pc = None
+
+    try:
+        rev = float(average_revenue_brl) if average_revenue_brl is not None else None
+    except Exception:
+        rev = None
+
+    return {
+        'average_revenue_brl': rev,
+        'professionals_count': pc,
+        'global_presence': global_presence,
+        'source': 'SAI'
+    }
+
+
+@app.route('/api/accounts/autofill', methods=['POST'])
+def account_autofill():
+    """Preenche automaticamente campos de uma conta com dados da empresa via SAI LLM e busca de imagem."""
+    try:
+        data = request.get_json() or {}
+        account_name = (data.get('account_name') or '').strip()
+        if not account_name:
+            return jsonify({'error': 'Nome da conta não informado.'}), 400
+
+        company_data = _account_autofill_via_sai(account_name)
+
+        average_revenue_formatted = ''
+        raw_revenue = company_data.get('average_revenue_brl')
+        if raw_revenue is not None:
+            try:
+                cents = int(round(float(raw_revenue) * 100))
+                average_revenue_formatted = format_currency_br(cents)
+            except Exception:
+                pass
+
+        logo_url = None
+        try:
+            candidates = _find_image_candidates_on_web(f'{account_name} logo empresa', limit=4)
+            if candidates:
+                logo_url = candidates[0]
+        except Exception as e:
+            logger.warning(f'[AccountAutoFill] Falha ao buscar logo: {e}')
+
+        return jsonify({
+            'average_revenue': average_revenue_formatted,
+            'professionals_count': company_data.get('professionals_count', ''),
+            'global_presence': company_data.get('global_presence', ''),
+            'logo_url': logo_url,
+            'source': company_data.get('source', 'SAI')
+        })
+    except Exception as e:
+        logger.exception(f'[AccountAutoFill] Erro: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/accounts', methods=['POST'])
 def create_account():
     try:
@@ -8239,10 +8388,11 @@ def create_account():
         professionals_count = int(professionals_count) if professionals_count.isdigit() else None
         global_presence = request.form.get('global_presence', '').strip() or None
         main_contact_ids = request.form.get('main_contact_ids', '').strip()
+        autofill_logo_url = (request.form.get('autofill_logo_url') or '').strip()
         if not name:
             return jsonify({'error': 'Nome da conta é obrigatório'}), 400
         conn = get_db(); c = conn.cursor()
-        logo_url = None
+        logo_url = autofill_logo_url or None
         if 'logo' in request.files:
             f = request.files['logo']
             if f and f.filename:
@@ -8277,12 +8427,13 @@ def update_account(account_id):
         global_presence = request.form.get('global_presence', '').strip() or None
         main_contact_ids = request.form.get('main_contact_ids', '').strip()
         remove_logo = request.form.get('remove_logo', '0') in ('1', 'true', 'True')
+        autofill_logo_url = (request.form.get('autofill_logo_url') or '').strip()
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         row = dict_from_row(c.fetchone())
         if not row:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        logo_url = None if remove_logo else row.get('logo_url')
+        logo_url = None if remove_logo else (autofill_logo_url or row.get('logo_url'))
         if 'logo' in request.files:
             f = request.files['logo']
             if f and f.filename:

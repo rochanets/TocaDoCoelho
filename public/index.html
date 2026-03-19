@@ -8548,7 +8548,7 @@
                 return `<button type="button" data-main-contact="${c.id}" onclick="toggleMainContactSelection(${c.id})" style="padding:8px 10px; border-radius:10px; border:1px solid ${active?'rgba(16,185,129,.45)':'rgba(16,185,129,.25)'}; background:${active?'rgba(16,185,129,.18)':'transparent'}; color:#065f46; cursor:pointer; text-align:left;">${escapeHtml(c.name)}</button>`;
             }).join('') || '<div style="color:#6b7280; font-size:13px;">Sem contatos nesta conta.</div>';
 
-            let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:860px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div style="display:grid; grid-template-columns: 1.4fr .9fr; gap:14px; align-items:start;"><div><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label>Target</label><select name="is_target"><option value="0" ${Number(account?.is_target)!==1?'selected':''}>Não</option><option value="1" ${Number(account?.is_target)===1?'selected':''}>Sim</option></select></div></div><div><img id="accountLogoPreview" src="${logoSrc}" style="width:100%; max-width:220px; height:150px; object-fit:contain; background:#fff; border-radius:14px; border:1px solid rgba(16,185,129,.25); display:block; margin-left:auto;"><div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;"><label class="btn btn-secondary btn-small" for="accountLogoInput"><i class="fas fa-image"></i> Alterar</label><button type="button" class="btn btn-danger btn-small" onclick="removeAccountLogo()"><i class="fas fa-trash"></i> Excluir</button></div><input type="file" id="accountLogoInput" name="logo" accept="image/*" style="display:none;" onchange="previewAccountLogo(event)"><input type="hidden" id="removeAccountLogoFlag" name="remove_logo" value="0"></div></div><div class="form-group"><label>Ponto Focal Principal</label><input type="hidden" id="accountMainContactsHidden" value="${mainSelected}"><div style="display:flex; flex-wrap:wrap; gap:8px;">${contactsList}</div></div><div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-primary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-briefcase"></i> Serviço Stefanini</button><div id="accountPresenceList" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents((account?.presences||[]).reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0))}</strong></div><div style='display:flex; flex-wrap:wrap; gap:8px;'>${(account?.presences||[]).map(p=>`<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`).join('')}</div></div></div></div>`;
+            let html = `<div class="modal active" id="accountModal" onclick="if(event.target===this) closeAccountModal()"><div class="modal-content" style="max-width:860px;"><h2 style="color:#047857;">${account?'Editar':'Nova'} Conta</h2><form id="accountForm" onsubmit="saveAccount(event, ${accountId||'null'})"><div style="display:grid; grid-template-columns: 1.4fr .9fr; gap:14px; align-items:start;"><div><div class="form-group"><label>Nome da Conta</label><input list="accountCompanies" name="name" required value="${escapeHtml(account?.name||'')}"><datalist id="accountCompanies">${companyOptions}</datalist></div><div class="form-group"><label>Setor</label><input list="accountSectors" id="accountSectorInput" name="sector" value="${escapeHtml(account?.sector||'')}"><datalist id="accountSectors">${sectorOptions}</datalist></div><div class="form-group"><label>Target</label><select name="is_target"><option value="0" ${Number(account?.is_target)!==1?'selected':''}>Não</option><option value="1" ${Number(account?.is_target)===1?'selected':''}>Sim</option></select></div></div><div><img id="accountLogoPreview" src="${logoSrc}" style="width:100%; max-width:220px; height:150px; object-fit:contain; background:#fff; border-radius:14px; border:1px solid rgba(16,185,129,.25); display:block; margin-left:auto;"><div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;"><label class="btn btn-secondary btn-small" for="accountLogoInput"><i class="fas fa-image"></i> Alterar</label><button type="button" class="btn btn-danger btn-small" onclick="removeAccountLogo()"><i class="fas fa-trash"></i> Excluir</button></div><div style="display:flex; justify-content:flex-end; margin-top:6px;"><button type="button" class="btn btn-auto-mapping btn-small" id="accountAutoFillBtn" onclick="autoFillAccount()"><span class="ai-star-icon">✦</span> AutoFill</button></div><input type="file" id="accountLogoInput" name="logo" accept="image/*" style="display:none;" onchange="previewAccountLogo(event)"><input type="hidden" id="removeAccountLogoFlag" name="remove_logo" value="0"><input type="hidden" id="accountAutoFillLogoUrl" name="autofill_logo_url" value=""></div></div><div class="form-group"><label>Ponto Focal Principal</label><input type="hidden" id="accountMainContactsHidden" value="${mainSelected}"><div style="display:flex; flex-wrap:wrap; gap:8px;">${contactsList}</div></div><div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div class="form-group"><label>Faturamento Médio Anual</label><input name="average_revenue" value="${account?.average_revenue_cents?formatMoneyFromCents(account.average_revenue_cents):''}" placeholder="R$0,00"></div><div class="form-group"><label>Quantidade de Profissionais</label><input name="professionals_count" type="number" min="0" value="${account?.professionals_count||''}"></div></div><div class="form-group"><label>Presença Global</label><select name="global_presence"><option value="">Selecione</option><option ${account?.global_presence==='Brasil'?'selected':''}>Brasil</option><option ${account?.global_presence==='Latam'?'selected':''}>Latam</option><option ${account?.global_presence==='Global'?'selected':''}>Global</option></select></div><div style="display:flex; gap:8px;"><button class="btn btn-secondary" type="button" onclick="closeAccountModal()">Cancelar</button><button class="btn btn-primary" type="submit">Salvar</button></div></form><hr style="margin:16px 0;"><button class="btn btn-primary btn-small" onclick="openPresenceModal(${accountId||'null'})"><i class="fas fa-briefcase"></i> Serviço Stefanini</button><div id="accountPresenceList" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents((account?.presences||[]).reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0))}</strong></div><div style='display:flex; flex-wrap:wrap; gap:8px;'>${(account?.presences||[]).map(p=>`<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`).join('')}</div></div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
@@ -8589,6 +8589,80 @@
             if (img) img.src = '/logo-coelho.png';
             if (flag) flag.value = '1';
             if (input) input.value = '';
+        }
+
+        async function autoFillAccount() {
+            const form = document.getElementById('accountForm');
+            if (!form) return;
+            const nameInput = form.querySelector('[name="name"]');
+            const accountName = (nameInput?.value || '').trim();
+            if (!accountName) {
+                await openSystemDialog({ title: 'AutoFill', message: 'Preencha o campo "Nome da Conta" antes de usar o AutoFill.' });
+                return;
+            }
+
+            const btn = document.getElementById('accountAutoFillBtn');
+            const originalHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="ai-star-icon">✦</span> Buscando...';
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/accounts/autofill`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_name: accountName })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível buscar dados da empresa.');
+
+                let filled = [];
+
+                const revenueInput = form.querySelector('[name="average_revenue"]');
+                if (revenueInput && payload.average_revenue) {
+                    revenueInput.value = payload.average_revenue;
+                    filled.push('Faturamento Médio Anual');
+                }
+
+                const profInput = form.querySelector('[name="professionals_count"]');
+                if (profInput && payload.professionals_count !== '' && payload.professionals_count !== null && payload.professionals_count !== undefined) {
+                    profInput.value = payload.professionals_count;
+                    filled.push('Quantidade de Profissionais');
+                }
+
+                const presenceSelect = form.querySelector('[name="global_presence"]');
+                if (presenceSelect && payload.global_presence) {
+                    const opt = Array.from(presenceSelect.options).find(o => o.value === payload.global_presence);
+                    if (opt) {
+                        presenceSelect.value = payload.global_presence;
+                        filled.push('Presença Global');
+                    }
+                }
+
+                if (payload.logo_url) {
+                    const logoPreview = document.getElementById('accountLogoPreview');
+                    const logoUrlHidden = document.getElementById('accountAutoFillLogoUrl');
+                    const removeFlag = document.getElementById('removeAccountLogoFlag');
+                    if (logoPreview) logoPreview.src = payload.logo_url;
+                    if (logoUrlHidden) logoUrlHidden.value = payload.logo_url;
+                    if (removeFlag) removeFlag.value = '0';
+                    filled.push('Logo');
+                }
+
+                if (filled.length === 0) {
+                    showError('AutoFill não encontrou dados para esta empresa. Verifique se o SAI está configurado em Configurações > Integrações.');
+                } else {
+                    showSuccess(`AutoFill preencheu: ${filled.join(', ')}.`);
+                }
+            } catch (error) {
+                showError(error.message || 'Falha ao executar o AutoFill.');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            }
         }
 
         function closeAccountModal(){ const m=document.getElementById('accountModal'); if(m)m.remove(); }
