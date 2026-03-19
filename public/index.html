@@ -5864,23 +5864,8 @@
                 return;
             }
 
-            try {
-                const response = await fetch(`${API_BASE}/whatsapp/send`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone, message })
-                });
-                const data = await response.json();
-                if (!response.ok || !data.ok) {
-                    const fallbackUrl = data.fallback_url || `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-                    whatsappWindowRef = openWhatsAppTab(fallbackUrl);
-                    showError('WAHA indisponível no momento. Abrimos o WhatsApp Web como contingência.');
-                }
-            } catch (error) {
-                const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-                whatsappWindowRef = openWhatsAppTab(url);
-                showError('Falha ao acionar o envio automatizado. Abrimos o WhatsApp Web como contingência.');
-            }
+            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+            whatsappWindowRef = openWhatsAppTab(url);
             closeWhatsAppModal();
             askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
