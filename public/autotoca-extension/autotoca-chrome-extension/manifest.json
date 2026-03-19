@@ -1,11 +1,13 @@
 {
   "manifest_version": 3,
   "name": "AutoToca Helper",
-  "version": "0.1.0",
-  "description": "Extensão auxiliar do AutoToca para detectar disponibilidade e preparar automações do Microsoft Forms.",
+  "version": "0.2.0",
+  "description": "Extensão auxiliar do AutoToca: preenche Microsoft Forms e captura perfis do LinkedIn para preparação de reuniões.",
   "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": [
     "https://forms.office.com/*",
+    "https://www.linkedin.com/*",
+    "https://linkedin.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "file:///*"
@@ -20,6 +22,12 @@
       "run_at": "document_idle"
     }
   ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "autotoca-helper@autotoca.app",
+      "strict_min_version": "109.0"
+    }
+  },
   "action": {
     "default_title": "AutoToca Helper"
   }
