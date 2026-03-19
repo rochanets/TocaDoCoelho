@@ -8228,46 +8228,8 @@ def get_account(account_id):
         return jsonify({'error': str(e)}), 500
 
 
-def _account_autofill_via_sai(account_name):
-    """Busca dados corporativos da empresa via SAI LLM. Retorna dict com average_revenue_brl, professionals_count, global_presence, source."""
-    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
-    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
-    template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
-    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-
-    empty = {'average_revenue_brl': None, 'professionals_count': None, 'global_presence': '', 'source': 'sem_sai'}
-    if not api_key:
-        return empty
-
-    question = (
-        f"Quais são os dados corporativos da empresa '{account_name}'? "
-        "Retorne SOMENTE um JSON válido, sem texto adicional, no formato: "
-        '{"average_revenue_brl": 3500000000, "professionals_count": 50000, "global_presence": "Global"} '
-        "Onde average_revenue_brl é o faturamento médio anual em reais (número inteiro, sem símbolos), "
-        "professionals_count é o número de funcionários/profissionais (número inteiro), "
-        "global_presence é 'Brasil' se opera principalmente no Brasil, 'Latam' se opera em países da América Latina além do Brasil, "
-        "'Global' se opera em múltiplos continentes. "
-        "Use null para campos dos quais não tem certeza."
-    )
-    context_sources = f"Empresa: {account_name}. Buscar dados públicos sobre esta empresa."
-
-    url = f'{base_url}/api/templates/{template_id}/execute'
-    headers = {'Content-Type': 'application/json', 'X-Api-Key': api_key}
-    payload = {'inputs': {'question': question, 'context_sources': context_sources}}
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers=headers,
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            raw = resp.read().decode('utf-8', errors='ignore')
-    except Exception as e:
-        logger.warning(f'[AccountAutoFill][SAI] falha na chamada SAI: {e}')
-        return {**empty, 'source': 'erro_sai'}
-
+def _account_autofill_parse_llm_raw(raw):
+    """Extrai dict de dados corporativos de uma resposta bruta de LLM (SAI ou OpenRouter)."""
     def _try_parse_json(value):
         if not value:
             return None
@@ -8329,12 +8291,85 @@ def _account_autofill_via_sai(account_name):
     except Exception:
         rev = None
 
-    return {
-        'average_revenue_brl': rev,
-        'professionals_count': pc,
-        'global_presence': global_presence,
-        'source': 'SAI'
-    }
+    return {'average_revenue_brl': rev, 'professionals_count': pc, 'global_presence': global_presence}
+
+
+def _account_autofill_via_sai(account_name):
+    """Busca dados corporativos da empresa via SAI LLM com fallback para OpenRouter."""
+    llm_prompt = (
+        f"Quais são os dados corporativos da empresa '{account_name}'? "
+        "Retorne SOMENTE um JSON válido, sem texto adicional, no formato: "
+        '{"average_revenue_brl": 3500000000, "professionals_count": 50000, "global_presence": "Global"} '
+        "Onde average_revenue_brl é o faturamento médio anual em reais (número inteiro, sem símbolos), "
+        "professionals_count é o número de funcionários/profissionais (número inteiro), "
+        "global_presence é 'Brasil' se opera principalmente no Brasil, 'Latam' se opera em países da América Latina além do Brasil, "
+        "'Global' se opera em múltiplos continentes. "
+        "Use null para campos dos quais não tem certeza."
+    )
+
+    # --- Tentativa 1: SAI ---
+    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
+    sai_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+
+    if sai_key:
+        template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
+        base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+        try:
+            req = urllib.request.Request(
+                f'{base_url}/api/templates/{template_id}/execute',
+                data=json.dumps({'inputs': {'question': llm_prompt, 'context_sources': f'Empresa: {account_name}.'}}, ensure_ascii=False).encode('utf-8'),
+                headers={'Content-Type': 'application/json', 'X-Api-Key': sai_key},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                raw = resp.read().decode('utf-8', errors='ignore')
+            result = _account_autofill_parse_llm_raw(raw)
+            result['source'] = 'SAI'
+            logger.info(f'[AccountAutoFill][SAI] resultado: {result}')
+            return result
+        except Exception as e:
+            logger.warning(f'[AccountAutoFill][SAI] falha: {e}')
+
+    # --- Tentativa 2: OpenRouter ---
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista corporativo. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
+                    {'role': 'user', 'content': llm_prompt}
+                ],
+                'temperature': 0.1
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            result = _account_autofill_parse_llm_raw(raw)
+            result['source'] = 'OpenRouter'
+            logger.info(f'[AccountAutoFill][OpenRouter] resultado: {result}')
+            return result
+        except Exception as e:
+            logger.warning(f'[AccountAutoFill][OpenRouter] falha: {e}')
+
+    logger.info(f'[AccountAutoFill] Nenhum LLM configurado para empresa: {account_name!r}')
+    return {'average_revenue_brl': None, 'professionals_count': None, 'global_presence': '', 'source': 'sem_llm'}
 
 
 @app.route('/api/accounts/autofill', methods=['POST'])
