@@ -6347,39 +6347,45 @@ def clients_autofind_photo_candidates():
                     result.append(u)
             return result[:limit]
 
-        # Estratégia 1 (mais precisa): nome + cargo + empresa com termos de foto profissional
-        # O cargo descobre pelo LLM guia o Bing para a pessoa certa; "foto perfil" sinaliza headshot
-        if name and company and role:
-            q1 = f'"{name}" {role} "{company}" foto perfil'
+        # IMPORTANTE: Os motores de busca de imagens (Bing, Google) são semânticos o suficiente
+        # para entender que "nome empresa" = "foto desta pessoa nesta empresa".
+        # Adicionar termos como "foto perfil linkedin" ATRAPALHA porque muda o significado da
+        # busca para "páginas sobre foto de perfil no linkedin" — e aí vêm tutoriais, templates, etc.
+        # A regra é: manter as queries simples, como um usuário faria no navegador.
+
+        # Estratégia 1 (primária): nome + empresa sem aspas — replica o que funciona no navegador
+        # Bing/Google entendem semanticamente que é busca por pessoa e retornam fotos de perfil
+        if name and company:
+            q1 = f'{name} {company}'
             queries_tried.append(q1)
-            logger.info(f'[AutoPic] Estratégia 1 (LLM role + foto perfil): query={q1!r}')
+            logger.info(f'[AutoPic] Estratégia 1 (simples, sem aspas): query={q1!r}')
             candidates = _find_image_candidates_on_web(q1, limit=6)
             logger.info(f'[AutoPic] Estratégia 1 retornou {len(candidates)} candidato(s)')
 
-        # Estratégia 2: nome + empresa com termos de perfil profissional
-        # "linkedin foto perfil" orienta o Bing para headshots, igual a "logo empresa" orienta para logos
-        if len(candidates) < 3 and name and company:
-            q2 = f'"{name}" "{company}" linkedin foto perfil'
+        # Estratégia 2: nome + cargo (LLM) + empresa — adiciona cargo para disambiguação
+        # quando há muitas pessoas com o mesmo nome
+        if len(candidates) < 3 and name and company and role:
+            q2 = f'{name} {role} {company}'
             queries_tried.append(q2)
-            logger.info(f'[AutoPic] Estratégia 2 (aspas + linkedin foto perfil): query={q2!r}')
+            logger.info(f'[AutoPic] Estratégia 2 (nome + cargo LLM + empresa): query={q2!r}')
             extra = _find_image_candidates_on_web(q2, limit=6)
             logger.info(f'[AutoPic] Estratégia 2 retornou {len(extra)} candidato(s)')
             candidates = _merge_candidates(candidates, extra)
 
-        # Estratégia 3: nome + empresa sem aspas + linkedin (mais abrangente)
+        # Estratégia 3: nome entre aspas + empresa — aspas forçam correspondência exata do nome
         if len(candidates) < 3 and name and company:
-            q3 = f'{name} {company} linkedin foto'
+            q3 = f'"{name}" {company}'
             queries_tried.append(q3)
-            logger.info(f'[AutoPic] Estratégia 3 (sem aspas + linkedin foto): query={q3!r}')
+            logger.info(f'[AutoPic] Estratégia 3 (nome entre aspas + empresa): query={q3!r}')
             extra = _find_image_candidates_on_web(q3, limit=6)
             logger.info(f'[AutoPic] Estratégia 3 retornou {len(extra)} candidato(s)')
             candidates = _merge_candidates(candidates, extra)
 
-        # Estratégia 4: apenas nome + foto perfil (último recurso)
+        # Estratégia 4: apenas nome (último recurso)
         if len(candidates) < 3:
-            q4 = f'{name or company} foto perfil profissional'
+            q4 = name or company
             queries_tried.append(q4)
-            logger.info(f'[AutoPic] Estratégia 4 (nome + foto perfil): query={q4!r}')
+            logger.info(f'[AutoPic] Estratégia 4 (apenas nome): query={q4!r}')
             extra = _find_image_candidates_on_web(q4, limit=6)
             logger.info(f'[AutoPic] Estratégia 4 retornou {len(extra)} candidato(s)')
             candidates = _merge_candidates(candidates, extra)
