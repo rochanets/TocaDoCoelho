@@ -5873,12 +5873,22 @@
                 const data = await response.json();
                 if (!response.ok || !data.ok) {
                     const fallbackUrl = data.fallback_url || `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                    const diagnostic = data.diagnostic || data.error || 'O WAHA não retornou sucesso.';
+                    console.error('[WAHA] Falha ao enviar mensagem; usando fallback no WhatsApp Web.', data);
+                    await openSystemDialog({
+                        title: 'WAHA indisponível',
+                        message: `Não foi possível enviar a mensagem pela integração do WAHA.\n\nDetalhes: ${diagnostic}\n\nVamos abrir o WhatsApp Web como contingência na mesma aba reutilizável.`
+                    });
                     whatsappWindowRef = openWhatsAppTab(fallbackUrl);
-                    const diagnostic = data.diagnostic ? ` Detalhe: ${data.diagnostic}` : '';
-                    showError(`WAHA indisponível no momento. Abrimos o WhatsApp Web como contingência.${diagnostic}`);
+                    showError(`WAHA indisponível. Detalhes: ${diagnostic}`);
                 }
             } catch (error) {
                 const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                console.error('[WAHA] Erro inesperado ao acionar /api/whatsapp/send.', error);
+                await openSystemDialog({
+                    title: 'Falha ao acionar WAHA',
+                    message: `Não foi possível chamar a rota interna de envio do WAHA.\n\nDetalhes técnicos: ${error.message || error}\n\nVamos abrir o WhatsApp Web como contingência na mesma aba reutilizável.`
+                });
                 whatsappWindowRef = openWhatsAppTab(url);
                 showError('Falha ao acionar o envio automatizado. Abrimos o WhatsApp Web como contingência.');
             }

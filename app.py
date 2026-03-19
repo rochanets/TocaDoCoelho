@@ -9341,6 +9341,9 @@ def send_whatsapp_message():
         headers = {'Content-Type': 'application/json'}
         if api_key:
             headers['X-Api-Key'] = api_key
+        logger.info(
+            f'[WAHA] Tentando enviar mensagem via WAHA | base={waha_base} | session={session_name} | phone={phone}'
+        )
         try:
             response = requests.post(
                 f'{waha_base}/api/sendText',
@@ -9350,6 +9353,9 @@ def send_whatsapp_message():
             )
             if response.ok:
                 body = response.json() if 'application/json' in response.headers.get('content-type', '') else {'raw': response.text}
+                logger.info(
+                    f'[WAHA] Envio concluído com sucesso | base={waha_base} | session={session_name} | phone={phone}'
+                )
                 return jsonify({'ok': True, 'provider': 'waha', 'response': body})
             diagnostic = None
             content_type = response.headers.get('content-type', '')
@@ -9358,6 +9364,11 @@ def send_whatsapp_message():
                     'WAHA_BASE_URL parece apontar para outra aplicação HTTP (ex.: o próprio '
                     'Toca do Coelho na porta 3000) e não para o servidor WAHA.'
                 )
+            logger.warning(
+                f'[WAHA] Falha HTTP ao enviar mensagem | base={waha_base} | session={session_name} '
+                f'| phone={phone} | status={response.status_code} | content_type={content_type} '
+                f'| diagnostic={diagnostic or "-"}'
+            )
             return jsonify({
                 'ok': False,
                 'provider': 'waha',
@@ -9366,8 +9377,51 @@ def send_whatsapp_message():
                 'diagnostic': diagnostic,
                 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'
             })
+        except requests.exceptions.ConnectionError as exc:
+            diagnostic = (
+                f'Não foi possível conectar ao WAHA em {waha_base}. '
+                'Verifique se o serviço está em execução. '
+                'Se no PowerShell aparecer "docker não é reconhecido", instale/inicie o Docker Desktop '
+                'ou aponte WAHA_BASE_URL para uma instância WAHA já disponível.'
+            )
+            logger.warning(
+                f'[WAHA] Falha de conexão com WAHA | base={waha_base} | session={session_name} '
+                f'| phone={phone} | error={exc}'
+            )
+            return jsonify({
+                'ok': False,
+                'provider': 'waha',
+                'error': str(exc),
+                'diagnostic': diagnostic,
+                'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'
+            })
+        except requests.exceptions.Timeout as exc:
+            diagnostic = (
+                f'O WAHA em {waha_base} não respondeu a tempo. '
+                'Verifique se a sessão do WhatsApp está ativa no WAHA e se o serviço está saudável.'
+            )
+            logger.warning(
+                f'[WAHA] Timeout ao enviar mensagem | base={waha_base} | session={session_name} '
+                f'| phone={phone} | error={exc}'
+            )
+            return jsonify({
+                'ok': False,
+                'provider': 'waha',
+                'error': str(exc),
+                'diagnostic': diagnostic,
+                'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'
+            })
         except Exception as exc:
-            return jsonify({'ok': False, 'provider': 'waha', 'error': str(exc), 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'})
+            logger.exception(
+                f'[WAHA] Erro inesperado ao enviar mensagem | base={waha_base} | session={session_name} | phone={phone}'
+            )
+            return jsonify({
+                'ok': False,
+                'provider': 'waha',
+                'error': str(exc),
+                'diagnostic': 'Ocorreu um erro inesperado ao acionar o WAHA. Consulte o app.log para detalhes.',
+                'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'
+            })
     except Exception as e:
         logger.exception(f'[Dashboard] POST /api/whatsapp/send: {e}')
         return jsonify({'ok': False, 'error': str(e)}), 500
