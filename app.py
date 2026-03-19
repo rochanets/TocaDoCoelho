@@ -11,6 +11,7 @@ import re
 import zipfile
 import tempfile
 import threading
+import concurrent.futures
 import traceback
 import shutil
 import urllib.request
@@ -6330,11 +6331,17 @@ def clients_autofind_photo_candidates():
         candidates = []
         queries_tried = []
 
-        # Enriquecimento via LLM: descobrir o cargo da pessoa para queries mais precisas
+        # Enriquecimento via LLM: descobrir o cargo da pessoa — limitado a 10s para não travar a UI.
+        # O _sai_simple_prompt tem timeout de 45s; usamos concurrent.futures para encurtar.
         role = None
         if name and company:
             try:
-                role = _autopic_get_role_via_llm(name, company)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(_autopic_get_role_via_llm, name, company)
+                    try:
+                        role = _fut.result(timeout=10)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f'[AutoPic] Timeout 10s ao buscar cargo via LLM para {name!r}, prosseguindo sem cargo.')
             except Exception as e:
                 logger.warning(f'[AutoPic] Falha ao obter cargo via LLM: {e}')
 
@@ -6347,36 +6354,31 @@ def clients_autofind_photo_candidates():
                     result.append(u)
             return result[:limit]
 
-        # IMPORTANTE: Os motores de busca de imagens (Bing, Google) são semânticos o suficiente
-        # para entender que "nome empresa" = "foto desta pessoa nesta empresa".
-        # Adicionar termos como "foto perfil linkedin" ATRAPALHA porque muda o significado da
-        # busca para "páginas sobre foto de perfil no linkedin" — e aí vêm tutoriais, templates, etc.
-        # A regra é: manter as queries simples, como um usuário faria no navegador.
-
-        # Estratégia 1 (primária): nome + empresa sem aspas — replica o que funciona no navegador
-        # Bing/Google entendem semanticamente que é busca por pessoa e retornam fotos de perfil
+        # Estratégia 1 (primária): nome ENTRE ASPAS + empresa sem aspas.
+        # As aspas no nome são essenciais: sem elas "Henrique Netto" vira dois tokens separados
+        # e o Bing pode combinar com a dupla sertaneja "Netto & Henrique" ou similares.
+        # Com aspas, o Bing exige a frase exata e prioriza o profissional da empresa.
         if name and company:
-            q1 = f'{name} {company}'
+            q1 = f'"{name}" {company}'
             queries_tried.append(q1)
-            logger.info(f'[AutoPic] Estratégia 1 (simples, sem aspas): query={q1!r}')
+            logger.info(f'[AutoPic] Estratégia 1 (nome entre aspas + empresa): query={q1!r}')
             candidates = _find_image_candidates_on_web(q1, limit=6)
             logger.info(f'[AutoPic] Estratégia 1 retornou {len(candidates)} candidato(s)')
 
-        # Estratégia 2: nome + cargo (LLM) + empresa — adiciona cargo para disambiguação
-        # quando há muitas pessoas com o mesmo nome
+        # Estratégia 2: nome entre aspas + cargo (LLM) + empresa — mais precisa quando há namesakes
         if len(candidates) < 3 and name and company and role:
-            q2 = f'{name} {role} {company}'
+            q2 = f'"{name}" {role} {company}'
             queries_tried.append(q2)
-            logger.info(f'[AutoPic] Estratégia 2 (nome + cargo LLM + empresa): query={q2!r}')
+            logger.info(f'[AutoPic] Estratégia 2 (nome aspas + cargo LLM + empresa): query={q2!r}')
             extra = _find_image_candidates_on_web(q2, limit=6)
             logger.info(f'[AutoPic] Estratégia 2 retornou {len(extra)} candidato(s)')
             candidates = _merge_candidates(candidates, extra)
 
-        # Estratégia 3: nome entre aspas + empresa — aspas forçam correspondência exata do nome
+        # Estratégia 3: nome + empresa sem aspas (mais abrangente, pode trazer mais resultados)
         if len(candidates) < 3 and name and company:
-            q3 = f'"{name}" {company}'
+            q3 = f'{name} {company}'
             queries_tried.append(q3)
-            logger.info(f'[AutoPic] Estratégia 3 (nome entre aspas + empresa): query={q3!r}')
+            logger.info(f'[AutoPic] Estratégia 3 (sem aspas): query={q3!r}')
             extra = _find_image_candidates_on_web(q3, limit=6)
             logger.info(f'[AutoPic] Estratégia 3 retornou {len(extra)} candidato(s)')
             candidates = _merge_candidates(candidates, extra)
