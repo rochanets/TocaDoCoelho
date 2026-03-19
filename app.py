@@ -4874,7 +4874,7 @@ def create_commitments_from_activity(cursor, client_id, activity_id, text):
     for due_date in dates:
         cursor.execute(
             '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
             (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity')
         )
         created.append({
@@ -9324,28 +9324,6 @@ def autotoca_teste_linkedin():
         return jsonify({'ok': True, 'items': _linkedin_mock_candidates(name, company), 'mode': 'safe_fallback'})
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/linkedin/teste: {e}')
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-@app.route('/api/whatsapp/send', methods=['POST'])
-def send_whatsapp_message():
-    try:
-        data = request.get_json(force=True) or {}
-        phone = ''.join(ch for ch in str(data.get('phone') or '') if ch.isdigit())
-        message_text = (data.get('message') or '').strip()
-        if not phone or not message_text:
-            return jsonify({'ok': False, 'error': 'Telefone e mensagem são obrigatórios.'}), 400
-        waha_base = os.environ.get('WAHA_BASE_URL', 'http://localhost:3000')
-        session_name = os.environ.get('WAHA_SESSION', 'default')
-        try:
-            response = requests.post(f'{waha_base}/api/sendText', json={'session': session_name, 'chatId': f'{phone}@c.us', 'text': message_text}, timeout=20)
-            if response.ok:
-                body = response.json() if 'application/json' in response.headers.get('content-type', '') else {'raw': response.text}
-                return jsonify({'ok': True, 'provider': 'waha', 'response': body})
-            return jsonify({'ok': False, 'provider': 'waha', 'status_code': response.status_code, 'response': response.text, 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'})
-        except Exception as exc:
-            return jsonify({'ok': False, 'provider': 'waha', 'error': str(exc), 'fallback_url': f'https://web.whatsapp.com/send?phone={phone}&text={quote_plus(message_text)}'})
-    except Exception as e:
-        logger.exception(f'[Dashboard] POST /api/whatsapp/send: {e}')
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 # Servir arquivos estaticos
