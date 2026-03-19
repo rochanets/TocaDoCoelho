@@ -700,6 +700,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_template_id', '69ac3c87024adc2d2bdc19f5'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_simple_template_id', '69bc155d7462bf7c702e9295'))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -854,6 +855,41 @@ def _resolve_setting(secret_key, env_key):
     if db_value:
         return db_value
     return (os.environ.get(env_key, '') or '').strip()
+
+
+def _sai_simple_prompt(question: str) -> str | None:
+    """Envia uma pergunta ao template SAI de prompt simples e retorna o texto da resposta.
+
+    Este é o helper padrão para chamar o LLM via SAI no TocaDoCoelho.
+    Use esta função sempre que precisar de uma resposta de LLM para uma pergunta livre.
+    A chave e a URL base são lidas automaticamente das configurações do app (itoca_sai_api_key,
+    itoca_sai_base_url). O template usado é o 'simple prompt' (itoca_sai_simple_template_id),
+    que aceita apenas o campo 'question' como entrada.
+
+    Retorna o texto bruto da resposta do LLM, ou None se o SAI não estiver configurado
+    ou se ocorrer algum erro de comunicação.
+
+    Exemplo de uso:
+        raw = _sai_simple_prompt("Qual o faturamento anual da Petrobras? Responda em JSON.")
+        # raw pode ser '{"faturamento": 500000000000}' ou None
+    """
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if not api_key:
+        return None
+    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
+    try:
+        req = urllib.request.Request(
+            f'{base_url}/api/templates/{template_id}/execute',
+            data=json.dumps({'inputs': {'question': question}}, ensure_ascii=False).encode('utf-8'),
+            headers={'Content-Type': 'application/json', 'X-Api-Key': api_key},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            return resp.read().decode('utf-8', errors='ignore')
+    except Exception as e:
+        logger.warning(f'[SAI][simple_prompt] falha: {e}')
+        return None
 
 
 def api_error(status, code, message, details=None, hint=None):
@@ -8307,28 +8343,13 @@ def _account_autofill_via_sai(account_name):
         "Use null para campos dos quais não tem certeza."
     )
 
-    # --- Tentativa 1: SAI ---
-    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
-    sai_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
-
-    if sai_key:
-        template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
-        base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-        try:
-            req = urllib.request.Request(
-                f'{base_url}/api/templates/{template_id}/execute',
-                data=json.dumps({'inputs': {'question': llm_prompt, 'context_sources': f'Empresa: {account_name}.'}}, ensure_ascii=False).encode('utf-8'),
-                headers={'Content-Type': 'application/json', 'X-Api-Key': sai_key},
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                raw = resp.read().decode('utf-8', errors='ignore')
-            result = _account_autofill_parse_llm_raw(raw)
-            result['source'] = 'SAI'
-            logger.info(f'[AccountAutoFill][SAI] resultado: {result}')
-            return result
-        except Exception as e:
-            logger.warning(f'[AccountAutoFill][SAI] falha: {e}')
+    # --- Tentativa 1: SAI (simple prompt template) ---
+    raw = _sai_simple_prompt(llm_prompt)
+    if raw is not None:
+        result = _account_autofill_parse_llm_raw(raw)
+        result['source'] = 'SAI'
+        logger.info(f'[AccountAutoFill][SAI] resultado: {result}')
+        return result
 
     # --- Tentativa 2: OpenRouter ---
     or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
