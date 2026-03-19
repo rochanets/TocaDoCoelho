@@ -9159,7 +9159,7 @@
 
             btn.disabled = true;
             btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerando resumo...';
-            resultArea.innerHTML = '<div style="padding: 32px; text-align: center; color: #6b7280;"><i class="fas fa-circle-notch fa-spin" style="font-size: 24px; margin-bottom: 12px; display: block;"></i>Analisando perfil e gerando resumo executivo...</div>';
+            resultArea.innerHTML = '<div class="loading"><div class="spinner"></div>Analisando perfil e gerando resumo executivo...</div>';
 
             try {
                 const resp = await fetch(`${API_BASE}/linkedin/summarize`, {
@@ -9175,16 +9175,28 @@
                 }
 
                 const s = data.summary;
+                const limitedDataWarning = data.limited_data
+                    ? `<div style="margin-bottom:12px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 14px; font-size:12px; color:#92400e;">
+                           <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
+                           <strong>Dados limitados:</strong> O LinkedIn bloqueou o acesso completo ao perfil. Para um resumo mais detalhado, <strong>cole o texto do perfil</strong> no campo acima (abra o LinkedIn, selecione tudo e copie).
+                       </div>`
+                    : '';
+
                 if (s) {
-                    resultArea.innerHTML = _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url);
-                } else {
+                    resultArea.innerHTML = limitedDataWarning + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url);
+                } else if (data.raw) {
                     // Exibe resposta bruta se não conseguiu parsear JSON
-                    resultArea.innerHTML = `
+                    resultArea.innerHTML = limitedDataWarning + `
                         <div class="settings-card">
                             <h3 style="color:#065f46; margin-bottom:12px;"><i class="fab fa-linkedin" style="margin-right:8px;"></i>Resumo Executivo</h3>
-                            <pre style="white-space: pre-wrap; font-family: inherit; font-size: 13px; color: #374151;">${_escHtml(data.raw || '')}</pre>
+                            <pre style="white-space: pre-wrap; font-family: inherit; font-size: 13px; color: #374151;">${_escHtml(data.raw)}</pre>
                             <p style="margin-top:12px; font-size:11px; color:#9ca3af;">Fonte: ${data.source}</p>
                         </div>`;
+                } else {
+                    resultArea.innerHTML = `<div style="padding:16px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; color:#92400e;">
+                        <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
+                        <strong>Perfil não acessível:</strong> O LinkedIn bloqueou o acesso a este perfil. Cole o texto do perfil manualmente no campo acima para gerar o resumo.
+                    </div>`;
                 }
             } catch (e) {
                 resultArea.innerHTML = `<p style="color:#dc2626; padding: 12px; background: #fee2e2; border-radius: 8px;"><i class="fas fa-exclamation-triangle"></i> Erro de conexão: ${e.message}</p>`;

@@ -8547,23 +8547,38 @@ def _linkedin_try_fetch_public(url):
         return None
 
 
-def _linkedin_generate_summary_via_llm(profile_content, meeting_context=''):
+def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data_is_rich=True):
     """Gera resumo executivo do perfil LinkedIn via LLM (SAI → OpenRouter)."""
     ctx_part = f'\n\nCONTEXTO DA REUNIÃO: {meeting_context}' if meeting_context.strip() else ''
+
+    if data_is_rich:
+        quality_instruction = (
+            'IMPORTANTE: Use SOMENTE as informações explicitamente presentes no perfil abaixo. '
+            'Seja ESPECÍFICO e DETALHADO: cite nomes reais de empresas, cargos exatos, anos, projetos, '
+            'números e realizações concretas mencionados no perfil. '
+            'NÃO generalize, NÃO invente informações que não estejam no texto. '
+        )
+    else:
+        quality_instruction = (
+            'ATENÇÃO: Os dados disponíveis são LIMITADOS (perfil parcialmente acessível). '
+            'Use null para campos que não estiverem explicitamente nos dados fornecidos. '
+            'NÃO invente nem generalize — prefira null a informação genérica. '
+        )
+
     llm_prompt = (
         'Analise as informações abaixo de um perfil profissional do LinkedIn e gere um resumo executivo '
-        'para preparar uma reunião de negócios com esta pessoa. '
+        f'para preparar uma reunião de negócios com esta pessoa. {quality_instruction}'
         f'PERFIL LINKEDIN:\n{profile_content}{ctx_part}\n\n'
         'Retorne SOMENTE um JSON válido, sem texto adicional, com exatamente estes campos: '
-        '{"nome": "Nome completo", '
-        '"cargo_atual": "Cargo e empresa atual", '
-        '"trajetoria": ["ponto 1", "ponto 2", "ponto 3"], '
-        '"formacao": ["formação 1", "formação 2"], '
-        '"competencias": ["competência 1", "competência 2", "competência 3", "competência 4", "competência 5"], '
-        '"pontos_conversa": ["ponto 1", "ponto 2", "ponto 3", "ponto 4"], '
-        '"insights": ["insight 1", "insight 2"], '
-        '"tom_sugerido": "descrição do tom recomendado para a reunião"} '
-        'Use null para campos não encontrados nas informações. Responda em português (BR).'
+        '{"nome": "Nome completo da pessoa", '
+        '"cargo_atual": "Cargo exato e empresa atual", '
+        '"trajetoria": ["experiência específica 1 com empresa e período", "experiência 2", "experiência 3"], '
+        '"formacao": ["curso, instituição e ano se disponível", "outra formação"], '
+        '"competencias": ["competência específica 1", "competência 2", "competência 3", "competência 4", "competência 5"], '
+        '"pontos_conversa": ["ponto de conversa concreto 1", "ponto 2", "ponto 3", "ponto 4"], '
+        '"insights": ["insight específico sobre o perfil 1", "insight 2"], '
+        '"tom_sugerido": "tom recomendado com justificativa baseada no perfil"} '
+        'Use null para campos não encontrados. Responda em português (BR).'
     )
 
     # Tentativa 1: SAI
@@ -8648,18 +8663,21 @@ def linkedin_summarize():
         if linkedin_url and not profile_text:
             fetched_text = _linkedin_try_fetch_public(linkedin_url)
 
+        # Determina qualidade dos dados: texto colado pelo usuário = rico; URL = limitado
+        data_is_rich = bool(profile_text) or (fetched_text and len(fetched_text) > 2000)
+        limited_data = not data_is_rich
+
         profile_content = profile_text or fetched_text or ''
         if not profile_content and linkedin_url:
-            # Usa apenas a URL como referência para o LLM
             profile_content = f'URL do perfil LinkedIn: {linkedin_url}'
 
-        raw, source = _linkedin_generate_summary_via_llm(profile_content, meeting_context)
+        raw, source = _linkedin_generate_summary_via_llm(profile_content, meeting_context, data_is_rich=data_is_rich)
         if not raw:
             return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
 
         parsed = _linkedin_parse_summary(raw)
 
-        # Tenta buscar foto de perfil usando nome extraído pelo LLM
+        # Tenta buscar foto e baixar localmente (evita CORS no html2canvas)
         photo_url = None
         if parsed and parsed.get('nome'):
             try:
@@ -8668,15 +8686,16 @@ def linkedin_summarize():
                 query = f'{nome} {cargo} foto perfil profissional'.strip()
                 candidates = _find_image_candidates_on_web(query, limit=3)
                 if candidates:
-                    photo_url = candidates[0]
+                    photo_url = _download_remote_image_to_uploads(candidates[0], prefix='linkedin-profile')
             except Exception as e:
-                logger.debug(f'[LinkedIn] Falha ao buscar foto: {e}')
+                logger.debug(f'[LinkedIn] Falha ao buscar/baixar foto: {e}')
 
         return jsonify({
             'summary': parsed,
             'raw': raw if not parsed else None,
             'source': source,
             'fetched_from_url': fetched_text is not None,
+            'limited_data': limited_data,
             'photo_url': photo_url
         })
     except Exception as e:
