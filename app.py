@@ -8658,11 +8658,26 @@ def linkedin_summarize():
             return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
 
         parsed = _linkedin_parse_summary(raw)
+
+        # Tenta buscar foto de perfil usando nome extraído pelo LLM
+        photo_url = None
+        if parsed and parsed.get('nome'):
+            try:
+                nome = parsed['nome']
+                cargo = parsed.get('cargo_atual', '')
+                query = f'{nome} {cargo} foto perfil profissional'.strip()
+                candidates = _find_image_candidates_on_web(query, limit=3)
+                if candidates:
+                    photo_url = candidates[0]
+            except Exception as e:
+                logger.debug(f'[LinkedIn] Falha ao buscar foto: {e}')
+
         return jsonify({
             'summary': parsed,
             'raw': raw if not parsed else None,
             'source': source,
-            'fetched_from_url': fetched_text is not None
+            'fetched_from_url': fetched_text is not None,
+            'photo_url': photo_url
         })
     except Exception as e:
         logger.exception(f'[LinkedIn] Erro: {e}')

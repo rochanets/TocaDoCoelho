@@ -9176,7 +9176,7 @@
 
                 const s = data.summary;
                 if (s) {
-                    resultArea.innerHTML = _renderLinkedInSummary(s, data.source, data.fetched_from_url);
+                    resultArea.innerHTML = _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url);
                 } else {
                     // Exibe resposta bruta se não conseguiu parsear JSON
                     resultArea.innerHTML = `
@@ -9198,54 +9198,127 @@
             return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         }
 
-        function _renderLinkedInSummary(s, source, fetchedFromUrl) {
+        function _renderLinkedInSummary(s, source, fetchedFromUrl, photoUrl) {
             const listItems = (arr) => (Array.isArray(arr) && arr.length)
                 ? arr.map(i => `<li style="margin-bottom:4px;">${_escHtml(i)}</li>`).join('')
                 : '<li style="color:#9ca3af;">Não identificado</li>';
 
-            const badge = `<span style="background:#d1fae5; color:#065f46; font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600; margin-left:8px;">${_escHtml(source)}</span>`;
-            const fetchBadge = fetchedFromUrl ? `<span style="background:#dbeafe; color:#1e40af; font-size:11px; padding:2px 8px; border-radius:12px; margin-left:4px;"><i class="fas fa-link"></i> dados da URL</span>` : '';
+            const badge = `<span style="background:#d1fae5; color:#065f46; font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600;">${_escHtml(source)}</span>`;
+            const fetchBadge = fetchedFromUrl ? `<span style="background:#dbeafe; color:#1e40af; font-size:11px; padding:2px 8px; border-radius:12px;"><i class="fas fa-link"></i> dados da URL</span>` : '';
+
+            const photoHtml = photoUrl
+                ? `<img src="${_escHtml(photoUrl)}" alt="Foto de perfil"
+                      style="width:80px; height:80px; border-radius:50%; object-fit:cover; border:3px solid #6ee7b7; flex-shrink:0;"
+                      onerror="this.style.display='none'">`
+                : `<div style="width:80px; height:80px; border-radius:50%; background:#d1fae5; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                       <i class="fas fa-user" style="font-size:32px; color:#6ee7b7;"></i>
+                   </div>`;
 
             return `
-            <div class="settings-card" style="margin-bottom: 16px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
-                    <div>
-                        <h2 style="color:#065f46; margin:0; font-size:20px;">${_escHtml(s.nome || '—')}</h2>
-                        <p style="color:#6b7280; margin:4px 0 0; font-size:14px;">${_escHtml(s.cargo_atual || '')}</p>
+            <div id="atLinkedinResumoCard">
+            <div class="settings-card" style="margin-bottom:16px;">
+                <!-- Cabeçalho: foto + nome + cargo + badges + botões export -->
+                <div style="display:flex; align-items:center; gap:16px; margin-bottom:20px; flex-wrap:wrap;">
+                    ${photoHtml}
+                    <div style="flex:1; min-width:0;">
+                        <h2 style="color:#065f46; margin:0 0 4px; font-size:20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${_escHtml(s.nome || '—')}</h2>
+                        <p style="color:#6b7280; margin:0 0 8px; font-size:14px;">${_escHtml(s.cargo_atual || '')}</p>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap;">${badge}${fetchBadge}</div>
                     </div>
-                    <div>${badge}${fetchBadge}</div>
+                    <div style="display:flex; gap:8px; flex-shrink:0; flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-small" onclick="exportarResumoLinkedIn('jpeg')" title="Exportar como imagem JPEG">
+                            <i class="fas fa-image"></i> JPEG
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="exportarResumoLinkedIn('pdf')" title="Exportar como PDF">
+                            <i class="fas fa-file-pdf"></i> PDF
+                        </button>
+                    </div>
                 </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <!-- Trajetória + Competências -->
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
                     <div>
                         <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-route" style="margin-right:6px;"></i>Trajetória</h4>
                         <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.trajetoria)}</ul>
                     </div>
                     <div>
-                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-graduation-cap" style="margin-right:6px;"></i>Formação</h4>
-                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.formacao)}</ul>
-                    </div>
-                    <div>
                         <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-star" style="margin-right:6px;"></i>Competências-chave</h4>
                         <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.competencias)}</ul>
                     </div>
+                </div>
+                <!-- Insights + Formação (formação mais abaixo) -->
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
                     <div>
                         <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-lightbulb" style="margin-right:6px;"></i>Insights</h4>
                         <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.insights)}</ul>
                     </div>
+                    <div>
+                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-graduation-cap" style="margin-right:6px;"></i>Formação</h4>
+                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.formacao)}</ul>
+                    </div>
                 </div>
             </div>
-            <div class="settings-card" style="margin-bottom: 16px; border-left: 4px solid #10b981;">
+            <!-- Pontos de conversa -->
+            <div class="settings-card" style="margin-bottom:16px; border-left:4px solid #10b981;">
                 <h4 style="color:#047857; margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-comments" style="margin-right:6px;"></i>Pontos de Conversa para a Reunião</h4>
                 <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.pontos_conversa)}</ul>
             </div>
             ${s.tom_sugerido ? `
-            <div class="settings-card" style="background: linear-gradient(135deg, #f0fdf4, #ecfdf5); border: 1.5px solid #6ee7b7;">
+            <div class="settings-card" style="background:linear-gradient(135deg,#f0fdf4,#ecfdf5); border:1.5px solid #6ee7b7;">
                 <h4 style="color:#047857; margin:0 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-theater-masks" style="margin-right:6px;"></i>Tom Sugerido para a Reunião</h4>
                 <p style="margin:0; font-size:14px; color:#065f46; font-weight:500;">${_escHtml(s.tom_sugerido)}</p>
-            </div>` : ''}`;
+            </div>` : ''}
+            </div>`;
+        }
+
+        async function exportarResumoLinkedIn(formato) {
+            const card = document.getElementById('atLinkedinResumoCard');
+            if (!card) return;
+
+            if (typeof html2canvas === 'undefined') {
+                alert('Biblioteca de exportação ainda carregando. Aguarde um instante e tente novamente.');
+                return;
+            }
+
+            const nomeEl = card.querySelector('h2');
+            const nomeArq = (nomeEl?.textContent || 'resumo-linkedin').trim().replace(/\s+/g, '-').toLowerCase();
+
+            const canvas = await html2canvas(card, {
+                scale: 2,
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false
+            });
+
+            if (formato === 'jpeg') {
+                const link = document.createElement('a');
+                link.download = `${nomeArq}.jpg`;
+                link.href = canvas.toDataURL('image/jpeg', 0.92);
+                link.click();
+            } else {
+                // PDF via jsPDF
+                if (typeof window.jspdf === 'undefined') {
+                    alert('Biblioteca PDF ainda carregando. Aguarde um instante e tente novamente.');
+                    return;
+                }
+                const { jsPDF } = window.jspdf;
+                const imgW = 210; // A4 largura em mm
+                const imgH = (canvas.height * imgW) / canvas.width;
+                const pdf = new jsPDF({ orientation: imgH > imgW ? 'p' : 'l', unit: 'mm', format: 'a4' });
+                const pageH = pdf.internal.pageSize.getHeight();
+                let yPos = 0;
+                while (yPos < imgH) {
+                    if (yPos > 0) pdf.addPage();
+                    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -yPos, imgW, imgH);
+                    yPos += pageH;
+                }
+                pdf.save(`${nomeArq}.pdf`);
+            }
         }
     </script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+    <!-- html2canvas + jsPDF para exportação do resumo LinkedIn -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
 </body>
 </html>
