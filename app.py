@@ -700,6 +700,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_template_id', '69ac3c87024adc2d2bdc19f5'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_simple_template_id', '69bc155d7462bf7c702e9295'))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -854,6 +855,41 @@ def _resolve_setting(secret_key, env_key):
     if db_value:
         return db_value
     return (os.environ.get(env_key, '') or '').strip()
+
+
+def _sai_simple_prompt(question: str) -> str | None:
+    """Envia uma pergunta ao template SAI de prompt simples e retorna o texto da resposta.
+
+    Este é o helper padrão para chamar o LLM via SAI no TocaDoCoelho.
+    Use esta função sempre que precisar de uma resposta de LLM para uma pergunta livre.
+    A chave e a URL base são lidas automaticamente das configurações do app (itoca_sai_api_key,
+    itoca_sai_base_url). O template usado é o 'simple prompt' (itoca_sai_simple_template_id),
+    que aceita apenas o campo 'question' como entrada.
+
+    Retorna o texto bruto da resposta do LLM, ou None se o SAI não estiver configurado
+    ou se ocorrer algum erro de comunicação.
+
+    Exemplo de uso:
+        raw = _sai_simple_prompt("Qual o faturamento anual da Petrobras? Responda em JSON.")
+        # raw pode ser '{"faturamento": 500000000000}' ou None
+    """
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if not api_key:
+        return None
+    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
+    try:
+        req = urllib.request.Request(
+            f'{base_url}/api/templates/{template_id}/execute',
+            data=json.dumps({'inputs': {'question': question}}, ensure_ascii=False).encode('utf-8'),
+            headers={'Content-Type': 'application/json', 'X-Api-Key': api_key},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            return resp.read().decode('utf-8', errors='ignore')
+    except Exception as e:
+        logger.warning(f'[SAI][simple_prompt] falha: {e}')
+        return None
 
 
 def api_error(status, code, message, details=None, hint=None):
@@ -8228,6 +8264,175 @@ def get_account(account_id):
         return jsonify({'error': str(e)}), 500
 
 
+def _account_autofill_parse_llm_raw(raw):
+    """Extrai dict de dados corporativos de uma resposta bruta de LLM (SAI ou OpenRouter)."""
+    def _try_parse_json(value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = json.loads(value.strip())
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        m = re.search(r'\{[^{}]*\}', value, re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+        return None
+
+    parsed = _try_parse_json(raw) or {}
+    if 'answer' not in parsed and 'average_revenue_brl' not in parsed:
+        for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message'):
+            candidate = parsed.get(key)
+            nested = _try_parse_json(candidate)
+            if nested:
+                parsed = nested
+                break
+
+    answer = parsed.get('answer') if isinstance(parsed, dict) else ''
+    answer_obj = _try_parse_json(answer) if isinstance(answer, str) else None
+    if answer_obj:
+        parsed = answer_obj
+
+    average_revenue_brl = parsed.get('average_revenue_brl') if isinstance(parsed, dict) else None
+    professionals_count = parsed.get('professionals_count') if isinstance(parsed, dict) else None
+    global_presence_raw = (parsed.get('global_presence') or '') if isinstance(parsed, dict) else ''
+
+    global_presence = ''
+    if global_presence_raw:
+        gp_lower = str(global_presence_raw).strip().lower()
+        if 'global' in gp_lower:
+            global_presence = 'Global'
+        elif 'latam' in gp_lower or 'latina' in gp_lower:
+            global_presence = 'Latam'
+        elif 'brasil' in gp_lower or 'brazil' in gp_lower:
+            global_presence = 'Brasil'
+
+    try:
+        pc = int(professionals_count) if professionals_count is not None else None
+    except Exception:
+        pc = None
+
+    try:
+        rev = float(average_revenue_brl) if average_revenue_brl is not None else None
+    except Exception:
+        rev = None
+
+    return {'average_revenue_brl': rev, 'professionals_count': pc, 'global_presence': global_presence}
+
+
+def _account_autofill_via_sai(account_name):
+    """Busca dados corporativos da empresa via SAI LLM com fallback para OpenRouter."""
+    llm_prompt = (
+        f"Quais são os dados corporativos da empresa '{account_name}'? "
+        "Retorne SOMENTE um JSON válido, sem texto adicional, no formato: "
+        '{"average_revenue_brl": 3500000000, "professionals_count": 50000, "global_presence": "Global"} '
+        "Onde average_revenue_brl é o faturamento médio anual em reais (número inteiro, sem símbolos), "
+        "professionals_count é o número de funcionários/profissionais (número inteiro), "
+        "global_presence é 'Brasil' se opera principalmente no Brasil, 'Latam' se opera em países da América Latina além do Brasil, "
+        "'Global' se opera em múltiplos continentes. "
+        "Use null para campos dos quais não tem certeza."
+    )
+
+    # --- Tentativa 1: SAI (simple prompt template) ---
+    raw = _sai_simple_prompt(llm_prompt)
+    if raw is not None:
+        result = _account_autofill_parse_llm_raw(raw)
+        result['source'] = 'SAI'
+        logger.info(f'[AccountAutoFill][SAI] resultado: {result}')
+        return result
+
+    # --- Tentativa 2: OpenRouter ---
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista corporativo. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
+                    {'role': 'user', 'content': llm_prompt}
+                ],
+                'temperature': 0.1
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            result = _account_autofill_parse_llm_raw(raw)
+            result['source'] = 'OpenRouter'
+            logger.info(f'[AccountAutoFill][OpenRouter] resultado: {result}')
+            return result
+        except Exception as e:
+            logger.warning(f'[AccountAutoFill][OpenRouter] falha: {e}')
+
+    logger.info(f'[AccountAutoFill] Nenhum LLM configurado para empresa: {account_name!r}')
+    return {'average_revenue_brl': None, 'professionals_count': None, 'global_presence': '', 'source': 'sem_llm'}
+
+
+@app.route('/api/accounts/autofill', methods=['POST'])
+def account_autofill():
+    """Preenche automaticamente campos de uma conta com dados da empresa via SAI LLM e busca de imagem."""
+    try:
+        data = request.get_json() or {}
+        account_name = (data.get('account_name') or '').strip()
+        if not account_name:
+            return jsonify({'error': 'Nome da conta não informado.'}), 400
+
+        company_data = _account_autofill_via_sai(account_name)
+
+        average_revenue_formatted = ''
+        raw_revenue = company_data.get('average_revenue_brl')
+        if raw_revenue is not None:
+            try:
+                cents = int(round(float(raw_revenue) * 100))
+                average_revenue_formatted = format_currency_br(cents)
+            except Exception:
+                pass
+
+        logo_url = None
+        try:
+            candidates = _find_image_candidates_on_web(f'{account_name} logo empresa', limit=4)
+            if candidates:
+                logo_url = candidates[0]
+        except Exception as e:
+            logger.warning(f'[AccountAutoFill] Falha ao buscar logo: {e}')
+
+        return jsonify({
+            'average_revenue': average_revenue_formatted,
+            'professionals_count': company_data.get('professionals_count', ''),
+            'global_presence': company_data.get('global_presence', ''),
+            'logo_url': logo_url,
+            'source': company_data.get('source', 'SAI')
+        })
+    except Exception as e:
+        logger.exception(f'[AccountAutoFill] Erro: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/accounts', methods=['POST'])
 def create_account():
     try:
@@ -8239,10 +8444,11 @@ def create_account():
         professionals_count = int(professionals_count) if professionals_count.isdigit() else None
         global_presence = request.form.get('global_presence', '').strip() or None
         main_contact_ids = request.form.get('main_contact_ids', '').strip()
+        autofill_logo_url = (request.form.get('autofill_logo_url') or '').strip()
         if not name:
             return jsonify({'error': 'Nome da conta é obrigatório'}), 400
         conn = get_db(); c = conn.cursor()
-        logo_url = None
+        logo_url = autofill_logo_url or None
         if 'logo' in request.files:
             f = request.files['logo']
             if f and f.filename:
@@ -8277,12 +8483,13 @@ def update_account(account_id):
         global_presence = request.form.get('global_presence', '').strip() or None
         main_contact_ids = request.form.get('main_contact_ids', '').strip()
         remove_logo = request.form.get('remove_logo', '0') in ('1', 'true', 'True')
+        autofill_logo_url = (request.form.get('autofill_logo_url') or '').strip()
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         row = dict_from_row(c.fetchone())
         if not row:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        logo_url = None if remove_logo else row.get('logo_url')
+        logo_url = None if remove_logo else (autofill_logo_url or row.get('logo_url'))
         if 'logo' in request.files:
             f = request.files['logo']
             if f and f.filename:
