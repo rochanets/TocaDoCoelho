@@ -2518,7 +2518,10 @@ def _itoca_search_context(question, limit=18):
     results = []
     seen = set()
     like_values = [f'%{token}%' for token in tokens[:6]]
+    _generic_limit_reached = False
     for table in tables:
+        if _generic_limit_reached:
+            break
         text_columns = _itoca_text_columns(cursor, table)
         if not text_columns:
             continue
@@ -2554,8 +2557,9 @@ def _itoca_search_context(question, limit=18):
                 'search_text': snippet.lower()
             })
             if len(results) >= limit:
-                conn.close()
-                return results
+                _generic_limit_reached = True
+                break  # Quebra o for row; a flag quebra o for table na próxima iteração.
+                       # As buscas especializadas de wiki, agenda, accounts continuam abaixo.
 
     # Busca especializada de accounts/clients quando a pergunta menciona contas, clientes, relacionamento ou resumo
     account_client_keywords = {'contas', 'conta', 'clientes', 'cliente', 'relacionamento', 'relacao', 'resumo', 'status', 'pipeline', 'accounts', 'account'}
@@ -2800,9 +2804,9 @@ def _itoca_search_context(question, limit=18):
                 snippet = f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | conteudo: {doc_text[:3000]}'
             else:
                 snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
-                           f'AVISO: conteúdo não extraído automaticamente. '
-                           f'Documento "{rd.get("original_name", "")}" existe no WikiToca. '
-                           f'Instale pdfplumber (pip install pdfplumber) para habilitar leitura de PDFs.')
+                           f'CONFIRMADO: o documento "{rd.get("original_name", "")}" EXISTE no WikiToca. '
+                           f'Conteúdo interno não disponível para leitura automática (biblioteca de extração não instalada). '
+                           f'Ao responder, informe que o documento existe mas não é possível detalhar o conteúdo.')
             fp = f'wiki_documents:{snippet[:160]}'
             if fp in seen:
                 continue
@@ -3211,17 +3215,18 @@ def _itoca_build_wiki_items(conn, max_chars_per_doc=8000):
             doc_ext = rd.get('file_ext', '')
 
             if not doc_text.strip():
-                # Sem conteúdo extraível: indexa metadados com nota ao LLM
+                # Sem conteúdo extraível: indexa metadados com nota clara ao LLM
                 snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
-                           f'AVISO: conteúdo do arquivo não pôde ser extraído automaticamente. '
-                           f'O documento existe no sistema com o nome "{rd.get("original_name", "")}". '
-                           f'Se o usuário perguntar sobre informações que possam estar neste documento, '
-                           f'informe que o documento existe mas o conteúdo não está disponível para leitura automática.')
+                           f'CONFIRMADO: o documento "{rd.get("original_name", "")}" EXISTE no WikiToca. '
+                           f'Conteúdo interno não disponível para leitura automática. '
+                           f'Ao responder sobre este tema, informe que o documento existe mas não é possível detalhar o conteúdo.')
+                # search_text inclui o título completo + nome original para melhor matching por tokens
+                _search_base = (doc_title + ' ' + rd.get('original_name', '') + ' ' + doc_ext).lower()
                 items.append({
                     'table': 'wiki_documents',
                     'id': rd.get('id'),
                     'snippet': snippet,
-                    'search_text': (doc_title + ' ' + rd.get('original_name', '')).lower()
+                    'search_text': _search_base
                 })
             else:
                 # Divide em chunks de max_chars_per_doc para não sobrecarregar o contexto
@@ -3631,9 +3636,11 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
                 doc_text = _itoca_extract_text_from_file(str(file_path))
             if not doc_text.strip():
                 snippet = (f'[WikiToca Doc] titulo: {doc_title} | tipo: {doc_ext} | '
-                           f'AVISO: conteúdo não extraído automaticamente. '
-                           f'Documento "{rd.get("original_name", "")}" existe no WikiToca.')
-                wiki_doc_items.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': (doc_title + ' ' + rd.get('original_name', '')).lower()})
+                           f'CONFIRMADO: o documento "{rd.get("original_name", "")}" EXISTE no WikiToca. '
+                           f'Conteúdo interno não disponível para leitura automática. '
+                           f'Ao responder sobre este tema, informe que o documento existe mas não é possível detalhar o conteúdo.')
+                _search_base = (doc_title + ' ' + rd.get('original_name', '') + ' ' + doc_ext).lower()
+                wiki_doc_items.append({'table': 'wiki_documents', 'id': rd.get('id'), 'snippet': snippet, 'search_text': _search_base})
             else:
                 max_total = 8000 * 5
                 chunks = [doc_text[i:i+8000] for i in range(0, min(len(doc_text), max_total), 8000)]
