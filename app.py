@@ -1751,6 +1751,39 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
     c.drawRightString(page_width - 44 * mm, page_height - 33 * mm, subtitle)
 
 
+def _relation_report_fetch_market_status(account):
+    """Busca informações sobre a situação da empresa no mercado usando _sai_simple_prompt().
+    Retorna um dict com market_summary, news_highlights, market_position e industry_trends,
+    ou None se SAI não estiver configurado ou a empresa for desconhecida.
+    """
+    account_name = (account.get('name') or '').strip()
+    if not account_name:
+        return None
+    sector = (account.get('sector') or '').strip()
+    sector_info = f" do setor {sector}" if sector else ''
+    raw = _sai_simple_prompt(
+        f"Analise a situação de mercado da empresa '{account_name}'{sector_info} com base no que você sabe sobre ela. "
+        "Retorne SOMENTE JSON válido com exatamente este formato, sem texto antes ou depois: "
+        '{"market_summary": "parágrafo de 2-3 frases resumindo a posição da empresa no mercado", '
+        '"news_highlights": ["destaque de notícia ou fato relevante 1", "destaque 2", "destaque 3"], '
+        '"market_position": "líder de mercado/relevante/emergente/nicho/não identificada", '
+        '"industry_trends": "parágrafo de 1-2 frases sobre tendências do setor que impactam diretamente essa empresa"}. '
+        "Use null para campos que você não tem informação confiável. Se não reconhecer a empresa, retorne null em todos os campos de texto e lista vazia em news_highlights."
+    )
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw.strip())
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    obj = _extract_json_object_from_text(raw or '')
+    if isinstance(obj, dict):
+        return obj
+    return None
+
+
 def _relation_report_build_browser_html(report_data, profile=None, embed_images=False):
     profile = profile or {}
 
@@ -1914,6 +1947,34 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
 
     highlights_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('highlights') or [])]) or '<li>Sem destaques adicionais.</li>'
     next_steps_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('next_steps') or [])]) or '<li>Sem próximos passos sugeridos.</li>'
+
+    market_status = report_data.get('market_status') or {}
+    if market_status:
+        ms_position = esc(market_status.get('market_position') or '')
+        ms_summary = esc(market_status.get('market_summary') or 'Informação não disponível.')
+        ms_trends = esc(market_status.get('industry_trends') or '')
+        ms_news = market_status.get('news_highlights') or []
+        ms_news_html = ''.join([f"<li>{esc(n)}</li>" for n in ms_news if n]) or '<li>Sem destaques recentes identificados.</li>'
+        ms_position_html = f"<span class='rr-ms-position-badge'>{ms_position}</span>" if ms_position else ''
+        ms_trends_html = f"<div class='rr-ms-trends'><strong>Tendências do setor:</strong> {ms_trends}</div>" if ms_trends else ''
+        market_status_section = f"""
+  <section class='rr-section rr-ms-section'>
+    <div class='rr-ms-header'>
+      <h2>Empresa no mercado</h2>
+      {ms_position_html}
+    </div>
+    <p class='rr-ms-summary'>{ms_summary}</p>
+    <div class='rr-ms-body'>
+      <div>
+        <h3 class='rr-ms-subtitle'>Destaques e notícias recentes</h3>
+        <ul class='rr-list'>{ms_news_html}</ul>
+      </div>
+      {ms_trends_html}
+    </div>
+  </section>"""
+    else:
+        market_status_section = ''
+
     account_logo = _inline_image_url(account_logo)
     account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "📊"
     context_badges_html = ''.join([
@@ -1993,10 +2054,62 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-btn {{ border:none; border-radius:14px; padding:10px 16px; font-weight:700; cursor:pointer; }}
 .rr-btn-primary {{ background:#10b981; color:#fff; }}
 .rr-btn-secondary {{ background:#e5e7eb; color:#111827; }}
-@media (max-width: 1024px) {{ .rr-hero-grid,.rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ grid-template-columns:1fr; }} }}
-@page {{ size: landscape; margin: 12mm 10mm; }}
-@media print {{ .rr-toolbar {{ display:none !important; }} html, body {{ background:#fff !important; width:100%; height:auto; margin:0 !important; padding:0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }} .rr-shell {{ max-width:none !important; width:100% !important; padding:0 !important; margin:0 !important; }} .rr-hero {{ min-height:auto !important; padding:16px !important; margin-top:0 !important; border-radius:18px !important; overflow:visible !important; }} .rr-hero:after {{ display:none !important; }} .rr-top {{ display:grid !important; grid-template-columns:minmax(0,1fr) 220px !important; gap:14px !important; align-items:start !important; }} .rr-brand {{ gap:12px !important; align-items:flex-start !important; min-width:0 !important; }} .rr-user {{ justify-self:end !important; align-self:start !important; width:220px !important; }} .rr-brand-copy p {{ max-width:none !important; }} .rr-section,.rr-kpi,.rr-panel,.rr-contact-card,.rr-topic-card,.rr-info-item {{ box-shadow:none !important; break-inside:avoid; page-break-inside:avoid; }} .rr-hero {{ break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ display:grid !important; }} .rr-kpis {{ grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:10px !important; margin-top:12px !important; }} .rr-grid {{ grid-template-columns:1.1fr .9fr !important; gap:14px !important; margin-top:16px !important; }} .rr-hero-grid {{ display:block !important; margin-top:10px !important; }} .rr-panel-summary {{ display:block !important; width:100% !important; background:rgba(255,255,255,.14) !important; border:1px solid rgba(255,255,255,.18) !important; padding:14px !important; border-radius:18px !important; margin-top:8px !important; break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-contact-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-topic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-info-list {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:10px !important; }} .rr-kpi,.rr-section,.rr-contact-card,.rr-topic-card,.rr-info-item,.rr-panel {{ margin-bottom:10px !important; }} .rr-section {{ padding:16px !important; border-radius:18px !important; }} .rr-contact-card {{ min-height:0 !important; padding:14px !important; }} .rr-topic-card {{ min-height:0 !important; padding:14px !important; }} .rr-kpi {{ padding:14px !important; }} .rr-user-photo {{ width:68px !important; height:68px !important; }} .rr-brand-mark {{ max-width:170px !important; height:52px !important; border-radius:16px !important; }} .rr-brand-mark img {{ max-width:150px !important; max-height:38px !important; }} .rr-title {{ font-size:26px !important; line-height:1.08 !important; margin-bottom:6px !important; }} .rr-subtitle {{ font-size:12px !important; line-height:1.4 !important; margin-top:4px !important; max-width:none !important; }} .rr-panel-summary h3 {{ margin:0 0 10px !important; font-size:16px !important; color:#ffffff !important; }} .rr-lead {{ font-size:12px !important; line-height:1.5 !important; color:#ffffff !important; display:block !important; visibility:visible !important; opacity:1 !important; }} .rr-context-pills {{ gap:8px !important; margin-bottom:10px !important; }} .rr-context-pill {{ padding:6px 9px !important; font-size:10px !important; }} .rr-contact-meta, .rr-muted, .rr-user-role, .rr-info-item-value {{ font-size:10px !important; }} .rr-page-break-before {{ break-before:page; page-break-before:always; }} }}
+.rr-ms-section {{ margin-top:22px; }}
+.rr-ms-header {{ display:flex; align-items:center; gap:14px; margin-bottom:14px; flex-wrap:wrap; }}
+.rr-ms-header h2 {{ margin:0; font-size:22px; color:var(--green-dark); }}
+.rr-ms-position-badge {{ background:#ecfdf5; color:#065f46; border:1px solid #6ee7b7; border-radius:999px; font-size:12px; font-weight:700; padding:5px 14px; white-space:nowrap; }}
+.rr-ms-summary {{ font-size:14.5px; line-height:1.75; color:#1f2937; margin:0 0 18px; }}
+.rr-ms-body {{ display:grid; grid-template-columns:1fr 1fr; gap:22px; }}
+.rr-ms-subtitle {{ font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--green-dark); margin:0 0 10px; }}
+.rr-ms-trends {{ background:#f0fdf4; border:1px solid #bbf7d0; border-radius:16px; padding:14px 16px; font-size:13.5px; line-height:1.7; color:#1f2937; }}
+.rr-ms-trends strong {{ color:#065f46; }}
+@media (max-width: 1024px) {{ .rr-hero-grid,.rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list,.rr-ms-body {{ grid-template-columns:1fr; }} }}
+@page {{ size: A4 portrait; margin: 10mm 12mm; }}
+@media print {{
+  .rr-toolbar {{ display:none !important; }}
+  html, body {{ background:#fff !important; width:100%; height:auto; margin:0 !important; padding:0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }}
+  .rr-shell {{ max-width:none !important; width:100% !important; padding:0 !important; margin:0 !important; }}
+  .rr-hero {{ min-height:auto !important; padding:16px !important; margin-top:0 !important; border-radius:18px !important; overflow:visible !important; background:linear-gradient(135deg,#064e3b 0%, #047857 50%, #10b981 100%) !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }}
+  .rr-hero:after {{ display:none !important; }}
+  .rr-top {{ display:grid !important; grid-template-columns:minmax(0,1fr) 220px !important; gap:14px !important; align-items:start !important; }}
+  .rr-brand {{ gap:12px !important; align-items:flex-start !important; min-width:0 !important; }}
+  .rr-user {{ justify-self:end !important; align-self:start !important; width:220px !important; }}
+  .rr-brand-copy p {{ max-width:none !important; }}
+  .rr-section,.rr-kpi,.rr-panel,.rr-contact-card,.rr-topic-card,.rr-info-item {{ box-shadow:none !important; break-inside:avoid; page-break-inside:avoid; }}
+  .rr-hero,.rr-ms-section {{ break-inside:avoid !important; page-break-inside:avoid !important; }}
+  .rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ display:grid !important; }}
+  .rr-kpis {{ grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:10px !important; margin-top:12px !important; }}
+  .rr-grid {{ grid-template-columns:1.1fr .9fr !important; gap:14px !important; margin-top:16px !important; }}
+  .rr-hero-grid {{ display:block !important; margin-top:10px !important; }}
+  .rr-panel-summary {{ display:block !important; width:100% !important; background:rgba(255,255,255,.14) !important; border:1px solid rgba(255,255,255,.18) !important; padding:14px !important; border-radius:18px !important; margin-top:8px !important; break-inside:avoid !important; page-break-inside:avoid !important; }}
+  .rr-contact-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }}
+  .rr-topic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }}
+  .rr-info-list {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:10px !important; }}
+  .rr-ms-body {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:16px !important; }}
+  .rr-kpi,.rr-section,.rr-contact-card,.rr-topic-card,.rr-info-item,.rr-panel {{ margin-bottom:10px !important; }}
+  .rr-section {{ padding:16px !important; border-radius:18px !important; }}
+  .rr-ms-section {{ padding:16px !important; border-radius:18px !important; background:rgba(255,255,255,.86) !important; border:1px solid rgba(209,250,229,.9) !important; }}
+  .rr-contact-card {{ min-height:0 !important; padding:14px !important; }}
+  .rr-topic-card {{ min-height:0 !important; padding:14px !important; }}
+  .rr-kpi {{ padding:14px !important; }}
+  .rr-user-photo {{ width:68px !important; height:68px !important; }}
+  .rr-brand-mark {{ max-width:170px !important; height:52px !important; border-radius:16px !important; }}
+  .rr-brand-mark img {{ max-width:150px !important; max-height:38px !important; }}
+  .rr-title {{ font-size:26px !important; line-height:1.08 !important; margin-bottom:6px !important; }}
+  .rr-subtitle {{ font-size:12px !important; line-height:1.4 !important; margin-top:4px !important; max-width:none !important; }}
+  .rr-panel-summary h3 {{ margin:0 0 10px !important; font-size:16px !important; color:#ffffff !important; }}
+  .rr-lead {{ font-size:12px !important; line-height:1.5 !important; color:#ffffff !important; display:block !important; visibility:visible !important; opacity:1 !important; }}
+  .rr-context-pills {{ gap:8px !important; margin-bottom:10px !important; }}
+  .rr-context-pill {{ padding:6px 9px !important; font-size:10px !important; }}
+  .rr-contact-meta, .rr-muted, .rr-user-role, .rr-info-item-value {{ font-size:10px !important; }}
+  .rr-ms-summary, .rr-ms-trends, .rr-list {{ font-size:11px !important; line-height:1.6 !important; display:block !important; visibility:visible !important; opacity:1 !important; color:#1f2937 !important; }}
+  .rr-ms-trends {{ background:#f0fdf4 !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }}
+  .rr-contact-photo img, .rr-user-photo {{ display:block !important; }}
+  .rr-page-break-before {{ break-before:page; page-break-before:always; }}
+}}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
 <div class='rr-toolbar'>
@@ -2004,7 +2117,8 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
   <div class='rr-toolbar-actions'>
     <button class='rr-btn rr-btn-secondary' onclick='window.close()'>✕ Fechar</button>
     <button class='rr-btn rr-btn-secondary' onclick='window.location.href=window.location.pathname.replace("/view","/export-html") + window.location.search'>Exportar HTML</button>
-    <button class='rr-btn rr-btn-primary' onclick="window.location.href='/api/report/relation' + window.location.search">Exportar PDF</button>
+    <button class='rr-btn rr-btn-secondary' id='rr-btn-jpeg' onclick='exportarRelationReportJpeg()'>Exportar JPEG</button>
+    <button class='rr-btn rr-btn-primary' onclick='window.print()'>Exportar PDF</button>
   </div>
 </div>
 <div class='rr-shell'>
@@ -2076,7 +2190,37 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
       <ul class='rr-list'>{next_steps_html}</ul>
     </div>
   </section>
+{market_status_section}
 </div>
+<script>
+async function exportarRelationReportJpeg() {{
+  const btn = document.getElementById('rr-btn-jpeg');
+  if (btn) {{ btn.disabled = true; btn.textContent = 'Gerando...'; }}
+  try {{
+    const shell = document.querySelector('.rr-shell');
+    const toolbar = document.querySelector('.rr-toolbar');
+    if (toolbar) toolbar.style.display = 'none';
+    const canvas = await html2canvas(shell || document.body, {{
+      scale: 2,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#f6fffb',
+      logging: false
+    }});
+    if (toolbar) toolbar.style.display = '';
+    const link = document.createElement('a');
+    const accountName = document.title.replace('Relation Report - ', '').replace(/\s+/g, '-').toLowerCase();
+    link.download = 'relation-report-' + accountName + '.jpg';
+    link.href = canvas.toDataURL('image/jpeg', 0.92);
+    link.click();
+  }} catch(e) {{
+    if (toolbar) document.querySelector('.rr-toolbar').style.display = '';
+    alert('Erro ao exportar JPEG: ' + e.message);
+  }} finally {{
+    if (btn) {{ btn.disabled = false; btn.textContent = 'Exportar JPEG'; }}
+  }}
+}}
+</script>
 </body>
 </html>"""
 
@@ -2271,6 +2415,48 @@ def _relation_report_render_pdf(report_data):
         y = ensure_space(y, 8 * mm)
         y = _relation_report_draw_paragraph(c, f"• {item}", 18 * mm, y, page_width - 36 * mm, body_style) - 2 * mm
 
+    market_status = report_data.get('market_status') or {}
+    if market_status:
+        y = ensure_space(y, 40 * mm)
+        c.setFillColor(colors_map['secondary'])
+        c.setFont('Helvetica-Bold', 12)
+        c.drawString(18 * mm, y, 'Empresa no mercado')
+        position_label = (market_status.get('market_position') or '').strip()
+        if position_label:
+            pos_width = stringWidth(f'  {position_label}  ', 'Helvetica-Bold', 8.5)
+            c.setFillColor(colors.HexColor('#ecfdf5'))
+            c.roundRect(page_width - 18 * mm - pos_width - 4, y - 5 * mm, pos_width + 4, 5.5 * mm, 2 * mm, fill=1, stroke=0)
+            c.setFillColor(colors.HexColor('#065f46'))
+            c.setFont('Helvetica-Bold', 8.5)
+            c.drawRightString(page_width - 18 * mm - 2, y - 1.5 * mm, position_label)
+        y -= 4 * mm
+        c.setStrokeColor(colors_map['accent'])
+        c.line(18 * mm, y, page_width - 18 * mm, y)
+        y -= 5 * mm
+        ms_summary = (market_status.get('market_summary') or '').strip()
+        if ms_summary:
+            y = _relation_report_draw_paragraph(c, ms_summary, 18 * mm, y, page_width - 36 * mm, body_style) - 5 * mm
+        ms_news = [n for n in (market_status.get('news_highlights') or []) if n]
+        if ms_news:
+            y = ensure_space(y, 14 * mm)
+            c.setFillColor(colors_map['secondary'])
+            c.setFont('Helvetica-Bold', 9.5)
+            c.drawString(18 * mm, y, 'Destaques e notícias recentes')
+            y -= 4 * mm
+            for item in ms_news[:5]:
+                y = ensure_space(y, 7 * mm)
+                y = _relation_report_draw_paragraph(c, f"• {item}", 18 * mm, y, page_width - 36 * mm, small_style) - 2 * mm
+        ms_trends = (market_status.get('industry_trends') or '').strip()
+        if ms_trends:
+            y = ensure_space(y, 20 * mm)
+            y -= 4 * mm
+            c.setFillColor(colors.HexColor('#f0fdf4'))
+            trends_para = Paragraph(f"<b>Tendências do setor:</b> {ms_trends}", small_style)
+            tw, th = trends_para.wrap(page_width - 36 * mm, 10000)
+            c.roundRect(18 * mm, y - th - 6, page_width - 36 * mm, th + 10, 3 * mm, fill=1, stroke=0)
+            trends_para.drawOn(c, 20 * mm, y - th - 2)
+            y -= th + 10
+
     c.setFont('Helvetica', 8)
     c.setFillColor(colors.HexColor('#6b7280'))
     c.drawRightString(page_width - 18 * mm, 12 * mm, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
@@ -2297,6 +2483,8 @@ def export_relation_report():
         report_data = _relation_report_collect_data(account_id, start_date=start_date, end_date=end_date)
         if not report_data:
             return jsonify({'error': 'Conta não encontrada'}), 404
+        report_data['narrative'] = _relation_report_generate_narrative(report_data)
+        report_data['market_status'] = _relation_report_fetch_market_status(report_data.get('account') or {})
         pdf_buffer = _relation_report_render_pdf(report_data)
         safe_name = re.sub(r'[^a-zA-Z0-9_-]+', '-', (report_data['account'].get('name') or 'cliente').strip()).strip('-').lower() or 'cliente'
         file_name = f'relation-report-{safe_name}-{datetime.now().strftime("%Y%m%d-%H%M%S")}.pdf'
@@ -2328,6 +2516,7 @@ def view_relation_report_browser():
         if not report_data:
             return 'Conta não encontrada', 404
         report_data['narrative'] = _relation_report_generate_narrative(report_data)
+        report_data['market_status'] = _relation_report_fetch_market_status(report_data.get('account') or {})
         profile_response = get_profile_config()
         profile = profile_response.get_json(silent=True) if hasattr(profile_response, 'get_json') else {}
         html_doc = _relation_report_build_browser_html(report_data, profile=profile or {}, embed_images=True)
@@ -2354,6 +2543,7 @@ def export_relation_report_html():
         if not report_data:
             return 'Conta não encontrada', 404
         report_data['narrative'] = _relation_report_generate_narrative(report_data)
+        report_data['market_status'] = _relation_report_fetch_market_status(report_data.get('account') or {})
         profile_response = get_profile_config()
         profile = profile_response.get_json(silent=True) if hasattr(profile_response, 'get_json') else {}
         html_doc = _relation_report_build_browser_html(report_data, profile=profile or {}, embed_images=True)
