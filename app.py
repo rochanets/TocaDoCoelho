@@ -2469,14 +2469,22 @@ def _itoca_build_snippet(row_dict):
     # Campos de baixa relevância semântica que não devem aparecer no snippet genérico
     _SKIP_KEYS = {'id', 'created_at', 'updated_at', 'logo_url', 'photo_url', 'file_url',
                   'file_name', 'file_size', 'display_order', 'is_system', 'is_locked',
-                  'is_target', 'is_cold_contact', 'completed', 'completed_at',
+                  'completed', 'completed_at',
                   'account_id', 'client_id', 'card_id', 'column_id', 'presence_id',
                   'activity_id', 'grouping_id', 'focal_client_id', 'contact_id', 'target_id'}
     # Campos de data que devem ser formatados
     _DATE_KEYS = {'activity_date', 'due_date', 'validity_month'}
     parts = []
+    # Traduz flags booleanas para rótulos semânticos legíveis pelo LLM
+    if row_dict.get('is_target'):
+        parts.append('classificacao: conta-alvo (target)')
+    if row_dict.get('is_cold_contact'):
+        parts.append('classificacao: cold contact')
     for key, value in row_dict.items():
         if key in _SKIP_KEYS:
+            continue
+        if key in ('is_target', 'is_cold_contact'):
+            continue  # já tratados acima
             continue
         if value is None:
             continue
@@ -2554,20 +2562,24 @@ def _itoca_search_context(question, limit=18):
     is_account_query = any(t in account_client_keywords for t in tokens[:10])
     if is_account_query and len(results) < limit:
         try:
-            # Busca accounts com última atividade
+            # Busca accounts com última atividade, is_target e contagem de serviços
             cursor.execute('''
-                SELECT ac.id, ac.name, ac.sector, ac.description,
+                SELECT ac.id, ac.name, ac.sector, ac.description, ac.is_target,
                        MAX(act.activity_date) as last_activity,
-                       COUNT(act.id) as total_activities
+                       COUNT(DISTINCT act.id) as total_activities,
+                       COUNT(DISTINCT ap.id) as total_services
                 FROM accounts ac
                 LEFT JOIN activities act ON act.account_id = ac.id
+                LEFT JOIN account_presences ap ON ap.account_id = ac.id
                 GROUP BY ac.id
-                ORDER BY last_activity DESC NULLS LAST
-                LIMIT 20
+                ORDER BY ac.is_target DESC, last_activity DESC NULLS LAST
+                LIMIT 30
             ''')
             for row in cursor.fetchall():
                 rd = dict_from_row(row)
                 parts = []
+                if rd.get('is_target'):
+                    parts.append('classificacao: conta-alvo (target)')
                 if rd.get('name'):
                     parts.append(f'empresa: {rd["name"]}')
                 if rd.get('sector'):
@@ -2582,6 +2594,8 @@ def _itoca_search_context(question, limit=18):
                         parts.append(f'ultimo_contato: {rd["last_activity"]}')
                 if rd.get('total_activities'):
                     parts.append(f'total_interacoes: {rd["total_activities"]}')
+                if rd.get('total_services'):
+                    parts.append(f'servicos_stefanini_cadastrados: {rd["total_services"]}')
                 snippet = ' | '.join(parts)
                 if not snippet:
                     continue
@@ -2594,20 +2608,24 @@ def _itoca_search_context(question, limit=18):
             logger.warning(f'[iToca] Erro ao buscar accounts para query de contas: {e}')
 
         try:
-            # Busca clients com última atividade
+            # Busca clients com última atividade, is_target e is_cold_contact
             cursor.execute('''
                 SELECT cl.id, cl.name, cl.company, cl.position, cl.email,
-                       cl.last_activity_date,
+                       cl.last_activity_date, cl.is_target, cl.is_cold_contact,
                        COUNT(act.id) as total_activities
                 FROM clients cl
                 LEFT JOIN activities act ON act.client_id = cl.id
                 GROUP BY cl.id
-                ORDER BY cl.last_activity_date DESC NULLS LAST
-                LIMIT 20
+                ORDER BY cl.is_target DESC, cl.last_activity_date DESC NULLS LAST
+                LIMIT 25
             ''')
             for row in cursor.fetchall():
                 rd = dict_from_row(row)
                 parts = []
+                if rd.get('is_target'):
+                    parts.append('classificacao: contato-alvo (target)')
+                if rd.get('is_cold_contact'):
+                    parts.append('classificacao: cold contact')
                 if rd.get('name'):
                     parts.append(f'contato: {rd["name"]}')
                 if rd.get('company'):
@@ -3928,22 +3946,26 @@ def _itoca_compose_context_text(context_rows, history_rows=None):
     lines.append('')
     lines.append('INSTRUÇÕES DE FORMATAÇÃO E PROFUNDIDADE DA RESPOSTA:')
     lines.append('- Use linguagem natural, profissional e direta. Evite termos técnicos do banco de dados.')
-    lines.append('- Não repita os rótulos internos (ex: "titulo:", "conta:", "nome_contato:") na resposta final; traduza para linguagem natural.')
+    lines.append('- Não repita os rótulos internos (ex: "titulo:", "conta:", "nome_contato:", "classificacao:") na resposta final; traduza para linguagem natural.')
+    lines.append('- O rótulo "classificacao: conta-alvo (target)" significa que a conta/contato é prioritário (marcado como Target no sistema).')
+    lines.append('- O rótulo "classificacao: cold contact" significa que o contato está em prospecção fria.')
+    lines.append('- O rótulo "servicos_stefanini_cadastrados" indica quantos serviços/entregas Stefanini estão mapeados naquela conta.')
+    lines.append('- O rótulo "PAINEL_GERAL" contém estatísticas globais do sistema — use para contextualizar totais e proporções.')
     lines.append('- Para listas com 3 ou mais itens, use tópicos com "•" (bullet) ou números.')
-    lines.append('- Para comparar dados (ex: múltiplos contatos, contas, datas), organize em tabela Markdown com cabeçalhos descritivos em português.')
+    lines.append('- TABELAS: use tabela Markdown APENAS para comparações diretas de atributos similares (ex: lista de contatos com cargo e e-mail). Para análise de relacionamento, use seções por conta com bullets — NÃO use tabela plana que mistura contas com contatos em linhas.')
     lines.append('- Datas devem ser apresentadas no formato DD/MM/AAAA. Horários no formato HH:MM.')
     lines.append('- Valores monetários devem usar o formato R$ X.XXX,XX.')
     lines.append('- Ao citar um compromisso, sempre informe: título, data, horário e contato/empresa envolvidos.')
     lines.append('- Se a pergunta envolver "próximos eventos" ou "esta semana", use a DATA ATUAL acima como referência.')
-    lines.append('- PROFUNDIDADE: quando perguntado sobre relacionamento com clientes, não seja genérico. Cite:')
-    lines.append('  * O nome completo do contato e empresa')
-    lines.append('  * O último contato realizado (data, canal, conteúdo resumido)')
-    lines.append('  * Próximos compromissos agendados (se houver)')
-    lines.append('  * Situação atual no pipeline/Kanban (se houver)')
-    lines.append('  * Follow-ups pendentes ou sugeridos (se houver)')
+    lines.append('- ANÁLISE DE RELACIONAMENTO: quando perguntado sobre relacionamento com contas target ou múltiplas contas, organize a resposta COM UMA SEÇÃO POR CONTA, mostrando para cada uma:')
+    lines.append('  * Nome da conta e se é target ou não')
+    lines.append('  * Último contato realizado (data e tipo)')
+    lines.append('  * Total de interações registradas')
+    lines.append('  * Se possui serviços/entregas Stefanini cadastrados (quantos)')
+    lines.append('  * Contatos/pessoas mapeadas (se disponível)')
+    lines.append('  * Avaliação resumida: "evoluindo bem" se há atividades recentes, "só tentativas" se há poucas atividades, "sem histórico" se não há interações')
     lines.append('- NOMES: sempre use o nome da pessoa e da empresa, nunca IDs numéricos.')
-    lines.append('- TABELAS: quando montar tabela de clientes/contatos, as colunas devem ter nomes legíveis como "Cliente", "Empresa", "Último contato", "Canal", "Situação" — nunca "ID", "client_id" etc.')
-    lines.append('- COMPLETUDE: se houver dados de múltiplos clientes, apresente todos, não apenas os primeiros.')
+    lines.append('- COMPLETUDE: se houver dados de múltiplas contas target, apresente TODAS, não apenas as primeiras.')
     lines.append('')
 
     # Histórico da sessão (se fornecido)
@@ -5635,14 +5657,101 @@ def itoca_ask():
                 'base_ready': False
             }), 409
 
-        # Busca híbrida: snapshot em cache + busca direta no banco para agenda e wiki
-        snapshot_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=15)
-        live_rows = _itoca_search_context(question, limit=8)
+        # Detecta se é uma query analítica/ampla (resumos, panorama, todas as contas target, etc.)
+        _q_lower = question.lower()
+        _analytical_kws = {'target', 'todas', 'todos', 'resumo', 'resumir', 'panorama', 'geral',
+                           'visao geral', 'visão geral', 'analise', 'análise', 'situação', 'situacao',
+                           'relacionamento', 'evolucao', 'evolução', 'overview', 'mapa', 'balanço', 'balanco'}
+        is_analytical = any(kw in _q_lower for kw in _analytical_kws)
 
-        # Mescla resultados: prioriza live_rows para agenda/wiki, evita duplicatas
+        snapshot_limit = 30 if is_analytical else 15
+        live_limit = 15 if is_analytical else 8
+        context_max = 45 if is_analytical else 25
+
+        # Busca híbrida: snapshot em cache + busca direta no banco para agenda e wiki
+        snapshot_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=snapshot_limit)
+        live_rows = _itoca_search_context(question, limit=live_limit)
+
+        # Para queries analíticas/target: força inclusão de todas as contas target do banco
+        target_rows = []
+        if is_analytical and 'target' in _q_lower:
+            try:
+                _conn_t = get_db()
+                _cur_t = _conn_t.cursor()
+                _cur_t.execute('''
+                    SELECT ac.id, ac.name, ac.sector, ac.is_target,
+                           MAX(act.activity_date) as last_activity,
+                           COUNT(DISTINCT act.id) as total_activities,
+                           COUNT(DISTINCT ap.id) as total_services,
+                           COUNT(DISTINCT amc.id) as total_contacts
+                    FROM accounts ac
+                    LEFT JOIN activities act ON act.account_id = ac.id
+                    LEFT JOIN account_presences ap ON ap.account_id = ac.id
+                    LEFT JOIN account_main_contacts amc ON amc.account_id = ac.id
+                    WHERE ac.is_target = 1
+                    GROUP BY ac.id
+                    ORDER BY last_activity DESC NULLS LAST
+                ''')
+                for _row in _cur_t.fetchall():
+                    _rd = dict_from_row(_row)
+                    _parts = ['classificacao: conta-alvo (target)']
+                    if _rd.get('name'):
+                        _parts.append(f'empresa: {_rd["name"]}')
+                    if _rd.get('sector'):
+                        _parts.append(f'setor: {_rd["sector"]}')
+                    if _rd.get('last_activity'):
+                        try:
+                            _dt = datetime.strptime(_rd['last_activity'][:10], '%Y-%m-%d')
+                            _parts.append(f'ultimo_contato: {_dt.strftime("%d/%m/%Y")}')
+                        except Exception:
+                            _parts.append(f'ultimo_contato: {_rd["last_activity"]}')
+                    else:
+                        _parts.append('ultimo_contato: sem registros')
+                    if _rd.get('total_activities'):
+                        _parts.append(f'total_interacoes: {_rd["total_activities"]}')
+                    if _rd.get('total_services'):
+                        _parts.append(f'servicos_stefanini_cadastrados: {_rd["total_services"]}')
+                    if _rd.get('total_contacts'):
+                        _parts.append(f'total_contatos_mapeados: {_rd["total_contacts"]}')
+                    _snip = ' | '.join(_parts)
+                    if _snip:
+                        target_rows.append({'table': 'accounts', 'id': _rd.get('id'), 'snippet': _snip, 'search_text': _snip.lower()})
+                _conn_t.close()
+            except Exception as _te:
+                logger.warning(f'[iToca] Erro ao buscar contas target: {_te}')
+
+        # Para queries analíticas gerais: adiciona painel de stats do banco
+        stats_rows = []
+        if is_analytical:
+            try:
+                _conn_s = get_db()
+                _cur_s = _conn_s.cursor()
+                _cur_s.execute('SELECT COUNT(*) as n FROM accounts')
+                _total_ac = (_cur_s.fetchone() or [0])[0]
+                _cur_s.execute('SELECT COUNT(*) as n FROM accounts WHERE is_target = 1')
+                _total_target = (_cur_s.fetchone() or [0])[0]
+                _cur_s.execute('SELECT COUNT(*) as n FROM clients')
+                _total_cl = (_cur_s.fetchone() or [0])[0]
+                _cur_s.execute('SELECT COUNT(*) as n FROM activities')
+                _total_act = (_cur_s.fetchone() or [0])[0]
+                _cur_s.execute('SELECT COUNT(*) as n FROM account_presences')
+                _total_srv = (_cur_s.fetchone() or [0])[0]
+                _cur_s.execute("SELECT COUNT(*) as n FROM activities WHERE activity_date >= date('now', '-30 days')")
+                _act_30d = (_cur_s.fetchone() or [0])[0]
+                _conn_s.close()
+                _stats_snip = (
+                    f'total_contas: {_total_ac} | contas_target: {_total_target} | '
+                    f'total_contatos: {_total_cl} | total_interacoes: {_total_act} | '
+                    f'interacoes_ultimos_30dias: {_act_30d} | servicos_cadastrados: {_total_srv}'
+                )
+                stats_rows.append({'table': 'user_profile', 'id': None, 'snippet': f'PAINEL_GERAL: {_stats_snip}', 'search_text': _stats_snip.lower()})
+            except Exception as _se:
+                logger.warning(f'[iToca] Erro ao calcular stats analíticos: {_se}')
+
+        # Mescla resultados: prioriza target_rows > stats > live_rows > snapshot, evita duplicatas
         seen_keys = set()
         context_rows = []
-        for item in live_rows:
+        for item in (target_rows + stats_rows + live_rows):
             key = f"{item.get('table')}:{item.get('id')}:{str(item.get('snippet',''))[:60]}"
             if key not in seen_keys:
                 seen_keys.add(key)
@@ -5652,7 +5761,7 @@ def itoca_ask():
             if key not in seen_keys:
                 seen_keys.add(key)
                 context_rows.append(item)
-        context_rows = context_rows[:25]
+        context_rows = context_rows[:context_max]
 
         # Busca histórico da sessão atual para enviar como contexto de conversa
         history_rows = []
