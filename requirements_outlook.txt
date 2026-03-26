@@ -1,0 +1,8 @@
+# Dependências do exportador de emails do Outlook (outlook_export.py)
+# Instale SOMENTE no Windows, antes de usar o script:
+#
+#   pip install -r requirements_outlook.txt
+#
+# Nota: pywin32 é Windows-only e não deve ser instalado no servidor/Linux.
+
+pywin32>=306

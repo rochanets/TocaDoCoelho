@@ -170,6 +170,14 @@ def main():
         '--output', type=str, default='',
         help='Arquivo de saída JSON (padrão: outlook_export_YYYYMMDD_HHMMSS.json)'
     )
+    parser.add_argument(
+        '--upload', action='store_true',
+        help='Envia o JSON diretamente ao Toca do Coelho em http://localhost:3000 após exportar'
+    )
+    parser.add_argument(
+        '--toca-url', type=str, default='http://localhost:3000',
+        help='URL do Toca do Coelho (padrão: http://localhost:3000)'
+    )
     args = parser.parse_args()
 
     try:
@@ -245,10 +253,50 @@ def main():
     print()
     print('=' * 56)
     print(f'  [OK] {len(emails)} email(s) exportados → {output_file}')
-    print()
-    print('  Próximo passo:')
-    print('  Importe o arquivo em Configurações > Importar Emails do Outlook')
-    print('  dentro do Toca do Coelho.')
+
+    # --- Upload automático para o Toca do Coelho ---
+    if args.upload:
+        print()
+        print(f'[INFO] Enviando para o Toca do Coelho ({args.toca_url})...')
+        try:
+            import urllib.request
+            import urllib.error
+
+            boundary = '----TocaOutlookBoundary'
+            json_bytes = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+            filename = output_file.split('/')[-1].split('\\')[-1]
+
+            body = (
+                f'--{boundary}\r\n'
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                f'Content-Type: application/json\r\n\r\n'
+            ).encode('utf-8') + json_bytes + f'\r\n--{boundary}--\r\n'.encode('utf-8')
+
+            req = urllib.request.Request(
+                f'{args.toca_url}/api/outlook/import',
+                data=body,
+                headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+
+            print(f'  [OK] {result.get("message", "Importação concluída.")}')
+            if result.get('skipped_no_match'):
+                print(f'  [INFO] {result["skipped_no_match"]} email(s) sem contato correspondente no sistema.')
+        except urllib.error.URLError:
+            print('  [AVISO] Toca do Coelho não está rodando ou não acessível.')
+            print(f'  Importe manualmente o arquivo "{output_file}" em:')
+            print('  Configurações > Importar Emails do Outlook')
+        except Exception as e:
+            print(f'  [AVISO] Falha no upload automático: {e}')
+            print(f'  Importe manualmente o arquivo "{output_file}" em:')
+            print('  Configurações > Importar Emails do Outlook')
+    else:
+        print()
+        print('  Próximo passo:')
+        print('  Importe o arquivo em Configurações > Importar Emails do Outlook')
+        print('  dentro do Toca do Coelho.')
+
     print('=' * 56)
 
 
