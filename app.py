@@ -5560,6 +5560,58 @@ def check_updates():
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
 
+@app.route('/api/config/startup', methods=['GET'])
+def get_startup_config():
+    if sys.platform != 'win32':
+        return jsonify({'enabled': False, 'supported': False})
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r'Software\Microsoft\Windows\CurrentVersion\Run',
+            0, winreg.KEY_READ
+        )
+        try:
+            winreg.QueryValueEx(key, 'TocaDoCoelho')
+            enabled = True
+        except FileNotFoundError:
+            enabled = False
+        finally:
+            winreg.CloseKey(key)
+        return jsonify({'enabled': enabled, 'supported': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/startup: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/startup', methods=['POST'])
+def set_startup_config():
+    if sys.platform != 'win32':
+        return jsonify({'error': 'Não suportado nesta plataforma.'}), 400
+    try:
+        data = request.get_json() or {}
+        enable = bool(data.get('enabled', False))
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r'Software\Microsoft\Windows\CurrentVersion\Run',
+            0, winreg.KEY_SET_VALUE
+        )
+        if enable:
+            exe_path = str(Path(sys.executable).resolve())
+            winreg.SetValueEx(key, 'TocaDoCoelho', 0, winreg.REG_SZ, f'"{exe_path}"')
+        else:
+            try:
+                winreg.DeleteValue(key, 'TocaDoCoelho')
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(key)
+        return jsonify({'enabled': enable, 'message': 'Configuração salva com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/startup: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/itoca/base-status', methods=['GET'])
 def itoca_base_status():
     try:
