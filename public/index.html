@@ -2236,19 +2236,25 @@
 
 
                 <section class="settings-card">
-                    <h3>Importar Emails do Outlook</h3>
+                    <h3>Sincronizar Emails do Outlook</h3>
                     <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
-                        Execute <code>outlook_export.py</code> para gerar o arquivo de exportação e importe-o aqui.
-                        O sistema criará atividades do tipo <strong>Email</strong> para os contatos já cadastrados com email correspondente.
+                        Lê seus emails diretamente do Outlook e cria atividades do tipo <strong>Email</strong>
+                        para os contatos cadastrados com email correspondente. Certifique-se de que o Outlook está aberto.
                     </p>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                        <button class="btn btn-primary btn-small" onclick="document.getElementById('outlookJsonFile').click()">
-                            <i class="fas fa-upload"></i> Selecionar arquivo .json
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                        <label style="font-size:13px; color:#374151;">Período:</label>
+                        <select id="outlookSyncDays" style="padding:4px 8px; border-radius:6px; border:1px solid #d1fae5; font-size:13px;">
+                            <option value="30">Últimos 30 dias</option>
+                            <option value="60" selected>Últimos 60 dias</option>
+                            <option value="90">Últimos 90 dias</option>
+                            <option value="180">Últimos 180 dias</option>
+                            <option value="365">Último ano</option>
+                        </select>
+                        <button class="btn btn-primary btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
+                            <i class="fas fa-sync-alt"></i> Sincronizar com Outlook
                         </button>
-                        <span id="outlookFileLabel" style="color:#6b7280; font-size:13px;"></span>
                     </div>
-                    <input type="file" id="outlookJsonFile" accept=".json" style="display:none;" onchange="handleOutlookImport(event)">
-                    <div id="outlookImportStatus" style="margin-top:10px; font-size:13px;"></div>
+                    <div id="outlookImportStatus" style="font-size:13px;"></div>
                 </section>
 
                 <section class="settings-card" id="startupSettingsCard">
@@ -2716,31 +2722,30 @@
             }
         }
 
-        async function handleOutlookImport(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            const label = document.getElementById('outlookFileLabel');
+        async function syncOutlookEmails() {
+            const btn = document.getElementById('outlookSyncBtn');
             const status = document.getElementById('outlookImportStatus');
-            if (label) label.textContent = file.name;
-            if (status) status.innerHTML = '<span style="color:#6b7280;">Importando... Aguarde.</span>';
-
-            const formData = new FormData();
-            formData.append('file', file);
-
+            const days = parseInt(document.getElementById('outlookSyncDays')?.value || '60');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Lendo Outlook...'; }
+            if (status) status.innerHTML = '<span style="color:#6b7280;">Conectando ao Outlook e lendo emails. Isso pode levar alguns instantes...</span>';
             try {
-                const res = await fetch('/api/outlook/import', { method: 'POST', body: formData });
+                const res = await fetch('/api/outlook/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ days })
+                });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
                 let html = `<span style="color:#10b981;">✓ ${data.message}</span>`;
                 if (data.skipped_no_match > 0) {
-                    html += `<br><span style="color:#6b7280;">${data.skipped_no_match} email(s) sem contato correspondente no sistema.</span>`;
+                    html += `<br><span style="color:#6b7280;">${data.skipped_no_match} email(s) sem contato com email correspondente cadastrado.</span>`;
                 }
                 if (status) status.innerHTML = html;
             } catch (e) {
                 if (status) status.innerHTML = `<span style="color:#ef4444;">Erro: ${e.message}</span>`;
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i> Sincronizar com Outlook'; }
             }
-
-            event.target.value = '';
         }
 
         function setupSettingsCards() {

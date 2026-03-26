@@ -21,7 +21,7 @@ pip install pyinstaller
 ## 3) Gerar o executável (PyInstaller) **sem abrir janela de terminal**
 
 ```cmd
-pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app launcher.py
+pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --hidden-import win32com.client --hidden-import pywintypes --hidden-import app launcher.py
 ```
 
 ## 4) Validar se o executável foi criado
