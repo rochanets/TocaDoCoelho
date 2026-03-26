@@ -5612,6 +5612,150 @@ def set_startup_config():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/outlook/import', methods=['POST'])
+def import_outlook_emails():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+
+        file = request.files['file']
+        if not (file.filename or '').lower().endswith('.json'):
+            return jsonify({'error': 'Formato inválido. Envie o arquivo .json gerado pelo outlook_export.py'}), 400
+
+        file.seek(0, 2)
+        file_size = file.tell()
+        file.seek(0)
+        if file_size > 20 * 1024 * 1024:
+            return jsonify({'error': 'Arquivo muito grande. Máximo: 20MB.'}), 400
+
+        try:
+            data = json.loads(file.read().decode('utf-8'))
+        except Exception:
+            return jsonify({'error': 'Arquivo JSON inválido.'}), 400
+
+        emails = data.get('emails', [])
+        if not emails:
+            return jsonify({'imported': 0, 'skipped_duplicates': 0, 'skipped_no_match': 0,
+                            'message': 'Nenhum email encontrado no arquivo.'}), 200
+
+        conn = get_db()
+        c = conn.cursor()
+
+        # Mapear email → client_id para todos os clientes cadastrados
+        c.execute('SELECT id, email FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+        email_to_client = {}
+        for row in c.fetchall():
+            normalized = (row['email'] or '').strip().lower()
+            if normalized:
+                email_to_client[normalized] = row['id']
+
+        imported = 0
+        skipped_duplicates = 0
+        skipped_no_match = 0
+
+        for email_data in emails:
+            subject = (email_data.get('subject') or '').strip()
+            email_date = (email_data.get('date') or '').strip()
+            direction = email_data.get('direction', 'received')
+            sender = email_data.get('sender') or {}
+            recipients = email_data.get('recipients') or []
+            body_preview = (email_data.get('body_preview') or '').strip()
+
+            if not email_date:
+                continue
+
+            # Determinar candidatos ao match dependendo da direção
+            if direction == 'received':
+                candidates = [sender] if sender.get('email') else []
+                counterpart_label = 'De'
+            else:
+                candidates = [r for r in recipients if r.get('email')]
+                counterpart_label = 'Para'
+
+            matched_any = False
+            for candidate in candidates:
+                candidate_email = (candidate.get('email') or '').strip().lower()
+                if not candidate_email or candidate_email not in email_to_client:
+                    continue
+
+                matched_any = True
+                client_id = email_to_client[candidate_email]
+
+                # Deduplicação: mesmo cliente + mesma data (minuto) + mesmo assunto
+                date_minute = email_date[:16]  # "YYYY-MM-DDTHH:MM"
+                subject_key = subject[:100]
+                c.execute(
+                    '''SELECT id FROM activities
+                       WHERE client_id = ?
+                         AND contact_type = 'Email'
+                         AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
+                         AND information LIKE ?
+                       LIMIT 1''',
+                    (client_id, date_minute, f'{subject_key}%')
+                )
+                if c.fetchone():
+                    skipped_duplicates += 1
+                    continue
+
+                # Gerar resumo via LLM somente para emails novos (evita consumo desnecessário)
+                summary = None
+                if body_preview:
+                    raw_summary = _sai_simple_prompt(
+                        f'Resuma em 1 a 2 frases o conteúdo do email abaixo em português, '
+                        f'de forma objetiva, sem mencionar remetente ou destinatário:\n'
+                        f'Assunto: {subject}\n'
+                        f'Texto: {body_preview[:1000]}\n\n'
+                        'Retorne SOMENTE o resumo, sem introdução, aspas ou formatação extra.'
+                    )
+                    if raw_summary:
+                        summary = raw_summary.strip()
+
+                # Montar campo information
+                candidate_name = (candidate.get('name') or candidate_email).strip()
+                info_parts = [subject, f'{counterpart_label}: {candidate_name} <{candidate_email}>']
+                if summary:
+                    info_parts.append(f'Resumo: {summary}')
+                elif body_preview:
+                    info_parts.append(body_preview[:300])
+                information = '\n'.join(info_parts)
+
+                c.execute(
+                    '''INSERT INTO activities (client_id, contact_type, information, activity_date)
+                       VALUES (?, 'Email', ?, ?)''',
+                    (client_id, information, email_date)
+                )
+
+                # Atualizar last_activity_date do cliente se este email for mais recente
+                c.execute(
+                    '''UPDATE clients SET last_activity_date = ?
+                       WHERE id = ? AND (last_activity_date IS NULL OR last_activity_date < ?)''',
+                    (email_date, client_id, email_date)
+                )
+
+                imported += 1
+
+            if not matched_any:
+                skipped_no_match += 1
+
+        conn.commit()
+        conn.close()
+
+        msg = f'{imported} atividade(s) importada(s)'
+        if skipped_duplicates:
+            msg += f', {skipped_duplicates} duplicata(s) ignorada(s)'
+        msg += '.'
+
+        return jsonify({
+            'imported': imported,
+            'skipped_duplicates': skipped_duplicates,
+            'skipped_no_match': skipped_no_match,
+            'message': msg
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/import: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/itoca/base-status', methods=['GET'])
 def itoca_base_status():
     try:

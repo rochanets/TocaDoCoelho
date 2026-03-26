@@ -2235,6 +2235,22 @@
                 </section>
 
 
+                <section class="settings-card">
+                    <h3>Importar Emails do Outlook</h3>
+                    <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
+                        Execute <code>outlook_export.py</code> para gerar o arquivo de exportação e importe-o aqui.
+                        O sistema criará atividades do tipo <strong>Email</strong> para os contatos já cadastrados com email correspondente.
+                    </p>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                        <button class="btn btn-primary btn-small" onclick="document.getElementById('outlookJsonFile').click()">
+                            <i class="fas fa-upload"></i> Selecionar arquivo .json
+                        </button>
+                        <span id="outlookFileLabel" style="color:#6b7280; font-size:13px;"></span>
+                    </div>
+                    <input type="file" id="outlookJsonFile" accept=".json" style="display:none;" onchange="handleOutlookImport(event)">
+                    <div id="outlookImportStatus" style="margin-top:10px; font-size:13px;"></div>
+                </section>
+
                 <section class="settings-card" id="startupSettingsCard">
                     <h3>Sistema</h3>
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
@@ -2698,6 +2714,33 @@
             } finally {
                 if (toggle) toggle.disabled = false;
             }
+        }
+
+        async function handleOutlookImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const label = document.getElementById('outlookFileLabel');
+            const status = document.getElementById('outlookImportStatus');
+            if (label) label.textContent = file.name;
+            if (status) status.innerHTML = '<span style="color:#6b7280;">Importando... Aguarde.</span>';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const res = await fetch('/api/outlook/import', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+                let html = `<span style="color:#10b981;">✓ ${data.message}</span>`;
+                if (data.skipped_no_match > 0) {
+                    html += `<br><span style="color:#6b7280;">${data.skipped_no_match} email(s) sem contato correspondente no sistema.</span>`;
+                }
+                if (status) status.innerHTML = html;
+            } catch (e) {
+                if (status) status.innerHTML = `<span style="color:#ef4444;">Erro: ${e.message}</span>`;
+            }
+
+            event.target.value = '';
         }
 
         function setupSettingsCards() {
