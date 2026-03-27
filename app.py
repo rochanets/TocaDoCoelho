@@ -5560,6 +5560,636 @@ def check_updates():
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
 
+@app.route('/api/config/startup', methods=['GET'])
+def get_startup_config():
+    if sys.platform != 'win32':
+        return jsonify({'enabled': False, 'supported': False})
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r'Software\Microsoft\Windows\CurrentVersion\Run',
+            0, winreg.KEY_READ
+        )
+        try:
+            winreg.QueryValueEx(key, 'TocaDoCoelho')
+            enabled = True
+        except FileNotFoundError:
+            enabled = False
+        finally:
+            winreg.CloseKey(key)
+        return jsonify({'enabled': enabled, 'supported': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/startup: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/startup', methods=['POST'])
+def set_startup_config():
+    if sys.platform != 'win32':
+        return jsonify({'error': 'Não suportado nesta plataforma.'}), 400
+    try:
+        data = request.get_json() or {}
+        enable = bool(data.get('enabled', False))
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r'Software\Microsoft\Windows\CurrentVersion\Run',
+            0, winreg.KEY_SET_VALUE
+        )
+        if enable:
+            exe_path = str(Path(sys.executable).resolve())
+            winreg.SetValueEx(key, 'TocaDoCoelho', 0, winreg.REG_SZ, f'"{exe_path}"')
+        else:
+            try:
+                winreg.DeleteValue(key, 'TocaDoCoelho')
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(key)
+        return jsonify({'enabled': enable, 'message': 'Configuração salva com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/startup: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _outlook_fetch_via_powershell(days=60):
+    """
+    Lê emails do Outlook via PowerShell (compatível com Office C2R/365).
+    PowerShell corre em 64-bit e tem acesso nativo ao COM do Click-to-Run.
+    Retorna lista de dicts no formato de _outlook_extract_email().
+    """
+    import subprocess, tempfile, json, os
+
+    ps_script = """\
+param([int]$Days = 60)
+$ErrorActionPreference = 'Continue'
+$cutoff = (Get-Date).AddDays(-$Days)
+
+function Get-SmtpAddress($r) {
+    $a = $null; try { $a = $r.Address } catch {}
+    if ($a -and $a -match '@' -and $a -notmatch '^/o=') { return $a.ToLower() }
+    try { return ($r.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x39FE001E')).ToLower() } catch {}
+    return ''
+}
+
+function Get-SenderSmtp($m) {
+    $a = $null; try { $a = $m.SenderEmailAddress } catch {}
+    if ($a -and $a -match '@' -and $a -notmatch '^/o=') { return $a.ToLower() }
+    try { return ($m.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x5D01001E')).ToLower() } catch {}
+    return ''
+}
+
+function Get-AllFolders($folder) {
+    $list = [System.Collections.Generic.List[object]]::new()
+    $list.Add($folder)
+    try { foreach ($s in $folder.Folders) { (Get-AllFolders $s) | ForEach-Object { $list.Add($_) } } } catch {}
+    return ,$list
+}
+
+function Make-Item($item, $dt, $dir) {
+    $rcpts = [System.Collections.Generic.List[hashtable]]::new()
+    try { foreach ($r in $item.Recipients) { try { $rcpts.Add(@{ name=($r.Name+''); email=(Get-SmtpAddress $r) }) } catch {} } } catch {}
+    $bp = ''
+    try { $bp = ($item.Body -replace '[\\r\\n\\t]+',' ').Trim(); if ($bp.Length -gt 1500) { $bp = $bp.Substring(0,1500) } } catch {}
+    return [PSCustomObject]@{
+        subject      = ($item.Subject+'')
+        date         = $dt.ToString('yyyy-MM-ddTHH:mm:ss')
+        direction    = $dir
+        sender       = @{ name=($item.SenderName+''); email=(Get-SenderSmtp $item) }
+        recipients   = @($rcpts)
+        body_preview = $bp
+    }
+}
+
+$ol = $null
+try {
+    $ol = [System.Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application')
+} catch {
+    try { $ol = New-Object -ComObject Outlook.Application } catch {
+        [Console]::Error.WriteLine("Nao foi possivel conectar ao Outlook: $_")
+        exit 1
+    }
+}
+$ns = $ol.GetNamespace('MAPI')
+$results = [System.Collections.Generic.List[object]]::new()
+
+try {
+    $inbox = $ns.GetDefaultFolder(6)
+    foreach ($folder in (Get-AllFolders $inbox)) {
+        try {
+            foreach ($item in $folder.Items) {
+                try {
+                    if ($item.Class -ne 43) { continue }
+                    $dt = $null; try { $dt = $item.ReceivedTime } catch { continue }
+                    if ($dt -lt $cutoff) { continue }
+                    $results.Add((Make-Item $item $dt 'received'))
+                } catch {}
+            }
+        } catch {}
+    }
+} catch { [Console]::Error.WriteLine("Erro inbox: $_") }
+
+try {
+    $sent = $ns.GetDefaultFolder(5)
+    foreach ($item in $sent.Items) {
+        try {
+            if ($item.Class -ne 43) { continue }
+            $dt = $null; try { $dt = $item.SentOn } catch { continue }
+            if ($dt -lt $cutoff) { continue }
+            $results.Add((Make-Item $item $dt 'sent'))
+        } catch {}
+    }
+} catch { [Console]::Error.WriteLine("Erro sent: $_") }
+
+if ($results.Count -eq 0) { '[]'; exit 0 }
+$results | ConvertTo-Json -Depth 5 -Compress
+"""
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.ps1', delete=False, encoding='utf-8', errors='replace'
+        ) as tmp:
+            tmp.write(ps_script)
+            tmp_path = tmp.name
+
+        proc = subprocess.run(
+            ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
+             '-File', tmp_path, '-Days', str(int(days))],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=300
+        )
+        stderr = (proc.stderr or '').strip()
+        stdout = (proc.stdout or '').strip()
+        if proc.returncode != 0 and not stdout:
+            raise RuntimeError(stderr or f'PowerShell retornou código {proc.returncode}')
+        if not stdout or stdout == '[]':
+            return []
+        data = json.loads(stdout)
+        if isinstance(data, dict):
+            data = [data]
+        for item in data:
+            rcpts = item.get('recipients') or []
+            if isinstance(rcpts, dict):
+                rcpts = [rcpts]
+            item['recipients'] = rcpts
+            if not isinstance(item.get('sender'), dict):
+                item['sender'] = {'name': '', 'email': ''}
+        return data
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+def _outlook_extract_smtp_from_recipient(recipient):
+    """Extrai endereço SMTP de um recipient do Outlook (trata Exchange/EX)."""
+    try:
+        addr = (recipient.Address or '').strip().lower()
+        if addr and '@' in addr and not addr.startswith('/o='):
+            return addr
+        return recipient.PropertyAccessor.GetProperty(
+            'http://schemas.microsoft.com/mapi/proptag/0x39FE001E'
+        ).strip().lower()
+    except Exception:
+        return ''
+
+
+def _outlook_extract_smtp_from_sender(mail_item):
+    """Extrai endereço SMTP do remetente (trata Exchange/EX)."""
+    try:
+        addr = (mail_item.SenderEmailAddress or '').strip().lower()
+        if addr and '@' in addr and not addr.startswith('/o='):
+            return addr
+        return mail_item.PropertyAccessor.GetProperty(
+            'http://schemas.microsoft.com/mapi/proptag/0x5D01001E'
+        ).strip().lower()
+    except Exception:
+        return ''
+
+
+def _outlook_get_all_subfolders(folder):
+    result = [folder]
+    try:
+        for sub in folder.Folders:
+            result.extend(_outlook_get_all_subfolders(sub))
+    except Exception:
+        pass
+    return result
+
+
+def _outlook_extract_email(item, direction, cutoff_dt):
+    """Extrai metadados de um MailItem. Retorna dict ou None."""
+    try:
+        if item.Class != 43:  # 43 = olMail
+            return None
+        raw_dt = item.ReceivedTime if direction == 'received' else item.SentOn
+        dt = datetime(raw_dt.year, raw_dt.month, raw_dt.day,
+                      raw_dt.hour, raw_dt.minute, raw_dt.second)
+        if dt < cutoff_dt:
+            return None
+        recipients = []
+        try:
+            for r in item.Recipients:
+                try:
+                    email = _outlook_extract_smtp_from_recipient(r)
+                    recipients.append({'name': (r.Name or '').strip(), 'email': email})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        body_preview = ''
+        try:
+            body_preview = (item.Body or '')[:1500].strip()
+        except Exception:
+            pass
+        return {
+            'subject': (item.Subject or '').strip(),
+            'date': dt.strftime('%Y-%m-%dT%H:%M:%S'),
+            'direction': direction,
+            'sender': {
+                'name': (item.SenderName or '').strip(),
+                'email': _outlook_extract_smtp_from_sender(item)
+            },
+            'recipients': recipients,
+            'body_preview': body_preview
+        }
+    except Exception:
+        return None
+
+
+def _outlook_process_folder(folder, direction, cutoff_dt, emails):
+    count = 0
+    try:
+        items = folder.Items
+        date_str = cutoff_dt.strftime('%m/%d/%Y %H:%M %p')
+        field = 'ReceivedTime' if direction == 'received' else 'SentOn'
+        try:
+            items = items.Restrict(f"[{field}] >= '{date_str}'")
+        except Exception:
+            pass
+        for item in items:
+            try:
+                data = _outlook_extract_email(item, direction, cutoff_dt)
+                if data:
+                    emails.append(data)
+                    count += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return count
+
+
+def _outlook_import_emails(emails_data, conn):
+    """
+    Importa lista de emails já extraídos para o banco.
+    Retorna (imported, skipped_duplicates, skipped_no_match).
+    """
+    c = conn.cursor()
+    c.execute('SELECT id, email FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+    email_to_client = {}
+    for row in c.fetchall():
+        normalized = (row['email'] or '').strip().lower()
+        if normalized:
+            email_to_client[normalized] = row['id']
+
+    imported = 0
+    skipped_duplicates = 0
+    skipped_no_match = 0
+
+    for email_data in emails_data:
+        subject = (email_data.get('subject') or '').strip()
+        email_date = (email_data.get('date') or '').strip()
+        direction = email_data.get('direction', 'received')
+        sender = email_data.get('sender') or {}
+        recipients = email_data.get('recipients') or []
+        body_preview = (email_data.get('body_preview') or '').strip()
+
+        if not email_date:
+            continue
+
+        if direction == 'received':
+            candidates = [sender] if sender.get('email') else []
+            counterpart_label = 'De'
+        else:
+            candidates = [r for r in recipients if r.get('email')]
+            counterpart_label = 'Para'
+
+        matched_any = False
+        for candidate in candidates:
+            candidate_email = (candidate.get('email') or '').strip().lower()
+            if not candidate_email or candidate_email not in email_to_client:
+                continue
+
+            matched_any = True
+            client_id = email_to_client[candidate_email]
+
+            date_minute = email_date[:16]
+            subject_key = subject[:100]
+            c.execute(
+                '''SELECT id FROM activities
+                   WHERE client_id = ?
+                     AND contact_type = 'Email'
+                     AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
+                     AND information LIKE ?
+                   LIMIT 1''',
+                (client_id, date_minute, f'{subject_key}%')
+            )
+            if c.fetchone():
+                skipped_duplicates += 1
+                continue
+
+            # Gerar resumo via LLM somente para emails novos
+            summary = None
+            if body_preview:
+                raw_summary = _sai_simple_prompt(
+                    f'Resuma em 1 a 2 frases o conteúdo do email abaixo em português, '
+                    f'de forma objetiva, sem mencionar remetente ou destinatário:\n'
+                    f'Assunto: {subject}\n'
+                    f'Texto: {body_preview[:1000]}\n\n'
+                    'Retorne SOMENTE o resumo, sem introdução, aspas ou formatação extra.'
+                )
+                if raw_summary:
+                    summary = raw_summary.strip()
+
+            candidate_name = (candidate.get('name') or candidate_email).strip()
+            info_parts = [subject, f'{counterpart_label}: {candidate_name} <{candidate_email}>']
+            if summary:
+                info_parts.append(f'Resumo: {summary}')
+            elif body_preview:
+                info_parts.append(body_preview[:300])
+            information = '\n'.join(info_parts)
+
+            c.execute(
+                '''INSERT INTO activities (client_id, contact_type, information, activity_date)
+                   VALUES (?, 'Email', ?, ?)''',
+                (client_id, information, email_date)
+            )
+            c.execute(
+                '''UPDATE clients SET last_activity_date = ?
+                   WHERE id = ? AND (last_activity_date IS NULL OR last_activity_date < ?)''',
+                (email_date, client_id, email_date)
+            )
+            imported += 1
+
+        if not matched_any:
+            skipped_no_match += 1
+
+    conn.commit()
+    return imported, skipped_duplicates, skipped_no_match
+
+
+@app.route('/api/outlook/sync', methods=['POST'])
+def sync_outlook_emails():
+    """Lê o Outlook via PowerShell e importa os emails como atividades."""
+    if sys.platform != 'win32':
+        return jsonify({'error': 'Sincronização com Outlook disponível somente no Windows.'}), 400
+    try:
+        data = request.get_json() or {}
+        days = max(1, min(int(data.get('days', 60)), 365))
+        emails = _outlook_fetch_via_powershell(days)
+        if not emails:
+            return jsonify({
+                'imported': 0, 'skipped_duplicates': 0, 'skipped_no_match': 0,
+                'total_read': 0,
+                'message': f'Nenhum email encontrado nos últimos {days} dias.'
+            })
+        conn = get_db()
+        imported, skipped_duplicates, skipped_no_match = _outlook_import_emails(emails, conn)
+        conn.close()
+        msg = f'{imported} atividade(s) importada(s)'
+        if skipped_duplicates:
+            msg += f', {skipped_duplicates} duplicata(s) ignorada(s)'
+        msg += f'. ({len(emails)} emails lidos do Outlook)'
+        return jsonify({
+            'imported': imported,
+            'skipped_duplicates': skipped_duplicates,
+            'skipped_no_match': skipped_no_match,
+            'total_read': len(emails),
+            'message': msg
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/sync: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/sync-stream', methods=['GET'])
+def sync_outlook_stream():
+    """SSE: lê o Outlook via PowerShell, faz match de contatos e devolve lista para revisão (sem salvar)."""
+    if sys.platform != 'win32':
+        def _err():
+            yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização com Outlook disponível somente no Windows.'})}\n\n"
+        return Response(stream_with_context(_err()), mimetype='text/event-stream')
+
+    days = max(1, min(int(request.args.get('days', 60)), 365))
+
+    def generate():
+        def evt(d):
+            return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
+        try:
+            yield evt({'phase': 'connecting', 'message': 'Lendo emails do Outlook...'})
+
+            try:
+                emails = _outlook_fetch_via_powershell(days)
+            except Exception as e:
+                logger.exception(f'[ERROR] Outlook PowerShell (stream): {e}')
+                yield evt({'phase': 'error', 'message': str(e)})
+                return
+
+            total_read = len(emails)
+            yield evt({'phase': 'reading', 'message': f'{total_read} email(s) lidos.', 'count': total_read})
+
+            if not emails:
+                yield evt({'phase': 'done', 'total_read': 0, 'activities': [],
+                           'message': f'Nenhum email encontrado nos últimos {days} dias.'})
+                return
+
+            yield evt({'phase': 'matching', 'message': f'Identificando contatos em {total_read} email(s)...', 'count': total_read})
+
+            conn = get_db()
+            c = conn.cursor()
+            c.execute('SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+            clients_map = {}
+            for row in c.fetchall():
+                norm = (row['email'] or '').strip().lower()
+                if norm:
+                    clients_map[norm] = {'id': row['id'], 'name': row['name'], 'photo_url': row['photo_url'] or ''}
+
+            activities = []
+            for email_data in emails:
+                subject = (email_data.get('subject') or '').strip()
+                email_date = (email_data.get('date') or '').strip()
+                direction = email_data.get('direction', 'received')
+                sender = email_data.get('sender') or {}
+                recipients = email_data.get('recipients') or []
+                body_preview = (email_data.get('body_preview') or '').strip()
+                if not email_date:
+                    continue
+                if direction == 'received':
+                    candidates = [sender] if sender.get('email') else []
+                    label = 'De'
+                else:
+                    candidates = [r for r in recipients if r.get('email')]
+                    label = 'Para'
+                for candidate in candidates:
+                    cand_email = (candidate.get('email') or '').strip().lower()
+                    if not cand_email or cand_email not in clients_map:
+                        continue
+                    client = clients_map[cand_email]
+                    date_minute = email_date[:16]
+                    c.execute(
+                        '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
+                           AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
+                           AND information LIKE ? LIMIT 1''',
+                        (client['id'], date_minute, f'{subject[:100]}%')
+                    )
+                    if c.fetchone():
+                        continue
+                    activities.append({
+                        'client_id': client['id'],
+                        'client_name': client['name'],
+                        'client_photo_url': client['photo_url'],
+                        'subject': subject,
+                        'date': email_date,
+                        'direction': direction,
+                        'counterpart_label': label,
+                        'counterpart_name': (candidate.get('name') or cand_email).strip(),
+                        'counterpart_email': cand_email,
+                        'body_preview': body_preview
+                    })
+            conn.close()
+
+            yield evt({
+                'phase': 'done',
+                'total_read': total_read,
+                'activities': activities,
+                'message': f'{len(activities)} nova(s) atividade(s) encontrada(s) em {total_read} email(s) lidos.'
+            })
+        except Exception as e:
+            logger.exception(f'[ERROR] SSE /api/outlook/sync-stream: {e}')
+            yield evt({'phase': 'error', 'message': f'Erro inesperado: {str(e)}'})
+        finally:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
+    )
+
+
+@app.route('/api/outlook/confirm-import', methods=['POST'])
+def confirm_import_outlook():
+    """Salva as atividades confirmadas pelo usuário, gerando resumo LLM."""
+    try:
+        data = request.get_json() or {}
+        activities = data.get('activities', [])
+        if not activities:
+            return jsonify({'imported': 0, 'message': 'Nenhuma atividade para importar.'})
+
+        conn = get_db()
+        c = conn.cursor()
+        imported = 0
+
+        for act in activities:
+            client_id = act.get('client_id')
+            subject = (act.get('subject') or '').strip()
+            email_date = (act.get('date') or '').strip()
+            label = act.get('counterpart_label', 'De')
+            cname = (act.get('counterpart_name') or '').strip()
+            cemail = (act.get('counterpart_email') or '').strip()
+            body_preview = (act.get('body_preview') or '').strip()
+            if not client_id or not email_date:
+                continue
+
+            date_minute = email_date[:16]
+            c.execute(
+                '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
+                   AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
+                   AND information LIKE ? LIMIT 1''',
+                (client_id, date_minute, f'{subject[:100]}%')
+            )
+            if c.fetchone():
+                continue
+
+            summary = None
+            if body_preview:
+                raw = _sai_simple_prompt(
+                    f'Resuma em 1 a 2 frases o conteúdo do email abaixo em português, '
+                    f'de forma objetiva, sem mencionar remetente ou destinatário:\n'
+                    f'Assunto: {subject}\nTexto: {body_preview[:1000]}\n\n'
+                    'Retorne SOMENTE o resumo, sem introdução, aspas ou formatação extra.'
+                )
+                if raw:
+                    summary = raw.strip()
+
+            info_parts = [subject, f'{label}: {cname} <{cemail}>']
+            if summary:
+                info_parts.append(f'Resumo: {summary}')
+            elif body_preview:
+                info_parts.append(body_preview[:300])
+
+            c.execute(
+                '''INSERT INTO activities (client_id, contact_type, information, activity_date)
+                   VALUES (?, 'Email', ?, ?)''',
+                (client_id, '\n'.join(info_parts), email_date)
+            )
+            c.execute(
+                '''UPDATE clients SET last_activity_date = ?
+                   WHERE id = ? AND (last_activity_date IS NULL OR last_activity_date < ?)''',
+                (email_date, client_id, email_date)
+            )
+            imported += 1
+
+        conn.commit()
+        conn.close()
+        return jsonify({'imported': imported, 'message': f'{imported} atividade(s) registrada(s) com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/confirm-import: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/import', methods=['POST'])
+def import_outlook_emails():
+    """Importação via arquivo JSON (fallback / uso avançado)."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+        file = request.files['file']
+        if not (file.filename or '').lower().endswith('.json'):
+            return jsonify({'error': 'Formato inválido. Envie um arquivo .json com emails do Outlook.'}), 400
+        file.seek(0, 2)
+        if file.tell() > 20 * 1024 * 1024:
+            return jsonify({'error': 'Arquivo muito grande. Máximo: 20MB.'}), 400
+        file.seek(0)
+        try:
+            data = json.loads(file.read().decode('utf-8'))
+        except Exception:
+            return jsonify({'error': 'Arquivo JSON inválido.'}), 400
+        emails = data.get('emails', [])
+        if not emails:
+            return jsonify({'imported': 0, 'skipped_duplicates': 0, 'skipped_no_match': 0,
+                            'message': 'Nenhum email encontrado no arquivo.'}), 200
+        conn = get_db()
+        imported, skipped_duplicates, skipped_no_match = _outlook_import_emails(emails, conn)
+        conn.close()
+        msg = f'{imported} atividade(s) importada(s)'
+        if skipped_duplicates:
+            msg += f', {skipped_duplicates} duplicata(s) ignorada(s)'
+        msg += '.'
+        return jsonify({'imported': imported, 'skipped_duplicates': skipped_duplicates,
+                        'skipped_no_match': skipped_no_match, 'message': msg})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/import: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/itoca/base-status', methods=['GET'])
 def itoca_base_status():
     try:

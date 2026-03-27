@@ -11,30 +11,32 @@ Var StartMenuFolder
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_STARTMENU "Application" $StartMenuFolder
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_LANGUAGE "PortugueseBR"
 
 LangString DESC_SecApp ${LANG_PORTUGUESEBR} "Instala o Toca do Coelho"
-LangString DESC_SecShortcuts ${LANG_PORTUGUESEBR} "Cria atalhos"
+LangString DESC_SecShortcuts ${LANG_PORTUGUESEBR} "Cria atalhos na Área de Trabalho e no Menu Iniciar"
+LangString DESC_SecAutoStart ${LANG_PORTUGUESEBR} "Iniciar o Toca do Coelho automaticamente quando o Windows ligar"
 
 Section "Instalar Toca do Coelho" SecApp
     SetOutPath "$INSTDIR"
     File /r "dist\TocaDoCoelho\*.*"
     File "README.md"
     File "coelho_icon_transparent.ico"
-    
+
     CreateDirectory "$APPDATA\toca-do-coelho"
-    
+
     WriteRegStr HKCU "Software\TocaDoCoelho" "InstallPath" "$INSTDIR"
     WriteRegStr HKCU "Software\TocaDoCoelho" "Version" "1.0.0"
-    
+
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "DisplayName" "Toca do Coelho"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "DisplayVersion" "1.0.0"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "UninstallString" "$INSTDIR\uninstall.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "InstallLocation" "$INSTDIR"
-    
+
     WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -47,6 +49,10 @@ Section "Criar Atalhos" SecShortcuts
     CreateShortCut "$DESKTOP\Toca do Coelho.lnk" "$INSTDIR\TocaDoCoelho.exe" "" "$INSTDIR\coelho_icon_transparent.ico" 0 SW_SHOWNORMAL
 SectionEnd
 
+Section /o "Iniciar com o Windows" SecAutoStart
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TocaDoCoelho" '"$INSTDIR\TocaDoCoelho.exe"'
+SectionEnd
+
 Section "Uninstall"
     RMDir /r "$INSTDIR"
     !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
@@ -54,6 +60,7 @@ Section "Uninstall"
     Delete "$SMPROGRAMS\$StartMenuFolder\Desinstalar.lnk"
     RMDir "$SMPROGRAMS\$StartMenuFolder"
     Delete "$DESKTOP\Toca do Coelho.lnk"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TocaDoCoelho"
     DeleteRegKey HKCU "Software\TocaDoCoelho"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho"
 SectionEnd
@@ -61,4 +68,5 @@ SectionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} $(DESC_SecApp)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecShortcuts} $(DESC_SecShortcuts)
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecAutoStart} $(DESC_SecAutoStart)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END

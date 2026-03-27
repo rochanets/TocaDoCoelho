@@ -420,6 +420,53 @@
             transform: translateY(-1px);
         }
 
+        /* Outlook sync — progress bar */
+        .outlook-progress-track {
+            width: 100%; height: 6px;
+            background: #d1fae5; border-radius: 3px;
+            overflow: hidden; margin: 14px 0 8px;
+        }
+        .outlook-progress-fill {
+            height: 100%; width: 35%;
+            background: linear-gradient(90deg, #10b981, #34d399, #10b981);
+            background-size: 200% 100%;
+            border-radius: 3px;
+            animation: outlookSlide 1.1s ease-in-out infinite;
+        }
+        @keyframes outlookSlide {
+            0%   { transform: translateX(-200%); }
+            100% { transform: translateX(450%); }
+        }
+
+        /* Outlook review modal — activity items */
+        .outlook-review-item {
+            display: flex; align-items: flex-start; gap: 12px;
+            padding: 10px 0; border-bottom: 1px solid #f0fdf4;
+        }
+        .outlook-review-item:last-child { border-bottom: none; }
+        .outlook-review-avatar {
+            width: 38px; height: 38px; border-radius: 50%;
+            object-fit: cover; flex-shrink: 0;
+            background: #d1fae5; border: 2px solid #a7f3d0;
+        }
+        .outlook-review-avatar-placeholder {
+            width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+            background: linear-gradient(135deg,#10b981,#34d399);
+            color: #fff; font-weight: 700; font-size: 15px;
+            display: flex; align-items: center; justify-content: center;
+            border: 2px solid #a7f3d0;
+        }
+        .outlook-review-body { flex: 1; min-width: 0; }
+        .outlook-review-header {
+            display: flex; align-items: center; gap: 8px;
+            flex-wrap: wrap; margin-bottom: 2px;
+        }
+        .outlook-review-name { font-weight: 600; color: #065f46; font-size: 13px; }
+        .outlook-review-date { font-size: 12px; color: #6b7280; }
+        .outlook-review-dir  { font-size: 11px; color: #9ca3af; }
+        .outlook-review-subject { font-size: 13px; color: #111827; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .outlook-review-preview { font-size: 12px; color: #6b7280; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
         .sad-bunny-image {
             width: 180px;
             max-width: 65%;
@@ -1889,10 +1936,23 @@
             </div>
             <div class="section-title">
                 <h2>Registro de Atividades</h2>
-                <button class="btn btn-primary" onclick="openActivityModal()">
-                    <i class="fas fa-plus"></i> Nova Atividade
-                </button>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="openActivityModal()">
+                        <i class="fas fa-plus"></i> Nova Atividade
+                    </button>
+                    <select id="outlookSyncDays" title="Período de sincronização do Outlook" style="padding:4px 8px; border-radius:6px; border:1px solid #d1fae5; font-size:13px; background:#f0fdf4; color:#065f46;">
+                        <option value="30">30 dias</option>
+                        <option value="60" selected>60 dias</option>
+                        <option value="90">90 dias</option>
+                        <option value="180">180 dias</option>
+                        <option value="365">1 ano</option>
+                    </select>
+                    <button class="btn btn-auto-mapping btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
+                        <span class="ai-star-icon">✦</span> Sync Outlook
+                    </button>
+                </div>
             </div>
+            <div id="outlookImportStatus" style="margin-bottom:8px; font-size:13px;"></div>
             <div id="activitiesList"></div>
         </div>
 
@@ -2235,6 +2295,21 @@
                 </section>
 
 
+                <section class="settings-card" id="startupSettingsCard">
+                    <h3>Sistema</h3>
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+                        <div>
+                            <strong>Iniciar com o Windows</strong>
+                            <p style="margin:4px 0 0; color:#6b7280; font-size:13px;">Iniciar o Toca do Coelho automaticamente quando o Windows ligar.</p>
+                        </div>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;">
+                            <input type="checkbox" id="startupToggle" onchange="setStartupConfig(this.checked)" disabled style="width:18px; height:18px; cursor:pointer; accent-color:#10b981;">
+                            <span id="startupToggleLabel" style="font-size:13px; color:#6b7280;">Carregando...</span>
+                        </label>
+                    </div>
+                    <small id="startupSettingStatus" style="color:#6b7280; display:block; margin-top:8px;"></small>
+                </section>
+
                 <section class="settings-card">
                     <h3>MSG Padrão</h3>
                     <form onsubmit="saveMessageTemplate(event)">
@@ -2454,6 +2529,49 @@
         </div>
     </div>
 
+    <!-- Outlook Sync — Modal de Progresso -->
+    <div id="outlookProgressModal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width:460px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-envelope" style="margin-right:8px;color:#10b981;"></i>Sincronizando com Outlook</h2>
+            </div>
+            <div style="padding:20px;">
+                <div class="outlook-progress-track"><div class="outlook-progress-fill"></div></div>
+                <p id="outlookProgressMsg" style="font-size:13px;color:#374151;margin:0 0 4px;">Conectando ao Outlook...</p>
+                <p id="outlookProgressCount" style="font-size:12px;color:#9ca3af;margin:0;min-height:16px;"></p>
+                <div style="margin-top:16px;text-align:right;">
+                    <button class="btn btn-secondary btn-small" onclick="cancelOutlookSync()">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Outlook Sync — Modal de Revisão -->
+    <div id="outlookReviewModal" class="modal" style="display:none;" onclick="if(event.target===this)closeOutlookReview()">
+        <div class="modal-content" style="max-width:640px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-envelope-open-text" style="margin-right:8px;color:#10b981;"></i>Revisar Atividades do Outlook</h2>
+                <button class="modal-close" onclick="closeOutlookReview()">×</button>
+            </div>
+            <div style="padding:20px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+                    <p id="outlookReviewSummary" style="margin:0;font-size:13px;color:#4b5563;"></p>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#374151;cursor:pointer;">
+                        <input type="checkbox" id="outlookSelectAll" checked onchange="toggleAllOutlookItems(this.checked)"> Selecionar todos
+                    </label>
+                </div>
+                <div id="outlookReviewList" style="max-height:380px;overflow-y:auto;border:1px solid #d1fae5;border-radius:8px;padding:8px 12px;"></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                    <button class="btn btn-secondary" onclick="closeOutlookReview()">Cancelar</button>
+                    <button class="btn btn-auto-mapping" id="outlookConfirmBtn" onclick="confirmOutlookImport()">
+                        <span class="ai-star-icon">✦</span> <span id="outlookConfirmLabel">Importar</span>
+                    </button>
+                </div>
+                <div id="outlookConfirmStatus" style="margin-top:10px;font-size:13px;"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Client Profile Modal -->
     <div id="profileModal" class="modal">
         <div class="modal-content details-modal-content">
@@ -2634,8 +2752,226 @@
 
         async function loadSettings() {
             setupSettingsCards();
-            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig()]);
+            await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig(), loadStartupConfig()]);
             renderSettings();
+        }
+
+        async function loadStartupConfig() {
+            try {
+                const res = await fetch('/api/config/startup');
+                const data = await res.json();
+                const card = document.getElementById('startupSettingsCard');
+                const toggle = document.getElementById('startupToggle');
+                const label = document.getElementById('startupToggleLabel');
+                if (!toggle) return;
+                if (!data.supported) {
+                    if (card) card.style.display = 'none';
+                    return;
+                }
+                toggle.checked = data.enabled;
+                toggle.disabled = false;
+                if (label) label.textContent = data.enabled ? 'Ativado' : 'Desativado';
+            } catch (e) {
+                console.error('Erro ao carregar config de inicialização:', e);
+            }
+        }
+
+        async function setStartupConfig(enabled) {
+            const toggle = document.getElementById('startupToggle');
+            const label = document.getElementById('startupToggleLabel');
+            const status = document.getElementById('startupSettingStatus');
+            if (toggle) toggle.disabled = true;
+            try {
+                const res = await fetch('/api/config/startup', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled})
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+                if (label) label.textContent = enabled ? 'Ativado' : 'Desativado';
+                if (status) {
+                    status.textContent = enabled ? 'O app será iniciado automaticamente com o Windows.' : 'Inicialização automática desativada.';
+                    setTimeout(() => { status.textContent = ''; }, 3000);
+                }
+            } catch (e) {
+                if (toggle) toggle.checked = !enabled;
+                if (label) label.textContent = !enabled ? 'Ativado' : 'Desativado';
+                if (status) status.textContent = 'Erro ao salvar: ' + e.message;
+            } finally {
+                if (toggle) toggle.disabled = false;
+            }
+        }
+
+        let _outlookEventSource = null;
+        let _outlookPendingActivities = [];
+
+        function syncOutlookEmails() {
+            const btn = document.getElementById('outlookSyncBtn');
+            const days = parseInt(document.getElementById('outlookSyncDays')?.value || '60');
+
+            // Abrir modal de progresso
+            const modal = document.getElementById('outlookProgressModal');
+            if (modal) modal.style.display = 'flex';
+            _setOutlookProgress('Conectando ao Outlook...', '');
+
+            if (btn) { btn.disabled = true; }
+
+            // Fechar stream anterior se existir
+            if (_outlookEventSource) { _outlookEventSource.close(); _outlookEventSource = null; }
+
+            _outlookEventSource = new EventSource(`/api/outlook/sync-stream?days=${days}`);
+
+            _outlookEventSource.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.phase === 'connecting') {
+                        _setOutlookProgress(data.message, '');
+                    } else if (data.phase === 'reading') {
+                        _setOutlookProgress(data.message, data.count ? `${data.count} email(s) lidos até agora` : '');
+                    } else if (data.phase === 'matching') {
+                        _setOutlookProgress(data.message, `${data.count} emails no total`);
+                    } else if (data.phase === 'done') {
+                        _outlookEventSource.close(); _outlookEventSource = null;
+                        _closeOutlookProgressModal();
+                        if (btn) { btn.disabled = false; }
+                        _openOutlookReviewModal(data);
+                    } else if (data.phase === 'error') {
+                        _outlookEventSource.close(); _outlookEventSource = null;
+                        _closeOutlookProgressModal();
+                        if (btn) { btn.disabled = false; }
+                        const status = document.getElementById('outlookImportStatus');
+                        if (status) status.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(data.message)}</span>`;
+                    }
+                } catch (_) {}
+            };
+
+            _outlookEventSource.onerror = () => {
+                if (_outlookEventSource) { _outlookEventSource.close(); _outlookEventSource = null; }
+                _closeOutlookProgressModal();
+                if (btn) { btn.disabled = false; }
+                const status = document.getElementById('outlookImportStatus');
+                if (status) status.innerHTML = '<span style="color:#ef4444;">Erro na conexão com o servidor. Tente novamente.</span>';
+            };
+        }
+
+        function _setOutlookProgress(msg, count) {
+            const m = document.getElementById('outlookProgressMsg');
+            const c = document.getElementById('outlookProgressCount');
+            if (m) m.textContent = msg;
+            if (c) c.textContent = count || '';
+        }
+
+        function _closeOutlookProgressModal() {
+            const modal = document.getElementById('outlookProgressModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function cancelOutlookSync() {
+            if (_outlookEventSource) { _outlookEventSource.close(); _outlookEventSource = null; }
+            _closeOutlookProgressModal();
+            const btn = document.getElementById('outlookSyncBtn');
+            if (btn) btn.disabled = false;
+        }
+
+        function _openOutlookReviewModal(data) {
+            _outlookPendingActivities = data.activities || [];
+            const modal = document.getElementById('outlookReviewModal');
+            const summary = document.getElementById('outlookReviewSummary');
+            const list = document.getElementById('outlookReviewList');
+            const confirmLabel = document.getElementById('outlookConfirmLabel');
+            const selectAll = document.getElementById('outlookSelectAll');
+            const status = document.getElementById('outlookImportStatus');
+
+            if (status) status.innerHTML = '';
+            if (selectAll) selectAll.checked = true;
+
+            if (!_outlookPendingActivities.length) {
+                if (status) status.innerHTML = `<span style="color:#6b7280;">${escapeHtml(data.message)}</span>`;
+                return;
+            }
+
+            if (summary) summary.textContent = `${data.total_read} email(s) lidos · ${_outlookPendingActivities.length} nova(s) atividade(s) encontrada(s)`;
+
+            // Renderizar itens
+            list.innerHTML = _outlookPendingActivities.map((act, i) => {
+                const dt = new Date(act.date);
+                const dateStr = isNaN(dt) ? act.date : dt.toLocaleDateString('pt-BR');
+                const dirIcon = act.direction === 'received' ? '←' : '→';
+                const preview = (act.body_preview || '').slice(0, 180);
+                const initial = (act.client_name || '?')[0].toUpperCase();
+                const avatar = act.client_photo_url
+                    ? `<img src="${escapeHtml(act.client_photo_url)}" class="outlook-review-avatar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="outlook-review-avatar-placeholder" style="display:none;">${escapeHtml(initial)}</span>`
+                    : `<span class="outlook-review-avatar-placeholder">${escapeHtml(initial)}</span>`;
+                return `<div class="outlook-review-item">
+                    <input type="checkbox" class="outlook-item-check" data-index="${i}" checked onchange="_updateOutlookConfirmBtn()" style="margin-top:10px;cursor:pointer;accent-color:#10b981;">
+                    ${avatar}
+                    <div class="outlook-review-body">
+                        <div class="outlook-review-header">
+                            <span class="outlook-review-name">${escapeHtml(act.client_name)}</span>
+                            <span class="outlook-review-date">${escapeHtml(dateStr)}</span>
+                            <span class="outlook-review-dir">${dirIcon} ${escapeHtml(act.counterpart_label)}: ${escapeHtml(act.counterpart_name)}</span>
+                        </div>
+                        <div class="outlook-review-subject">${escapeHtml(act.subject || '(sem assunto)')}</div>
+                        ${preview ? `<div class="outlook-review-preview">${escapeHtml(preview)}</div>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+
+            _updateOutlookConfirmBtn();
+            if (modal) modal.style.display = 'flex';
+        }
+
+        function _updateOutlookConfirmBtn() {
+            const checks = document.querySelectorAll('.outlook-item-check');
+            const selected = Array.from(checks).filter(c => c.checked).length;
+            const label = document.getElementById('outlookConfirmLabel');
+            const btn = document.getElementById('outlookConfirmBtn');
+            if (label) label.textContent = `Importar ${selected} atividade${selected !== 1 ? 's' : ''}`;
+            if (btn) btn.disabled = selected === 0;
+        }
+
+        function toggleAllOutlookItems(checked) {
+            document.querySelectorAll('.outlook-item-check').forEach(c => c.checked = checked);
+            _updateOutlookConfirmBtn();
+        }
+
+        function closeOutlookReview() {
+            const modal = document.getElementById('outlookReviewModal');
+            if (modal) modal.style.display = 'none';
+            _outlookPendingActivities = [];
+        }
+
+        async function confirmOutlookImport() {
+            const checks = document.querySelectorAll('.outlook-item-check');
+            const selected = Array.from(checks)
+                .filter(c => c.checked)
+                .map(c => _outlookPendingActivities[parseInt(c.dataset.index)]);
+
+            if (!selected.length) return;
+
+            const btn = document.getElementById('outlookConfirmBtn');
+            const confStatus = document.getElementById('outlookConfirmStatus');
+            if (btn) btn.disabled = true;
+            if (confStatus) confStatus.innerHTML = '<span style="color:#6b7280;"><i class="fas fa-spinner fa-spin"></i> Registrando atividades...</span>';
+
+            try {
+                const res = await fetch('/api/outlook/confirm-import', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({activities: selected})
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+
+                closeOutlookReview();
+                const status = document.getElementById('outlookImportStatus');
+                if (status) status.innerHTML = `<span style="color:#10b981;">✓ ${escapeHtml(data.message)}</span>`;
+                loadActivities();
+            } catch (e) {
+                if (confStatus) confStatus.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(e.message)}</span>`;
+                if (btn) btn.disabled = false;
+            }
         }
 
         function setupSettingsCards() {
@@ -3740,7 +4076,7 @@
                     html += '</tr></thead><tbody>';
 
                     activities.forEach(activity => {
-                        const date = new Date(activity.created_at).toLocaleDateString('pt-BR');
+                        const date = new Date(activity.activity_date || activity.created_at).toLocaleDateString('pt-BR');
                         const contactType = activity.contact_type || 'Outro';
                         const information = activity.information || '-';
                         html += `<tr>
