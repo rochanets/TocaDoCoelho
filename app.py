@@ -5827,11 +5827,16 @@ def sync_outlook_emails():
         cutoff_dt = datetime.now() - timedelta(days=days)
 
         try:
-            outlook = _win32com.Dispatch('Outlook.Application')
+            import pythoncom
+            pythoncom.CoInitialize()
+            try:
+                outlook = _win32com.GetActiveObject('Outlook.Application')
+            except Exception:
+                outlook = _win32com.Dispatch('Outlook.Application')
             namespace = outlook.GetNamespace('MAPI')
         except Exception as e:
             logger.exception(f'[ERROR] Outlook COM: {e}')
-            return jsonify({'error': 'Não foi possível conectar ao Outlook. Certifique-se de que o Outlook está aberto e instalado.'}), 500
+            return jsonify({'error': f'Não foi possível conectar ao Outlook: {e}'}), 500
 
         emails = []
 
@@ -5902,13 +5907,19 @@ def sync_outlook_stream():
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
         try:
+            import pythoncom
+            pythoncom.CoInitialize()
             yield evt({'phase': 'connecting', 'message': 'Conectando ao Outlook...'})
 
             try:
-                outlook = _win32.Dispatch('Outlook.Application')
+                try:
+                    outlook = _win32.GetActiveObject('Outlook.Application')
+                except Exception:
+                    outlook = _win32.Dispatch('Outlook.Application')
                 namespace = outlook.GetNamespace('MAPI')
-            except Exception:
-                yield evt({'phase': 'error', 'message': 'Não foi possível conectar ao Outlook. Certifique-se de que ele está aberto.'})
+            except Exception as e:
+                logger.exception(f'[ERROR] Outlook COM connect (stream): {e}')
+                yield evt({'phase': 'error', 'message': f'Não foi possível conectar ao Outlook: {e}'})
                 return
 
             cutoff_dt = datetime.now() - timedelta(days=days)
@@ -6011,6 +6022,11 @@ def sync_outlook_stream():
         except Exception as e:
             logger.exception(f'[ERROR] SSE /api/outlook/sync-stream: {e}')
             yield evt({'phase': 'error', 'message': f'Erro inesperado: {str(e)}'})
+        finally:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
     return Response(
         stream_with_context(generate()),
