@@ -5612,6 +5612,52 @@ def set_startup_config():
         return jsonify({'error': str(e)}), 500
 
 
+def _outlook_connect(win32mod):
+    """
+    Conecta ao Outlook em execução.
+    Lê o CLSID diretamente do registro de 64 bits para funcionar com
+    Python 32-bit + Office 64-bit (e vice-versa).
+    """
+    import winreg
+
+    clsid = None
+    for flag in [winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                 winreg.KEY_READ,
+                 winreg.KEY_READ | winreg.KEY_WOW64_32KEY]:
+        for progid in ['Outlook.Application.16', 'Outlook.Application.15',
+                       'Outlook.Application.14', 'Outlook.Application']:
+            try:
+                k = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, f'{progid}\\CLSID', 0, flag)
+                clsid, _ = winreg.QueryValueEx(k, '')
+                winreg.CloseKey(k)
+                break
+            except Exception:
+                continue
+        if clsid:
+            break
+
+    if not clsid:
+        clsid = '{0006F03A-0000-0000-C000-000000000046}'
+
+    last_exc = None
+    for method in [
+        lambda: win32mod.GetActiveObject(clsid),
+        lambda: win32mod.GetActiveObject('Outlook.Application'),
+        lambda: win32mod.Dispatch(clsid),
+        lambda: win32mod.Dispatch('Outlook.Application'),
+    ]:
+        try:
+            return method()
+        except Exception as ex:
+            last_exc = ex
+            continue
+
+    raise RuntimeError(
+        f'Não foi possível conectar ao Outlook (último erro: {last_exc}). '
+        'Verifique se o Outlook está instalado e aberto.'
+    )
+
+
 def _outlook_extract_smtp_from_recipient(recipient):
     """Extrai endereço SMTP de um recipient do Outlook (trata Exchange/EX)."""
     try:
@@ -5829,14 +5875,11 @@ def sync_outlook_emails():
         try:
             import pythoncom
             pythoncom.CoInitialize()
-            try:
-                outlook = _win32com.GetActiveObject('Outlook.Application')
-            except Exception:
-                outlook = _win32com.Dispatch('Outlook.Application')
+            outlook = _outlook_connect(_win32com)
             namespace = outlook.GetNamespace('MAPI')
         except Exception as e:
             logger.exception(f'[ERROR] Outlook COM: {e}')
-            return jsonify({'error': f'Não foi possível conectar ao Outlook: {e}'}), 500
+            return jsonify({'error': str(e)}), 500
 
         emails = []
 
@@ -5912,14 +5955,11 @@ def sync_outlook_stream():
             yield evt({'phase': 'connecting', 'message': 'Conectando ao Outlook...'})
 
             try:
-                try:
-                    outlook = _win32.GetActiveObject('Outlook.Application')
-                except Exception:
-                    outlook = _win32.Dispatch('Outlook.Application')
+                outlook = _outlook_connect(_win32)
                 namespace = outlook.GetNamespace('MAPI')
             except Exception as e:
                 logger.exception(f'[ERROR] Outlook COM connect (stream): {e}')
-                yield evt({'phase': 'error', 'message': f'Não foi possível conectar ao Outlook: {e}'})
+                yield evt({'phase': 'error', 'message': str(e)})
                 return
 
             cutoff_dt = datetime.now() - timedelta(days=days)
