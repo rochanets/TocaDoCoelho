@@ -1950,6 +1950,10 @@
                     <button class="btn btn-auto-mapping btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
                         <span class="ai-star-icon">✦</span> Sync Outlook
                     </button>
+                    <button class="btn btn-secondary btn-small" id="outlookJsonImportBtn" onclick="openOutlookJsonPicker()">
+                        <i class="fas fa-file-import"></i> Importar JSON Outlook
+                    </button>
+                    <input type="file" id="outlookJsonInput" accept=".json,application/json" style="display:none;" onchange="handleOutlookJsonSelected(event)">
                 </div>
             </div>
             <div id="outlookImportStatus" style="margin-bottom:8px; font-size:13px;"></div>
@@ -2872,6 +2876,43 @@
             _closeOutlookProgressModal();
             const btn = document.getElementById('outlookSyncBtn');
             if (btn) btn.disabled = false;
+        }
+
+        function openOutlookJsonPicker() {
+            const input = document.getElementById('outlookJsonInput');
+            if (!input) return;
+            input.value = '';
+            input.click();
+        }
+
+        async function handleOutlookJsonSelected(event) {
+            const file = event?.target?.files?.[0];
+            if (!file) return;
+
+            const status = document.getElementById('outlookImportStatus');
+            const importBtn = document.getElementById('outlookJsonImportBtn');
+            if (importBtn) importBtn.disabled = true;
+            if (status) status.innerHTML = '<span style="color:#6b7280;"><i class="fas fa-spinner fa-spin"></i> Importando arquivo JSON...</span>';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                const res = await fetch('/api/outlook/import', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Erro desconhecido ao importar arquivo');
+
+                const parts = [`✓ ${data.message || 'Importação concluída.'}`];
+                if (typeof data.skipped_no_match === 'number' && data.skipped_no_match > 0) {
+                    parts.push(`${data.skipped_no_match} sem contato correspondente`);
+                }
+                if (status) status.innerHTML = `<span style="color:#10b981;">${escapeHtml(parts.join(' · '))}</span>`;
+                loadActivities();
+            } catch (e) {
+                if (status) status.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(e.message || 'Falha na importação')}</span>`;
+            } finally {
+                if (importBtn) importBtn.disabled = false;
+                if (event?.target) event.target.value = '';
+            }
         }
 
         function _openOutlookReviewModal(data) {
