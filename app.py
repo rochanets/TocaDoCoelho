@@ -5662,9 +5662,13 @@ function Make-Item($item, $dt, $dir) {
 }
 
 $ol = $null
-try { $ol = New-Object -ComObject Outlook.Application } catch {
-    [Console]::Error.WriteLine("Nao foi possivel conectar ao Outlook: $_")
-    exit 1
+try {
+    $ol = [System.Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application')
+} catch {
+    try { $ol = New-Object -ComObject Outlook.Application } catch {
+        [Console]::Error.WriteLine("Nao foi possivel conectar ao Outlook: $_")
+        exit 1
+    }
 }
 $ns = $ol.GetNamespace('MAPI')
 $results = [System.Collections.Generic.List[object]]::new()
