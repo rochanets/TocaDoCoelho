@@ -144,6 +144,7 @@ else:
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / 'toca-do-coelho.db'
+TEST_DB_TEMPLATE_PATH = Path(__file__).resolve().parent / 'BD_teste' / 'toca-do-coelho-ficticio-reduzido.db'
 BACKUP_DIR = DATA_DIR / 'backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR = DATA_DIR / 'logs'
@@ -305,6 +306,77 @@ def get_whisper_model():
 
     return WHISPER_MODEL
 
+
+TEST_DB_REQUIRED_SCHEMA = {
+    'clients': {'id', 'name', 'company', 'position'},
+    'accounts': {'id', 'name'},
+    'activities': {'id', 'client_id'},
+    'commitments': {'id', 'client_id', 'title', 'due_date'},
+    'app_settings': {'key', 'value'},
+    'itoca_chat_history': {'id', 'session_id', 'role', 'content'},
+}
+
+
+def _is_test_db_schema_valid(db_path):
+    try:
+        conn = sqlite3.connect(str(db_path))
+        c = conn.cursor()
+        for table_name, required_columns in TEST_DB_REQUIRED_SCHEMA.items():
+            c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+                (table_name,)
+            )
+            if c.fetchone() is None:
+                logger.warning(
+                    f'[Database] Banco de teste inválido: tabela obrigatória ausente ({table_name}).'
+                )
+                conn.close()
+                return False
+
+            c.execute(f"PRAGMA table_info({table_name})")
+            table_columns = {row[1] for row in c.fetchall()}
+            missing_columns = required_columns - table_columns
+            if missing_columns:
+                logger.warning(
+                    '[Database] Banco de teste inválido: colunas obrigatórias ausentes em %s: %s',
+                    table_name,
+                    ', '.join(sorted(missing_columns))
+                )
+                conn.close()
+                return False
+
+        conn.close()
+        return True
+    except Exception as e:
+        logger.warning(f'[Database] Falha ao validar banco de teste: {e}')
+        return False
+
+
+def maybe_seed_test_db_fallback():
+    if DB_PATH.exists():
+        return
+
+    should_use_test_db = os.environ.get('TOCA_ENABLE_TEST_DB_FALLBACK', '').strip().lower() in {
+        '1', 'true', 'yes', 'on'
+    }
+    if not should_use_test_db:
+        return
+
+    if getattr(sys, 'frozen', False):
+        logger.info('[Database] Fallback de banco de teste ignorado em build instalada.')
+        return
+
+    if not TEST_DB_TEMPLATE_PATH.exists():
+        logger.warning(f'[Database] Banco de teste não encontrado em {TEST_DB_TEMPLATE_PATH}.')
+        return
+
+    if not _is_test_db_schema_valid(TEST_DB_TEMPLATE_PATH):
+        logger.warning('[Database] Banco de teste inválido. O app seguirá com banco vazio padrão.')
+        return
+
+    shutil.copy2(str(TEST_DB_TEMPLATE_PATH), str(DB_PATH))
+    logger.info(f'[Database] Banco de teste copiado para uso local: {DB_PATH}')
+
 # Migração automática do banco de dados antigo
 if sys.platform == 'win32' and not DB_PATH.exists():
     import shutil
@@ -337,6 +409,8 @@ if sys.platform == 'win32' and not DB_PATH.exists():
 
             logger.info(f'[Database] Migração de {source_label} concluída com sucesso!')
             migrated = True
+
+maybe_seed_test_db_fallback()
 
 logger.info(f'[Database] Caminho: {DB_PATH}')
 

@@ -51,6 +51,15 @@ Na primeira execução (Windows), se o banco novo não existir, o app tenta migr
 
 Uploads também são migrados quando encontrados.
 
+## 🤖 Banco fictício para testes de IA
+
+- O banco mocado em `BD_teste/toca-do-coelho-ficticio-reduzido.db` pode ser usado como fallback **somente para testes**.
+- Ele só é aplicado quando:
+  - não existe banco configurado do usuário em `%AppData%\toca-do-coelho\toca-do-coelho.db` (ou `~/.toca-do-coelho/toca-do-coelho.db`);
+  - a variável de ambiente `TOCA_ENABLE_TEST_DB_FALLBACK=1` está ativa.
+- Prioridade sempre do banco real do usuário: se já existir banco configurado/migrado, o fallback não roda.
+- Em build instalada (`PyInstaller`/`sys.frozen`), o fallback de teste é ignorado por segurança.
+
 ## 🧾 Logs e suporte pós-release
 
 - Log de aplicação: `%AppData%\toca-do-coelho\logs\app.log`
