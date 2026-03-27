@@ -5612,50 +5612,132 @@ def set_startup_config():
         return jsonify({'error': str(e)}), 500
 
 
-def _outlook_connect(win32mod):
+def _outlook_fetch_via_powershell(days=60):
     """
-    Conecta ao Outlook em execução.
-    Lê o CLSID diretamente do registro de 64 bits para funcionar com
-    Python 32-bit + Office 64-bit (e vice-versa).
+    Lê emails do Outlook via PowerShell (compatível com Office C2R/365).
+    PowerShell corre em 64-bit e tem acesso nativo ao COM do Click-to-Run.
+    Retorna lista de dicts no formato de _outlook_extract_email().
     """
-    import winreg
+    import subprocess, tempfile, json, os
 
-    clsid = None
-    for flag in [winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
-                 winreg.KEY_READ,
-                 winreg.KEY_READ | winreg.KEY_WOW64_32KEY]:
-        for progid in ['Outlook.Application.16', 'Outlook.Application.15',
-                       'Outlook.Application.14', 'Outlook.Application']:
+    ps_script = """\
+param([int]$Days = 60)
+$ErrorActionPreference = 'Continue'
+$cutoff = (Get-Date).AddDays(-$Days)
+
+function Get-SmtpAddress($r) {
+    $a = $null; try { $a = $r.Address } catch {}
+    if ($a -and $a -match '@' -and $a -notmatch '^/o=') { return $a.ToLower() }
+    try { return ($r.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x39FE001E')).ToLower() } catch {}
+    return ''
+}
+
+function Get-SenderSmtp($m) {
+    $a = $null; try { $a = $m.SenderEmailAddress } catch {}
+    if ($a -and $a -match '@' -and $a -notmatch '^/o=') { return $a.ToLower() }
+    try { return ($m.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x5D01001E')).ToLower() } catch {}
+    return ''
+}
+
+function Get-AllFolders($folder) {
+    $list = [System.Collections.Generic.List[object]]::new()
+    $list.Add($folder)
+    try { foreach ($s in $folder.Folders) { (Get-AllFolders $s) | ForEach-Object { $list.Add($_) } } } catch {}
+    return ,$list
+}
+
+function Make-Item($item, $dt, $dir) {
+    $rcpts = [System.Collections.Generic.List[hashtable]]::new()
+    try { foreach ($r in $item.Recipients) { try { $rcpts.Add(@{ name=($r.Name+''); email=(Get-SmtpAddress $r) }) } catch {} } } catch {}
+    $bp = ''
+    try { $bp = ($item.Body -replace '[\\r\\n\\t]+',' ').Trim(); if ($bp.Length -gt 1500) { $bp = $bp.Substring(0,1500) } } catch {}
+    return [PSCustomObject]@{
+        subject      = ($item.Subject+'')
+        date         = $dt.ToString('yyyy-MM-ddTHH:mm:ss')
+        direction    = $dir
+        sender       = @{ name=($item.SenderName+''); email=(Get-SenderSmtp $item) }
+        recipients   = @($rcpts)
+        body_preview = $bp
+    }
+}
+
+$ol = $null
+try { $ol = New-Object -ComObject Outlook.Application } catch {
+    [Console]::Error.WriteLine("Nao foi possivel conectar ao Outlook: $_")
+    exit 1
+}
+$ns = $ol.GetNamespace('MAPI')
+$results = [System.Collections.Generic.List[object]]::new()
+
+try {
+    $inbox = $ns.GetDefaultFolder(6)
+    foreach ($folder in (Get-AllFolders $inbox)) {
+        try {
+            foreach ($item in $folder.Items) {
+                try {
+                    if ($item.Class -ne 43) { continue }
+                    $dt = $null; try { $dt = $item.ReceivedTime } catch { continue }
+                    if ($dt -lt $cutoff) { continue }
+                    $results.Add((Make-Item $item $dt 'received'))
+                } catch {}
+            }
+        } catch {}
+    }
+} catch { [Console]::Error.WriteLine("Erro inbox: $_") }
+
+try {
+    $sent = $ns.GetDefaultFolder(5)
+    foreach ($item in $sent.Items) {
+        try {
+            if ($item.Class -ne 43) { continue }
+            $dt = $null; try { $dt = $item.SentOn } catch { continue }
+            if ($dt -lt $cutoff) { continue }
+            $results.Add((Make-Item $item $dt 'sent'))
+        } catch {}
+    }
+} catch { [Console]::Error.WriteLine("Erro sent: $_") }
+
+if ($results.Count -eq 0) { '[]'; exit 0 }
+$results | ConvertTo-Json -Depth 5 -Compress
+"""
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.ps1', delete=False, encoding='utf-8', errors='replace'
+        ) as tmp:
+            tmp.write(ps_script)
+            tmp_path = tmp.name
+
+        proc = subprocess.run(
+            ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
+             '-File', tmp_path, '-Days', str(int(days))],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=300
+        )
+        stderr = (proc.stderr or '').strip()
+        stdout = (proc.stdout or '').strip()
+        if proc.returncode != 0 and not stdout:
+            raise RuntimeError(stderr or f'PowerShell retornou código {proc.returncode}')
+        if not stdout or stdout == '[]':
+            return []
+        data = json.loads(stdout)
+        if isinstance(data, dict):
+            data = [data]
+        for item in data:
+            rcpts = item.get('recipients') or []
+            if isinstance(rcpts, dict):
+                rcpts = [rcpts]
+            item['recipients'] = rcpts
+            if not isinstance(item.get('sender'), dict):
+                item['sender'] = {'name': '', 'email': ''}
+        return data
+    finally:
+        if tmp_path:
             try:
-                k = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, f'{progid}\\CLSID', 0, flag)
-                clsid, _ = winreg.QueryValueEx(k, '')
-                winreg.CloseKey(k)
-                break
+                os.unlink(tmp_path)
             except Exception:
-                continue
-        if clsid:
-            break
-
-    if not clsid:
-        clsid = '{0006F03A-0000-0000-C000-000000000046}'
-
-    last_exc = None
-    for method in [
-        lambda: win32mod.GetActiveObject(clsid),
-        lambda: win32mod.GetActiveObject('Outlook.Application'),
-        lambda: win32mod.Dispatch(clsid),
-        lambda: win32mod.Dispatch('Outlook.Application'),
-    ]:
-        try:
-            return method()
-        except Exception as ex:
-            last_exc = ex
-            continue
-
-    raise RuntimeError(
-        f'Não foi possível conectar ao Outlook (último erro: {last_exc}). '
-        'Verifique se o Outlook está instalado e aberto.'
-    )
+                pass
 
 
 def _outlook_extract_smtp_from_recipient(recipient):
@@ -5858,65 +5940,26 @@ def _outlook_import_emails(emails_data, conn):
 
 @app.route('/api/outlook/sync', methods=['POST'])
 def sync_outlook_emails():
-    """Lê o Outlook diretamente via COM e importa os emails como atividades."""
+    """Lê o Outlook via PowerShell e importa os emails como atividades."""
     if sys.platform != 'win32':
         return jsonify({'error': 'Sincronização com Outlook disponível somente no Windows.'}), 400
-
-    try:
-        import win32com.client as _win32com
-    except ImportError:
-        return jsonify({'error': 'pywin32 não encontrado. Reinstale o Toca do Coelho.'}), 500
-
     try:
         data = request.get_json() or {}
         days = max(1, min(int(data.get('days', 60)), 365))
-        cutoff_dt = datetime.now() - timedelta(days=days)
-
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            outlook = _outlook_connect(_win32com)
-            namespace = outlook.GetNamespace('MAPI')
-        except Exception as e:
-            logger.exception(f'[ERROR] Outlook COM: {e}')
-            return jsonify({'error': str(e)}), 500
-
-        emails = []
-
-        # Caixa de Entrada + todas as subpastas
-        try:
-            inbox = namespace.GetDefaultFolder(6)
-            for folder in _outlook_get_all_subfolders(inbox):
-                try:
-                    _outlook_process_folder(folder, 'received', cutoff_dt, emails)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f'[WARN] Outlook inbox: {e}')
-
-        # Itens Enviados
-        try:
-            sent = namespace.GetDefaultFolder(5)
-            _outlook_process_folder(sent, 'sent', cutoff_dt, emails)
-        except Exception as e:
-            logger.warning(f'[WARN] Outlook sent: {e}')
-
+        emails = _outlook_fetch_via_powershell(days)
         if not emails:
             return jsonify({
                 'imported': 0, 'skipped_duplicates': 0, 'skipped_no_match': 0,
                 'total_read': 0,
                 'message': f'Nenhum email encontrado nos últimos {days} dias.'
             })
-
         conn = get_db()
         imported, skipped_duplicates, skipped_no_match = _outlook_import_emails(emails, conn)
         conn.close()
-
         msg = f'{imported} atividade(s) importada(s)'
         if skipped_duplicates:
             msg += f', {skipped_duplicates} duplicata(s) ignorada(s)'
         msg += f'. ({len(emails)} emails lidos do Outlook)'
-
         return jsonify({
             'imported': imported,
             'skipped_duplicates': skipped_duplicates,
@@ -5931,17 +5974,10 @@ def sync_outlook_emails():
 
 @app.route('/api/outlook/sync-stream', methods=['GET'])
 def sync_outlook_stream():
-    """SSE: lê o Outlook, faz match de contatos e devolve lista para revisão (sem salvar)."""
+    """SSE: lê o Outlook via PowerShell, faz match de contatos e devolve lista para revisão (sem salvar)."""
     if sys.platform != 'win32':
         def _err():
             yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização com Outlook disponível somente no Windows.'})}\n\n"
-        return Response(stream_with_context(_err()), mimetype='text/event-stream')
-
-    try:
-        import win32com.client as _win32
-    except ImportError:
-        def _err():
-            yield f"data: {json.dumps({'phase': 'error', 'message': 'pywin32 não encontrado. Reinstale o Toca do Coelho.'})}\n\n"
         return Response(stream_with_context(_err()), mimetype='text/event-stream')
 
     days = max(1, min(int(request.args.get('days', 60)), 365))
@@ -5950,48 +5986,17 @@ def sync_outlook_stream():
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
         try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            yield evt({'phase': 'connecting', 'message': 'Conectando ao Outlook...'})
+            yield evt({'phase': 'connecting', 'message': 'Lendo emails do Outlook...'})
 
             try:
-                outlook = _outlook_connect(_win32)
-                namespace = outlook.GetNamespace('MAPI')
+                emails = _outlook_fetch_via_powershell(days)
             except Exception as e:
-                logger.exception(f'[ERROR] Outlook COM connect (stream): {e}')
+                logger.exception(f'[ERROR] Outlook PowerShell (stream): {e}')
                 yield evt({'phase': 'error', 'message': str(e)})
                 return
 
-            cutoff_dt = datetime.now() - timedelta(days=days)
-            emails = []
-
-            yield evt({'phase': 'reading', 'message': 'Lendo Caixa de Entrada...', 'count': 0})
-            try:
-                inbox = namespace.GetDefaultFolder(6)
-                for folder in _outlook_get_all_subfolders(inbox):
-                    try:
-                        before = len(emails)
-                        _outlook_process_folder(folder, 'received', cutoff_dt, emails)
-                        added = len(emails) - before
-                        if added:
-                            yield evt({'phase': 'reading', 'message': f'Pasta "{folder.Name}": {added} email(s)', 'count': len(emails)})
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(f'[WARN] Outlook inbox stream: {e}')
-
-            yield evt({'phase': 'reading', 'message': 'Lendo Itens Enviados...', 'count': len(emails)})
-            try:
-                sent = namespace.GetDefaultFolder(5)
-                before = len(emails)
-                _outlook_process_folder(sent, 'sent', cutoff_dt, emails)
-                added = len(emails) - before
-                if added:
-                    yield evt({'phase': 'reading', 'message': f'Itens Enviados: {added} email(s)', 'count': len(emails)})
-            except Exception as e:
-                logger.warning(f'[WARN] Outlook sent stream: {e}')
-
             total_read = len(emails)
+            yield evt({'phase': 'reading', 'message': f'{total_read} email(s) lidos.', 'count': total_read})
 
             if not emails:
                 yield evt({'phase': 'done', 'total_read': 0, 'activities': [],
