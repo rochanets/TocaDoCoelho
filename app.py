@@ -5726,12 +5726,19 @@ $results | ConvertTo-Json -Depth 5 -Compress
             tmp.write(ps_script)
             tmp_path = tmp.name
 
-        proc = subprocess.run(
-            ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
-             '-File', tmp_path, '-Days', str(int(days))],
-            capture_output=True, text=True, encoding='utf-8', errors='replace',
-            timeout=300
-        )
+        try:
+            proc = subprocess.run(
+                ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
+                 '-File', tmp_path, '-Days', str(int(days))],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=300
+            )
+        except subprocess.TimeoutExpired as timeout_err:
+            raise RuntimeError(
+                'A leitura via Outlook COM excedeu 300s sem retorno. '
+                'Não foi possível confirmar processamento parcial; tente reduzir o período '
+                '(ex.: days=7), usar OUTLOOK_CONNECTOR_MODE=graph, ou configurar OAuth Graph.'
+            ) from timeout_err
         stderr = (proc.stderr or '').strip()
         stdout = (proc.stdout or '').strip()
         if proc.returncode != 0 and not stdout:
@@ -6111,7 +6118,34 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     )
                     conn.close()
                 else:
-                    emails = _outlook_fetch_via_powershell(days)
+                    yield evt({
+                        'phase': 'reading',
+                        'message': 'Consulta COM iniciada. Isso pode levar alguns minutos em caixas postais grandes.',
+                        'count': 0
+                    })
+                    result_holder = {'emails': None, 'error': None}
+
+                    def _run_com_fetch():
+                        try:
+                            result_holder['emails'] = _outlook_fetch_via_powershell(days)
+                        except Exception as run_err:
+                            result_holder['error'] = run_err
+
+                    worker = threading.Thread(target=_run_com_fetch, daemon=True)
+                    started_at = time.time()
+                    worker.start()
+                    while worker.is_alive():
+                        elapsed = int(time.time() - started_at)
+                        yield evt({
+                            'phase': 'reading',
+                            'message': f'Consulta COM em andamento... {elapsed}s decorridos.',
+                            'count': 0
+                        })
+                        worker.join(timeout=5)
+
+                    if result_holder.get('error') is not None:
+                        raise result_holder['error']
+                    emails = result_holder.get('emails') or []
             except OutlookOAuthError as e:
                 logger.error(f'[Outlook][OAuth] Falha de autenticação no sync-stream ({source}): {e}')
                 yield evt({'phase': 'error', 'error_type': 'oauth_authentication', 'message': str(e)})
