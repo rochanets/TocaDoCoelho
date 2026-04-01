@@ -41,6 +41,16 @@ except Exception:
     SELENIUM_AVAILABLE = False
 from werkzeug.exceptions import HTTPException
 from autotoca import AccountAddressService
+from integrations.outlook_graph import (
+    OutlookOAuthError,
+    OutlookSyncError,
+    build_authorize_url as outlook_graph_build_authorize_url,
+    ensure_schema as outlook_graph_ensure_schema,
+    exchange_code_and_store as outlook_graph_exchange_code_and_store,
+    fetch_messages as outlook_graph_fetch_messages,
+    get_valid_access_token as outlook_graph_get_valid_access_token,
+    parse_state as outlook_graph_parse_state,
+)
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
@@ -689,6 +699,9 @@ def init_db():
 
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_query_key ON automapping_runs(query_key)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_created_at ON automapping_runs(created_at)')
+
+    # Tokens de integrações OAuth por usuário (Outlook Graph e futuros conectores)
+    outlook_graph_ensure_schema(conn)
 
     # Inserir cards pré-definidos se não existirem
     predefined_cards = [
@@ -5787,12 +5800,19 @@ $results | ConvertTo-Json -Depth 5 -Compress
             tmp.write(ps_script)
             tmp_path = tmp.name
 
-        proc = subprocess.run(
-            ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
-             '-File', tmp_path, '-Days', str(int(days))],
-            capture_output=True, text=True, encoding='utf-8', errors='replace',
-            timeout=300
-        )
+        try:
+            proc = subprocess.run(
+                ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
+                 '-File', tmp_path, '-Days', str(int(days))],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=300
+            )
+        except subprocess.TimeoutExpired as timeout_err:
+            raise RuntimeError(
+                'A leitura via Outlook COM excedeu 300s sem retorno. '
+                'Não foi possível confirmar processamento parcial; tente reduzir o período '
+                '(ex.: days=7), usar OUTLOOK_CONNECTOR_MODE=graph, ou configurar OAuth Graph.'
+            ) from timeout_err
         stderr = (proc.stderr or '').strip()
         stdout = (proc.stdout or '').strip()
         if proc.returncode != 0 and not stdout:
@@ -6052,25 +6072,165 @@ def sync_outlook_emails():
 
 @app.route('/api/outlook/sync-stream', methods=['GET'])
 def sync_outlook_stream():
-    """SSE: lê o Outlook via PowerShell, faz match de contatos e devolve lista para revisão (sem salvar)."""
+    """SSE: roteia para COM legado ou Graph de acordo com OUTLOOK_CONNECTOR_MODE."""
+    mode = (os.environ.get('OUTLOOK_CONNECTOR_MODE') or 'auto').strip().lower()
+    if mode not in {'com', 'graph', 'auto'}:
+        mode = 'auto'
+
+    # comportamento legado explícito
+    if mode == 'com':
+        return _outlook_sync_stream_com()
+
+    # Graph explícito
+    if mode == 'graph':
+        return _outlook_sync_stream_graph()
+
+    # auto: prioriza Graph se houver integração conectada; fallback para COM em Windows
+    user_id = max(1, int(request.args.get('user_id', 1)))
+    has_graph_integration = False
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT 1 FROM user_integrations WHERE user_id = ? AND provider = 'outlook_graph' LIMIT 1",
+            (user_id,)
+        )
+        has_graph_integration = c.fetchone() is not None
+        conn.close()
+    except Exception:
+        has_graph_integration = False
+
+    if has_graph_integration:
+        return _outlook_sync_stream_graph()
+    return _outlook_sync_stream_com()
+
+
+def _outlook_sync_stream_com():
     if sys.platform != 'win32':
         def _err():
-            yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização com Outlook disponível somente no Windows.'})}\n\n"
+            yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização COM com Outlook disponível somente no Windows.'})}\n\n"
         return Response(stream_with_context(_err()), mimetype='text/event-stream')
 
     days = max(1, min(int(request.args.get('days', 60)), 365))
+    return _build_outlook_stream_response(days=days, source='com', page_size=100, max_pages=1)
 
+
+@app.route('/api/outlook/sync-stream-graph', methods=['GET'])
+def sync_outlook_stream_graph():
+    """SSE dedicado do conector Graph (OAuth + Graph API)."""
+    return _outlook_sync_stream_graph()
+
+
+@app.route('/api/outlook/oauth/start', methods=['GET'])
+def outlook_oauth_start():
+    try:
+        user_id = max(1, int(request.args.get('user_id', 1)))
+        auth_url = outlook_graph_build_authorize_url(user_id=user_id)
+        return jsonify({'auth_url': auth_url, 'provider': 'outlook_graph', 'user_id': user_id})
+    except OutlookOAuthError as e:
+        logger.error(f'[Outlook][OAuth] Falha ao iniciar OAuth: {e}')
+        return jsonify({'error': str(e), 'error_type': 'oauth_authentication'}), 400
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/outlook/oauth/start: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/oauth/callback', methods=['GET'])
+def outlook_oauth_callback():
+    try:
+        error = (request.args.get('error') or '').strip()
+        if error:
+            desc = request.args.get('error_description') or error
+            raise OutlookOAuthError(f'Autorização OAuth negada: {desc}')
+
+        code = (request.args.get('code') or '').strip()
+        state = (request.args.get('state') or '').strip()
+        if not code or not state:
+            raise OutlookOAuthError('Parâmetros OAuth incompletos: code/state são obrigatórios.')
+
+        user_id = outlook_graph_parse_state(state)
+        conn = get_db()
+        outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id)
+        conn.close()
+        return jsonify({'ok': True, 'provider': 'outlook_graph', 'user_id': user_id})
+    except OutlookOAuthError as e:
+        logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')
+        return jsonify({'error': str(e), 'error_type': 'oauth_authentication'}), 400
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/outlook/oauth/callback: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _outlook_sync_stream_graph():
+    days = max(1, min(int(request.args.get('days', 60)), 365))
+    page_size = max(1, min(int(request.args.get('page_size', 50)), 200))
+    max_pages = max(1, min(int(request.args.get('max_pages', 10)), 50))
+    user_id = max(1, int(request.args.get('user_id', 1)))
+    return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id)
+
+
+def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1):
     def generate():
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
         try:
-            yield evt({'phase': 'connecting', 'message': 'Lendo emails do Outlook...'})
+            connecting_message = 'Conectando via Microsoft Graph...' if source == 'graph' else 'Lendo emails do Outlook via COM...'
+            yield evt({'phase': 'connecting', 'message': connecting_message})
 
             try:
-                emails = _outlook_fetch_via_powershell(days)
+                if source == 'graph':
+                    end_date = datetime.utcnow()
+                    start_date = end_date - timedelta(days=days)
+                    conn = get_db()
+                    access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id)
+                    emails = outlook_graph_fetch_messages(
+                        access_token=access_token,
+                        start_date=start_date,
+                        end_date=end_date,
+                        page_size=page_size,
+                        max_pages=max_pages
+                    )
+                    conn.close()
+                else:
+                    yield evt({
+                        'phase': 'reading',
+                        'message': 'Consulta COM iniciada. Isso pode levar alguns minutos em caixas postais grandes.',
+                        'count': 0
+                    })
+                    result_holder = {'emails': None, 'error': None}
+
+                    def _run_com_fetch():
+                        try:
+                            result_holder['emails'] = _outlook_fetch_via_powershell(days)
+                        except Exception as run_err:
+                            result_holder['error'] = run_err
+
+                    worker = threading.Thread(target=_run_com_fetch, daemon=True)
+                    started_at = time.time()
+                    worker.start()
+                    while worker.is_alive():
+                        elapsed = int(time.time() - started_at)
+                        yield evt({
+                            'phase': 'reading',
+                            'message': f'Consulta COM em andamento... {elapsed}s decorridos.',
+                            'count': 0
+                        })
+                        worker.join(timeout=5)
+
+                    if result_holder.get('error') is not None:
+                        raise result_holder['error']
+                    emails = result_holder.get('emails') or []
+            except OutlookOAuthError as e:
+                logger.error(f'[Outlook][OAuth] Falha de autenticação no sync-stream ({source}): {e}')
+                yield evt({'phase': 'error', 'error_type': 'oauth_authentication', 'message': str(e)})
+                return
+            except OutlookSyncError as e:
+                logger.error(f'[Outlook][Sync] Falha na leitura Graph ({source}): {e}')
+                yield evt({'phase': 'error', 'error_type': 'sync_failure', 'message': str(e)})
+                return
             except Exception as e:
-                logger.exception(f'[ERROR] Outlook PowerShell (stream): {e}')
-                yield evt({'phase': 'error', 'message': str(e)})
+                logger.exception(f'[Outlook][Sync] Falha no conector {source}: {e}')
+                yield evt({'phase': 'error', 'error_type': 'sync_failure', 'message': str(e)})
                 return
 
             total_read = len(emails)
@@ -6143,8 +6303,8 @@ def sync_outlook_stream():
                 'message': f'{len(activities)} nova(s) atividade(s) encontrada(s) em {total_read} email(s) lidos.'
             })
         except Exception as e:
-            logger.exception(f'[ERROR] SSE /api/outlook/sync-stream: {e}')
-            yield evt({'phase': 'error', 'message': f'Erro inesperado: {str(e)}'})
+            logger.exception(f'[ERROR] SSE /api/outlook/sync-stream ({source}): {e}')
+            yield evt({'phase': 'error', 'error_type': 'sync_failure', 'message': f'Erro inesperado: {str(e)}'})
         finally:
             try:
                 pythoncom.CoUninitialize()
