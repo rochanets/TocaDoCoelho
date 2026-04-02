@@ -4188,13 +4188,13 @@
                 html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">';
                 html += '<div>';
                 html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Exportar Banco</h4>';
-                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Baixe uma cópia completa do banco de dados</p>';
+                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Baixe uma cópia completa do banco de dados (com opção de incluir imagens)</p>';
                 html += '<button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>';
                 html += '</div>';
                 html += '<div>';
                 html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Importar Banco</h4>';
-                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Restaure um backup anterior (cria backup automático antes)</p>';
-                html += '<input type="file" id="restoreDbInput" accept=".db" style="display: none;" onchange="restoreDatabase(event)">';
+                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Restaure um backup .db ou pacote .zip (cria backup automático antes)</p>';
+                html += '<input type="file" id="restoreDbInput" accept=".db,.zip" style="display: none;" onchange="restoreDatabase(event)">';
                 html += '<button class="btn btn-secondary" onclick="document.getElementById(\'restoreDbInput\').click()"><i class="fas fa-upload"></i> Importar Banco</button>';
                 html += '</div>';
                 html += '</div></div>';
@@ -5049,7 +5049,12 @@
         // Backup Database
         async function backupDatabase() {
             try {
-                const response = await fetch(`${API_BASE}/backup/database`);
+                const includeImages = await uiConfirm(
+                    'Deseja incluir também as imagens (contatos, contas, perfil e arquivos em uploads) no backup? Se sim, o arquivo será exportado em .zip.',
+                    'Exportar Banco'
+                );
+                const endpoint = includeImages ? `${API_BASE}/backup/database?include_uploads=true` : `${API_BASE}/backup/database`;
+                const response = await fetch(endpoint);
                 if (!response.ok) throw new Error('Erro ao fazer backup');
                 
                 const blob = await response.blob();
@@ -5057,12 +5062,16 @@
                 const a = document.createElement('a');
                 a.href = url;
                 const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-                a.download = `toca-do-coelho-backup-${timestamp}.db`;
+                a.download = includeImages
+                    ? `toca-do-coelho-backup-${timestamp}.zip`
+                    : `toca-do-coelho-backup-${timestamp}.db`;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
-                showSuccess('Backup do banco de dados realizado com sucesso!');
+                showSuccess(includeImages
+                    ? 'Backup completo (banco + imagens) realizado com sucesso!'
+                    : 'Backup do banco de dados realizado com sucesso!');
             } catch (error) {
                 showError('Erro ao fazer backup do banco de dados');
             }
@@ -5072,10 +5081,23 @@
         async function restoreDatabase(event) {
             const file = event.target.files[0];
             if (!file) return;
+            const lowerName = (file.name || '').toLowerCase();
+            const isZip = lowerName.endsWith('.zip');
             
-            if (!file.name.endsWith('.db')) {
-                showError('Por favor, selecione um arquivo .db válido');
+            if (!lowerName.endsWith('.db') && !lowerName.endsWith('.zip')) {
+                showError('Por favor, selecione um arquivo .db ou .zip válido');
                 return;
+            }
+
+            if (!isZip) {
+                const continueDbOnly = await uiConfirm(
+                    'Você selecionou um arquivo .db (somente banco). As imagens não serão restauradas. Para manter cards e fotos exatamente como estavam, use um backup .zip completo. Deseja continuar mesmo assim?',
+                    'Importar somente banco'
+                );
+                if (!continueDbOnly) {
+                    event.target.value = '';
+                    return;
+                }
             }
             
             if (!await uiConfirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?', 'Atenção')) {
