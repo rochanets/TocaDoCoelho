@@ -8874,11 +8874,29 @@ def backup_database():
         from flask import send_file
         import tempfile
         import shutil
+        include_uploads = str(request.args.get('include_uploads', '')).strip().lower() in {'1', 'true', 'yes', 'sim', 'on'}
         
         # Criar cópia temporária do banco
         temp_dir = tempfile.mkdtemp()
         temp_db = Path(temp_dir) / 'toca-do-coelho-backup.db'
         shutil.copy2(str(DB_PATH), str(temp_db))
+
+        if include_uploads:
+            temp_zip = Path(temp_dir) / 'toca-do-coelho-backup.zip'
+            with zipfile.ZipFile(str(temp_zip), mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.write(str(temp_db), arcname='database/toca-do-coelho.db')
+                if UPLOAD_DIR.exists():
+                    for file_path in UPLOAD_DIR.rglob('*'):
+                        if file_path.is_file():
+                            relative = file_path.relative_to(UPLOAD_DIR)
+                            zf.write(str(file_path), arcname=str(Path('uploads') / relative))
+
+            return send_file(
+                str(temp_zip),
+                as_attachment=True,
+                download_name=f'toca-do-coelho-backup-{datetime.now().strftime("%Y%m%d-%H%M%S")}.zip',
+                mimetype='application/zip'
+            )
         
         return send_file(
             str(temp_db),
@@ -8900,18 +8918,57 @@ def restore_database():
         if file.filename == '':
             return jsonify({'error': 'Arquivo inválido'}), 400
         
+        uploaded_name = (file.filename or '').strip().lower()
+        is_zip_backup = uploaded_name.endswith('.zip')
+        is_db_backup = uploaded_name.endswith('.db')
+        if not is_zip_backup and not is_db_backup:
+            return jsonify({'error': 'Formato inválido. Envie um arquivo .db ou .zip de backup.'}), 400
+        
         # Criar backup do banco atual antes de restaurar
         backup_dir = DATA_DIR / 'backups'
         backup_dir.mkdir(exist_ok=True)
         backup_path = backup_dir / f'pre-restore-{datetime.now().strftime("%Y%m%d-%H%M%S")}.db'
+        backup_uploads_path = backup_dir / f'pre-restore-uploads-{datetime.now().strftime("%Y%m%d-%H%M%S")}.zip'
         
         import shutil
         shutil.copy2(str(DB_PATH), str(backup_path))
         print(f'[Database] Backup de segurança criado em {backup_path}')
+
+        # Backup de segurança dos uploads atuais (garante rollback dos arquivos visuais)
+        with zipfile.ZipFile(str(backup_uploads_path), mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+            if UPLOAD_DIR.exists():
+                for file_path in UPLOAD_DIR.rglob('*'):
+                    if file_path.is_file():
+                        rel = file_path.relative_to(UPLOAD_DIR)
+                        zf.write(str(file_path), arcname=str(Path('uploads') / rel))
+        print(f'[Database] Backup de segurança dos uploads criado em {backup_uploads_path}')
         
         # Salvar arquivo temporário
         temp_path = DATA_DIR / 'temp_restore.db'
-        file.save(str(temp_path))
+        temp_zip_path = DATA_DIR / 'temp_restore.zip'
+        if temp_path.exists():
+            temp_path.unlink()
+        if temp_zip_path.exists():
+            temp_zip_path.unlink()
+        
+        if is_zip_backup:
+            file.save(str(temp_zip_path))
+            with zipfile.ZipFile(str(temp_zip_path), mode='r') as zf:
+                db_member = None
+                for name in zf.namelist():
+                    normalized = name.replace('\\', '/')
+                    if normalized.endswith('/'):
+                        continue
+                    if normalized in {'database/toca-do-coelho.db', 'toca-do-coelho.db'} or normalized.lower().endswith('.db'):
+                        db_member = name
+                        break
+                if not db_member:
+                    temp_zip_path.unlink(missing_ok=True)
+                    return jsonify({'error': 'Backup .zip inválido: arquivo de banco (.db) não encontrado.'}), 400
+                with zf.open(db_member, 'r') as db_src, open(temp_path, 'wb') as db_out:
+                    shutil.copyfileobj(db_src, db_out)
+        else:
+            file.save(str(temp_path))
         
         # Validar se é um banco SQLite válido
         try:
@@ -8925,10 +8982,43 @@ def restore_database():
         # Substituir banco atual
         shutil.move(str(temp_path), str(DB_PATH))
         print(f'[Database] Banco de dados restaurado com sucesso')
+
+        restored_uploads = 0
+        if is_zip_backup and temp_zip_path.exists():
+            extracted_files = []
+            with zipfile.ZipFile(str(temp_zip_path), mode='r') as zf:
+                for member in zf.infolist():
+                    normalized = member.filename.replace('\\', '/')
+                    if member.is_dir() or not normalized.startswith('uploads/'):
+                        continue
+                    relative = Path(normalized.replace('uploads/', '', 1)).as_posix().strip('/')
+                    if not relative:
+                        continue
+                    if relative.startswith('../') or '/..' in f'/{relative}':
+                        continue
+                    destination = (UPLOAD_DIR / relative).resolve()
+                    upload_root = UPLOAD_DIR.resolve()
+                    if upload_root not in destination.parents and destination != upload_root:
+                        continue
+                    extracted_files.append((member, destination))
+
+                # Para manter o estado visual EXATAMENTE como no backup, limpa uploads antes de restaurar
+                if UPLOAD_DIR.exists():
+                    shutil.rmtree(str(UPLOAD_DIR))
+                UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+                for member, destination in extracted_files:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member, 'r') as src, open(destination, 'wb') as dst:
+                        shutil.copyfileobj(src, dst)
+                    restored_uploads += 1
+            temp_zip_path.unlink(missing_ok=True)
         
         return jsonify({
             'message': 'Banco de dados restaurado com sucesso! Recarregue a página.',
-            'backup_location': str(backup_path)
+            'backup_location': str(backup_path),
+            'backup_uploads_location': str(backup_uploads_path),
+            'restored_upload_files': restored_uploads
         }), 200
         
     except Exception as e:
