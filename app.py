@@ -2221,6 +2221,121 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-btn {{ border:none; border-radius:14px; padding:10px 16px; font-weight:700; cursor:pointer; }}
 .rr-btn-primary {{ background:#10b981; color:#fff; }}
 .rr-btn-secondary {{ background:#e5e7eb; color:#111827; }}
+/* ── FireShot Modal ── */
+#rr-fireshot-modal {{
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 9999;
+  align-items: center;
+  justify-content: center;
+}}
+#rr-fireshot-modal.active {{
+  display: flex;
+}}
+.rr-fs-box {{
+  background: #fff;
+  border-radius: 18px;
+  padding: 32px 28px 24px;
+  max-width: 480px;
+  width: 92%;
+  box-shadow: 0 24px 64px rgba(4,120,87,0.18);
+  border-top: 4px solid #10b981;
+}}
+.rr-fs-header {{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}}
+.rr-fs-title {{
+  font-size: 18px;
+  font-weight: 700;
+  color: #047857;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}}
+.rr-fs-close {{
+  background: none;
+  border: none;
+  font-size: 22px;
+  color: #6b7280;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}}
+.rr-fs-close:hover {{ color: #1f2937; }}
+.rr-fs-steps {{
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}}
+.rr-fs-steps li {{
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 13.5px;
+  color: #1f2937;
+  line-height: 1.5;
+}}
+.rr-fs-step-num {{
+  background: #10b981;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  border-radius: 50%;
+  min-width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}}
+.rr-fs-note {{
+  background: #ecfdf5;
+  border: 1px solid #d1fae5;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: #047857;
+  margin-bottom: 20px;
+}}
+.rr-fs-actions {{
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}}
+.rr-fs-btn-install {{
+  background: #10b981;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}}
+.rr-fs-btn-install:hover {{ background: #047857; }}
+.rr-fs-btn-ok {{
+  background: #e5e7eb;
+  color: #1f2937;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}}
+.rr-fs-btn-ok:hover {{ background: #d1d5db; }}
 @media (max-width: 1024px) {{ .rr-hero-grid,.rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ grid-template-columns:1fr; }} }}
 @page {{ size: landscape; margin: 12mm 10mm; }}
 @media print {{ .rr-toolbar {{ display:none !important; }} html, body {{ background:#fff !important; width:100%; height:auto; margin:0 !important; padding:0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }} .rr-shell {{ max-width:none !important; width:100% !important; padding:0 !important; margin:0 !important; }} .rr-hero {{ min-height:auto !important; padding:16px !important; margin-top:0 !important; border-radius:18px !important; overflow:visible !important; }} .rr-hero:after {{ display:none !important; }} .rr-top {{ display:grid !important; grid-template-columns:minmax(0,1fr) 220px !important; gap:14px !important; align-items:start !important; }} .rr-brand {{ gap:12px !important; align-items:flex-start !important; min-width:0 !important; }} .rr-user {{ justify-self:end !important; align-self:start !important; width:220px !important; }} .rr-brand-copy p {{ max-width:none !important; }} .rr-section,.rr-kpi,.rr-panel,.rr-contact-card,.rr-topic-card,.rr-info-item {{ box-shadow:none !important; break-inside:avoid; page-break-inside:avoid; }} .rr-hero {{ break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ display:grid !important; }} .rr-kpis {{ grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:10px !important; margin-top:12px !important; }} .rr-grid {{ grid-template-columns:1.1fr .9fr !important; gap:14px !important; margin-top:16px !important; }} .rr-hero-grid {{ display:block !important; margin-top:10px !important; }} .rr-panel-summary {{ display:block !important; width:100% !important; background:rgba(255,255,255,.14) !important; border:1px solid rgba(255,255,255,.18) !important; padding:14px !important; border-radius:18px !important; margin-top:8px !important; break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-contact-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-topic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-info-list {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:10px !important; }} .rr-kpi,.rr-section,.rr-contact-card,.rr-topic-card,.rr-info-item,.rr-panel {{ margin-bottom:10px !important; }} .rr-section {{ padding:16px !important; border-radius:18px !important; }} .rr-contact-card {{ min-height:0 !important; padding:14px !important; }} .rr-topic-card {{ min-height:0 !important; padding:14px !important; }} .rr-kpi {{ padding:14px !important; }} .rr-user-photo {{ width:68px !important; height:68px !important; }} .rr-brand-mark {{ max-width:170px !important; height:52px !important; border-radius:16px !important; }} .rr-brand-mark img {{ max-width:150px !important; max-height:38px !important; }} .rr-title {{ font-size:26px !important; line-height:1.08 !important; margin-bottom:6px !important; }} .rr-subtitle {{ font-size:12px !important; line-height:1.4 !important; margin-top:4px !important; max-width:none !important; }} .rr-panel-summary h3 {{ margin:0 0 10px !important; font-size:16px !important; color:#ffffff !important; }} .rr-lead {{ font-size:12px !important; line-height:1.5 !important; color:#ffffff !important; display:block !important; visibility:visible !important; opacity:1 !important; }} .rr-context-pills {{ gap:8px !important; margin-bottom:10px !important; }} .rr-context-pill {{ padding:6px 9px !important; font-size:10px !important; }} .rr-contact-meta, .rr-muted, .rr-user-role, .rr-info-item-value {{ font-size:10px !important; }} .rr-page-break-before {{ break-before:page; page-break-before:always; }} }}
@@ -2231,8 +2346,9 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
   <div class='rr-toolbar-title'>Relation Report · {esc(account_name)}</div>
   <div class='rr-toolbar-actions'>
     <button class='rr-btn rr-btn-secondary' onclick='window.close()'>✕ Fechar</button>
-    <button class='rr-btn rr-btn-secondary' onclick='window.location.href=window.location.pathname.replace("/view","/export-html") + window.location.search'>Exportar HTML</button>
-    <button class='rr-btn rr-btn-primary' onclick="window.location.href='/api/report/relation' + window.location.search">Exportar PDF</button>
+    <button class='rr-btn rr-btn-primary' onclick='rrShowFireshotModal()'>
+      <span style='font-size:15px;'>📷</span> Exportar JPG
+    </button>
   </div>
 </div>
 <div class='rr-shell'>
@@ -2306,6 +2422,57 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
     </div>
   </section>
 </div>
+<div id='rr-fireshot-modal' onclick="if(event.target===this)rrCloseFireshotModal()">
+  <div class='rr-fs-box'>
+    <div class='rr-fs-header'>
+      <div class='rr-fs-title'>
+        <span>📷</span> Exportar como JPG
+      </div>
+      <button class='rr-fs-close' onclick='rrCloseFireshotModal()'>&#215;</button>
+    </div>
+    <ol class='rr-fs-steps'>
+      <li>
+        <span class='rr-fs-step-num'>1</span>
+        <span>Instale a extensão <strong>FireShot</strong> no Google Chrome (gratuita).</span>
+      </li>
+      <li>
+        <span class='rr-fs-step-num'>2</span>
+        <span>Feche este popup e, com o relatório aberto, clique com o botão <strong>direito</strong> em qualquer área da página.</span>
+      </li>
+      <li>
+        <span class='rr-fs-step-num'>3</span>
+        <span>No menu de contexto, selecione <strong>"Capturar página inteira"</strong> → <strong>"Salvar como imagem"</strong>.</span>
+      </li>
+      <li>
+        <span class='rr-fs-step-num'>4</span>
+        <span>Escolha o formato <strong>JPG</strong> e salve o arquivo.</span>
+      </li>
+    </ol>
+    <div class='rr-fs-note'>
+      💡 Se preferir, use o ícone do FireShot na barra de extensões do Chrome e selecione <em>"Capturar página inteira"</em>.
+    </div>
+    <div class='rr-fs-actions'>
+      <a class='rr-fs-btn-install'
+         href='https://chrome.google.com/webstore/detail/fireshot/mcbpblocgmgfnpjjppndjkmgjaogfceg'
+         target='_blank' rel='noopener'>
+        ⬇ Instalar FireShot
+      </a>
+      <button class='rr-fs-btn-ok' onclick='rrCloseFireshotModal()'>Entendido</button>
+    </div>
+  </div>
+</div>
+<script>
+function rrShowFireshotModal() {{
+  document.getElementById('rr-fireshot-modal').classList.add('active');
+}}
+function rrCloseFireshotModal() {{
+  document.getElementById('rr-fireshot-modal').classList.remove('active');
+}}
+// Fechar com ESC
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') rrCloseFireshotModal();
+}});
+</script>
 </body>
 </html>"""
 
