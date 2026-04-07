@@ -1690,6 +1690,158 @@ def _relation_report_build_topic_evidence(report_data):
     return '\n\n'.join(sections)
 
 
+def _relation_report_fetch_market_context(account_name: str) -> str | None:
+    question = (
+        f"Você é um analista de negócios. Pesquise na web notícias e informações recentes "
+        f"sobre a empresa '{account_name}'. "
+        "Escreva um parágrafo executivo de 3 a 5 linhas descrevendo o momento atual "
+        "desta empresa no mercado: tendências, movimentos estratégicos, expansões, "
+        "desafios ou destaque setorial. "
+        "Use somente informações verificáveis e recentes. "
+        "Se não encontrar informações confiáveis, responda exatamente: SEM_DADOS"
+    )
+    raw = _sai_simple_prompt(question)
+    if not raw:
+        return None
+    text = raw.strip()
+    if 'SEM_DADOS' in text or len(text) < 30:
+        return None
+    return text
+
+
+def _relation_report_generate_highlights(report_data: dict) -> list[str]:
+    account_name = ((report_data.get('account') or {}).get('name') or 'Conta').strip()
+    activities = report_data.get('activities') or []
+    account_activities = report_data.get('account_activities') or []
+
+    lines = []
+    for activity in (account_activities + activities)[:40]:
+        desc = (activity.get('description') or activity.get('notes') or activity.get('information') or '').strip()
+        date = (
+            activity.get('date')
+            or activity.get('activity_date')
+            or activity.get('created_at')
+            or ''
+        )
+        atype = (activity.get('type') or activity.get('category') or activity.get('origin') or '').strip()
+        if desc:
+            lines.append(f"[{str(date)[:10]}][{atype}] {desc}")
+
+    if not lines:
+        return []
+
+    activities_text = '\n'.join(lines)
+    question = (
+        f"Analise as atividades abaixo registradas na conta '{account_name}'. "
+        "Gere de 4 a 6 bullets executivos destacando os pontos mais relevantes: "
+        "temas estratégicos discutidos, avanços concretos de relacionamento, "
+        "pendências ou oportunidades identificadas, e padrão de engajamento. "
+        "Seja direto, use verbos no passado ou presente, sem inventar fatos. "
+        "Retorne SOMENTE os bullets, um por linha, começando cada linha com '- '. "
+        "Atividades:\n" + activities_text
+    )
+    raw = _sai_simple_prompt(question)
+    if not raw:
+        return []
+
+    bullets = [
+        line.lstrip('- •*').strip()
+        for line in raw.strip().splitlines()
+        if line.strip().startswith(('-', '•', '*')) and len(line.strip()) > 10
+    ]
+    return bullets[:6]
+
+
+def _relation_report_call_sai_narrative_template(
+    account_name,
+    report_period,
+    account_snapshot,
+    relationship_snapshot,
+    topic_evidence,
+    output_style,
+):
+    settings_map = _load_app_settings_map([
+        'relation_report_sai_api_key',
+        'relation_report_sai_template_id',
+        'relation_report_sai_base_url'
+    ])
+    api_key = (settings_map.get('relation_report_sai_api_key') or '').strip() or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip() or 'RuWKlxg1Sk+/3PpzUKof+w'
+    template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '69b83e37025459101ee6735d'
+    base_url = (settings_map.get('relation_report_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    if not api_key:
+        return None
+
+    url = f'{base_url}/api/templates/{template_id}/execute'
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Api-Key': api_key
+    }
+    payload = {
+        'inputs': {
+            'account_name': account_name,
+            'report_period': report_period,
+            'account_snapshot': account_snapshot,
+            'relationship_snapshot': relationship_snapshot,
+            'topic_evidence': topic_evidence,
+            'output_style': output_style,
+        }
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        headers=headers,
+        method='POST'
+    )
+
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read().decode('utf-8')
+
+    logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
+    parsed_outer = None
+    try:
+        parsed_outer = json.loads(raw)
+    except Exception:
+        parsed_outer = None
+
+    candidate_texts = []
+    if isinstance(parsed_outer, dict):
+        for key in ['answer', 'output', 'result', 'text', 'response', 'data']:
+            value = parsed_outer.get(key)
+            if isinstance(value, str):
+                candidate_texts.append(value)
+            elif isinstance(value, dict):
+                candidate_texts.append(json.dumps(value, ensure_ascii=False))
+        candidate_texts.append(raw)
+    else:
+        candidate_texts.append(raw)
+
+    parsed = None
+    for candidate in candidate_texts:
+        try:
+            obj = json.loads((candidate or '').strip())
+            if isinstance(obj, dict):
+                parsed = obj
+                break
+        except Exception:
+            obj = _extract_json_object_from_text(candidate or '')
+            if isinstance(obj, dict):
+                parsed = obj
+                break
+
+    if not isinstance(parsed, dict):
+        return None
+
+    return {
+        'executive_summary': (parsed.get('executive_summary') or '').strip(),
+        'relationship_maturity': (parsed.get('relationship_maturity') or 'Em evolução').strip(),
+        'next_steps': [str(x).strip() for x in (parsed.get('next_steps') or []) if str(x).strip()][:5],
+        'topic_breakdown': parsed.get('topic_breakdown') or {},
+        'highlights': [str(x).strip() for x in (parsed.get('highlights') or []) if str(x).strip()][:6],
+        'llm_used': True
+    }
+
+
 def _relation_report_generate_narrative(report_data):
     account = report_data.get('account') or {}
     period = report_data.get('period') or {}
@@ -1700,81 +1852,44 @@ def _relation_report_generate_narrative(report_data):
     topic_evidence = _relation_report_build_topic_evidence(report_data)
     output_style = 'Tom executivo, objetivo, claro, elegante e sem inventar fatos. Use sempre a expressão Power Mapping. Não trate faturamento de mercado da conta como receita da Stefanini. Só classifique o relacionamento como profundo quando houver evidências concretas de avanço, reuniões realizadas, discussões de conteúdo, entregas, proposta, assessment, workshop, roadmap ou desdobramentos objetivos. Se o histórico indicar apenas tentativa de agenda, cobrança ou follow-up sem avanço real, deixe isso explícito. Considere também o conteúdo dos cards de Kanban para explicar como eles se relacionam com a conta.'
 
-    settings_map = _load_app_settings_map([
-        'relation_report_sai_api_key',
-        'relation_report_sai_template_id',
-        'relation_report_sai_base_url'
-    ])
-    api_key = (settings_map.get('relation_report_sai_api_key') or '').strip() or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip() or 'RuWKlxg1Sk+/3PpzUKof+w'
-    template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '69b83e37025459101ee6735d'
-    base_url = (settings_map.get('relation_report_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    narrative_data = None
+    market_context = None
+    llm_highlights = []
 
-    if api_key:
-        url = f'{base_url}/api/templates/{template_id}/execute'
-        headers = {
-            'Content-Type': 'application/json',
-            'X-Api-Key': api_key
-        }
-        payload = {
-            'inputs': {
-                'account_name': account_name,
-                'report_period': report_period,
-                'account_snapshot': account_snapshot,
-                'relationship_snapshot': relationship_snapshot,
-                'topic_evidence': topic_evidence,
-                'output_style': output_style,
-            }
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers=headers,
-            method='POST'
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                raw = resp.read().decode('utf-8')
-            logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
-            parsed_outer = None
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            f_narrative = executor.submit(
+                _relation_report_call_sai_narrative_template,
+                account_name,
+                report_period,
+                account_snapshot,
+                relationship_snapshot,
+                topic_evidence,
+                output_style,
+            )
+            f_market = executor.submit(_relation_report_fetch_market_context, account_name)
+            f_highlights = executor.submit(_relation_report_generate_highlights, report_data)
+
             try:
-                parsed_outer = json.loads(raw)
-            except Exception:
-                parsed_outer = None
-            candidate_texts = []
-            if isinstance(parsed_outer, dict):
-                for key in ['answer', 'output', 'result', 'text', 'response', 'data']:
-                    value = parsed_outer.get(key)
-                    if isinstance(value, str):
-                        candidate_texts.append(value)
-                    elif isinstance(value, dict):
-                        candidate_texts.append(json.dumps(value, ensure_ascii=False))
-                candidate_texts.append(raw)
-            else:
-                candidate_texts.append(raw)
+                narrative_data = f_narrative.result()
+            except Exception as e:
+                logger.warning(f'[RelationReport] Falha ao gerar narrativa com SAI: {e}')
+            try:
+                market_context = f_market.result()
+            except Exception as e:
+                logger.warning(f'[RelationReport] Falha ao gerar contexto de mercado: {e}')
+            try:
+                llm_highlights = f_highlights.result() or []
+            except Exception as e:
+                logger.warning(f'[RelationReport] Falha ao gerar destaques via LLM: {e}')
+    except Exception as e:
+        logger.warning(f'[RelationReport] Falha no executor paralelo da narrativa: {e}')
 
-            parsed = None
-            for candidate in candidate_texts:
-                try:
-                    obj = json.loads((candidate or '').strip())
-                    if isinstance(obj, dict):
-                        parsed = obj
-                        break
-                except Exception:
-                    obj = _extract_json_object_from_text(candidate or '')
-                    if isinstance(obj, dict):
-                        parsed = obj
-                        break
-            if isinstance(parsed, dict):
-                return {
-                    'executive_summary': (parsed.get('executive_summary') or '').strip(),
-                    'relationship_maturity': (parsed.get('relationship_maturity') or 'Em evolução').strip(),
-                    'next_steps': [str(x).strip() for x in (parsed.get('next_steps') or []) if str(x).strip()][:5],
-                    'topic_breakdown': parsed.get('topic_breakdown') or {},
-                    'highlights': [str(x).strip() for x in (parsed.get('highlights') or []) if str(x).strip()][:6],
-                    'llm_used': True
-                }
-        except Exception as e:
-            logger.warning(f'[RelationReport] Falha ao gerar narrativa com SAI: {e}')
+    if isinstance(narrative_data, dict):
+        if len(llm_highlights) >= 2:
+            narrative_data['highlights'] = llm_highlights
+        narrative_data['market_context'] = market_context
+        return narrative_data
 
     latest = report_data.get('latest_interaction') or {}
     counts = report_data.get('summary_counts') or {}
@@ -1796,7 +1911,7 @@ def _relation_report_generate_narrative(report_data):
             topic_breakdown[topic] = f"Há {len(items)} evidência(s) relacionadas a {topic.lower()} no período, com destaque para registros de {sample.get('source')} e menções envolvendo {sample.get('person') or 'contatos da conta'}."
         else:
             topic_breakdown[topic] = f"Não foram encontradas evidências relevantes sobre {topic.lower()} no período analisado."
-    return {
+    fallback_narrative = {
         'executive_summary': executive_summary,
         'relationship_maturity': 'Em evolução' if counts.get('activities', 0) < 8 else 'Estruturado',
         'next_steps': [
@@ -1810,8 +1925,12 @@ def _relation_report_generate_narrative(report_data):
             f"{counts.get('mapping_items', 0)} item(ns) de mapeamento de ambiente registrados.",
             f"Última interação em {_relation_report_format_dt(latest.get('date'))}."
         ],
-        'llm_used': False
+        'llm_used': False,
+        'market_context': market_context,
     }
+    if len(llm_highlights) >= 2:
+        fallback_narrative['highlights'] = llm_highlights
+    return fallback_narrative
 
 
 def _relation_report_draw_paragraph(c, text, x, y, width, style):
@@ -2009,6 +2128,19 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
         """)
 
     highlights_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('highlights') or [])]) or '<li>Sem destaques adicionais.</li>'
+    market_context_text = (narrative.get('market_context') or '').strip()
+    market_context_html = ''
+    if market_context_text:
+        market_context_html = f"""
+        <div class='rr-market-context'>
+          <h3 style='font-size:13px; color:#6b7280; text-transform:uppercase; letter-spacing:.05em; margin:18px 0 6px;'>
+            Contexto de Mercado
+          </h3>
+          <p style='font-size:14px; line-height:1.7; color:#374151;'>
+            {esc(market_context_text)}
+          </p>
+        </div>
+        """
     next_steps_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('next_steps') or [])]) or '<li>Sem próximos passos sugeridos.</li>'
     account_logo = _inline_image_url(account_logo)
     account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "📊"
@@ -2127,6 +2259,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
         <h3>Resumo executivo</h3>
         <div class='rr-context-pills'>{context_badges_html}</div>
         <div class='rr-lead'>{esc((narrative.get('executive_summary') or 'Sem resumo gerado.').replace('powermapping', 'Power Mapping').replace('Powermapping', 'Power Mapping'))}</div>
+        {market_context_html}
       </div>
     </div>
   </section>
@@ -2486,6 +2619,7 @@ def preview_relation_report_data():
             'latest_interaction': report_data['latest_interaction'],
             'relationship_cards': report_data['relationship_cards'][:12],
             'topics': {k: len(v) for k, v in report_data['topics'].items()},
+            'highlights': narrative.get('highlights') or [],
             'narrative': narrative,
             'period': {
                 'full_period': report_data['full_period'],
