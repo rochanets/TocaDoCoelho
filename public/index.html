@@ -2636,7 +2636,7 @@
 
     <div id="kanbanUrgencyEditor" class="kanban-urgency-editor"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+    <script src="/vendor/sortablejs/Sortable.min.js" onerror="if(!window.__sortableFallbackLoading){window.__sortableFallbackLoading=true;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js';document.head.appendChild(s);}"></script>
     <script>
         const API_BASE = '/api';
         let currentEditingClientId = null;
@@ -5618,7 +5618,6 @@
                     onStart: (evt) => {
                         kanbanDragState.sorting = true;
                         kanbanDragState.movedAt = Date.now();
-                        kanbanDragState.snapshot = cloneKanbanCardsState();
                         evt.from?.classList.add('sortable-over');
                         logKanbanDrag('drag_start', { cardId: Number(evt.item?.getAttribute('data-card-id')), fromColumnId: columnId });
                     },
@@ -5640,14 +5639,18 @@
                         if (!cardId || Number.isNaN(newIndex) || Number.isNaN(toColumnId) || Number.isNaN(fromColumnId)) return;
                         if (fromColumnId === toColumnId && oldIndex === newIndex) return;
                         if (kanbanDragState.requestInFlight) {
-                            renderKanban();
+                            const cards = Array.from(evt.from?.querySelectorAll('.kanban-card') || []);
+                            const target = cards[oldIndex] || null;
+                            if (target) evt.from.insertBefore(evt.item, target);
+                            else evt.from.appendChild(evt.item);
+                            if (evt.from !== evt.to) evt.to?.classList.remove('sortable-over');
                             showError('Aguarde a conclusão do movimento anterior.');
                             return;
                         }
-                        if (kanbanDragState.snapshot && !applyKanbanMoveLocally(cardId, fromColumnId, toColumnId, newIndex)) {
-                            kanbanCards = kanbanDragState.snapshot;
+                        const localSnapshot = cloneKanbanCardsState();
+                        kanbanDragState.snapshot = localSnapshot;
+                        if (!applyKanbanMoveLocally(cardId, fromColumnId, toColumnId, newIndex)) {
                             kanbanDragState.snapshot = null;
-                            renderKanban();
                             return;
                         }
                         try {
@@ -5655,7 +5658,7 @@
                             await persistKanbanMove(cardId, toColumnId, newIndex);
                             kanbanDragState.snapshot = null;
                         } catch (e) {
-                            if (kanbanDragState.snapshot) kanbanCards = kanbanDragState.snapshot;
+                            if (localSnapshot) kanbanCards = localSnapshot;
                             kanbanDragState.snapshot = null;
                             kanbanDragState.rollbackCount = Number(kanbanDragState.rollbackCount || 0) + 1;
                             renderKanban();
