@@ -8431,28 +8431,55 @@ def export_clientes():
     try:
         import csv
         from io import StringIO
-        
+
+        allowed_fields = {
+            'id': ('id', 'ID'),
+            'name': ('name', 'Nome'),
+            'company': ('company', 'Empresa'),
+            'position': ('position', 'Cargo'),
+            'area_of_activity': ('area_of_activity', 'Área de Atuação'),
+            'email': ('email', 'Email'),
+            'phone': ('phone', 'Telefone'),
+            'photo_url': ('photo_url', 'Foto (URL)'),
+            'is_target': ('is_target', 'Contato-Alvo'),
+            'is_cold_contact': ('is_cold_contact', 'Contato Frio'),
+            'created_at': ('created_at', 'Data de Cadastro'),
+            'updated_at': ('updated_at', 'Última Atualização'),
+        }
+
+        default_fields = ['id', 'name', 'company', 'position', 'email', 'phone', 'created_at']
+        requested_fields = (request.args.get('fields') or '').strip()
+
+        selected_fields = []
+        if requested_fields:
+            seen = set()
+            for raw_field in requested_fields.split(','):
+                field = raw_field.strip()
+                if not field or field in seen:
+                    continue
+                if field in allowed_fields:
+                    selected_fields.append(field)
+                    seen.add(field)
+
+            if not selected_fields:
+                return jsonify({'error': 'Nenhum campo válido foi informado para exportação.'}), 400
+        else:
+            selected_fields = default_fields
+
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id, name, company, position, email, phone, created_at FROM clients ORDER BY name')
+        db_fields = ', '.join([allowed_fields[field][0] for field in selected_fields])
+        c.execute(f'SELECT {db_fields} FROM clients ORDER BY name')
         rows = c.fetchall()
         conn.close()
         
         # Criar CSV em memoria
         output = StringIO()
         writer = csv.writer(output)
-        writer.writerow(['ID', 'Nome', 'Empresa', 'Cargo', 'Email', 'Telefone', 'Data de Cadastro'])
-        
+        writer.writerow([allowed_fields[field][1] for field in selected_fields])
+
         for row in rows:
-            writer.writerow([
-                row['id'],
-                row['name'],
-                row['company'],
-                row['position'],
-                row['email'] or '',
-                row['phone'] or '',
-                row['created_at']
-            ])
+            writer.writerow([row[field] if row[field] is not None else '' for field in selected_fields])
         
         # Retornar como arquivo
         from flask import Response

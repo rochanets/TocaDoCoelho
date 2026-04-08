@@ -4400,7 +4400,7 @@
                 html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
                 html += '<h3 style="color: #047857; margin-bottom: 10px;">Exportar Base de Clientes</h3>';
                 html += '<p style="color: #6b7280; margin-bottom: 15px;">Exporte todos os dados cadastrais dos clientes em CSV</p>';
-                html += '<button class="btn btn-primary" onclick="exportClients()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>';
+                html += '<button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>';
                 html += '</div>';
 
                 html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
@@ -4435,11 +4435,87 @@
                 html += '</div>';
                 html += '</div></div>';
 
+                html += '<div id="clientExportModal" class="modal" onclick="if(event.target===this)closeClientExportModal()">';
+                html += '<div class="modal-content" style="max-width:720px;">';
+                html += '<div class="modal-header">';
+                html += '<h2 class="modal-title">Exportar Base de Clientes</h2>';
+                html += '<button class="modal-close" onclick="closeClientExportModal()">&#215;</button>';
+                html += '</div>';
+                html += '<div class="modal-body">';
+                html += '<p style="color:#4b5563; margin-bottom:14px;">Selecione os campos do cadastro de contatos que deseja exportar.</p>';
+                html += '<div style="display:flex; gap:10px; margin-bottom:12px;">';
+                html += '<button type="button" class="btn btn-secondary" style="padding:8px 12px;" onclick="clientExportSelectAll(true)">Selecionar Todos</button>';
+                html += '<button type="button" class="btn btn-secondary" style="padding:8px 12px;" onclick="clientExportSelectAll(false)">Limpar Seleção</button>';
+                html += '</div>';
+                html += '<div id="clientExportFields" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; max-height:320px; overflow:auto; border:1px solid #e5e7eb; border-radius:10px; padding:12px;"></div>';
+                html += '</div>';
+                html += '<div class="modal-footer">';
+                html += '<button type="button" class="btn btn-secondary" onclick="closeClientExportModal()">Cancelar</button>';
+                html += '<button type="button" class="btn btn-primary" id="clientExportConfirmBtn" onclick="confirmClientExport()"><i class="fas fa-download"></i> Exportar CSV</button>';
+                html += '</div>';
+                html += '</div></div>';
+
                 document.getElementById('reportContent').innerHTML = html;
                 toggleRelationReportPeriod();
             } catch (error) {
                 showError('Erro ao carregar report');
             }
+        }
+
+        const CLIENT_EXPORT_FIELDS = [
+            { key: 'id', label: 'ID', checked: true },
+            { key: 'name', label: 'Nome', checked: true },
+            { key: 'company', label: 'Empresa', checked: true },
+            { key: 'position', label: 'Cargo', checked: true },
+            { key: 'area_of_activity', label: 'Área de Atuação', checked: false },
+            { key: 'email', label: 'Email', checked: true },
+            { key: 'phone', label: 'Telefone', checked: true },
+            { key: 'photo_url', label: 'Foto (URL)', checked: false },
+            { key: 'is_target', label: 'Contato-Alvo', checked: false },
+            { key: 'is_cold_contact', label: 'Contato Frio', checked: false },
+            { key: 'created_at', label: 'Data de Cadastro', checked: true },
+            { key: 'updated_at', label: 'Última Atualização', checked: false }
+        ];
+
+        function renderClientExportFields() {
+            const container = document.getElementById('clientExportFields');
+            if (!container) return;
+            container.innerHTML = CLIENT_EXPORT_FIELDS.map(field => `
+                <label style="display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; cursor:pointer; background:white;">
+                    <input type="checkbox" class="client-export-field" value="${field.key}" ${field.checked ? 'checked' : ''} onchange="toggleClientExportButton()">
+                    <span style="font-size:14px; color:#1f2937;">${escapeHtml(field.label)}</span>
+                </label>
+            `).join('');
+            toggleClientExportButton();
+        }
+
+        function openClientExportModal() {
+            renderClientExportFields();
+            document.getElementById('clientExportModal')?.classList.add('active');
+        }
+
+        function closeClientExportModal() {
+            document.getElementById('clientExportModal')?.classList.remove('active');
+        }
+
+        function clientExportSelectAll(value) {
+            document.querySelectorAll('.client-export-field').forEach(input => {
+                input.checked = !!value;
+            });
+            toggleClientExportButton();
+        }
+
+        function getSelectedClientExportFields() {
+            return Array.from(document.querySelectorAll('.client-export-field:checked')).map(input => input.value);
+        }
+
+        function toggleClientExportButton() {
+            const btn = document.getElementById('clientExportConfirmBtn');
+            if (!btn) return;
+            const hasSelection = getSelectedClientExportFields().length > 0;
+            btn.disabled = !hasSelection;
+            btn.style.opacity = hasSelection ? '1' : '0.6';
+            btn.style.cursor = hasSelection ? 'pointer' : 'not-allowed';
         }
 
         function toggleRelationReportPeriod() {
@@ -5241,8 +5317,22 @@
 
         // Export Clients
         async function exportClients() {
+            openClientExportModal();
+        }
+
+        async function confirmClientExport() {
+            const selectedFields = getSelectedClientExportFields();
+            if (selectedFields.length === 0) {
+                showError('Selecione ao menos um campo para exportar.');
+                return;
+            }
+
             try {
-                const response = await fetch(`${API_BASE}/export/clientes`);
+                const query = encodeURIComponent(selectedFields.join(','));
+                const response = await fetch(`${API_BASE}/export/clientes?fields=${query}`);
+                if (!response.ok) {
+                    throw new Error('Erro ao exportar clientes');
+                }
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -5252,6 +5342,7 @@
                 a.click();
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
+                closeClientExportModal();
             } catch (error) {
                 showError('Erro ao exportar clientes');
             }
