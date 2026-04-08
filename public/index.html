@@ -7463,6 +7463,10 @@
             setTimeout(() => el.classList.remove('show'), 3000);
         }
 
+        function showInfo(message) {
+            showSuccess(message);
+        }
+
         function closeSystemDialog(result = null) {
             const modal = document.getElementById('systemDialogModal');
             if (window._systemDialogResolve) {
