@@ -438,6 +438,7 @@ def init_db():
         area_of_activity TEXT,
         email TEXT,
         phone TEXT,
+        linkedin TEXT,
         photo_url TEXT,
         is_target INTEGER DEFAULT 0,
         is_cold_contact INTEGER DEFAULT 0,
@@ -781,6 +782,8 @@ def init_db():
         c.execute('ALTER TABLE clients ADD COLUMN area_of_activity TEXT')
     if 'is_cold_contact' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN is_cold_contact INTEGER DEFAULT 0')
+    if 'linkedin' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN linkedin TEXT')
 
     c.execute("PRAGMA table_info(commitments)")
     commitment_columns = [col[1] for col in c.fetchall()]
@@ -7810,6 +7813,7 @@ def create_client():
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        linkedin = request.form.get('linkedin', '').strip()
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
@@ -7851,9 +7855,9 @@ def create_client():
         
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, photo_url, is_target, is_cold_contact)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact))
+        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact))
         client_id = c.lastrowid
         ensure_account_for_company(c, company)
         conn.commit()
@@ -7881,6 +7885,7 @@ def update_client(client_id):
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        linkedin = request.form.get('linkedin', '').strip()
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         remove_photo = request.form.get('remove_photo', '0') == '1'
@@ -7909,9 +7914,9 @@ def update_client(client_id):
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
         
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
+        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact, client_id))
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, client_id))
         ensure_account_for_company(c, company)
         conn.commit()
         conn.close()
@@ -8661,6 +8666,7 @@ def import_clients():
             position = row[2].strip() if len(row) > 2 else ''
             email = row[3].strip() if len(row) > 3 else None
             phone = row[4].strip() if len(row) > 4 else None
+            linkedin = row[5].strip() if len(row) > 5 else None
             
             # VALIDACAO 4: Campos obrigatorios nao podem estar vazios
             if not name or not company or not position:
@@ -8682,7 +8688,8 @@ def import_clients():
                 'company': company,
                 'position': position,
                 'email': email,
-                'phone': phone
+                'phone': phone,
+                'linkedin': linkedin
             })
         
         # Se houver erros de validacao, retornar sem importar nada
@@ -8709,10 +8716,10 @@ def import_clients():
                     continue
                 
                 # Inserir novo cliente
-                c.execute('''INSERT INTO clients (name, company, position, email, phone, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                c.execute('''INSERT INTO clients (name, company, position, email, phone, linkedin, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
                          (row_data['name'], row_data['company'], row_data['position'], 
-                          row_data['email'], row_data['phone']))
+                          row_data['email'], row_data['phone'], row_data.get('linkedin')))
                 ensure_account_for_company(c, row_data['company'])
                 imported_count += 1
             
@@ -9244,6 +9251,174 @@ def get_card_all_responses(card_id):
         return jsonify({'error': str(e)}), 500
 
 # Rotas de backup e restore do banco de dados
+def _normalize_merge_text(value):
+    return str(value or '').strip().lower()
+
+
+def _normalize_merge_phone(value):
+    digits = re.sub(r'\D+', '', str(value or ''))
+    if len(digits) >= 11:
+        return digits[-11:]
+    if len(digits) == 10:
+        return f"{digits[:2]}9{digits[2:]}"
+    return digits
+
+
+def _is_empty_merge_value(value):
+    return value is None or str(value).strip() == ''
+
+
+def _merge_clients_from_db(temp_db_path):
+    incoming_conn = sqlite3.connect(str(temp_db_path))
+    incoming_conn.row_factory = sqlite3.Row
+    current_conn = sqlite3.connect(str(DB_PATH))
+    current_conn.row_factory = sqlite3.Row
+
+    try:
+        incoming_cur = incoming_conn.cursor()
+        current_cur = current_conn.cursor()
+
+        incoming_cur.execute('PRAGMA table_info(clients)')
+        incoming_client_columns = [row['name'] for row in incoming_cur.fetchall()]
+        if not incoming_client_columns:
+            return {
+                'processed': 0,
+                'imported': 0,
+                'updated': 0,
+                'unchanged': 0,
+                'conflicts': 0,
+                'skipped': 0,
+                'conflict_rows': []
+            }
+
+        current_cur.execute('PRAGMA table_info(clients)')
+        current_client_columns = [row['name'] for row in current_cur.fetchall()]
+
+        updatable_columns = [col for col in incoming_client_columns if col in current_client_columns and col != 'id']
+        if not updatable_columns:
+            return {
+                'processed': 0,
+                'imported': 0,
+                'updated': 0,
+                'unchanged': 0,
+                'conflicts': 0,
+                'skipped': 0,
+                'conflict_rows': []
+            }
+
+        def load_current_clients():
+            current_cur.execute('SELECT * FROM clients')
+            rows = [dict(row) for row in current_cur.fetchall()]
+            index_name = {}
+            index_email = {}
+            index_phone = {}
+            for row in rows:
+                rid = row.get('id')
+                name_key = _normalize_merge_text(row.get('name'))
+                email_key = _normalize_merge_text(row.get('email'))
+                phone_key = _normalize_merge_phone(row.get('phone'))
+                if name_key:
+                    index_name.setdefault(name_key, rid)
+                if email_key:
+                    index_email.setdefault(email_key, rid)
+                if phone_key:
+                    index_phone.setdefault(phone_key, rid)
+            return rows, index_name, index_email, index_phone
+
+        rows, index_name, index_email, index_phone = load_current_clients()
+        current_by_id = {row['id']: row for row in rows}
+
+        incoming_cur.execute('SELECT * FROM clients ORDER BY id ASC')
+        incoming_rows = [dict(row) for row in incoming_cur.fetchall()]
+
+        summary = {
+            'processed': len(incoming_rows),
+            'imported': 0,
+            'updated': 0,
+            'unchanged': 0,
+            'conflicts': 0,
+            'skipped': 0,
+            'conflict_rows': []
+        }
+
+        for incoming in incoming_rows:
+            name_key = _normalize_merge_text(incoming.get('name'))
+            email_key = _normalize_merge_text(incoming.get('email'))
+            phone_key = _normalize_merge_phone(incoming.get('phone'))
+
+            match_id = None
+            match_basis = None
+            if name_key and name_key in index_name:
+                match_id = index_name[name_key]
+                match_basis = 'name'
+            elif email_key and email_key in index_email:
+                match_id = index_email[email_key]
+                match_basis = 'email'
+            elif phone_key and phone_key in index_phone:
+                match_id = index_phone[phone_key]
+                match_basis = 'phone'
+
+            if not match_id:
+                insert_cols = [col for col in updatable_columns if col in incoming]
+                insert_values = [incoming.get(col) for col in insert_cols]
+                placeholders = ','.join(['?'] * len(insert_cols))
+                current_cur.execute(
+                    f"INSERT INTO clients ({','.join(insert_cols)}) VALUES ({placeholders})",
+                    tuple(insert_values)
+                )
+                new_id = current_cur.lastrowid
+                summary['imported'] += 1
+                if name_key:
+                    index_name.setdefault(name_key, new_id)
+                if email_key:
+                    index_email.setdefault(email_key, new_id)
+                if phone_key:
+                    index_phone.setdefault(phone_key, new_id)
+                continue
+
+            current_row = current_by_id.get(match_id) or {}
+            updates = {}
+            conflict_fields = []
+            for col in updatable_columns:
+                incoming_val = incoming.get(col)
+                current_val = current_row.get(col)
+                if _is_empty_merge_value(incoming_val):
+                    continue
+                if _is_empty_merge_value(current_val):
+                    updates[col] = incoming_val
+                    continue
+                if str(incoming_val).strip() == str(current_val).strip():
+                    continue
+                conflict_fields.append(col)
+
+            if conflict_fields:
+                summary['conflicts'] += 1
+                summary['skipped'] += 1
+                summary['conflict_rows'].append({
+                    'incoming_name': incoming.get('name') or '',
+                    'match_id': match_id,
+                    'match_basis': match_basis or 'none',
+                    'fields': conflict_fields[:8]
+                })
+                continue
+
+            if updates:
+                set_sql = ', '.join([f"{col} = ?" for col in updates.keys()])
+                params = list(updates.values()) + [match_id]
+                current_cur.execute(f'UPDATE clients SET {set_sql} WHERE id = ?', tuple(params))
+                summary['updated'] += 1
+                for col, value in updates.items():
+                    current_row[col] = value
+            else:
+                summary['unchanged'] += 1
+
+        current_conn.commit()
+        return summary
+    finally:
+        incoming_conn.close()
+        current_conn.close()
+
+
 @app.route('/api/backup/database', methods=['GET'])
 def backup_database():
     try:
@@ -9294,6 +9469,10 @@ def restore_database():
         if file.filename == '':
             return jsonify({'error': 'Arquivo inválido'}), 400
         
+        mode = str(request.form.get('mode', 'replace_all') or 'replace_all').strip().lower()
+        if mode not in {'replace_all', 'merge'}:
+            return jsonify({'error': 'Modo de importação inválido. Use replace_all ou merge.'}), 400
+
         uploaded_name = (file.filename or '').strip().lower()
         is_zip_backup = uploaded_name.endswith('.zip')
         is_db_backup = uploaded_name.endswith('.db')
@@ -9355,6 +9534,18 @@ def restore_database():
             temp_path.unlink()
             return jsonify({'error': 'Arquivo não é um banco de dados SQLite válido'}), 400
         
+        if mode == 'merge':
+            merge_summary = _merge_clients_from_db(temp_path)
+            temp_path.unlink(missing_ok=True)
+            temp_zip_path.unlink(missing_ok=True)
+            return jsonify({
+                'message': 'Fusão concluída! Nenhum dado existente foi apagado.',
+                'mode': 'merge',
+                'backup_location': str(backup_path),
+                'backup_uploads_location': str(backup_uploads_path),
+                'merge_summary': merge_summary
+            }), 200
+
         # Substituir banco atual
         shutil.move(str(temp_path), str(DB_PATH))
         print(f'[Database] Banco de dados restaurado com sucesso')
@@ -9392,6 +9583,7 @@ def restore_database():
         
         return jsonify({
             'message': 'Banco de dados restaurado com sucesso! Recarregue a página.',
+            'mode': 'replace_all',
             'backup_location': str(backup_path),
             'backup_uploads_location': str(backup_uploads_path),
             'restored_upload_files': restored_uploads
