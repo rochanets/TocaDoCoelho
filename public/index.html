@@ -7447,6 +7447,13 @@
             setTimeout(() => el.classList.remove('show'), 3000);
         }
 
+        // Show Info
+        function showInfo(message) {
+            // Mantém compatibilidade com fluxos que dependem de aviso não-bloqueante.
+            // Reutiliza o toast de sucesso para evitar criar novo componente visual.
+            showSuccess(message);
+        }
+
         function closeSystemDialog(result = null) {
             const modal = document.getElementById('systemDialogModal');
             if (window._systemDialogResolve) {
