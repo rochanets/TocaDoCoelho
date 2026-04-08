@@ -2470,6 +2470,10 @@
                     <input type="tel" name="phone">
                 </div>
                 <div class="form-group">
+                    <label>LinkedIn (opcional)</label>
+                    <input type="url" name="linkedin" placeholder="https://www.linkedin.com/in/...">
+                </div>
+                <div class="form-group">
                     <label>Foto</label>
                     <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)" style="display:none;">
                     <div style="display:flex; gap:8px; flex-wrap:wrap;"><label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label><button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientAutoPicSearch()"><span class="ai-star-icon">✦</span> AutoPic</button></div>
@@ -5122,6 +5126,7 @@
                 document.getElementById('clientForm').position.value = client.position;
                 document.getElementById('clientForm').email.value = client.email || '';
                 document.getElementById('clientForm').phone.value = client.phone || '';
+                if (document.getElementById('clientForm').linkedin) document.getElementById('clientForm').linkedin.value = client.linkedin || '';
 
                 resetClientPhotoField();
                 if (client.photo_url) {
@@ -7592,6 +7597,7 @@
             document.getElementById('clientForm').name.value = client.name;
             document.getElementById('clientForm').email.value = client.email || '';
             document.getElementById('clientForm').phone.value = formatPhone(client.phone || '');
+            if (document.getElementById('clientForm').linkedin) document.getElementById('clientForm').linkedin.value = client.linkedin || '';
             document.getElementById('clientIsTarget').value = Number(client.is_target) === 1 ? '1' : '0';
             document.getElementById('clientColdContact').value = Number(client.is_cold_contact) === 1 ? '1' : '0';
             document.getElementById('clientForm').area_of_activity.value = client.area_of_activity || '';
@@ -7619,6 +7625,7 @@
             formData.set('company', company);
             formData.set('position', position);
             formData.set('phone', formatPhone(formData.get('phone')));
+            formData.set('linkedin', (formData.get('linkedin') || '').toString().trim());
             formData.set('is_target', document.getElementById('clientIsTarget').value === '1' ? '1' : '0');
 
             try {
@@ -8103,6 +8110,7 @@
             position:     'Cargo',
             email:        'E-mail',
             phone:        'Telefone',
+            linkedin:     'LinkedIn',
             information:  'Informação',
             contact_type: 'Tipo de contato',
             due_date:     'Data',
@@ -8119,7 +8127,7 @@
         const _ITOCA_EDITABLE_FIELDS = {
             kanban_card:         ['title', 'description', 'urgency', 'account_name', 'contact_name'],
             activity:            ['contact_name', 'company', 'description', 'contact_type'],
-            new_contact:         ['name', 'company', 'position', 'email', 'phone'],
+            new_contact:         ['name', 'company', 'position', 'email', 'phone', 'linkedin'],
             wiki_entry:          ['title', 'content', 'category', 'tags'],
             commitment:          ['title', 'due_date', 'due_time', 'contact_name', 'notes'],
             environment_mapping: ['company', 'card_title', 'response'],

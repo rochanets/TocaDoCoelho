@@ -438,6 +438,7 @@ def init_db():
         area_of_activity TEXT,
         email TEXT,
         phone TEXT,
+        linkedin TEXT,
         photo_url TEXT,
         is_target INTEGER DEFAULT 0,
         is_cold_contact INTEGER DEFAULT 0,
@@ -781,6 +782,8 @@ def init_db():
         c.execute('ALTER TABLE clients ADD COLUMN area_of_activity TEXT')
     if 'is_cold_contact' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN is_cold_contact INTEGER DEFAULT 0')
+    if 'linkedin' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN linkedin TEXT')
 
     c.execute("PRAGMA table_info(commitments)")
     commitment_columns = [col[1] for col in c.fetchall()]
@@ -7810,6 +7813,7 @@ def create_client():
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        linkedin = request.form.get('linkedin', '').strip()
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
@@ -7851,9 +7855,9 @@ def create_client():
         
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, photo_url, is_target, is_cold_contact)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact))
+        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact))
         client_id = c.lastrowid
         ensure_account_for_company(c, company)
         conn.commit()
@@ -7881,6 +7885,7 @@ def update_client(client_id):
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        linkedin = request.form.get('linkedin', '').strip()
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         remove_photo = request.form.get('remove_photo', '0') == '1'
@@ -7909,9 +7914,9 @@ def update_client(client_id):
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
         
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
+        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact, client_id))
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, client_id))
         ensure_account_for_company(c, company)
         conn.commit()
         conn.close()
@@ -8434,14 +8439,14 @@ def export_clientes():
         
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id, name, company, position, email, phone, created_at FROM clients ORDER BY name')
+        c.execute('SELECT id, name, company, position, email, phone, linkedin, created_at FROM clients ORDER BY name')
         rows = c.fetchall()
         conn.close()
         
         # Criar CSV em memoria
         output = StringIO()
         writer = csv.writer(output)
-        writer.writerow(['ID', 'Nome', 'Empresa', 'Cargo', 'Email', 'Telefone', 'Data de Cadastro'])
+        writer.writerow(['ID', 'Nome', 'Empresa', 'Cargo', 'Email', 'Telefone', 'LinkedIn', 'Data de Cadastro'])
         
         for row in rows:
             writer.writerow([
@@ -8451,6 +8456,7 @@ def export_clientes():
                 row['position'],
                 row['email'] or '',
                 row['phone'] or '',
+                row['linkedin'] or '',
                 row['created_at']
             ])
         
@@ -8634,6 +8640,7 @@ def import_clients():
             position = row[2].strip() if len(row) > 2 else ''
             email = row[3].strip() if len(row) > 3 else None
             phone = row[4].strip() if len(row) > 4 else None
+            linkedin = row[5].strip() if len(row) > 5 else None
             
             # VALIDACAO 4: Campos obrigatorios nao podem estar vazios
             if not name or not company or not position:
@@ -8655,7 +8662,8 @@ def import_clients():
                 'company': company,
                 'position': position,
                 'email': email,
-                'phone': phone
+                'phone': phone,
+                'linkedin': linkedin
             })
         
         # Se houver erros de validacao, retornar sem importar nada
@@ -8682,10 +8690,10 @@ def import_clients():
                     continue
                 
                 # Inserir novo cliente
-                c.execute('''INSERT INTO clients (name, company, position, email, phone, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                c.execute('''INSERT INTO clients (name, company, position, email, phone, linkedin, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
                          (row_data['name'], row_data['company'], row_data['position'], 
-                          row_data['email'], row_data['phone']))
+                          row_data['email'], row_data['phone'], row_data.get('linkedin')))
                 ensure_account_for_company(c, row_data['company'])
                 imported_count += 1
             
