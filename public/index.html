@@ -1673,6 +1673,10 @@
                 <i class="fas fa-building-user"></i>
                 <span>Gestão de Conta</span>
             </button>
+            <button class="nav-item" onclick="switchTab(event, 'portfolio')">
+                <i class="fas fa-briefcase"></i>
+                <span>Portifólio</span>
+            </button>
             <button class="nav-item" onclick="switchTab(event, 'autotoca')">
                 <i class="fas fa-wand-magic-sparkles"></i>
                 <span>AutoToca</span>
@@ -1930,6 +1934,17 @@
             </div>
             <div style="margin-bottom:12px;"><button class="btn btn-primary" onclick="openAccountModal()"><i class="fas fa-plus"></i> Nova Conta</button></div>
             <div id="accountsContent"></div>
+        </div>
+
+        <div id="portfolio" class="tab-content">
+            <div class="page-header">
+                <h1>Portifólio</h1>
+                <p>Organize ofertas comerciais com pares de dor do cliente e solução.</p>
+            </div>
+            <div style="margin-bottom:12px;">
+                <button class="btn btn-auto-mapping btn-small" onclick="openNewOfferModal()"><span class="ai-star-icon">✦</span> Nova Oferta</button>
+            </div>
+            <div id="portfolioContent"></div>
         </div>
 
         <div id="atividades" class="tab-content">
@@ -2751,6 +2766,7 @@
             else if (tabName === 'mapeamento') loadMapeamento();
             else if (tabName === 'mapeamento-organizacional') loadOrganizationalMapping();
             else if (tabName === 'gestao-conta') loadAccounts();
+            else if (tabName === 'portfolio') loadPortfolio();
             else if (tabName === 'wikitoca') loadWikiTocaData();
             else if (tabName === 'autotoca') loadAutoToca();
             else if (tabName === 'configuracoes') loadSettings();
@@ -9228,6 +9244,282 @@
             if (!r.ok) return showError('Erro ao excluir presença');
             showSuccess('Presença excluída');
             await refreshAccountPresencePanels(accountId);
+        }
+
+        let portfolioOffers = [];
+        const expandedPortfolioOffers = new Set();
+
+        async function loadPortfolio() {
+            const container = document.getElementById('portfolioContent');
+            if (!container) return;
+            container.innerHTML = '<p style="color:#6b7280;">Carregando ofertas...</p>';
+            try {
+                const response = await fetch(`${API_BASE}/portfolio/offers`);
+                const payload = await response.json().catch(() => []);
+                if (!response.ok) throw new Error(payload.error || 'Erro ao carregar ofertas.');
+                portfolioOffers = Array.isArray(payload) ? payload : [];
+                renderPortfolioOffers(portfolioOffers);
+            } catch (error) {
+                container.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(error.message || 'Erro ao carregar portifólio.')}</div>`;
+            }
+        }
+
+        function renderPortfolioOffers(offers = []) {
+            const container = document.getElementById('portfolioContent');
+            if (!container) return;
+            if (!offers.length) {
+                container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📁</div><h3>Nenhuma oferta cadastrada</h3><p>Clique em "Nova Oferta" para analisar um texto/PDF com IA.</p></div>`;
+                return;
+            }
+            container.innerHTML = offers.map(offer => {
+                const offerId = Number(offer.id);
+                const isExpanded = expandedPortfolioOffers.has(offerId);
+                const items = Array.isArray(offer.items) ? offer.items : [];
+                const summary = offer.summary || '';
+                return `
+                    <div class="history-item" style="border:1px solid rgba(16,185,129,.25); border-radius:12px; margin-bottom:10px; background:#fff;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                            <div style="flex:1; min-width:0;">
+                                <div style="display:flex; align-items:center; gap:8px; color:#065f46;">
+                                    <i class="fas fa-briefcase"></i>
+                                    <h3 style="margin:0; font-size:16px;">${escapeHtml(offer.title || 'Oferta sem título')}</h3>
+                                </div>
+                                <p style="margin:6px 0 0; color:#4b5563; ${isExpanded ? '' : 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'}">${escapeHtml(summary || 'Sem resumo.')}</p>
+                            </div>
+                            <div style="display:flex; gap:6px;">
+                                <button class="btn btn-secondary btn-small" onclick="toggleOfferExpand(${offerId})" title="Expandir/Colapsar">${isExpanded ? '▲' : '▼'}</button>
+                                <button class="btn btn-secondary btn-small" onclick="openEditOfferModal(${offerId})" title="Editar"><i class="fas fa-edit"></i></button>
+                                <button class="btn btn-danger btn-small" onclick="deleteOffer(${offerId})" title="Excluir"><i class="fas fa-trash"></i></button>
+                            </div>
+                        </div>
+                        ${isExpanded ? `
+                            <div style="margin-top:10px;" class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr><th>Dor do Cliente</th><th>Solução</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        ${items.length ? items.map(item => `
+                                            <tr>
+                                                <td>${escapeHtml(item.pain || '-')}</td>
+                                                <td>${escapeHtml(item.solution || '-')}</td>
+                                            </tr>
+                                        `).join('') : '<tr><td colspan="2">Nenhum par dor/solução cadastrado.</td></tr>'}
+                                    </tbody>
+                                </table>
+                            </div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleOfferExpand(offerId) {
+            const key = Number(offerId);
+            if (expandedPortfolioOffers.has(key)) expandedPortfolioOffers.delete(key);
+            else expandedPortfolioOffers.add(key);
+            renderPortfolioOffers(portfolioOffers);
+        }
+
+        function closePortfolioModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) modal.remove();
+        }
+
+        function openNewOfferModal() {
+            closePortfolioModal('portfolioNewModal');
+            const html = `
+                <div class="modal active" id="portfolioNewModal" onclick="if(event.target===this) closePortfolioModal('portfolioNewModal')">
+                    <div class="modal-content" style="max-width:760px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title">Nova Oferta</h2>
+                            <button class="modal-close" onclick="closePortfolioModal('portfolioNewModal')">&#215;</button>
+                        </div>
+                        <div class="form-group">
+                            <label>Cole o texto do material</label>
+                            <textarea id="portfolioRawInput" rows="8" placeholder="Cole aqui o texto base para análise..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>OU envie um PDF</label>
+                            <input id="portfolioPdfFile" type="file" accept=".pdf,application/pdf">
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button class="btn btn-secondary" onclick="closePortfolioModal('portfolioNewModal')">Cancelar</button>
+                            <button id="portfolioSubmitBtn" class="btn btn-auto-mapping btn-small" onclick="submitNewOffer()"><span class="ai-star-icon">✦</span> Analisar com IA</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        async function submitNewOffer() {
+            const input = (document.getElementById('portfolioRawInput')?.value || '').trim();
+            const pdfFile = document.getElementById('portfolioPdfFile')?.files?.[0] || null;
+            if (!input && !pdfFile) {
+                showError('Informe um texto ou envie um PDF.');
+                return;
+            }
+            const btn = document.getElementById('portfolioSubmitBtn');
+            const original = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="ai-star-icon">✦</span> Analisando...';
+            }
+            try {
+                const fd = new FormData();
+                if (input) fd.append('raw_input', input);
+                if (pdfFile) fd.append('pdf_file', pdfFile);
+                const response = await fetch(`${API_BASE}/portfolio/offers`, { method: 'POST', body: fd });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Erro ao criar oferta.');
+                closePortfolioModal('portfolioNewModal');
+                showSuccess('Oferta criada com sucesso.');
+                await loadPortfolio();
+            } catch (error) {
+                showError(error.message || 'Erro ao analisar material com IA.');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = original;
+                }
+            }
+        }
+
+        function openEditOfferModal(offerId) {
+            const offer = portfolioOffers.find(item => Number(item.id) === Number(offerId));
+            if (!offer) return showError('Oferta não encontrada.');
+            closePortfolioModal('portfolioEditModal');
+            const items = Array.isArray(offer.items) ? offer.items : [];
+            const html = `
+                <div class="modal active" id="portfolioEditModal" onclick="if(event.target===this) closePortfolioModal('portfolioEditModal')">
+                    <div class="modal-content" style="max-width:920px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title">Editar Oferta</h2>
+                            <button class="modal-close" onclick="closePortfolioModal('portfolioEditModal')">&#215;</button>
+                        </div>
+                        <input type="hidden" id="portfolioEditOfferId" value="${offer.id}">
+                        <div class="form-group">
+                            <label>Título</label>
+                            <input id="portfolioEditTitle" type="text" value="${escapeHtml(offer.title || '')}">
+                        </div>
+                        <div class="form-group">
+                            <label>Resumo</label>
+                            <textarea id="portfolioEditSummary" rows="3">${escapeHtml(offer.summary || '')}</textarea>
+                        </div>
+                        <div class="table-container" style="margin-top:8px;">
+                            <table>
+                                <thead><tr><th>Dor do Cliente</th><th>Solução</th><th style="width:80px;">Ações</th></tr></thead>
+                                <tbody id="portfolioEditItemsBody">
+                                    ${items.map(item => `
+                                        <tr data-item-id="${item.id}">
+                                            <td><textarea rows="2" data-role="pain">${escapeHtml(item.pain || '')}</textarea></td>
+                                            <td><textarea rows="2" data-role="solution">${escapeHtml(item.solution || '')}</textarea></td>
+                                            <td><button class="btn btn-danger btn-small" onclick="deleteOfferItem(${offer.id}, ${item.id})"><i class="fas fa-trash"></i></button></td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-top:10px; gap:8px;">
+                            <button class="btn btn-secondary btn-small" onclick="addOfferItemRow()">+ Adicionar linha</button>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-secondary" onclick="closePortfolioModal('portfolioEditModal')">Cancelar</button>
+                                <button class="btn btn-primary" onclick="saveOfferEdits()">Salvar</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function addOfferItemRow() {
+            const tbody = document.getElementById('portfolioEditItemsBody');
+            if (!tbody) return;
+            tbody.insertAdjacentHTML('beforeend', `
+                <tr data-item-id="">
+                    <td><textarea rows="2" data-role="pain"></textarea></td>
+                    <td><textarea rows="2" data-role="solution"></textarea></td>
+                    <td><button class="btn btn-danger btn-small" onclick="this.closest('tr').remove()"><i class="fas fa-trash"></i></button></td>
+                </tr>
+            `);
+        }
+
+        async function saveOfferEdits() {
+            const offerId = Number(document.getElementById('portfolioEditOfferId')?.value || 0);
+            const title = (document.getElementById('portfolioEditTitle')?.value || '').trim();
+            const summary = (document.getElementById('portfolioEditSummary')?.value || '').trim();
+            if (!offerId || !title) return showError('Título da oferta é obrigatório.');
+
+            try {
+                const offerRes = await fetch(`${API_BASE}/portfolio/offers/${offerId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, summary })
+                });
+                const offerPayload = await offerRes.json().catch(() => ({}));
+                if (!offerRes.ok) throw new Error(offerPayload.error || 'Erro ao salvar oferta.');
+
+                const rows = Array.from(document.querySelectorAll('#portfolioEditItemsBody tr'));
+                for (const [index, row] of rows.entries()) {
+                    const itemId = Number(row.getAttribute('data-item-id') || 0);
+                    const pain = (row.querySelector('[data-role="pain"]')?.value || '').trim();
+                    const solution = (row.querySelector('[data-role="solution"]')?.value || '').trim();
+                    if (!pain && !solution) continue;
+                    const payload = { pain, solution, sort_order: index };
+                    if (itemId > 0) {
+                        await fetch(`${API_BASE}/portfolio/offers/${offerId}/items/${itemId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                    } else {
+                        await fetch(`${API_BASE}/portfolio/offers/${offerId}/items`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                    }
+                }
+
+                closePortfolioModal('portfolioEditModal');
+                showSuccess('Oferta atualizada com sucesso.');
+                await loadPortfolio();
+            } catch (error) {
+                showError(error.message || 'Erro ao salvar alterações da oferta.');
+            }
+        }
+
+        async function deleteOffer(offerId) {
+            const confirmed = window.confirm('Deseja realmente excluir esta oferta?');
+            if (!confirmed) return;
+            try {
+                const response = await fetch(`${API_BASE}/portfolio/offers/${offerId}`, { method: 'DELETE' });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Erro ao excluir oferta.');
+                showSuccess('Oferta excluída com sucesso.');
+                await loadPortfolio();
+            } catch (error) {
+                showError(error.message || 'Erro ao excluir oferta.');
+            }
+        }
+
+        async function deleteOfferItem(offerId, itemId) {
+            const confirmed = window.confirm('Deseja excluir este item dor/solução?');
+            if (!confirmed) return;
+            try {
+                const response = await fetch(`${API_BASE}/portfolio/offers/${offerId}/items/${itemId}`, { method: 'DELETE' });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Erro ao remover item.');
+                const offer = portfolioOffers.find(item => Number(item.id) === Number(offerId));
+                if (offer && Array.isArray(offer.items)) {
+                    offer.items = offer.items.filter(item => Number(item.id) !== Number(itemId));
+                }
+                openEditOfferModal(offerId);
+                showSuccess('Item removido com sucesso.');
+            } catch (error) {
+                showError(error.message || 'Erro ao remover item.');
+            }
         }
 
 

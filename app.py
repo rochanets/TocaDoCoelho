@@ -587,6 +587,26 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS portfolio_offers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        summary TEXT,
+        raw_input TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS portfolio_offer_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        offer_id INTEGER NOT NULL,
+        pain TEXT,
+        solution TEXT,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(offer_id) REFERENCES portfolio_offers(id) ON DELETE CASCADE
+    )''')
     
     # Tabela de compromissos (agenda)
     c.execute('''CREATE TABLE IF NOT EXISTS commitments (
@@ -9851,6 +9871,354 @@ def _account_autofill_via_sai(account_name):
 
     logger.info(f'[AccountAutoFill] Nenhum LLM configurado para empresa: {account_name!r}')
     return {'average_revenue_brl': None, 'professionals_count': None, 'global_presence': '', 'source': 'sem_llm'}
+
+
+def _portfolio_extract_pdf_text(file_storage):
+    if not file_storage:
+        return ''
+    if not PDFPLUMBER_AVAILABLE:
+        raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
+
+    file_bytes = file_storage.read()
+    if not file_bytes:
+        return ''
+
+    text_parts = []
+    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+        for page in (pdf.pages or []):
+            try:
+                text_parts.append(page.extract_text() or '')
+            except Exception:
+                continue
+    return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
+
+
+def _portfolio_parse_llm_raw(raw):
+    def _try_parse_json(value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
+            return {'items': value}
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, list):
+                return {'items': parsed}
+        except Exception:
+            pass
+        m = re.search(r'\{[\s\S]*\}', stripped)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+        return None
+
+    parsed = _try_parse_json(raw) or {}
+    if 'items' not in parsed:
+        for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message', 'answer'):
+            candidate = parsed.get(key)
+            nested = _try_parse_json(candidate)
+            if nested:
+                parsed = nested
+                break
+
+    title = (parsed.get('title') or '').strip() if isinstance(parsed, dict) else ''
+    summary = (parsed.get('summary') or '').strip() if isinstance(parsed, dict) else ''
+    raw_items = parsed.get('items') if isinstance(parsed, dict) else []
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    items = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            pain = (item.get('pain') or '').strip()
+            solution = (item.get('solution') or '').strip()
+            if pain or solution:
+                items.append({'pain': pain, 'solution': solution})
+
+    if not title:
+        title = 'Oferta sem título'
+    if not summary:
+        summary = 'Resumo não informado.'
+    if not items:
+        items = [{'pain': 'Dor não identificada', 'solution': 'Solução não identificada'}]
+    return {'title': title, 'summary': summary, 'items': items}
+
+
+def _portfolio_generate_offer_from_llm(raw_input):
+    llm_prompt = (
+        "Você é um especialista em posicionamento comercial B2B. "
+        "Analise o material abaixo e extraia um portfólio comercial em português (Brasil). "
+        "Retorne SOMENTE JSON válido no formato: "
+        '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
+        '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}. '
+        "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto; "
+        "use frases curtas e claras; não inclua markdown.\n\n"
+        f"MATERIAL:\n{raw_input[:30000]}"
+    )
+
+    raw = _sai_simple_prompt(llm_prompt)
+    source = 'SAI'
+
+    if raw is None:
+        or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+        if not or_key:
+            return None, 'sem_llm'
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista comercial. Responda SEMPRE e SOMENTE com JSON válido.'},
+                    {'role': 'user', 'content': llm_prompt}
+                ],
+                'temperature': 0.2
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            source = 'OpenRouter'
+        except Exception as e:
+            logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}')
+            return None, 'sem_llm'
+
+    return _portfolio_parse_llm_raw(raw), source
+
+
+def _portfolio_fetch_offer(c, offer_id):
+    c.execute('SELECT * FROM portfolio_offers WHERE id = ?', (offer_id,))
+    offer = dict_from_row(c.fetchone())
+    if not offer:
+        return None
+    c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer_id,))
+    offer['items'] = [dict_from_row(row) for row in c.fetchall()]
+    return offer
+
+
+@app.route('/api/portfolio/offers', methods=['GET'])
+def list_portfolio_offers():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM portfolio_offers ORDER BY datetime(created_at) DESC, id DESC')
+        offers = [dict_from_row(row) for row in c.fetchall()]
+        for offer in offers:
+            c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer['id'],))
+            offer['items'] = [dict_from_row(item) for item in c.fetchall()]
+        conn.close()
+        return jsonify(offers)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao listar ofertas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers', methods=['POST'])
+def create_portfolio_offer():
+    try:
+        input_text = (request.form.get('raw_input') or '').strip()
+        file_obj = request.files.get('pdf_file')
+        pdf_text = _portfolio_extract_pdf_text(file_obj) if file_obj else ''
+        raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+
+        if not raw_input:
+            return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
+
+        parsed, source = _portfolio_generate_offer_from_llm(raw_input)
+        if not parsed:
+            return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+            (parsed['title'], parsed['summary'], raw_input)
+        )
+        offer_id = c.lastrowid
+        for idx, item in enumerate(parsed.get('items') or []):
+            c.execute(
+                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
+            )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if offer is None:
+            return jsonify({'error': 'Falha ao carregar oferta criada.'}), 500
+        offer['llm_source'] = source
+        return jsonify(offer), 201
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao criar oferta: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>', methods=['PUT'])
+def update_portfolio_offer(offer_id):
+    try:
+        data = request.get_json() or {}
+        title = (data.get('title') or '').strip()
+        summary = (data.get('summary') or '').strip()
+        if not title:
+            return jsonify({'error': 'Título é obrigatório.'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        c.execute(
+            'UPDATE portfolio_offers SET title = ?, summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            (title, summary, offer_id)
+        )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        return jsonify(offer)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao atualizar oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>', methods=['DELETE'])
+def delete_portfolio_offer(offer_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
+        c.execute('DELETE FROM portfolio_offers WHERE id = ?', (offer_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Oferta removida com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao remover oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>/items/<int:item_id>', methods=['PUT'])
+def update_portfolio_offer_item(offer_id, item_id):
+    try:
+        data = request.get_json() or {}
+        pain = (data.get('pain') or '').strip()
+        solution = (data.get('solution') or '').strip()
+        sort_order = data.get('sort_order')
+        if not pain and not solution:
+            return jsonify({'error': 'Informe dor e/ou solução.'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Item não encontrado.'}), 404
+
+        if sort_order is None:
+            c.execute(
+                '''UPDATE portfolio_offer_items
+                   SET pain = ?, solution = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND offer_id = ?''',
+                (pain, solution, item_id, offer_id)
+            )
+        else:
+            try:
+                sort_order_int = int(sort_order)
+            except Exception:
+                return jsonify({'error': 'sort_order inválido.'}), 400
+            c.execute(
+                '''UPDATE portfolio_offer_items
+                   SET pain = ?, solution = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND offer_id = ?''',
+                (pain, solution, sort_order_int, item_id, offer_id)
+            )
+
+        conn.commit()
+        c.execute('SELECT * FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(item)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao atualizar item {item_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>/items', methods=['POST'])
+def create_portfolio_offer_item(offer_id):
+    try:
+        data = request.get_json() or {}
+        pain = (data.get('pain') or '').strip()
+        solution = (data.get('solution') or '').strip()
+        if not pain and not solution:
+            return jsonify({'error': 'Informe dor e/ou solução.'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        c.execute('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
+        max_sort = (dict_from_row(c.fetchone()) or {}).get('max_sort', -1)
+        next_sort = int(max_sort) + 1
+        c.execute(
+            '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+            (offer_id, pain, solution, next_sort)
+        )
+        item_id = c.lastrowid
+        conn.commit()
+        c.execute('SELECT * FROM portfolio_offer_items WHERE id = ?', (item_id,))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(item), 201
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao criar item para oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>/items/<int:item_id>', methods=['DELETE'])
+def delete_portfolio_offer_item(offer_id, item_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Item não encontrado.'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Item removido com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao remover item {item_id}: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/accounts/autofill', methods=['POST'])
