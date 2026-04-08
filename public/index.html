@@ -2037,6 +2037,20 @@
                     Exportar
                 </button>
             </div>
+            <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="min-width:280px; flex:1;">
+                    <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#0d3a52;">Filtrar conta</label>
+                    <input id="orgAccountFilterInput" type="text" placeholder="Digite o nome da conta" oninput="setOrgAccountFilter(this.value)" style="width:100%; padding:10px 12px; border:1px solid #bfe5f1; border-radius:10px; background:#fff; color:#0f172a;">
+                </div>
+                <div style="min-width:220px;">
+                    <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#0d3a52;">Agrupar colunas por</label>
+                    <select id="orgGroupingModeSelect" onchange="setOrgGroupingMode(this.value)" style="width:100%; padding:10px 12px; border:1px solid #bfe5f1; border-radius:10px; background:#fff; color:#0f172a;">
+                        <option value="position">Cargo</option>
+                        <option value="area">Área de Atuação</option>
+                        <option value="position_area">Cargo + Área de Atuação</option>
+                    </select>
+                </div>
+            </div>
             <div id="organizationalContent"></div>
         </div>
 
@@ -8692,6 +8706,28 @@
             return String(name || '').trim().toLowerCase();
         }
 
+        let orgAccountFilter = '';
+        let orgGroupingMode = 'position'; // padrão da tela
+
+        function setOrgAccountFilter(value) {
+            orgAccountFilter = String(value || '');
+            loadOrganizationalMapping();
+        }
+
+        function setOrgGroupingMode(mode) {
+            const allowedModes = new Set(['position', 'area', 'position_area']);
+            orgGroupingMode = allowedModes.has(mode) ? mode : 'position';
+            loadOrganizationalMapping();
+        }
+
+        function getOrgGroupLabel(client, mode) {
+            const position = String(client?.position || '').trim() || 'Não informado';
+            const area = String(client?.area_of_activity || '').trim() || 'Não informado';
+            if (mode === 'area') return area;
+            if (mode === 'position_area') return `${position} + ${area}`;
+            return position;
+        }
+
         async function loadOrganizationalMapping() {
             const [clientsRes, accountsRes] = await Promise.all([
                 fetch(`${API_BASE}/clientes`),
@@ -8710,23 +8746,26 @@
             data.forEach(c => { if (c.company) companySet.add(c.company); });
             accounts.forEach(a => { if (a.name) companySet.add(a.name); });
 
-            const companies = [...companySet].sort((a, b) => {
-                const accA = accountByCompany[normalizeCompanyKey(a)] || {};
-                const accB = accountByCompany[normalizeCompanyKey(b)] || {};
-                const targetDiff = Number(accB.is_target || 0) - Number(accA.is_target || 0);
-                if (targetDiff !== 0) return targetDiff;
-                return String(a || '').localeCompare(String(b || ''), 'pt-BR');
-            });
+            const companies = [...companySet]
+                .filter(company => String(company || '').toLowerCase().includes(orgAccountFilter.trim().toLowerCase()))
+                .sort((a, b) => String(a || '').localeCompare(String(b || ''), 'pt-BR'));
 
-            const positions = [...new Set(data.map(c => c.position).filter(Boolean))].sort((a,b)=>{ const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b); return r !== 0 ? r : a.localeCompare(b,'pt-BR'); });
-            let html = '<div class="org-map-container"><div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + positions.map(p=>`<th>${escapeHtml(p)}</th>`).join('') + '</tr></thead><tbody>';
+            const groupLabels = [...new Set(data.map(c => getOrgGroupLabel(c, orgGroupingMode)).filter(Boolean))]
+                .sort((a, b) => {
+                    const r = getCompanyImportanceRank(a) - getCompanyImportanceRank(b);
+                    return r !== 0 ? r : a.localeCompare(b, 'pt-BR');
+                });
+            let html = '<div class="org-map-container"><div class="org-table-wrap"><table class="org-table"><thead><tr><th>Cliente/Empresa</th>' + groupLabels.map(label=>`<th>${escapeHtml(label)}</th>`).join('') + '</tr></thead><tbody>';
             companies.forEach(company => {
                 const account = accountByCompany[normalizeCompanyKey(company)] || {};
                 const companyLogo = account.logo_url || '/logo-coelho.png';
                 html += `<tr><td><div style="display:flex; align-items:center; gap:8px;"><img src="${companyLogo}" style="width:24px; height:24px; border-radius:6px; object-fit:contain; border:1px solid rgba(96,187,217,.35); background:#fff;"><strong style="color:#fff;">${escapeHtml(company)}</strong></div></td>`;
-                positions.forEach(position => {
+                groupLabels.forEach(label => {
                     const people = data
-                        .filter(c => String(c.company || '').toLowerCase() === String(company || '').toLowerCase() && c.position===position)
+                        .filter(c =>
+                            String(c.company || '').toLowerCase() === String(company || '').toLowerCase()
+                            && getOrgGroupLabel(c, orgGroupingMode) === label
+                        )
                         .sort((a,b) => {
                             const targetDiff = Number(b.is_target || 0) - Number(a.is_target || 0);
                             if (targetDiff !== 0) return targetDiff;
@@ -8737,8 +8776,9 @@
                         html += `<td>${cell}</td>`;
                     } else {
                         const safeCompany = escapeHtml(company);
-                        const safePosition = escapeHtml(position);
-                        html += `<td><button class="org-add-btn" data-company="${safeCompany}" data-position="${safePosition}" title="Cadastrar ${safePosition} em ${safeCompany}">+</button></td>`;
+                        const suggestedPosition = orgGroupingMode === 'position' ? label : '';
+                        const safeSuggestedPosition = escapeHtml(suggestedPosition);
+                        html += `<td><button class="org-add-btn" data-company="${safeCompany}" data-position="${safeSuggestedPosition}" title="Cadastrar novo contato em ${safeCompany}">+</button></td>`;
                     }
                 });
                 html += '</tr>';
@@ -8746,6 +8786,8 @@
             html += '</tbody></table></div></div>';
             const container = document.getElementById('organizationalContent');
             container.innerHTML = html;
+            const groupingSelect = document.getElementById('orgGroupingModeSelect');
+            if (groupingSelect && groupingSelect.value !== orgGroupingMode) groupingSelect.value = orgGroupingMode;
             // Delegação de eventos para os botões +
             container.querySelectorAll('.org-add-btn').forEach(btn => {
                 btn.addEventListener('click', function() {
@@ -8776,7 +8818,9 @@
             toggleOtherField('company');
             // Pré-selecionar cargo
             const pSel = document.getElementById('clientPositionSelect');
-            if (pSel && [...pSel.options].some(o => o.value === position)) {
+            if (pSel && !position) {
+                pSel.value = '';
+            } else if (pSel && [...pSel.options].some(o => o.value === position)) {
                 pSel.value = position;
             } else if (pSel) {
                 pSel.value = '__other__';
