@@ -240,6 +240,21 @@
             text-align: center;
         }
 
+        /* Ícones coloridos por módulo */
+        .nav-iata i          { color: #7c3aed !important; }  /* roxo — IA/assistente */
+        .nav-dashboard i     { color: #2563eb !important; }  /* azul — visão geral */
+        .nav-wikitoca i      { color: #d97706 !important; }  /* âmbar — conhecimento */
+        .nav-kanban i        { color: #4f46e5 !important; }  /* índigo — gestão de tarefas */
+        .nav-mapeamento i    { color: #0891b2 !important; }  /* ciano — mapa de ambiente */
+        .nav-mapeamento-org i{ color: #64748b !important; }  /* ardósia — organograma */
+        .nav-gestao-conta i  { color: #ea580c !important; }  /* laranja — empresa/conta */
+        .nav-autotoca i      { color: #c026d3 !important; }  /* fúcsia — automação mágica */
+        .nav-atividades i    { color: #16a34a !important; }  /* verde — desempenho */
+        .nav-agenda i        { color: #dc2626 !important; }  /* vermelho — agenda/datas */
+        .nav-clientes i      { color: #0284c7 !important; }  /* azul-céu — contatos */
+        .nav-report i        { color: #78716c !important; }  /* pedra — dados/backup */
+        .nav-config i        { color: #71717a !important; }  /* zinco — configurações */
+
         .sidebar-footer {
             padding: 16px;
             border-top: 1px solid rgba(52, 211, 153, 0.2);
@@ -1645,55 +1660,55 @@
         </div>
 
         <nav class="sidebar-nav">
-            <button class="nav-item" onclick="switchTab(event, 'iata')">
+            <button class="nav-item nav-iata" onclick="switchTab(event, 'iata')">
                 <i class="fas fa-robot"></i>
                 <span>iToca</span>
             </button>
-            <button class="nav-item active" onclick="switchTab(event, 'dashboard')">
+            <button class="nav-item nav-dashboard active" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'wikitoca')">
+            <button class="nav-item nav-wikitoca" onclick="switchTab(event, 'wikitoca')">
                 <i class="fas fa-book-open"></i>
                 <span>WikiToca</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'kanban')">
+            <button class="nav-item nav-kanban" onclick="switchTab(event, 'kanban')">
                 <i class="fas fa-table-columns"></i>
                 <span>Kanban</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'mapeamento')">
+            <button class="nav-item nav-mapeamento" onclick="switchTab(event, 'mapeamento')">
                 <i class="fas fa-map-marked-alt"></i>
                 <span>Mapeamento de Ambiente</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'mapeamento-organizacional')">
+            <button class="nav-item nav-mapeamento-org" onclick="switchTab(event, 'mapeamento-organizacional')">
                 <i class="fas fa-sitemap"></i>
                 <span>Mapeamento Organizacional</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'gestao-conta')">
+            <button class="nav-item nav-gestao-conta" onclick="switchTab(event, 'gestao-conta')">
                 <i class="fas fa-building-user"></i>
                 <span>Gestão de Conta</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'autotoca')">
+            <button class="nav-item nav-autotoca" onclick="switchTab(event, 'autotoca')">
                 <i class="fas fa-wand-magic-sparkles"></i>
                 <span>AutoToca</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'atividades')">
+            <button class="nav-item nav-atividades" onclick="switchTab(event, 'atividades')">
                 <i class="fas fa-chart-line"></i>
                 <span>Atividades</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'agenda')">
+            <button class="nav-item nav-agenda" onclick="switchTab(event, 'agenda')">
                 <i class="fas fa-calendar-alt"></i>
                 <span>Agenda</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'clientes')">
+            <button class="nav-item nav-clientes" onclick="switchTab(event, 'clientes')">
                 <i class="fas fa-users"></i>
                 <span>Gestão de Contatos</span>
             </button>
-            <button class="nav-item" onclick="switchTab(event, 'report')">
+            <button class="nav-item nav-report" onclick="switchTab(event, 'report')">
                 <i class="fas fa-database"></i>
                 <span>Report & Backup</span>
             </button>
-            <button class="nav-item nav-item-settings" onclick="switchTab(event, 'configuracoes')">
+            <button class="nav-item nav-config nav-item-settings" onclick="switchTab(event, 'configuracoes')">
                 <i class="fas fa-cog"></i>
                 <span>Configurações</span>
             </button>
