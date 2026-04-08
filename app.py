@@ -9217,6 +9217,174 @@ def get_card_all_responses(card_id):
         return jsonify({'error': str(e)}), 500
 
 # Rotas de backup e restore do banco de dados
+def _normalize_merge_text(value):
+    return str(value or '').strip().lower()
+
+
+def _normalize_merge_phone(value):
+    digits = re.sub(r'\D+', '', str(value or ''))
+    if len(digits) >= 11:
+        return digits[-11:]
+    if len(digits) == 10:
+        return f"{digits[:2]}9{digits[2:]}"
+    return digits
+
+
+def _is_empty_merge_value(value):
+    return value is None or str(value).strip() == ''
+
+
+def _merge_clients_from_db(temp_db_path):
+    incoming_conn = sqlite3.connect(str(temp_db_path))
+    incoming_conn.row_factory = sqlite3.Row
+    current_conn = sqlite3.connect(str(DB_PATH))
+    current_conn.row_factory = sqlite3.Row
+
+    try:
+        incoming_cur = incoming_conn.cursor()
+        current_cur = current_conn.cursor()
+
+        incoming_cur.execute('PRAGMA table_info(clients)')
+        incoming_client_columns = [row['name'] for row in incoming_cur.fetchall()]
+        if not incoming_client_columns:
+            return {
+                'processed': 0,
+                'imported': 0,
+                'updated': 0,
+                'unchanged': 0,
+                'conflicts': 0,
+                'skipped': 0,
+                'conflict_rows': []
+            }
+
+        current_cur.execute('PRAGMA table_info(clients)')
+        current_client_columns = [row['name'] for row in current_cur.fetchall()]
+
+        updatable_columns = [col for col in incoming_client_columns if col in current_client_columns and col != 'id']
+        if not updatable_columns:
+            return {
+                'processed': 0,
+                'imported': 0,
+                'updated': 0,
+                'unchanged': 0,
+                'conflicts': 0,
+                'skipped': 0,
+                'conflict_rows': []
+            }
+
+        def load_current_clients():
+            current_cur.execute('SELECT * FROM clients')
+            rows = [dict(row) for row in current_cur.fetchall()]
+            index_name = {}
+            index_email = {}
+            index_phone = {}
+            for row in rows:
+                rid = row.get('id')
+                name_key = _normalize_merge_text(row.get('name'))
+                email_key = _normalize_merge_text(row.get('email'))
+                phone_key = _normalize_merge_phone(row.get('phone'))
+                if name_key:
+                    index_name.setdefault(name_key, rid)
+                if email_key:
+                    index_email.setdefault(email_key, rid)
+                if phone_key:
+                    index_phone.setdefault(phone_key, rid)
+            return rows, index_name, index_email, index_phone
+
+        rows, index_name, index_email, index_phone = load_current_clients()
+        current_by_id = {row['id']: row for row in rows}
+
+        incoming_cur.execute('SELECT * FROM clients ORDER BY id ASC')
+        incoming_rows = [dict(row) for row in incoming_cur.fetchall()]
+
+        summary = {
+            'processed': len(incoming_rows),
+            'imported': 0,
+            'updated': 0,
+            'unchanged': 0,
+            'conflicts': 0,
+            'skipped': 0,
+            'conflict_rows': []
+        }
+
+        for incoming in incoming_rows:
+            name_key = _normalize_merge_text(incoming.get('name'))
+            email_key = _normalize_merge_text(incoming.get('email'))
+            phone_key = _normalize_merge_phone(incoming.get('phone'))
+
+            match_id = None
+            match_basis = None
+            if name_key and name_key in index_name:
+                match_id = index_name[name_key]
+                match_basis = 'name'
+            elif email_key and email_key in index_email:
+                match_id = index_email[email_key]
+                match_basis = 'email'
+            elif phone_key and phone_key in index_phone:
+                match_id = index_phone[phone_key]
+                match_basis = 'phone'
+
+            if not match_id:
+                insert_cols = [col for col in updatable_columns if col in incoming]
+                insert_values = [incoming.get(col) for col in insert_cols]
+                placeholders = ','.join(['?'] * len(insert_cols))
+                current_cur.execute(
+                    f"INSERT INTO clients ({','.join(insert_cols)}) VALUES ({placeholders})",
+                    tuple(insert_values)
+                )
+                new_id = current_cur.lastrowid
+                summary['imported'] += 1
+                if name_key:
+                    index_name.setdefault(name_key, new_id)
+                if email_key:
+                    index_email.setdefault(email_key, new_id)
+                if phone_key:
+                    index_phone.setdefault(phone_key, new_id)
+                continue
+
+            current_row = current_by_id.get(match_id) or {}
+            updates = {}
+            conflict_fields = []
+            for col in updatable_columns:
+                incoming_val = incoming.get(col)
+                current_val = current_row.get(col)
+                if _is_empty_merge_value(incoming_val):
+                    continue
+                if _is_empty_merge_value(current_val):
+                    updates[col] = incoming_val
+                    continue
+                if str(incoming_val).strip() == str(current_val).strip():
+                    continue
+                conflict_fields.append(col)
+
+            if conflict_fields:
+                summary['conflicts'] += 1
+                summary['skipped'] += 1
+                summary['conflict_rows'].append({
+                    'incoming_name': incoming.get('name') or '',
+                    'match_id': match_id,
+                    'match_basis': match_basis or 'none',
+                    'fields': conflict_fields[:8]
+                })
+                continue
+
+            if updates:
+                set_sql = ', '.join([f"{col} = ?" for col in updates.keys()])
+                params = list(updates.values()) + [match_id]
+                current_cur.execute(f'UPDATE clients SET {set_sql} WHERE id = ?', tuple(params))
+                summary['updated'] += 1
+                for col, value in updates.items():
+                    current_row[col] = value
+            else:
+                summary['unchanged'] += 1
+
+        current_conn.commit()
+        return summary
+    finally:
+        incoming_conn.close()
+        current_conn.close()
+
+
 @app.route('/api/backup/database', methods=['GET'])
 def backup_database():
     try:
@@ -9267,6 +9435,10 @@ def restore_database():
         if file.filename == '':
             return jsonify({'error': 'Arquivo inválido'}), 400
         
+        mode = str(request.form.get('mode', 'replace_all') or 'replace_all').strip().lower()
+        if mode not in {'replace_all', 'merge'}:
+            return jsonify({'error': 'Modo de importação inválido. Use replace_all ou merge.'}), 400
+
         uploaded_name = (file.filename or '').strip().lower()
         is_zip_backup = uploaded_name.endswith('.zip')
         is_db_backup = uploaded_name.endswith('.db')
@@ -9328,6 +9500,18 @@ def restore_database():
             temp_path.unlink()
             return jsonify({'error': 'Arquivo não é um banco de dados SQLite válido'}), 400
         
+        if mode == 'merge':
+            merge_summary = _merge_clients_from_db(temp_path)
+            temp_path.unlink(missing_ok=True)
+            temp_zip_path.unlink(missing_ok=True)
+            return jsonify({
+                'message': 'Fusão concluída! Nenhum dado existente foi apagado.',
+                'mode': 'merge',
+                'backup_location': str(backup_path),
+                'backup_uploads_location': str(backup_uploads_path),
+                'merge_summary': merge_summary
+            }), 200
+
         # Substituir banco atual
         shutil.move(str(temp_path), str(DB_PATH))
         print(f'[Database] Banco de dados restaurado com sucesso')
@@ -9365,6 +9549,7 @@ def restore_database():
         
         return jsonify({
             'message': 'Banco de dados restaurado com sucesso! Recarregue a página.',
+            'mode': 'replace_all',
             'backup_location': str(backup_path),
             'backup_uploads_location': str(backup_uploads_path),
             'restored_upload_files': restored_uploads

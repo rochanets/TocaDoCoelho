@@ -5320,6 +5320,11 @@
             if (!file) return;
             const lowerName = (file.name || '').toLowerCase();
             const isZip = lowerName.endsWith('.zip');
+            const mergeMode = await uiConfirm(
+                'Escolha o modo de importação:\n\nOK = Fundir bancos (recomendado, não apaga dados atuais).\nCancelar = Substituir tudo (restauração completa).',
+                'Importar Banco'
+            );
+            const importMode = mergeMode ? 'merge' : 'replace_all';
             
             if (!lowerName.endsWith('.db') && !lowerName.endsWith('.zip')) {
                 showError('Por favor, selecione um arquivo .db ou .zip válido');
@@ -5337,14 +5342,22 @@
                 }
             }
             
-            if (!await uiConfirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?', 'Atenção')) {
-                event.target.value = '';
-                return;
+            if (importMode === 'replace_all') {
+                if (!await uiConfirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?', 'Atenção')) {
+                    event.target.value = '';
+                    return;
+                }
+            } else {
+                if (!await uiConfirm('Você escolheu FUNDIR bancos. O sistema vai comparar por Nome, depois Email e depois Telefone. Deseja continuar?', 'Confirmar fusão')) {
+                    event.target.value = '';
+                    return;
+                }
             }
             
             try {
                 const formData = new FormData();
                 formData.append('file', file);
+                formData.append('mode', importMode);
                 
                 const response = await fetch(`${API_BASE}/restore/database`, {
                     method: 'POST',
@@ -5357,12 +5370,19 @@
                     throw new Error(result.error || 'Erro ao restaurar banco');
                 }
                 
-                showSuccess(result.message);
-                
-                // Recarregar a página após 2 segundos
-                setTimeout(() => {
-                    window.location.reload();
-                }, 2000);
+                if (result.mode === 'merge') {
+                    const s = result.merge_summary || {};
+                    showSuccess(
+                        `${result.message} Processadas: ${s.processed || 0}, novas: ${s.imported || 0}, atualizadas: ${s.updated || 0}, conflitos ignorados: ${s.conflicts || 0}.`
+                    );
+                } else {
+                    showSuccess(result.message);
+                    
+                    // Recarregar a página após 2 segundos
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                }
                 
             } catch (error) {
                 showError(error.message || 'Erro ao restaurar banco de dados');
