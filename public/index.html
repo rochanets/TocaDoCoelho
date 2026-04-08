@@ -2090,6 +2090,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('resumo-linkedin')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
+                <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
             </div>
             <div id="autoTocaResumoLinkedin" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
                 <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
@@ -2183,6 +2184,28 @@
                         loading="lazy"
                         referrerpolicy="strict-origin-when-cross-origin">
                     </iframe>
+                </div>
+            </div>
+            <div id="autoTocaMalaDireta" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
+                <h3 style="margin-bottom:8px; color:#065f46;">Mala Direta</h3>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Filtre os contatos, selecione quem receberá e abra os rascunhos de e-mail personalizados em lote.</p>
+                <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="form-group" style="margin:0; min-width:220px;">
+                        <label>Modo de filtro</label>
+                        <select id="atMailingMode" onchange="onAutoTocaMailingModeChange()">
+                            <option value="position">Por Cargo</option>
+                            <option value="area">Por Área de Atuação</option>
+                            <option value="company">Por Conta</option>
+                            <option value="manual">Manual</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin:0; min-width:260px; flex:1;" id="atMailingFilterWrap">
+                        <label id="atMailingFilterLabel">Cargo</label>
+                        <select id="atMailingFilterValue"></select>
+                    </div>
+                    <button class="btn btn-auto-mapping" type="button" onclick="openAutoTocaMailingPreview()">
+                        <span class="ai-star-icon">✦</span> Selecionar Contatos
+                    </button>
                 </div>
             </div>
         </div>
@@ -2443,6 +2466,10 @@
                     <input type="tel" name="phone">
                 </div>
                 <div class="form-group">
+                    <label>LinkedIn (opcional)</label>
+                    <input type="url" name="linkedin" placeholder="https://www.linkedin.com/in/...">
+                </div>
+                <div class="form-group">
                     <label>Foto</label>
                     <input type="file" id="photoInput" name="photo" accept="image/*" onchange="previewPhoto(event)" style="display:none;">
                     <div style="display:flex; gap:8px; flex-wrap:wrap;"><label for="photoInput" class="btn btn-secondary btn-small" style="display:inline-flex; width:fit-content;"><i class="fas fa-image"></i>&nbsp;Selecionar foto</label><button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientAutoPicSearch()"><span class="ai-star-icon">✦</span> AutoPic</button></div>
@@ -2687,6 +2714,10 @@
         let kanbanDragState = { movedAt: 0, snapshot: null, sorting: false, rollbackCount: 0, requestInFlight: false };
         let kanbanSortableInstances = new Map();
         let _gestaoContaCurrentSubTab = 'accounts';
+        let autoTocaMailingClients = [];
+        let autoTocaMailingPositions = [];
+        let autoTocaMailingAreas = [];
+        let autoTocaMailingSelection = [];
 
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
@@ -3202,12 +3233,14 @@
             if (extensionNotice) extensionNotice.style.display = 'none';
             if (extensionStatus) extensionStatus.style.display = 'none';
             await loadAutoTocaSupportFiles();
+            await loadAutoTocaMailingData();
         }
 
         function toggleAutoTocaAutomation(key) {
             const panels = {
                 'chamado-juridico': 'autoTocaChamadoJuridico',
-                'resumo-linkedin': 'autoTocaResumoLinkedin'
+                'resumo-linkedin': 'autoTocaResumoLinkedin',
+                'mala-direta': 'autoTocaMalaDireta'
             };
             const targetId = panels[key];
             if (!targetId) return;
@@ -3221,6 +3254,191 @@
             });
             // Abre o selecionado (toggle)
             if (isOpening) target.style.display = 'block';
+        }
+
+        async function loadAutoTocaMailingData() {
+            try {
+                const [clientsResp, positionsResp, areasResp] = await Promise.all([
+                    fetch(`${API_BASE}/clients`),
+                    fetch(`${API_BASE}/autotoca/mala-direta/positions`),
+                    fetch(`${API_BASE}/autotoca/mala-direta/areas`)
+                ]);
+
+                autoTocaMailingClients = clientsResp.ok ? await clientsResp.json() : [];
+                autoTocaMailingPositions = positionsResp.ok ? await positionsResp.json() : [];
+                autoTocaMailingAreas = areasResp.ok ? await areasResp.json() : [];
+                onAutoTocaMailingModeChange();
+            } catch (error) {
+                autoTocaMailingClients = [];
+                autoTocaMailingPositions = [];
+                autoTocaMailingAreas = [];
+            }
+        }
+
+        function onAutoTocaMailingModeChange() {
+            const modeEl = document.getElementById('atMailingMode');
+            const wrap = document.getElementById('atMailingFilterWrap');
+            if (!modeEl || !wrap) return;
+
+            const mode = modeEl.value;
+            if (mode === 'manual') {
+                wrap.innerHTML = `
+                    <label id="atMailingFilterLabel">Buscar contato</label>
+                    <input id="atMailingManualSearch" type="text" placeholder="Digite nomes separados por vírgula">
+                `;
+                return;
+            }
+
+            wrap.innerHTML = `
+                <label id="atMailingFilterLabel"></label>
+                <select id="atMailingFilterValue"></select>
+            `;
+            const label = document.getElementById('atMailingFilterLabel');
+            const filterEl = document.getElementById('atMailingFilterValue');
+
+            const options = mode === 'position'
+                ? autoTocaMailingPositions
+                : mode === 'area'
+                    ? autoTocaMailingAreas
+                    : Array.from(new Set((autoTocaMailingClients || []).map(c => (c.company || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            const modeLabel = mode === 'position' ? 'Cargo' : mode === 'area' ? 'Área de Atuação' : 'Conta';
+            label.textContent = modeLabel;
+            filterEl.innerHTML = options.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        }
+
+        function _getAutoTocaFilteredMailingClients() {
+            const mode = document.getElementById('atMailingMode')?.value || 'position';
+            if (mode === 'manual') {
+                const q = (document.getElementById('atMailingManualSearch')?.value || '').trim().toLowerCase();
+                const terms = q.split(',').map(s => s.trim()).filter(Boolean);
+                if (!terms.length) return [];
+                return autoTocaMailingClients.filter(c => terms.some(term => String(c.name || '').toLowerCase().includes(term)));
+            }
+
+            const selected = (document.getElementById('atMailingFilterValue')?.value || '').trim();
+            if (!selected) return [];
+            if (mode === 'position') return autoTocaMailingClients.filter(c => (c.position || '') === selected);
+            if (mode === 'area') return autoTocaMailingClients.filter(c => (c.area_of_activity || '') === selected);
+            return autoTocaMailingClients.filter(c => (c.company || '') === selected);
+        }
+
+        function openAutoTocaMailingPreview() {
+            const filtered = _getAutoTocaFilteredMailingClients();
+            if (!filtered.length) return showInfo('Nenhum contato encontrado para esse filtro.');
+            autoTocaMailingSelection = filtered.map(c => c.id);
+
+            let html = `<div class="modal active" id="autoTocaMailingPreviewModal" onclick="if(event.target===this) closeAutoTocaMailingPreview()">`;
+            html += `<div class="modal-content" style="max-width:920px;">`;
+            html += `<h2 style="color:#047857;">Mala Direta — Seleção de Contatos</h2>`;
+            html += `<p style="color:#6b7280; margin-bottom:12px;">Desmarque quem não deve receber. Contatos sem e-mail serão ignorados no envio.</p>`;
+            html += `<div style="max-height:420px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(250px,1fr)); gap:10px;">`;
+            html += filtered.map(c => {
+                const noEmail = !String(c.email || '').trim();
+                return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noEmail ? 'rgba(245,158,11,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noEmail ? 'rgba(255,251,235,.7)' : 'rgba(236,253,245,.5)'};">
+                    <input type="checkbox" checked onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
+                    <img src="${c.photo_url || '/logo-coelho.png'}" style="width:40px;height:40px;border-radius:999px;object-fit:cover;">
+                    <div style="min-width:0;">
+                        <div style="font-weight:700; color:#065f46;">${escapeHtml(c.name || '-')}</div>
+                        <div style="font-size:12px;color:#6b7280;">${escapeHtml(c.company || '-')}</div>
+                        <div style="font-size:12px;color:#9ca3af;">${escapeHtml(c.position || '-')}</div>
+                        <div style="font-size:12px;color:#9ca3af;">${escapeHtml(c.area_of_activity || '-')}</div>
+                        ${noEmail ? '<div style="font-size:12px;color:#b45309;"><i class="fas fa-triangle-exclamation"></i> Sem e-mail</div>' : ''}
+                    </div>
+                </label>`;
+            }).join('');
+            html += `</div>`;
+            html += `<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingPreview()">Cancelar</button><button class="btn btn-primary" onclick="openAutoTocaMailingComposer()">Próximo →</button></div>`;
+            html += `</div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function toggleAutoTocaMailingContact(contactId, checked) {
+            if (checked) {
+                if (!autoTocaMailingSelection.includes(contactId)) autoTocaMailingSelection.push(contactId);
+                return;
+            }
+            autoTocaMailingSelection = autoTocaMailingSelection.filter(id => Number(id) !== Number(contactId));
+        }
+
+        function closeAutoTocaMailingPreview() {
+            document.getElementById('autoTocaMailingPreviewModal')?.remove();
+        }
+
+        function openAutoTocaMailingComposer() {
+            const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
+            if (!selectedContacts.length) return showInfo('Selecione ao menos um contato.');
+            closeAutoTocaMailingPreview();
+
+            const chips = selectedContacts.map(c => {
+                const missing = !String(c.email || '').trim();
+                return `<span style="display:inline-flex; gap:6px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${escapeHtml(c.name || '-')} ${missing ? '<i class="fas fa-triangle-exclamation" title="Sem e-mail"></i>' : ''}</span>`;
+            }).join('');
+
+            const mergeTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            let html = `<div class="modal active" id="autoTocaMailingComposerModal" onclick="if(event.target===this) closeAutoTocaMailingComposer()">`;
+            html += `<div class="modal-content" style="max-width:1120px;">`;
+            html += `<h2 style="color:#047857; margin-bottom:10px;">Mala Direta — Composição</h2>`;
+            html += `<div style="display:grid; grid-template-columns:220px 1fr 250px; gap:14px;">`;
+            html += `<div style="border:1px solid rgba(16,185,129,.2); border-radius:10px; padding:10px; background:rgba(236,253,245,.55);">
+                <div style="font-weight:700; color:#065f46; margin-bottom:8px;">Chaves de merge</div>
+                <p style="font-size:12px; color:#4b5563; line-height:1.45;">Use as chaves ao lado para personalizar o texto. Cada chave será substituída automaticamente pelo dado real de cada contato no momento do envio.</p>
+                <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
+                    ${mergeTags.map(tag => `<button type="button" class="btn btn-secondary btn-small" onclick="copyAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`).join('')}
+                </div>
+            </div>`;
+            html += `<div>
+                <div class="form-group"><label>Destinatários confirmados</label><div style="display:flex; flex-wrap:wrap; gap:6px; border:1px solid #d1d5db; border-radius:8px; padding:8px; min-height:42px; background:#fff;">${chips}</div></div>
+                <div class="form-group"><label>Assunto</label><input id="autoTocaMailingSubject" type="text" placeholder="Ex: Olá <nome do contato>, oportunidade para <conta>"></div>
+                <div class="form-group"><label>Mensagem</label><textarea id="autoTocaMailingBody" rows="10" placeholder="Escreva o corpo do e-mail usando as chaves desejadas."></textarea></div>
+                <div style="display:flex; justify-content:flex-end; gap:10px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingComposer()">Cancelar</button><button class="btn btn-primary" onclick="sendAutoTocaMailingBatch()">Abrir e-mails no Outlook</button></div>
+            </div>`;
+            html += `<div style="border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','autoTocaMailingBody')}</div>`;
+            html += `</div></div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeAutoTocaMailingComposer() {
+            document.getElementById('autoTocaMailingComposerModal')?.remove();
+        }
+
+        function copyAutoTocaMergeTag(tag) {
+            navigator.clipboard?.writeText(tag);
+            showSuccess(`Chave copiada: ${tag}`);
+        }
+
+        function applyMergeFields(template, contact) {
+            return String(template || '')
+                .replaceAll('<nome do contato>', contact.name || '')
+                .replaceAll('<conta>', contact.company || '')
+                .replaceAll('<cargo>', contact.position || '')
+                .replaceAll('<area de atuacao>', contact.area_of_activity || '')
+                .replaceAll('<email>', contact.email || '');
+        }
+
+        async function sendAutoTocaMailingBatch() {
+            const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
+            const subjectTemplate = document.getElementById('autoTocaMailingSubject')?.value || '';
+            const bodyTemplate = document.getElementById('autoTocaMailingBody')?.value || '';
+            const contactsWithEmail = selectedContacts.filter(c => String(c.email || '').trim());
+            const skipped = selectedContacts.length - contactsWithEmail.length;
+
+            if (!contactsWithEmail.length) return showError('Nenhum contato selecionado possui e-mail.');
+            if (contactsWithEmail.length > 20) {
+                showInfo('Lote grande detectado. Seu navegador pode bloquear pop-ups; permita pop-ups se necessário.');
+            }
+
+            contactsWithEmail.forEach((contact, idx) => {
+                setTimeout(() => {
+                    const personalizedSubject = applyMergeFields(subjectTemplate, contact);
+                    const personalizedBody = applyMergeFields(bodyTemplate, contact);
+                    const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(personalizedSubject)}&body=${encodeURIComponent(personalizedBody)}`;
+                    window.open(outlookUrl, '_blank');
+                    askRegisterActivityFromCommunication(contact.id, 'Email', personalizedBody);
+                }, idx * 300);
+            });
+
+            closeAutoTocaMailingComposer();
+            showSuccess(`Mala direta iniciada para ${contactsWithEmail.length} contato(s).${skipped ? ` ${skipped} sem e-mail foram ignorados.` : ''}`);
         }
 
         async function buscarEnderecoAutoToca(evt) {
@@ -4941,6 +5159,7 @@
                 document.getElementById('clientForm').position.value = client.position;
                 document.getElementById('clientForm').email.value = client.email || '';
                 document.getElementById('clientForm').phone.value = client.phone || '';
+                if (document.getElementById('clientForm').linkedin) document.getElementById('clientForm').linkedin.value = client.linkedin || '';
 
                 resetClientPhotoField();
                 if (client.photo_url) {
@@ -5139,6 +5358,11 @@
             if (!file) return;
             const lowerName = (file.name || '').toLowerCase();
             const isZip = lowerName.endsWith('.zip');
+            const mergeMode = await uiConfirm(
+                'Escolha o modo de importação:\n\nOK = Fundir bancos (recomendado, não apaga dados atuais).\nCancelar = Substituir tudo (restauração completa).',
+                'Importar Banco'
+            );
+            const importMode = mergeMode ? 'merge' : 'replace_all';
             
             if (!lowerName.endsWith('.db') && !lowerName.endsWith('.zip')) {
                 showError('Por favor, selecione um arquivo .db ou .zip válido');
@@ -5156,14 +5380,22 @@
                 }
             }
             
-            if (!await uiConfirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?', 'Atenção')) {
-                event.target.value = '';
-                return;
+            if (importMode === 'replace_all') {
+                if (!await uiConfirm('ATENÇÃO: Isso irá substituir o banco de dados atual. Um backup automático será criado antes. Deseja continuar?', 'Atenção')) {
+                    event.target.value = '';
+                    return;
+                }
+            } else {
+                if (!await uiConfirm('Você escolheu FUNDIR bancos. O sistema vai comparar por Nome, depois Email e depois Telefone. Deseja continuar?', 'Confirmar fusão')) {
+                    event.target.value = '';
+                    return;
+                }
             }
             
             try {
                 const formData = new FormData();
                 formData.append('file', file);
+                formData.append('mode', importMode);
                 
                 const response = await fetch(`${API_BASE}/restore/database`, {
                     method: 'POST',
@@ -5176,12 +5408,19 @@
                     throw new Error(result.error || 'Erro ao restaurar banco');
                 }
                 
-                showSuccess(result.message);
-                
-                // Recarregar a página após 2 segundos
-                setTimeout(() => {
-                    window.location.reload();
-                }, 2000);
+                if (result.mode === 'merge') {
+                    const s = result.merge_summary || {};
+                    showSuccess(
+                        `${result.message} Processadas: ${s.processed || 0}, novas: ${s.imported || 0}, atualizadas: ${s.updated || 0}, conflitos ignorados: ${s.conflicts || 0}.`
+                    );
+                } else {
+                    showSuccess(result.message);
+                    
+                    // Recarregar a página após 2 segundos
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                }
                 
             } catch (error) {
                 showError(error.message || 'Erro ao restaurar banco de dados');
@@ -7282,6 +7521,13 @@
             setTimeout(() => el.classList.remove('show'), 3000);
         }
 
+        // Show Info
+        function showInfo(message) {
+            // Mantém compatibilidade com fluxos que dependem de aviso não-bloqueante.
+            // Reutiliza o toast de sucesso para evitar criar novo componente visual.
+            showSuccess(message);
+        }
+
         function closeSystemDialog(result = null) {
             const modal = document.getElementById('systemDialogModal');
             if (window._systemDialogResolve) {
@@ -7384,6 +7630,7 @@
             document.getElementById('clientForm').name.value = client.name;
             document.getElementById('clientForm').email.value = client.email || '';
             document.getElementById('clientForm').phone.value = formatPhone(client.phone || '');
+            if (document.getElementById('clientForm').linkedin) document.getElementById('clientForm').linkedin.value = client.linkedin || '';
             document.getElementById('clientIsTarget').value = Number(client.is_target) === 1 ? '1' : '0';
             document.getElementById('clientColdContact').value = Number(client.is_cold_contact) === 1 ? '1' : '0';
             document.getElementById('clientForm').area_of_activity.value = client.area_of_activity || '';
@@ -7411,6 +7658,7 @@
             formData.set('company', company);
             formData.set('position', position);
             formData.set('phone', formatPhone(formData.get('phone')));
+            formData.set('linkedin', (formData.get('linkedin') || '').toString().trim());
             formData.set('is_target', document.getElementById('clientIsTarget').value === '1' ? '1' : '0');
 
             try {
@@ -7895,6 +8143,7 @@
             position:     'Cargo',
             email:        'E-mail',
             phone:        'Telefone',
+            linkedin:     'LinkedIn',
             information:  'Informação',
             contact_type: 'Tipo de contato',
             due_date:     'Data',
@@ -7911,7 +8160,7 @@
         const _ITOCA_EDITABLE_FIELDS = {
             kanban_card:         ['title', 'description', 'urgency', 'account_name', 'contact_name'],
             activity:            ['contact_name', 'company', 'description', 'contact_type'],
-            new_contact:         ['name', 'company', 'position', 'email', 'phone'],
+            new_contact:         ['name', 'company', 'position', 'email', 'phone', 'linkedin'],
             wiki_entry:          ['title', 'content', 'category', 'tags'],
             commitment:          ['title', 'due_date', 'due_time', 'contact_name', 'notes'],
             environment_mapping: ['company', 'card_title', 'response'],
