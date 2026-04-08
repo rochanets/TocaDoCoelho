@@ -5545,6 +5545,34 @@ def get_positions():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/autotoca/mala-direta/positions', methods=['GET'])
+def get_autotoca_mailing_positions():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != "" ORDER BY position COLLATE NOCASE')
+        positions = [row['position'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(positions)
+    except Exception as e:
+        print(f'[ERROR] GET /api/autotoca/mala-direta/positions: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/mala-direta/areas', methods=['GET'])
+def get_autotoca_mailing_areas():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT area_of_activity FROM clients WHERE area_of_activity IS NOT NULL AND TRIM(area_of_activity) != "" ORDER BY area_of_activity COLLATE NOCASE')
+        areas = [row['area_of_activity'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(areas)
+    except Exception as e:
+        print(f'[ERROR] GET /api/autotoca/mala-direta/areas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/empresas', methods=['GET'])
 def get_companies():
     try:
