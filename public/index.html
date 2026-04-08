@@ -5221,22 +5221,25 @@
         }
 
         // Delete Client
-        async function deleteClient(id) {
-            if (await uiConfirm('Tem certeza que deseja deletar este cliente?')) {
+        async function deleteClient(id, options = {}) {
+            if (await uiConfirm('Tem certeza que deseja excluir este contato? Esta ação não pode ser desfeita.', 'Excluir contato')) {
                 try {
                     const response = await fetch(`${API_BASE}/clientes/${id}`, {
                         method: 'DELETE'
                     });
 
                     if (response.ok) {
-                        showSuccess('Cliente deletado!');
+                        if (options && options.closeProfileOnSuccess) {
+                            closeProfileModal();
+                        }
+                        showSuccess('Contato excluído com sucesso!');
                         loadClients();
                         loadDashboard();
                     } else {
-                        showError('Erro ao deletar cliente');
+                        showError('Erro ao excluir contato');
                     }
                 } catch (error) {
-                    showError('Erro ao deletar cliente');
+                    showError('Erro ao excluir contato');
                 }
             }
         }
@@ -7414,7 +7417,8 @@
                 }
 
                 const modalBody = `
-                    <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                        <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
                     <div class="profile-layout">
