@@ -10151,6 +10151,10 @@ def _portfolio_parse_llm_raw(raw):
         if not isinstance(value, str):
             return None
         stripped = value.strip()
+        if stripped.startswith('```'):
+            fenced_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', stripped, flags=re.IGNORECASE)
+            if fenced_match:
+                stripped = fenced_match.group(1).strip()
         try:
             parsed = json.loads(stripped)
             if isinstance(parsed, dict):
@@ -10159,24 +10163,21 @@ def _portfolio_parse_llm_raw(raw):
                 return {'items': parsed}
         except Exception:
             pass
-        m = re.search(r'\{[\s\S]*\}', stripped)
-        if m:
-            try:
-                parsed = json.loads(m.group(0))
-                if isinstance(parsed, dict):
-                    return parsed
-            except Exception:
-                pass
+        parsed = _extract_json_object_from_text(stripped)
+        if isinstance(parsed, dict):
+            return parsed
         return None
 
-    parsed = _try_parse_json(raw) or {}
-    if 'items' not in parsed:
+    parsed = _try_parse_json(raw)
+    if parsed and 'items' not in parsed:
         for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message', 'answer'):
             candidate = parsed.get(key)
             nested = _try_parse_json(candidate)
             if nested:
                 parsed = nested
                 break
+    if not parsed:
+        return None
 
     title = (parsed.get('title') or '').strip() if isinstance(parsed, dict) else ''
     summary = (parsed.get('summary') or '').strip() if isinstance(parsed, dict) else ''
@@ -10192,12 +10193,14 @@ def _portfolio_parse_llm_raw(raw):
             if pain or solution:
                 items.append({'pain': pain, 'solution': solution})
 
+    if not title and not summary and not items:
+        return None
     if not title:
-        title = 'Oferta sem título'
+        title = 'Oferta gerada por IA'
     if not summary:
         summary = 'Resumo não informado.'
     if not items:
-        items = [{'pain': 'Dor não identificada', 'solution': 'Solução não identificada'}]
+        items = [{'pain': 'Ponto principal não identificado', 'solution': 'Solução principal não identificada'}]
     return {'title': title, 'summary': summary, 'items': items}
 
 
@@ -10205,7 +10208,7 @@ def _portfolio_generate_offer_from_llm(raw_input):
     llm_prompt = (
         "Você é um especialista em posicionamento comercial B2B. "
         "Analise o material abaixo e extraia um portfólio comercial em português (Brasil). "
-        "Retorne SOMENTE JSON válido no formato: "
+        "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão: "
         '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
         '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}. '
         "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto; "
@@ -10215,6 +10218,13 @@ def _portfolio_generate_offer_from_llm(raw_input):
 
     raw = _sai_simple_prompt(llm_prompt)
     source = 'SAI'
+    if raw is not None and not str(raw).strip():
+        raw = None
+    if raw is not None:
+        parsed = _portfolio_parse_llm_raw(raw)
+        if parsed:
+            return parsed, source
+        logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta. Tentando OpenRouter.')
 
     if raw is None:
         or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
@@ -10249,11 +10259,16 @@ def _portfolio_generate_offer_from_llm(raw_input):
             choices = data.get('choices') or []
             raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
             source = 'OpenRouter'
+            parsed = _portfolio_parse_llm_raw(raw)
+            if parsed:
+                return parsed, source
+            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta.')
+            return None, 'llm_invalid_response'
         except Exception as e:
             logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}')
             return None, 'sem_llm'
 
-    return _portfolio_parse_llm_raw(raw), source
+    return None, 'llm_invalid_response'
 
 
 def _portfolio_fetch_offer(c, offer_id):
@@ -10296,7 +10311,9 @@ def create_portfolio_offer():
 
         parsed, source = _portfolio_generate_offer_from_llm(raw_input)
         if not parsed:
-            return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+            if source == 'sem_llm':
+                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}), 502
 
         conn = get_db()
         c = conn.cursor()
