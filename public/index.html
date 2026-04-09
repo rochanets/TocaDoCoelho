@@ -65,6 +65,20 @@
             color: rgba(52, 211, 153, 0.7);
         }
 
+        .beta-badge {
+            display: inline-flex;
+            align-items: center;
+            margin-left: 6px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #ef4444;
+            color: #ffffff;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            vertical-align: middle;
+        }
+
         .sidebar-nav {
             flex: 1;
             padding: 16px;
@@ -1045,6 +1059,24 @@
             font-style: italic;
         }
 
+        .input-minimal {
+            width: 100%;
+            max-width: 320px;
+            padding: 8px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #fff;
+            color: #111827;
+            font-size: 13px;
+            line-height: 1.2;
+        }
+
+        .input-minimal:focus {
+            outline: none;
+            border-color: #34d399;
+            box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.15);
+        }
+
         .filter-group {
             display: flex;
             flex-direction: column;
@@ -1203,6 +1235,68 @@
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
+        }
+
+        .report-loading-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 14000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 23, 42, 0.52);
+            backdrop-filter: blur(1.5px);
+            padding: 20px;
+        }
+
+        .report-loading-overlay.active {
+            display: flex;
+        }
+
+        .report-loading-card {
+            width: min(460px, 100%);
+            background: #ffffff;
+            border-radius: 16px;
+            border: 1px solid #d1fae5;
+            box-shadow: 0 18px 50px rgba(15, 23, 42, 0.22);
+            padding: 22px 22px 20px;
+        }
+
+        .report-loading-title {
+            margin: 0 0 8px;
+            color: #065f46;
+            font-size: 19px;
+            font-weight: 700;
+        }
+
+        .report-loading-message {
+            margin: 0 0 14px;
+            color: #4b5563;
+            font-size: 14px;
+            line-height: 1.55;
+        }
+
+        .report-loading-progress {
+            height: 10px;
+            border-radius: 999px;
+            background: #e5e7eb;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .report-loading-progress::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            width: 45%;
+            background: linear-gradient(90deg, #34d399, #10b981, #34d399);
+            border-radius: inherit;
+            animation: reportLoadingSlide 1.2s ease-in-out infinite;
+        }
+
+        @keyframes reportLoadingSlide {
+            0% { transform: translateX(-110%); }
+            100% { transform: translateX(260%); }
         }
 
         /* Status Badge */
@@ -1718,6 +1812,13 @@
         <div class="alert alert-success" id="successMsg"></div>
         <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
+        <div id="relationReportLoadingOverlay" class="report-loading-overlay" aria-hidden="true">
+            <div class="report-loading-card" role="status" aria-live="polite">
+                <h3 class="report-loading-title">Gerando Relation Report</h3>
+                <p class="report-loading-message" id="relationReportLoadingMessage">Processando informações da conta. Isso pode levar alguns segundos.</p>
+                <div class="report-loading-progress"></div>
+            </div>
+        </div>
 
         <div id="iata" class="tab-content">
             <div class="page-header">
@@ -1955,9 +2056,9 @@
                     </div>
                 </div>
                 <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Filtrar por Cliente:</label>
-                    <select id="mappingClientFilter" onchange="loadMapeamento()" style="width: 100%; max-width: 400px; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
-                        <option value="">Selecione um cliente</option>
+                    <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Selecionar Conta:</label>
+                    <select id="mappingClientFilter" onchange="loadMapeamento()" class="input-minimal">
+                        <option value="">Selecione uma conta</option>
                     </select>
                 </div>
                 <div id="mapeamentoContent"></div>
@@ -1977,8 +2078,10 @@
                 </div>
                 <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px;">
                     <div style="min-width:280px; flex:1;">
-                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#0d3a52;">Filtrar conta</label>
-                        <input id="orgAccountFilterInput" type="text" placeholder="Digite o nome da conta" oninput="setOrgAccountFilter(this.value)" style="width:100%; padding:10px 12px; border:1px solid #bfe5f1; border-radius:10px; background:#fff; color:#0f172a;">
+                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#0d3a52;">Conta</label>
+                        <select id="orgAccountFilterSelect" onchange="setOrgAccountFilter(this.value)" style="width:100%; max-width:340px; padding:8px 10px; border:1px solid #bfe5f1; border-radius:8px; background:#fff; color:#0f172a; font-size:13px;">
+                            <option value="">Selecione uma conta</option>
+                        </select>
                     </div>
                     <div style="min-width:220px;">
                         <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#0d3a52;">Agrupar colunas por</label>
@@ -2704,6 +2807,26 @@
     <script src="/vendor/sortablejs/Sortable.min.js" onerror="if(!window.__sortableFallbackLoading){window.__sortableFallbackLoading=true;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js';document.head.appendChild(s);}"></script>
     <script>
         const API_BASE = '/api';
+        let systemConfig = { env: 'production' };
+
+        async function loadSystemConfig() {
+            try {
+                const response = await fetch(`${API_BASE}/system/config`);
+                if (!response.ok) return;
+                systemConfig = await response.json();
+                if ((systemConfig.env || '').toLowerCase() === 'beta') {
+                    const logoText = document.querySelector('.sidebar-logo-text h1');
+                    if (logoText && !logoText.querySelector('.beta-badge')) {
+                        const betaBadge = document.createElement('span');
+                        betaBadge.className = 'beta-badge';
+                        betaBadge.textContent = 'BETA';
+                        logoText.appendChild(betaBadge);
+                    }
+                }
+            } catch (error) {
+                console.error('Erro ao carregar config do sistema', error);
+            }
+        }
         let currentEditingClientId = null;
         let currentEditingActivityId = null;
         let clients = [];
@@ -2720,7 +2843,7 @@
             openrouter_app_name: 'TocaDoCoelho'
         };
         let updateSourceConfig = {
-            current_version: '1.0.0',
+            current_version: '',
             github_owner: '',
             github_repo: '',
             configured: false
@@ -3901,7 +4024,7 @@
 
             document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
             document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
-            document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '1.0.0'}`;
+            document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '-'}`;
             const updateResult = document.getElementById('updateCheckResult');
             if (updateResult) updateResult.textContent = '';
         }
@@ -4558,6 +4681,7 @@
             { key: 'area_of_activity', label: 'Área de Atuação', checked: false },
             { key: 'email', label: 'Email', checked: true },
             { key: 'phone', label: 'Telefone', checked: true },
+            { key: 'linkedin', label: 'LinkedIn', checked: true },
             { key: 'photo_url', label: 'Foto (URL)', checked: false },
             { key: 'is_target', label: 'Contato-Alvo', checked: false },
             { key: 'is_cold_contact', label: 'Contato Frio', checked: false },
@@ -4631,9 +4755,22 @@
             return { accountId, fullPeriod, startDate, endDate };
         }
 
-        function openRelationReportView() {
+        function toggleRelationReportLoadingOverlay(show, message = '') {
+            const overlay = document.getElementById('relationReportLoadingOverlay');
+            const msgEl = document.getElementById('relationReportLoadingMessage');
+            if (!overlay) return;
+            if (msgEl) {
+                msgEl.textContent = message || 'Processando informações da conta. Isso pode levar alguns segundos.';
+            }
+            overlay.classList.toggle('active', !!show);
+            overlay.setAttribute('aria-hidden', show ? 'false' : 'true');
+            document.body.style.overflow = show ? 'hidden' : '';
+        }
+
+        async function openRelationReportView() {
             const btn = document.getElementById('relationReportOpenBtn');
             const originalHtml = btn ? btn.innerHTML : '';
+            let reportWindow = null;
             try {
                 const { accountId, fullPeriod, startDate, endDate } = getRelationReportParams();
                 const params = new URLSearchParams({ account_id: accountId, full_period: fullPeriod ? 'true' : 'false' });
@@ -4641,17 +4778,39 @@
                     params.set('start_date', startDate);
                     params.set('end_date', endDate);
                 }
+                // Mantém o gesto do usuário para evitar bloqueio de pop-up após await.
+                reportWindow = window.open('', '_blank', 'noopener');
+                if (!reportWindow) {
+                    throw new Error('Não foi possível abrir uma nova aba. Verifique o bloqueador de pop-up do navegador.');
+                }
+                reportWindow.document.open();
+                reportWindow.document.write('<!doctype html><html><head><title>Gerando Relation Report...</title><style>body{font-family:Arial,sans-serif;background:#f8fafc;color:#374151;display:flex;align-items:center;justify-content:center;height:100vh;margin:0} .box{padding:20px 24px;border:1px solid #d1fae5;border-radius:12px;background:#fff;box-shadow:0 10px 28px rgba(0,0,0,.08)} strong{color:#047857}</style></head><body><div class="box"><strong>Gerando Relation Report...</strong><div style="margin-top:8px;font-size:14px">Aguarde alguns segundos.</div></div></body></html>');
+                reportWindow.document.close();
                 if (btn) {
                     btn.disabled = true;
-                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Abrindo report...';
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Gerando report...';
                 }
-                const targetUrl = `/report/relation/view?${params.toString()}`;
-                window.open(targetUrl, '_blank', 'noopener');
-                showToast('Abrindo Relation Report executivo...', 'success');
+                toggleRelationReportLoadingOverlay(true, 'Processando dados e montando o report executivo. Aguarde...');
+                const response = await fetch(`/report/relation/view?${params.toString()}`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'text/html' }
+                });
+                const reportHtml = await response.text();
+                if (!response.ok) {
+                    throw new Error(reportHtml || 'Erro ao gerar Relation Report');
+                }
+                reportWindow.document.open();
+                reportWindow.document.write(reportHtml);
+                reportWindow.document.close();
+                showToast('Relation Report gerado com sucesso.', 'success');
             } catch (error) {
                 console.error(error);
+                if (reportWindow && !reportWindow.closed) {
+                    reportWindow.close();
+                }
                 showToast(error.message || 'Erro ao abrir Relation Report', 'error');
             } finally {
+                toggleRelationReportLoadingOverlay(false);
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = originalHtml || '<i class="fas fa-chart-line"></i> Abrir Report Executivo';
@@ -6109,7 +6268,7 @@
         // Mapeamento de Ambiente
         let mappingCards = [];
         let mappingSelectedClient = null;
-        let mappingCompanies = [];
+        let mappingAccounts = [];
 
         async function loadMapeamento() {
             try {
@@ -6121,32 +6280,34 @@
                 const cardsResponse = await fetch(`${API_BASE}/environment/cards`);
                 mappingCards = await cardsResponse.json();
 
-                // Carregar empresas (mesma base usada em outros pontos do sistema)
-                const [companiesResponse, clientsResponse] = await Promise.all([
-                    fetch(`${API_BASE}/empresas`),
+                // Carregar contas cadastradas e clientes
+                const [accountsResponse, clientsResponse] = await Promise.all([
+                    fetch(`${API_BASE}/accounts`),
                     fetch(`${API_BASE}/clientes`)
                 ]);
-                mappingCompanies = await companiesResponse.json();
+                mappingAccounts = await accountsResponse.json();
                 const clientsList = await clientsResponse.json();
 
-                // Preencher dropdown de clientes usando lista de empresas completa
-                filterSelect.innerHTML = '<option value="">Selecione um cliente</option>';
+                // Preencher dropdown com contas
+                filterSelect.innerHTML = '<option value="">Selecione uma conta</option>';
 
-                // Mapeamento empresa -> client_id (quando existir cliente vinculado)
-                const companiesMap = new Map();
+                // Mapeamento conta(empresa) -> client_id (quando existir cliente vinculado)
+                const accountClientMap = new Map();
                 clientsList.forEach(client => {
-                    if (client.company && !companiesMap.has(client.company)) {
-                        companiesMap.set(client.company, client.id);
+                    if (client.company && !accountClientMap.has(client.company)) {
+                        accountClientMap.set(client.company, client.id);
                     }
                 });
 
-                const sortedCompanies = (mappingCompanies || []).slice().sort((a, b) => a.localeCompare(b, 'pt-BR'));
+                const sortedAccounts = (mappingAccounts || [])
+                    .slice()
+                    .sort((a, b) => (a.name || '').localeCompare((b.name || ''), 'pt-BR'));
 
-                sortedCompanies.forEach((company) => {
+                sortedAccounts.forEach((account) => {
                     const option = document.createElement('option');
-                    option.value = company;
-                    option.textContent = company;
-                    if (!companiesMap.has(company)) {
+                    option.value = String(account.id);
+                    option.textContent = account.name || `Conta ${account.id}`;
+                    if (!accountClientMap.has(account.name)) {
                         option.title = 'Sem cliente vinculado para respostas';
                     }
                     filterSelect.appendChild(option);
@@ -6157,10 +6318,12 @@
                     filterSelect.value = previousSelection;
                 }
 
-                // Obter cliente selecionado
-                const selectedCompany = filterSelect.value || '';
-                mappingSelectedClient = selectedCompany && companiesMap.has(selectedCompany)
-                    ? parseInt(companiesMap.get(selectedCompany))
+                // Obter cliente selecionado a partir da conta escolhida
+                const selectedAccountId = parseInt(filterSelect.value || '', 10);
+                const selectedAccount = (mappingAccounts || []).find(a => Number(a.id) === selectedAccountId);
+                const selectedCompany = selectedAccount && selectedAccount.name ? selectedAccount.name : '';
+                mappingSelectedClient = selectedCompany && accountClientMap.has(selectedCompany)
+                    ? parseInt(accountClientMap.get(selectedCompany), 10)
                     : null;
 
                 // Renderizar cards
@@ -7517,6 +7680,7 @@
                                 <div class="profile-field"><div class="profile-field-label">Área de Atuação</div><div class="profile-field-value">${escapeHtml(client.area_of_activity || '-')}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Contato Frio</div><div class="profile-field-value">${Number(client.is_cold_contact)===1?'Sim':'Não'}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Telefone</div><div class="profile-field-value">${escapeHtml(client.phone || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">LinkedIn</div><div class="profile-field-value">${client.linkedin ? `<a href="${escapeHtml(client.linkedin)}" target="_blank" rel="noopener noreferrer" style="color:#0a66c2; text-decoration:none;">${escapeHtml(client.linkedin)}</a>` : '-'}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Último contato</div><div class="profile-field-value">${formatDateBr(client.last_activity_date)}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Cadastro</div><div class="profile-field-value">${formatDateBr(client.created_at)}</div></div>
                             </div>
@@ -8806,6 +8970,7 @@
             ]);
             const data = clientsRes.ok ? await clientsRes.json() : [];
             const accounts = accountsRes.ok ? await accountsRes.json() : [];
+            const accountFilterSelect = document.getElementById('orgAccountFilterSelect');
 
             const accountByCompany = {};
             (accounts || []).forEach(acc => {
@@ -8813,13 +8978,27 @@
                 if (key) accountByCompany[key] = acc;
             });
 
-            const companySet = new Set();
-            data.forEach(c => { if (c.company) companySet.add(c.company); });
-            accounts.forEach(a => { if (a.name) companySet.add(a.name); });
+            const accountNames = (accounts || [])
+                .map(a => String(a?.name || '').trim())
+                .filter(Boolean)
+                .sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
-            const companies = [...companySet]
-                .filter(company => String(company || '').toLowerCase().includes(orgAccountFilter.trim().toLowerCase()))
-                .sort((a, b) => String(a || '').localeCompare(String(b || ''), 'pt-BR'));
+            if (accountFilterSelect) {
+                const currentValue = String(orgAccountFilter || '');
+                const options = ['<option value="">Selecione uma conta</option>']
+                    .concat(accountNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`));
+                accountFilterSelect.innerHTML = options.join('');
+                if (currentValue && accountNames.includes(currentValue)) {
+                    accountFilterSelect.value = currentValue;
+                } else {
+                    accountFilterSelect.value = '';
+                    if (currentValue) orgAccountFilter = '';
+                }
+            }
+
+            const companies = orgAccountFilter
+                ? accountNames.filter(name => normalizeCompanyKey(name) === normalizeCompanyKey(orgAccountFilter))
+                : accountNames;
 
             const groupLabels = [...new Set(data.map(c => getOrgGroupLabel(c, orgGroupingMode)).filter(Boolean))]
                 .sort((a, b) => {
@@ -9380,7 +9559,7 @@
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
             const totalMonthlyCents = (account.presences || []).reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
             html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMonthlyCents)}</strong></div>${(account.presences||[]).length?`<div style='display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;'>${(account.presences||[]).map(p=>`<button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`).join('')}</div>`:'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
-            html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><h4 style="color:#065f46; margin:0;">Histórico de Atividades</h4><button class="btn btn-primary btn-small" style="padding:2px 10px; border-radius:999px; font-size:18px; line-height:1; font-weight:700;" onclick="openAccountActivityModal(${account.id})" title="Registrar atividade da conta">+</button></div><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
+            html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div><div style='display:flex; align-items:center; gap:8px; margin-top:5px;'>${c.email ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-envelope' style='margin-right:4px;'></i>${escapeHtml(c.email)}</span>` : ''}${c.phone ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-phone' style='margin-right:4px;'></i>${escapeHtml(c.phone)}</span>` : ''}${c.linkedin ? `<a href='${escapeHtml(c.linkedin)}' target='_blank' rel='noopener noreferrer' title='LinkedIn' onclick='event.stopPropagation()' style='font-size:13px; color:#0a66c2;'><i class='fab fa-linkedin'></i></a>` : ''}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><h4 style="color:#065f46; margin:0;">Histórico de Atividades</h4><button class="btn btn-primary btn-small" style="padding:2px 10px; border-radius:999px; font-size:18px; line-height:1; font-weight:700;" onclick="openAccountActivityModal(${account.id})" title="Registrar atividade da conta">+</button></div><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
             await refreshAccountActivitiesWrap(accountId, account);
@@ -10324,6 +10503,7 @@
 
         window.addEventListener('DOMContentLoaded', async () => {
             ensureAutoTocaPresence();
+            await loadSystemConfig();
             window.addEventListener(AUTOTOCA_EXTENSION_PING_EVENT, handleAutoTocaExtensionPong);
             window.addEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, handleAutoTocaExtensionResult);
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadITocaBaseStatus()]);

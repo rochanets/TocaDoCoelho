@@ -203,7 +203,35 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
 
-APP_VERSION = os.environ.get('TOCA_APP_VERSION', '1.0.0').strip() or '1.0.0'
+def _resolve_app_version():
+    default_version = '1.0.0'
+    env_version = (os.environ.get('TOCA_APP_VERSION') or '').strip()
+    candidate_dirs = [Path(__file__).resolve().parent]
+
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidate_dirs.append(Path(meipass))
+        candidate_dirs.append(Path(sys.executable).resolve().parent)
+
+    for base_dir in candidate_dirs:
+        version_file = base_dir / 'version.txt'
+        try:
+            if version_file.exists():
+                file_version = version_file.read_text(encoding='utf-8').strip()
+                if file_version:
+                    return file_version
+        except Exception as error:
+            logger.warning(
+                '[Update] Não foi possível ler %s: %s',
+                version_file,
+                error
+            )
+
+    return env_version or default_version
+
+
+APP_VERSION = _resolve_app_version()
 DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
 
@@ -2132,6 +2160,11 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
             meta.append(esc(contact.get('email')))
         if contact.get('phone'):
             meta.append(esc(contact.get('phone')))
+        linkedin_raw = str(contact.get('linkedin') or '').strip()
+        linkedin_html = ''
+        if linkedin_raw:
+            linkedin_safe = esc(linkedin_raw)
+            linkedin_html = f"<div class='rr-contact-linkedin'><a href='{linkedin_safe}' target='_blank' rel='noopener noreferrer'>LinkedIn</a></div>"
         activities = [a for a in (report_data.get('activities') or []) if a.get('client_id') == contact.get('id')]
         last_contact = activities[0] if activities else None
         last_contact_line = f"Última interação: {esc(_relation_report_format_dt(last_contact.get('activity_date')))}" if last_contact else 'Última interação: não registrada'
@@ -2143,6 +2176,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
                 <div>
                     <div class='rr-contact-name'>{esc(contact.get('name'))}</div>
                     <div class='rr-contact-meta'>{' · '.join(meta) if meta else 'Sem detalhes complementares'}</div>
+                    {linkedin_html}
                 </div>
             </div>
             <div class='rr-badge-row'>{''.join(badges)}</div>
@@ -2227,6 +2261,9 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-contact-photo-fallback {{ display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--green-dark); font-size:22px; }}
 .rr-contact-name {{ font-size:17px; font-weight:800; color:#111827; }}
 .rr-contact-meta {{ font-size:13px; color:#6b7280; margin-top:3px; line-height:1.4; }}
+.rr-contact-linkedin {{ margin-top:6px; }}
+.rr-contact-linkedin a {{ color:#0a66c2; text-decoration:none; font-size:12px; font-weight:600; }}
+.rr-contact-linkedin a:hover {{ text-decoration:underline; }}
 .rr-badge-row {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }}
 .rr-badge {{ font-size:11px; font-weight:700; border-radius:999px; padding:6px 10px; display:inline-flex; align-items:center; }}
 .rr-badge-primary {{ background:#dcfce7; color:#166534; }}
@@ -2637,9 +2674,11 @@ def _relation_report_render_pdf(report_data):
         c.drawString(22 * mm, y - 6 * mm, f"{contact.get('name') or 'Contato'} — {contact.get('position') or 'Cargo não informado'}")
         c.setFont('Helvetica', 8.3)
         c.setFillColor(colors.HexColor('#4b5563'))
+        linkedin_value = str(contact.get('linkedin') or '').strip() or 'Não informado'
         c.drawString(22 * mm, y - 10 * mm, f"Área: {contact.get('area_of_activity') or 'Não informada'} | Email: {contact.get('email') or 'Não informado'}")
-        c.drawString(22 * mm, y - 14 * mm, f"Cards: atividades {rel.get('activities_count',0)} | mapeamento {rel.get('mapping_count',0)} | kanban {rel.get('kanban_count',0)} | último contato {_relation_report_format_dt((rel.get('last_contact') or {}).get('date'))}")
-        y -= 19 * mm
+        c.drawString(22 * mm, y - 12.5 * mm, f"LinkedIn: {linkedin_value[:95]}")
+        c.drawString(22 * mm, y - 15 * mm, f"Cards: atividades {rel.get('activities_count',0)} | mapeamento {rel.get('mapping_count',0)} | kanban {rel.get('kanban_count',0)} | último contato {_relation_report_format_dt((rel.get('last_contact') or {}).get('date'))}")
+        y -= 20 * mm
 
     y = ensure_space(y, 45 * mm)
     c.setFillColor(colors_map['secondary'])
@@ -8445,6 +8484,7 @@ def export_clientes():
             'area_of_activity': ('area_of_activity', 'Área de Atuação'),
             'email': ('email', 'Email'),
             'phone': ('phone', 'Telefone'),
+            'linkedin': ('linkedin', 'LinkedIn'),
             'photo_url': ('photo_url', 'Foto (URL)'),
             'is_target': ('is_target', 'Contato-Alvo'),
             'is_cold_contact': ('is_cold_contact', 'Contato Frio'),
@@ -8452,7 +8492,7 @@ def export_clientes():
             'updated_at': ('updated_at', 'Última Atualização'),
         }
 
-        default_fields = ['id', 'name', 'company', 'position', 'email', 'phone', 'created_at']
+        default_fields = ['id', 'name', 'company', 'position', 'email', 'phone', 'linkedin', 'created_at']
         requested_fields = (request.args.get('fields') or '').strip()
 
         selected_fields = []
@@ -10151,6 +10191,10 @@ def _portfolio_parse_llm_raw(raw):
         if not isinstance(value, str):
             return None
         stripped = value.strip()
+        if stripped.startswith('```'):
+            fenced_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', stripped, flags=re.IGNORECASE)
+            if fenced_match:
+                stripped = fenced_match.group(1).strip()
         try:
             parsed = json.loads(stripped)
             if isinstance(parsed, dict):
@@ -10159,24 +10203,21 @@ def _portfolio_parse_llm_raw(raw):
                 return {'items': parsed}
         except Exception:
             pass
-        m = re.search(r'\{[\s\S]*\}', stripped)
-        if m:
-            try:
-                parsed = json.loads(m.group(0))
-                if isinstance(parsed, dict):
-                    return parsed
-            except Exception:
-                pass
+        parsed = _extract_json_object_from_text(stripped)
+        if isinstance(parsed, dict):
+            return parsed
         return None
 
-    parsed = _try_parse_json(raw) or {}
-    if 'items' not in parsed:
+    parsed = _try_parse_json(raw)
+    if parsed and 'items' not in parsed:
         for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message', 'answer'):
             candidate = parsed.get(key)
             nested = _try_parse_json(candidate)
             if nested:
                 parsed = nested
                 break
+    if not parsed:
+        return None
 
     title = (parsed.get('title') or '').strip() if isinstance(parsed, dict) else ''
     summary = (parsed.get('summary') or '').strip() if isinstance(parsed, dict) else ''
@@ -10192,12 +10233,14 @@ def _portfolio_parse_llm_raw(raw):
             if pain or solution:
                 items.append({'pain': pain, 'solution': solution})
 
+    if not title and not summary and not items:
+        return None
     if not title:
-        title = 'Oferta sem título'
+        title = 'Oferta gerada por IA'
     if not summary:
         summary = 'Resumo não informado.'
     if not items:
-        items = [{'pain': 'Dor não identificada', 'solution': 'Solução não identificada'}]
+        items = [{'pain': 'Ponto principal não identificado', 'solution': 'Solução principal não identificada'}]
     return {'title': title, 'summary': summary, 'items': items}
 
 
@@ -10205,7 +10248,7 @@ def _portfolio_generate_offer_from_llm(raw_input):
     llm_prompt = (
         "Você é um especialista em posicionamento comercial B2B. "
         "Analise o material abaixo e extraia um portfólio comercial em português (Brasil). "
-        "Retorne SOMENTE JSON válido no formato: "
+        "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão: "
         '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
         '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}. '
         "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto; "
@@ -10215,6 +10258,13 @@ def _portfolio_generate_offer_from_llm(raw_input):
 
     raw = _sai_simple_prompt(llm_prompt)
     source = 'SAI'
+    if raw is not None and not str(raw).strip():
+        raw = None
+    if raw is not None:
+        parsed = _portfolio_parse_llm_raw(raw)
+        if parsed:
+            return parsed, source
+        logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta. Tentando OpenRouter.')
 
     if raw is None:
         or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
@@ -10249,11 +10299,16 @@ def _portfolio_generate_offer_from_llm(raw_input):
             choices = data.get('choices') or []
             raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
             source = 'OpenRouter'
+            parsed = _portfolio_parse_llm_raw(raw)
+            if parsed:
+                return parsed, source
+            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta.')
+            return None, 'llm_invalid_response'
         except Exception as e:
             logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}')
             return None, 'sem_llm'
 
-    return _portfolio_parse_llm_raw(raw), source
+    return None, 'llm_invalid_response'
 
 
 def _portfolio_fetch_offer(c, offer_id):
@@ -10296,7 +10351,9 @@ def create_portfolio_offer():
 
         parsed, source = _portfolio_generate_offer_from_llm(raw_input)
         if not parsed:
-            return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+            if source == 'sem_llm':
+                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}), 502
 
         conn = get_db()
         c = conn.cursor()
@@ -11822,6 +11879,13 @@ def serve_autotoca_upload(filename):
 def serve_upload(filename):
     return send_from_directory(str(UPLOAD_DIR), filename)
 
+@app.route('/api/system/config', methods=['GET'])
+def get_system_config():
+    return jsonify({
+        'env': os.environ.get('TOCA_ENV', 'production'),
+        'version': APP_VERSION
+    })
+
 @app.route('/')
 def index():
     return send_from_directory(app.static_folder, 'index.html')
@@ -11842,11 +11906,15 @@ def handle_unexpected_exception(error):
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))
+    fixed_debug_mode = True
+    app.logger.setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(logging.DEBUG)
     print('=' * 50)
     print('  TOCA DO COELHO - Gestao de Clientes')
     print('=' * 50)
     print(f'[Database] Banco de dados inicializado')
     print(f'[Server] Iniciando em http://localhost:{port}')
+    print(f'[Debug] Modo debug fixo no terminal: {"ATIVO" if fixed_debug_mode else "INATIVO"}')
     print(f'[Server] Pressione CTRL+C para parar')
     print()
     
@@ -11860,4 +11928,4 @@ if __name__ == '__main__':
     thread = threading.Thread(target=open_browser, daemon=True)
     thread.start()
     
-    app.run(host='localhost', port=port, debug=False)
+    app.run(host='localhost', port=port, debug=fixed_debug_mode, use_reloader=False)
