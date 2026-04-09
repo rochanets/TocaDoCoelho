@@ -203,7 +203,35 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
 
-APP_VERSION = os.environ.get('TOCA_APP_VERSION', '1.0.0').strip() or '1.0.0'
+def _resolve_app_version():
+    default_version = '1.0.0'
+    env_version = (os.environ.get('TOCA_APP_VERSION') or '').strip()
+    candidate_dirs = [Path(__file__).resolve().parent]
+
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidate_dirs.append(Path(meipass))
+        candidate_dirs.append(Path(sys.executable).resolve().parent)
+
+    for base_dir in candidate_dirs:
+        version_file = base_dir / 'version.txt'
+        try:
+            if version_file.exists():
+                file_version = version_file.read_text(encoding='utf-8').strip()
+                if file_version:
+                    return file_version
+        except Exception as error:
+            logger.warning(
+                '[Update] Não foi possível ler %s: %s',
+                version_file,
+                error
+            )
+
+    return env_version or default_version
+
+
+APP_VERSION = _resolve_app_version()
 DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
 

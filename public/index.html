@@ -2807,7 +2807,7 @@
             openrouter_app_name: 'TocaDoCoelho'
         };
         let updateSourceConfig = {
-            current_version: '1.0.0',
+            current_version: '',
             github_owner: '',
             github_repo: '',
             configured: false
@@ -3988,7 +3988,7 @@
 
             document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
             document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
-            document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '1.0.0'}`;
+            document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '-'}`;
             const updateResult = document.getElementById('updateCheckResult');
             if (updateResult) updateResult.textContent = '';
         }
