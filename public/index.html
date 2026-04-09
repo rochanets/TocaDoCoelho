@@ -1205,6 +1205,68 @@
             100% { transform: rotate(360deg); }
         }
 
+        .report-loading-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 14000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 23, 42, 0.52);
+            backdrop-filter: blur(1.5px);
+            padding: 20px;
+        }
+
+        .report-loading-overlay.active {
+            display: flex;
+        }
+
+        .report-loading-card {
+            width: min(460px, 100%);
+            background: #ffffff;
+            border-radius: 16px;
+            border: 1px solid #d1fae5;
+            box-shadow: 0 18px 50px rgba(15, 23, 42, 0.22);
+            padding: 22px 22px 20px;
+        }
+
+        .report-loading-title {
+            margin: 0 0 8px;
+            color: #065f46;
+            font-size: 19px;
+            font-weight: 700;
+        }
+
+        .report-loading-message {
+            margin: 0 0 14px;
+            color: #4b5563;
+            font-size: 14px;
+            line-height: 1.55;
+        }
+
+        .report-loading-progress {
+            height: 10px;
+            border-radius: 999px;
+            background: #e5e7eb;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .report-loading-progress::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            width: 45%;
+            background: linear-gradient(90deg, #34d399, #10b981, #34d399);
+            border-radius: inherit;
+            animation: reportLoadingSlide 1.2s ease-in-out infinite;
+        }
+
+        @keyframes reportLoadingSlide {
+            0% { transform: translateX(-110%); }
+            100% { transform: translateX(260%); }
+        }
+
         /* Status Badge */
         .status-badge {
             display: inline-flex;
@@ -1718,6 +1780,13 @@
         <div class="alert alert-success" id="successMsg"></div>
         <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
+        <div id="relationshipReportLoadingOverlay" class="report-loading-overlay" aria-hidden="true">
+            <div class="report-loading-card" role="status" aria-live="polite">
+                <h3 class="report-loading-title">Gerando Relationship Report</h3>
+                <p class="report-loading-message" id="relationshipReportLoadingMessage">Processando informações da conta. Isso pode levar alguns segundos.</p>
+                <div class="report-loading-progress"></div>
+            </div>
+        </div>
 
         <div id="iata" class="tab-content">
             <div class="page-header">
@@ -4414,7 +4483,7 @@
                 html += '<div style="display:flex; justify-content:space-between; gap:20px; align-items:flex-start; flex-wrap:wrap;">';
                 html += '<div style="max-width:680px;">';
                 html += '<div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.9; margin-bottom:8px;">Report & Backup</div>';
-                html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relation Report</h2>';
+                html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relationship Report</h2>';
                 html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Abra um report executivo visual no navegador com identidade da conta, foto do usuário, cards dos contatos, contexto relacional, leitura temática e botão para imprimir ou salvar em PDF.</p>';
                 html += '</div>';
                 html += '</div>';
@@ -4424,12 +4493,12 @@
 
                 html += '<div style="background: rgba(255,255,255,0.92); padding: 22px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.24); box-shadow: 0 12px 34px rgba(15,23,42,0.05);">';
                 html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; flex-wrap:wrap;">';
-                html += '<div><h3 style="color:#047857; margin:0 0 6px 0;">Gerar Relation Report</h3><p style="color:#6b7280; margin:0; font-size:14px;">Selecione a conta e o período para montar o PDF completo.</p></div>';
+                html += '<div><h3 style="color:#047857; margin:0 0 6px 0;">Gerar Relationship Report</h3><p style="color:#6b7280; margin:0; font-size:14px;">Selecione a conta e o período para montar o PDF completo.</p></div>';
                 html += '<div style="background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; border-radius:999px; padding:8px 12px; font-size:12px; font-weight:600;">Resumo com IA incluído</div>';
                 html += '</div>';
                 html += '<div class="form-group" style="margin-bottom:14px;">';
                 html += '<label style="display:block; margin-bottom:8px; font-weight:600; color:#065f46;">Cliente / Conta</label>';
-                html += '<select id="relationReportAccount" style="width:100%; border:2px solid #d1fae5; padding:12px; border-radius:10px; background:white;">';
+                html += '<select id="relationshipReportAccount" style="width:100%; border:2px solid #d1fae5; padding:12px; border-radius:10px; background:white;">';
                 html += '<option value="">Selecione uma conta</option>';
                 (Array.isArray(accountsData) ? accountsData : []).forEach(account => {
                     html += `<option value="${account.id}">${escapeHtml(account.name || 'Conta sem nome')}</option>`;
@@ -4439,25 +4508,25 @@
                 html += '<div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">';
                 html += '<div class="form-group">';
                 html += '<label style="display:block; margin-bottom:8px; font-weight:600; color:#065f46;">Data Inicial</label>';
-                html += '<input type="date" id="relationReportStart" style="width:100%; border:2px solid #e5e7eb; padding:12px; border-radius:10px; background:white;">';
+                html += '<input type="date" id="relationshipReportStart" style="width:100%; border:2px solid #e5e7eb; padding:12px; border-radius:10px; background:white;">';
                 html += '</div>';
                 html += '<div class="form-group">';
                 html += '<label style="display:block; margin-bottom:8px; font-weight:600; color:#065f46;">Data Final</label>';
-                html += '<input type="date" id="relationReportEnd" style="width:100%; border:2px solid #e5e7eb; padding:12px; border-radius:10px; background:white;">';
+                html += '<input type="date" id="relationshipReportEnd" style="width:100%; border:2px solid #e5e7eb; padding:12px; border-radius:10px; background:white;">';
                 html += '</div>';
                 html += '</div>';
                 html += '<div style="margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">';
                 html += '<label style="display:flex; align-items:center; gap:8px; color:#374151; font-size:14px; cursor:pointer;">';
-                html += '<input type="checkbox" id="relationReportFullPeriod" onchange="toggleRelationReportPeriod()">';
+                html += '<input type="checkbox" id="relationshipReportFullPeriod" onchange="toggleRelationshipReportPeriod()">';
                 html += '<span>Usar todo o período</span>';
                 html += '</label>';
                 html += '<span style="font-size:12px; color:#6b7280;">Ao marcar, o relatório ignora o filtro de datas.</span>';
                 html += '</div>';
                 html += '<div style="margin-top:18px; display:flex; gap:12px; flex-wrap:wrap;">';
-                html += '<button class="btn btn-primary" id="relationReportOpenBtn" onclick="openRelationReportView()"><i class="fas fa-chart-line"></i> Abrir Report Executivo</button>';
-                html += '<button class="btn btn-secondary" onclick="previewRelationReport()"><i class="fas fa-eye"></i> Pré-visualizar resumo</button>';
+                html += '<button class="btn btn-primary" id="relationshipReportOpenBtn" onclick="openRelationshipReportView()"><i class="fas fa-chart-line"></i> Abrir Report Executivo</button>';
+                html += '<button class="btn btn-secondary" onclick="previewRelationshipReport()"><i class="fas fa-eye"></i> Pré-visualizar resumo</button>';
                 html += '</div>';
-                html += '<div id="relationReportPreview" style="display:none; margin-top:18px;"></div>';
+                html += '<div id="relationshipReportPreview" style="display:none; margin-top:18px;"></div>';
                 html += '</div>';
 
                 html += '<div style="display:grid; gap:20px;">';
@@ -4520,7 +4589,7 @@
                 html += '</div></div>';
 
                 document.getElementById('reportContent').innerHTML = html;
-                toggleRelationReportPeriod();
+                toggleRelationshipReportPeriod();
             } catch (error) {
                 showError('Erro ao carregar report');
             }
@@ -4582,10 +4651,10 @@
             btn.style.cursor = hasSelection ? 'pointer' : 'not-allowed';
         }
 
-        function toggleRelationReportPeriod() {
-            const full = document.getElementById('relationReportFullPeriod')?.checked;
-            const start = document.getElementById('relationReportStart');
-            const end = document.getElementById('relationReportEnd');
+        function toggleRelationshipReportPeriod() {
+            const full = document.getElementById('relationshipReportFullPeriod')?.checked;
+            const start = document.getElementById('relationshipReportStart');
+            const end = document.getElementById('relationshipReportEnd');
             if (!start || !end) return;
             start.disabled = !!full;
             end.disabled = !!full;
@@ -4593,13 +4662,13 @@
             end.style.opacity = full ? '0.55' : '1';
         }
 
-        function getRelationReportParams() {
-            const accountId = document.getElementById('relationReportAccount')?.value;
-            const fullPeriod = document.getElementById('relationReportFullPeriod')?.checked;
-            const startDate = document.getElementById('relationReportStart')?.value;
-            const endDate = document.getElementById('relationReportEnd')?.value;
+        function getRelationshipReportParams() {
+            const accountId = document.getElementById('relationshipReportAccount')?.value;
+            const fullPeriod = document.getElementById('relationshipReportFullPeriod')?.checked;
+            const startDate = document.getElementById('relationshipReportStart')?.value;
+            const endDate = document.getElementById('relationshipReportEnd')?.value;
             if (!accountId) {
-                throw new Error('Selecione uma conta para gerar o Relation Report.');
+                throw new Error('Selecione uma conta para gerar o Relationship Report.');
             }
             if (!fullPeriod && (!startDate || !endDate)) {
                 throw new Error('Selecione data inicial e final ou marque todo o período.');
@@ -4607,11 +4676,23 @@
             return { accountId, fullPeriod, startDate, endDate };
         }
 
-        function openRelationReportView() {
-            const btn = document.getElementById('relationReportOpenBtn');
+        function toggleRelationshipReportLoadingOverlay(show, message = '') {
+            const overlay = document.getElementById('relationshipReportLoadingOverlay');
+            const msgEl = document.getElementById('relationshipReportLoadingMessage');
+            if (!overlay) return;
+            if (msgEl) {
+                msgEl.textContent = message || 'Processando informações da conta. Isso pode levar alguns segundos.';
+            }
+            overlay.classList.toggle('active', !!show);
+            overlay.setAttribute('aria-hidden', show ? 'false' : 'true');
+            document.body.style.overflow = show ? 'hidden' : '';
+        }
+
+        async function openRelationshipReportView() {
+            const btn = document.getElementById('relationshipReportOpenBtn');
             const originalHtml = btn ? btn.innerHTML : '';
             try {
-                const { accountId, fullPeriod, startDate, endDate } = getRelationReportParams();
+                const { accountId, fullPeriod, startDate, endDate } = getRelationshipReportParams();
                 const params = new URLSearchParams({ account_id: accountId, full_period: fullPeriod ? 'true' : 'false' });
                 if (!fullPeriod) {
                     params.set('start_date', startDate);
@@ -4619,15 +4700,31 @@
                 }
                 if (btn) {
                     btn.disabled = true;
-                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Abrindo report...';
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Gerando report...';
                 }
-                const targetUrl = `/report/relation/view?${params.toString()}`;
-                window.open(targetUrl, '_blank', 'noopener');
-                showToast('Abrindo Relation Report executivo...', 'success');
+                toggleRelationshipReportLoadingOverlay(true, 'Processando dados e montando o report executivo. Aguarde...');
+                const response = await fetch(`/report/relation/view?${params.toString()}`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'text/html' }
+                });
+                const reportHtml = await response.text();
+                if (!response.ok) {
+                    throw new Error(reportHtml || 'Erro ao gerar Relationship Report');
+                }
+                const reportWindow = window.open('', '_blank');
+                if (!reportWindow) {
+                    throw new Error('Não foi possível abrir a aba do relatório. Verifique o bloqueador de pop-up do navegador.');
+                }
+                try { reportWindow.opener = null; } catch (e) { /* noop */ }
+                reportWindow.document.open();
+                reportWindow.document.write(reportHtml);
+                reportWindow.document.close();
+                showToast('Relationship Report gerado com sucesso.', 'success');
             } catch (error) {
                 console.error(error);
-                showToast(error.message || 'Erro ao abrir Relation Report', 'error');
+                showToast(error.message || 'Erro ao abrir Relationship Report', 'error');
             } finally {
+                toggleRelationshipReportLoadingOverlay(false);
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = originalHtml || '<i class="fas fa-chart-line"></i> Abrir Report Executivo';
@@ -4635,10 +4732,10 @@
             }
         }
 
-        async function previewRelationReport() {
-            const container = document.getElementById('relationReportPreview');
+        async function previewRelationshipReport() {
+            const container = document.getElementById('relationshipReportPreview');
             try {
-                const { accountId, fullPeriod, startDate, endDate } = getRelationReportParams();
+                const { accountId, fullPeriod, startDate, endDate } = getRelationshipReportParams();
                 container.style.display = 'block';
                 container.innerHTML = '<div style="padding:16px; border-radius:12px; background:#f9fafb; color:#6b7280; border:1px solid #e5e7eb;">Gerando prévia...</div>';
                 const params = new URLSearchParams({ account_id: accountId, full_period: fullPeriod ? 'true' : 'false' });

@@ -1975,7 +1975,7 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
         c.drawImage(account_logo, page_width - 40 * mm, page_height - 38 * mm, width=18 * mm, height=18 * mm, mask='auto', preserveAspectRatio=True)
     c.setFillColor(colors.white)
     c.setFont('Helvetica-Bold', 18)
-    c.drawString(44 * mm, page_height - 27 * mm, 'Relation Report')
+    c.drawString(44 * mm, page_height - 27 * mm, 'Relationship Report')
     c.setFont('Helvetica', 10)
     c.drawString(44 * mm, page_height - 33 * mm, 'Toca do Coelho')
     c.setFont('Helvetica-Bold', 14)
@@ -2181,7 +2181,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
 <head>
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-<title>Relation Report - {esc(account_name)}</title>
+<title>Relationship Report - {esc(account_name)}</title>
 <style>
 :root {{ --green:#059669; --green-dark:#065f46; --mint:#d1fae5; --bg:#f6fffb; --text:#1f2937; --muted:#6b7280; --card:#ffffff; --line:#d1fae5; }}
 * {{ box-sizing:border-box; }}
@@ -2366,7 +2366,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 </head>
 <body>
 <div class='rr-toolbar'>
-  <div class='rr-toolbar-title'>Relation Report · {esc(account_name)}</div>
+  <div class='rr-toolbar-title'>Relationship Report · {esc(account_name)}</div>
   <div class='rr-toolbar-actions'>
     <button class='rr-btn rr-btn-secondary' onclick='window.close()'>✕ Fechar</button>
     <button class='rr-btn rr-btn-primary' onclick='rrShowFireshotModal()'>
@@ -2380,7 +2380,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
       <div class='rr-brand'>
         <div class='rr-brand-mark'>{account_logo_html}</div>
         <div>
-          <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relation Report</p>
+          <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relationship Report</p>
           <h1 class='rr-title'>{esc(account_name)}</h1>
           <p class='rr-subtitle'>Visão executiva do relacionamento da conta, combinando Power Mapping, histórico de interação, presença operacional, leitura temática e próximos passos recomendados.</p>
         </div>
@@ -11842,11 +11842,15 @@ def handle_unexpected_exception(error):
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))
+    fixed_debug_mode = True
+    app.logger.setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(logging.DEBUG)
     print('=' * 50)
     print('  TOCA DO COELHO - Gestao de Clientes')
     print('=' * 50)
     print(f'[Database] Banco de dados inicializado')
     print(f'[Server] Iniciando em http://localhost:{port}')
+    print(f'[Debug] Modo debug fixo no terminal: {"ATIVO" if fixed_debug_mode else "INATIVO"}')
     print(f'[Server] Pressione CTRL+C para parar')
     print()
     
@@ -11860,4 +11864,4 @@ if __name__ == '__main__':
     thread = threading.Thread(target=open_browser, daemon=True)
     thread.start()
     
-    app.run(host='localhost', port=port, debug=False)
+    app.run(host='localhost', port=port, debug=fixed_debug_mode, use_reloader=False)
