@@ -1205,6 +1205,68 @@
             100% { transform: rotate(360deg); }
         }
 
+        .report-loading-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 14000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 23, 42, 0.52);
+            backdrop-filter: blur(1.5px);
+            padding: 20px;
+        }
+
+        .report-loading-overlay.active {
+            display: flex;
+        }
+
+        .report-loading-card {
+            width: min(460px, 100%);
+            background: #ffffff;
+            border-radius: 16px;
+            border: 1px solid #d1fae5;
+            box-shadow: 0 18px 50px rgba(15, 23, 42, 0.22);
+            padding: 22px 22px 20px;
+        }
+
+        .report-loading-title {
+            margin: 0 0 8px;
+            color: #065f46;
+            font-size: 19px;
+            font-weight: 700;
+        }
+
+        .report-loading-message {
+            margin: 0 0 14px;
+            color: #4b5563;
+            font-size: 14px;
+            line-height: 1.55;
+        }
+
+        .report-loading-progress {
+            height: 10px;
+            border-radius: 999px;
+            background: #e5e7eb;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .report-loading-progress::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            width: 45%;
+            background: linear-gradient(90deg, #34d399, #10b981, #34d399);
+            border-radius: inherit;
+            animation: reportLoadingSlide 1.2s ease-in-out infinite;
+        }
+
+        @keyframes reportLoadingSlide {
+            0% { transform: translateX(-110%); }
+            100% { transform: translateX(260%); }
+        }
+
         /* Status Badge */
         .status-badge {
             display: inline-flex;
@@ -1718,6 +1780,13 @@
         <div class="alert alert-success" id="successMsg"></div>
         <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
+        <div id="relationReportLoadingOverlay" class="report-loading-overlay" aria-hidden="true">
+            <div class="report-loading-card" role="status" aria-live="polite">
+                <h3 class="report-loading-title">Gerando Relation Report</h3>
+                <p class="report-loading-message" id="relationReportLoadingMessage">Processando informações da conta. Isso pode levar alguns segundos.</p>
+                <div class="report-loading-progress"></div>
+            </div>
+        </div>
 
         <div id="iata" class="tab-content">
             <div class="page-header">
@@ -4607,7 +4676,19 @@
             return { accountId, fullPeriod, startDate, endDate };
         }
 
-        function openRelationReportView() {
+        function toggleRelationReportLoadingOverlay(show, message = '') {
+            const overlay = document.getElementById('relationReportLoadingOverlay');
+            const msgEl = document.getElementById('relationReportLoadingMessage');
+            if (!overlay) return;
+            if (msgEl) {
+                msgEl.textContent = message || 'Processando informações da conta. Isso pode levar alguns segundos.';
+            }
+            overlay.classList.toggle('active', !!show);
+            overlay.setAttribute('aria-hidden', show ? 'false' : 'true');
+            document.body.style.overflow = show ? 'hidden' : '';
+        }
+
+        async function openRelationReportView() {
             const btn = document.getElementById('relationReportOpenBtn');
             const originalHtml = btn ? btn.innerHTML : '';
             try {
@@ -4619,15 +4700,30 @@
                 }
                 if (btn) {
                     btn.disabled = true;
-                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Abrindo report...';
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Gerando report...';
                 }
-                const targetUrl = `/report/relation/view?${params.toString()}`;
-                window.open(targetUrl, '_blank', 'noopener');
-                showToast('Abrindo Relation Report executivo...', 'success');
+                toggleRelationReportLoadingOverlay(true, 'Processando dados e montando o report executivo. Aguarde...');
+                const response = await fetch(`/report/relation/view?${params.toString()}`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'text/html' }
+                });
+                const reportHtml = await response.text();
+                if (!response.ok) {
+                    throw new Error(reportHtml || 'Erro ao gerar Relation Report');
+                }
+                const reportWindow = window.open('', '_blank', 'noopener');
+                if (!reportWindow) {
+                    throw new Error('Não foi possível abrir uma nova aba. Verifique o bloqueador de pop-up do navegador.');
+                }
+                reportWindow.document.open();
+                reportWindow.document.write(reportHtml);
+                reportWindow.document.close();
+                showToast('Relation Report gerado com sucesso.', 'success');
             } catch (error) {
                 console.error(error);
                 showToast(error.message || 'Erro ao abrir Relation Report', 'error');
             } finally {
+                toggleRelationReportLoadingOverlay(false);
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = originalHtml || '<i class="fas fa-chart-line"></i> Abrir Report Executivo';
