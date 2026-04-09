@@ -2132,6 +2132,11 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
             meta.append(esc(contact.get('email')))
         if contact.get('phone'):
             meta.append(esc(contact.get('phone')))
+        linkedin_raw = str(contact.get('linkedin') or '').strip()
+        linkedin_html = ''
+        if linkedin_raw:
+            linkedin_safe = esc(linkedin_raw)
+            linkedin_html = f"<div class='rr-contact-linkedin'><a href='{linkedin_safe}' target='_blank' rel='noopener noreferrer'>LinkedIn</a></div>"
         activities = [a for a in (report_data.get('activities') or []) if a.get('client_id') == contact.get('id')]
         last_contact = activities[0] if activities else None
         last_contact_line = f"Última interação: {esc(_relation_report_format_dt(last_contact.get('activity_date')))}" if last_contact else 'Última interação: não registrada'
@@ -2143,6 +2148,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
                 <div>
                     <div class='rr-contact-name'>{esc(contact.get('name'))}</div>
                     <div class='rr-contact-meta'>{' · '.join(meta) if meta else 'Sem detalhes complementares'}</div>
+                    {linkedin_html}
                 </div>
             </div>
             <div class='rr-badge-row'>{''.join(badges)}</div>
@@ -2227,6 +2233,9 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-contact-photo-fallback {{ display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--green-dark); font-size:22px; }}
 .rr-contact-name {{ font-size:17px; font-weight:800; color:#111827; }}
 .rr-contact-meta {{ font-size:13px; color:#6b7280; margin-top:3px; line-height:1.4; }}
+.rr-contact-linkedin {{ margin-top:6px; }}
+.rr-contact-linkedin a {{ color:#0a66c2; text-decoration:none; font-size:12px; font-weight:600; }}
+.rr-contact-linkedin a:hover {{ text-decoration:underline; }}
 .rr-badge-row {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }}
 .rr-badge {{ font-size:11px; font-weight:700; border-radius:999px; padding:6px 10px; display:inline-flex; align-items:center; }}
 .rr-badge-primary {{ background:#dcfce7; color:#166534; }}
@@ -2637,9 +2646,11 @@ def _relation_report_render_pdf(report_data):
         c.drawString(22 * mm, y - 6 * mm, f"{contact.get('name') or 'Contato'} — {contact.get('position') or 'Cargo não informado'}")
         c.setFont('Helvetica', 8.3)
         c.setFillColor(colors.HexColor('#4b5563'))
+        linkedin_value = str(contact.get('linkedin') or '').strip() or 'Não informado'
         c.drawString(22 * mm, y - 10 * mm, f"Área: {contact.get('area_of_activity') or 'Não informada'} | Email: {contact.get('email') or 'Não informado'}")
-        c.drawString(22 * mm, y - 14 * mm, f"Cards: atividades {rel.get('activities_count',0)} | mapeamento {rel.get('mapping_count',0)} | kanban {rel.get('kanban_count',0)} | último contato {_relation_report_format_dt((rel.get('last_contact') or {}).get('date'))}")
-        y -= 19 * mm
+        c.drawString(22 * mm, y - 12.5 * mm, f"LinkedIn: {linkedin_value[:95]}")
+        c.drawString(22 * mm, y - 15 * mm, f"Cards: atividades {rel.get('activities_count',0)} | mapeamento {rel.get('mapping_count',0)} | kanban {rel.get('kanban_count',0)} | último contato {_relation_report_format_dt((rel.get('last_contact') or {}).get('date'))}")
+        y -= 20 * mm
 
     y = ensure_space(y, 45 * mm)
     c.setFillColor(colors_map['secondary'])
