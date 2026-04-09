@@ -11905,12 +11905,16 @@ def handle_unexpected_exception(error):
     return jsonify({'error': 'Erro interno inesperado. Consulte os logs para suporte.'}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 3000))
+    port = int(os.getenv('PORT', 3000))
+    fixed_debug_mode = True
+    app.logger.setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(logging.DEBUG)
     print('=' * 50)
     print('  TOCA DO COELHO - Gestao de Clientes')
     print('=' * 50)
     print(f'[Database] Banco de dados inicializado')
     print(f'[Server] Iniciando em http://localhost:{port}')
+    print(f'[Debug] Modo debug fixo no terminal: {"ATIVO" if fixed_debug_mode else "INATIVO"}')
     print(f'[Server] Pressione CTRL+C para parar')
     print()
     
@@ -11924,4 +11928,4 @@ if __name__ == '__main__':
     thread = threading.Thread(target=open_browser, daemon=True)
     thread.start()
     
-    app.run(host='localhost', port=port, debug=False)
+    app.run(host='localhost', port=port, debug=fixed_debug_mode, use_reloader=False)
