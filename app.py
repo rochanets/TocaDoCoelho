@@ -10208,6 +10208,62 @@ def _portfolio_parse_llm_raw(raw):
             return parsed
         return None
 
+    def _parse_structured_text_fallback(value):
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+
+        def _extract_numbered_items(section_title):
+            section_pattern = rf'(?is){re.escape(section_title)}\s*(.*?)(?:\n\s*(?:##+|\-\-\-)|\Z)'
+            section_match = re.search(section_pattern, text)
+            if not section_match:
+                return []
+            section_body = section_match.group(1)
+            items = []
+            for match in re.finditer(r'(?m)^\s*\d+[\.\)]\s+\*\*(.*?)\*\*|\s*\d+[\.\)]\s+(.+)$', section_body):
+                candidate = (match.group(1) or match.group(2) or '').strip()
+                candidate = re.sub(r'\s+', ' ', candidate).strip(' -•\t')
+                if candidate:
+                    items.append(candidate)
+            if not items:
+                for line in section_body.splitlines():
+                    line = re.sub(r'^\s*[-•]\s*', '', line).strip()
+                    if line and not line.startswith('#'):
+                        items.append(line)
+            return items[:12]
+
+        problems = _extract_numbered_items('Identificação de Problemas')
+        solutions = _extract_numbered_items('Soluções Apresentadas')
+
+        if not problems and not solutions:
+            return None
+
+        max_len = max(len(problems), len(solutions), 1)
+        items = []
+        for i in range(max_len):
+            pain = problems[i] if i < len(problems) else ''
+            solution = solutions[i] if i < len(solutions) else ''
+            if pain or solution:
+                items.append({'pain': pain, 'solution': solution})
+
+        summary = ''
+        resumo_match = re.search(r'(?is)Resumo Estruturado\s*(.*?)(?:\n\s*(?:##+)|\Z)', text)
+        if resumo_match:
+            lines = []
+            for ln in resumo_match.group(1).splitlines():
+                clean = re.sub(r'^\s*[-•]\s*', '', ln).strip()
+                if clean:
+                    lines.append(clean)
+            summary = ' '.join(lines)[:600]
+
+        return {
+            'title': 'Oferta gerada por IA',
+            'summary': summary or 'Resumo estruturado gerado a partir da análise do conteúdo enviado.',
+            'items': items or [{'pain': 'Pontos de dor não identificados no retorno.', 'solution': 'Soluções não identificadas no retorno.'}]
+        }
+
     parsed = _try_parse_json(raw)
     if parsed and 'items' not in parsed:
         for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message', 'answer'):
@@ -10217,6 +10273,9 @@ def _portfolio_parse_llm_raw(raw):
                 parsed = nested
                 break
     if not parsed:
+        fallback = _parse_structured_text_fallback(raw)
+        if fallback:
+            return fallback
         return None
 
     title = (parsed.get('title') or '').strip() if isinstance(parsed, dict) else ''
@@ -10246,14 +10305,9 @@ def _portfolio_parse_llm_raw(raw):
 
 def _portfolio_generate_offer_from_llm(raw_input):
     llm_prompt = (
-        "Você é um especialista em posicionamento comercial B2B. "
-        "Analise o material abaixo e extraia um portfólio comercial em português (Brasil). "
-        "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão: "
-        '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
-        '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}. '
-        "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto; "
-        "use frases curtas e claras; não inclua markdown.\n\n"
-        f"MATERIAL:\n{raw_input[:30000]}"
+        "Analise o conteudo do PDF ou texto recebido e me escreva toda a ideia de forma estruturada, "
+        "buscando Problemas e apresentando soluções, restritos ao conteúdo enviado.\n\n"
+        f"CONTEUDO RECEBIDO:\n{raw_input[:30000]}"
     )
 
     raw = _sai_simple_prompt(llm_prompt)
