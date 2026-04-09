@@ -1045,6 +1045,24 @@
             font-style: italic;
         }
 
+        .input-minimal {
+            width: 100%;
+            max-width: 320px;
+            padding: 8px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #fff;
+            color: #111827;
+            font-size: 13px;
+            line-height: 1.2;
+        }
+
+        .input-minimal:focus {
+            outline: none;
+            border-color: #34d399;
+            box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.15);
+        }
+
         .filter-group {
             display: flex;
             flex-direction: column;
@@ -1955,9 +1973,9 @@
                     </div>
                 </div>
                 <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Filtrar por Cliente:</label>
-                    <select id="mappingClientFilter" onchange="loadMapeamento()" style="width: 100%; max-width: 400px; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
-                        <option value="">Selecione um cliente</option>
+                    <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Selecionar Conta:</label>
+                    <select id="mappingClientFilter" onchange="loadMapeamento()" class="input-minimal">
+                        <option value="">Selecione uma conta</option>
                     </select>
                 </div>
                 <div id="mapeamentoContent"></div>
@@ -6085,7 +6103,7 @@
         // Mapeamento de Ambiente
         let mappingCards = [];
         let mappingSelectedClient = null;
-        let mappingCompanies = [];
+        let mappingAccounts = [];
 
         async function loadMapeamento() {
             try {
@@ -6097,32 +6115,34 @@
                 const cardsResponse = await fetch(`${API_BASE}/environment/cards`);
                 mappingCards = await cardsResponse.json();
 
-                // Carregar empresas (mesma base usada em outros pontos do sistema)
-                const [companiesResponse, clientsResponse] = await Promise.all([
-                    fetch(`${API_BASE}/empresas`),
+                // Carregar contas cadastradas e clientes
+                const [accountsResponse, clientsResponse] = await Promise.all([
+                    fetch(`${API_BASE}/accounts`),
                     fetch(`${API_BASE}/clientes`)
                 ]);
-                mappingCompanies = await companiesResponse.json();
+                mappingAccounts = await accountsResponse.json();
                 const clientsList = await clientsResponse.json();
 
-                // Preencher dropdown de clientes usando lista de empresas completa
-                filterSelect.innerHTML = '<option value="">Selecione um cliente</option>';
+                // Preencher dropdown com contas
+                filterSelect.innerHTML = '<option value="">Selecione uma conta</option>';
 
-                // Mapeamento empresa -> client_id (quando existir cliente vinculado)
-                const companiesMap = new Map();
+                // Mapeamento conta(empresa) -> client_id (quando existir cliente vinculado)
+                const accountClientMap = new Map();
                 clientsList.forEach(client => {
-                    if (client.company && !companiesMap.has(client.company)) {
-                        companiesMap.set(client.company, client.id);
+                    if (client.company && !accountClientMap.has(client.company)) {
+                        accountClientMap.set(client.company, client.id);
                     }
                 });
 
-                const sortedCompanies = (mappingCompanies || []).slice().sort((a, b) => a.localeCompare(b, 'pt-BR'));
+                const sortedAccounts = (mappingAccounts || [])
+                    .slice()
+                    .sort((a, b) => (a.name || '').localeCompare((b.name || ''), 'pt-BR'));
 
-                sortedCompanies.forEach((company) => {
+                sortedAccounts.forEach((account) => {
                     const option = document.createElement('option');
-                    option.value = company;
-                    option.textContent = company;
-                    if (!companiesMap.has(company)) {
+                    option.value = String(account.id);
+                    option.textContent = account.name || `Conta ${account.id}`;
+                    if (!accountClientMap.has(account.name)) {
                         option.title = 'Sem cliente vinculado para respostas';
                     }
                     filterSelect.appendChild(option);
@@ -6133,10 +6153,12 @@
                     filterSelect.value = previousSelection;
                 }
 
-                // Obter cliente selecionado
-                const selectedCompany = filterSelect.value || '';
-                mappingSelectedClient = selectedCompany && companiesMap.has(selectedCompany)
-                    ? parseInt(companiesMap.get(selectedCompany))
+                // Obter cliente selecionado a partir da conta escolhida
+                const selectedAccountId = parseInt(filterSelect.value || '', 10);
+                const selectedAccount = (mappingAccounts || []).find(a => Number(a.id) === selectedAccountId);
+                const selectedCompany = selectedAccount && selectedAccount.name ? selectedAccount.name : '';
+                mappingSelectedClient = selectedCompany && accountClientMap.has(selectedCompany)
+                    ? parseInt(accountClientMap.get(selectedCompany), 10)
                     : null;
 
                 // Renderizar cards
