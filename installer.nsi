@@ -1,8 +1,12 @@
 !include "MUI2.nsh"
 !include "x64.nsh"
 
+!ifndef APP_VERSION
+!define APP_VERSION "1.0.0"
+!endif
+
 Name "Toca do Coelho - Registro de Atividades"
-OutFile "TocaDoCoelho-1.0.0-Setup.exe"
+OutFile "TocaDoCoelho-${APP_VERSION}-Setup.exe"
 InstallDir "$PROGRAMFILES\TocaDoCoelho"
 InstallDirRegKey HKCU "Software\TocaDoCoelho" "InstallPath"
 
@@ -30,10 +34,10 @@ Section "Instalar Toca do Coelho" SecApp
     CreateDirectory "$APPDATA\toca-do-coelho"
 
     WriteRegStr HKCU "Software\TocaDoCoelho" "InstallPath" "$INSTDIR"
-    WriteRegStr HKCU "Software\TocaDoCoelho" "Version" "1.0.0"
+    WriteRegStr HKCU "Software\TocaDoCoelho" "Version" "${APP_VERSION}"
 
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "DisplayName" "Toca do Coelho"
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "DisplayVersion" "1.0.0"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "DisplayVersion" "${APP_VERSION}"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "UninstallString" "$INSTDIR\uninstall.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "InstallLocation" "$INSTDIR"
 
