@@ -58,8 +58,12 @@ def resolve_app_version():
 APP_VERSION = resolve_app_version()
 
 
+def get_server_port():
+    return int(os.environ.get('PORT', '3000'))
+
+
 def open_app_in_browser():
-    webbrowser.open('http://localhost:3000')
+    webbrowser.open(f'http://localhost:{get_server_port()}')
 
 
 class WindowsTrayIcon:
@@ -193,7 +197,7 @@ class WindowsTrayIcon:
 # colete as dependências do app no build.
 if '--serve' in sys.argv:
     import app as app_module
-    port = int(os.environ.get('PORT', '3000'))
+    port = get_server_port()
     app_module.app.run(host='localhost', port=port, debug=False, use_reloader=False)
     sys.exit(0)
 
@@ -252,7 +256,7 @@ while attempt < max_attempts:
         sys.exit(1)
 
     try:
-        response = requests.get('http://localhost:3000/', timeout=1)
+        response = requests.get(f'http://localhost:{get_server_port()}/', timeout=1)
         if response.status_code == 200:
             print("[OK] Servidor pronto!")
             break
@@ -278,7 +282,7 @@ print("[OK] Navegador aberto!")
 print()
 
 print("=" * 60)
-print("  Toca do Coelho está rodando em http://localhost:3000")
+print(f"  Toca do Coelho está rodando em http://localhost:{get_server_port()}")
 print("  Para encerrar no Windows, use o ícone na bandeja do sistema")
 print("=" * 60)
 print()

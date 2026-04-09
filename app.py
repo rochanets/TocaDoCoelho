@@ -11878,6 +11878,13 @@ def serve_autotoca_upload(filename):
 def serve_upload(filename):
     return send_from_directory(str(UPLOAD_DIR), filename)
 
+@app.route('/api/system/config', methods=['GET'])
+def get_system_config():
+    return jsonify({
+        'env': os.environ.get('TOCA_ENV', 'production'),
+        'version': APP_VERSION
+    })
+
 @app.route('/')
 def index():
     return send_from_directory(app.static_folder, 'index.html')
@@ -11897,7 +11904,7 @@ def handle_unexpected_exception(error):
     return jsonify({'error': 'Erro interno inesperado. Consulte os logs para suporte.'}), 500
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 3000))
+    port = int(os.environ.get('PORT', 3000))
     print('=' * 50)
     print('  TOCA DO COELHO - Gestao de Clientes')
     print('=' * 50)
