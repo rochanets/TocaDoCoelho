@@ -4679,6 +4679,7 @@
             { key: 'area_of_activity', label: 'Área de Atuação', checked: false },
             { key: 'email', label: 'Email', checked: true },
             { key: 'phone', label: 'Telefone', checked: true },
+            { key: 'linkedin', label: 'LinkedIn', checked: true },
             { key: 'photo_url', label: 'Foto (URL)', checked: false },
             { key: 'is_target', label: 'Contato-Alvo', checked: false },
             { key: 'is_cold_contact', label: 'Contato Frio', checked: false },
@@ -7669,6 +7670,7 @@
                                 <div class="profile-field"><div class="profile-field-label">Área de Atuação</div><div class="profile-field-value">${escapeHtml(client.area_of_activity || '-')}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Contato Frio</div><div class="profile-field-value">${Number(client.is_cold_contact)===1?'Sim':'Não'}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Telefone</div><div class="profile-field-value">${escapeHtml(client.phone || '-')}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">LinkedIn</div><div class="profile-field-value">${client.linkedin ? `<a href="${escapeHtml(client.linkedin)}" target="_blank" rel="noopener noreferrer" style="color:#0a66c2; text-decoration:none;">${escapeHtml(client.linkedin)}</a>` : '-'}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Último contato</div><div class="profile-field-value">${formatDateBr(client.last_activity_date)}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Cadastro</div><div class="profile-field-value">${formatDateBr(client.created_at)}</div></div>
                             </div>

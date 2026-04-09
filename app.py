@@ -8484,6 +8484,7 @@ def export_clientes():
             'area_of_activity': ('area_of_activity', 'Área de Atuação'),
             'email': ('email', 'Email'),
             'phone': ('phone', 'Telefone'),
+            'linkedin': ('linkedin', 'LinkedIn'),
             'photo_url': ('photo_url', 'Foto (URL)'),
             'is_target': ('is_target', 'Contato-Alvo'),
             'is_cold_contact': ('is_cold_contact', 'Contato Frio'),
@@ -8491,7 +8492,7 @@ def export_clientes():
             'updated_at': ('updated_at', 'Última Atualização'),
         }
 
-        default_fields = ['id', 'name', 'company', 'position', 'email', 'phone', 'created_at']
+        default_fields = ['id', 'name', 'company', 'position', 'email', 'phone', 'linkedin', 'created_at']
         requested_fields = (request.args.get('fields') or '').strip()
 
         selected_fields = []
