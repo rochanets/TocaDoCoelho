@@ -31,9 +31,39 @@ DATA_DIR = (
 )
 DB_PATH = DATA_DIR / 'toca-do-coelho.db'
 
+def resolve_app_version():
+    default_version = '1.0.0'
+    env_version = (os.environ.get('TOCA_APP_VERSION') or '').strip()
+    candidate_dirs = [Path(__file__).resolve().parent]
+
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidate_dirs.append(Path(meipass))
+        candidate_dirs.append(Path(sys.executable).resolve().parent)
+
+    for base_dir in candidate_dirs:
+        version_file = base_dir / 'version.txt'
+        try:
+            if version_file.exists():
+                file_version = version_file.read_text(encoding='utf-8').strip()
+                if file_version:
+                    return file_version
+        except Exception as error:
+            print(f"[WARN] Falha ao ler versão em {version_file}: {error}")
+
+    return env_version or default_version
+
+
+APP_VERSION = resolve_app_version()
+
+
+def get_server_port():
+    return int(os.environ.get('PORT', '3000'))
+
 
 def open_app_in_browser():
-    webbrowser.open('http://localhost:3000')
+    webbrowser.open(f'http://localhost:{get_server_port()}')
 
 
 class WindowsTrayIcon:
@@ -167,7 +197,7 @@ class WindowsTrayIcon:
 # colete as dependências do app no build.
 if '--serve' in sys.argv:
     import app as app_module
-    port = int(os.environ.get('PORT', '3000'))
+    port = get_server_port()
     app_module.app.run(host='localhost', port=port, debug=False, use_reloader=False)
     sys.exit(0)
 
@@ -175,7 +205,7 @@ if '--serve' in sys.argv:
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 print("=" * 60)
-print("  TOCA DO COELHO - Registro de Atividades v1.0.0")
+print(f"  TOCA DO COELHO - Registro de Atividades v{APP_VERSION}")
 print("=" * 60)
 print()
 print(f"[INFO] APP_DIR : {APP_DIR}")
@@ -226,7 +256,7 @@ while attempt < max_attempts:
         sys.exit(1)
 
     try:
-        response = requests.get('http://localhost:3000/', timeout=1)
+        response = requests.get(f'http://localhost:{get_server_port()}/', timeout=1)
         if response.status_code == 200:
             print("[OK] Servidor pronto!")
             break
@@ -252,7 +282,7 @@ print("[OK] Navegador aberto!")
 print()
 
 print("=" * 60)
-print("  Toca do Coelho está rodando em http://localhost:3000")
+print(f"  Toca do Coelho está rodando em http://localhost:{get_server_port()}")
 print("  Para encerrar no Windows, use o ícone na bandeja do sistema")
 print("=" * 60)
 print()
