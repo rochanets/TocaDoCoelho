@@ -15,6 +15,7 @@ import concurrent.futures
 import traceback
 import shutil
 import urllib.request
+import requests
 import urllib.error
 import urllib.parse
 import html
@@ -1742,22 +1743,26 @@ def _relation_report_build_topic_evidence(report_data):
 
 
 def _relation_report_fetch_market_context(account_name: str) -> str | None:
-    question = (
-        f"Você é um analista de negócios. Pesquise na web notícias e informações recentes "
-        f"sobre a empresa '{account_name}'. "
-        "Escreva um parágrafo executivo de 3 a 5 linhas descrevendo o momento atual "
-        "desta empresa no mercado: tendências, movimentos estratégicos, expansões, "
-        "desafios ou destaque setorial. "
-        "Use somente informações verificáveis e recentes. "
-        "Se não encontrar informações confiáveis, responda exatamente: SEM_DADOS"
-    )
-    raw = _sai_simple_prompt(question)
-    if not raw:
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if not api_key:
         return None
-    text = raw.strip()
-    if 'SEM_DADOS' in text or len(text) < 30:
+    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
+    try:
+        resp = requests.post(
+            f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
+            json={'inputs': {'search': search}},
+            headers={'X-Api-Key': api_key},
+            timeout=45,
+        )
+        resp.raise_for_status()
+        text = resp.text.strip()
+        if not text or len(text) < 30:
+            return None
+        return text
+    except Exception as e:
+        logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
         return None
-    return text
 
 
 def _relation_report_generate_highlights(report_data: dict) -> list[str]:
@@ -2003,7 +2008,7 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
         c.drawImage(account_logo, page_width - 40 * mm, page_height - 38 * mm, width=18 * mm, height=18 * mm, mask='auto', preserveAspectRatio=True)
     c.setFillColor(colors.white)
     c.setFont('Helvetica-Bold', 18)
-    c.drawString(44 * mm, page_height - 27 * mm, 'Relation Report')
+    c.drawString(44 * mm, page_height - 27 * mm, 'Relationship Report')
     c.setFont('Helvetica', 10)
     c.drawString(44 * mm, page_height - 33 * mm, 'Toca do Coelho')
     c.setFont('Helvetica-Bold', 14)
@@ -2190,10 +2195,10 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
     if market_context_text:
         market_context_html = f"""
         <div class='rr-market-context'>
-          <h3 style='font-size:13px; color:#6b7280; text-transform:uppercase; letter-spacing:.05em; margin:18px 0 6px;'>
+          <h3 style='font-size:13px; color:#ffffff; text-transform:uppercase; letter-spacing:.05em; margin:18px 0 6px;'>
             Contexto de Mercado
           </h3>
-          <p style='font-size:14px; line-height:1.7; color:#374151;'>
+          <p style='font-size:14px; line-height:1.7; color:#ffffff;'>
             {esc(market_context_text)}
           </p>
         </div>
@@ -2215,7 +2220,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
 <head>
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-<title>Relation Report - {esc(account_name)}</title>
+<title>Relationship Report - {esc(account_name)}</title>
 <style>
 :root {{ --green:#059669; --green-dark:#065f46; --mint:#d1fae5; --bg:#f6fffb; --text:#1f2937; --muted:#6b7280; --card:#ffffff; --line:#d1fae5; }}
 * {{ box-sizing:border-box; }}
@@ -2403,7 +2408,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 </head>
 <body>
 <div class='rr-toolbar'>
-  <div class='rr-toolbar-title'>Relation Report · {esc(account_name)}</div>
+  <div class='rr-toolbar-title'>Relationship Report · {esc(account_name)}</div>
   <div class='rr-toolbar-actions'>
     <button class='rr-btn rr-btn-secondary' onclick='window.close()'>✕ Fechar</button>
     <button class='rr-btn rr-btn-primary' onclick='rrShowFireshotModal()'>
@@ -2417,7 +2422,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
       <div class='rr-brand'>
         <div class='rr-brand-mark'>{account_logo_html}</div>
         <div>
-          <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relation Report</p>
+          <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relationship Report</p>
           <h1 class='rr-title'>{esc(account_name)}</h1>
           <p class='rr-subtitle'>Visão executiva do relacionamento da conta, combinando Power Mapping, histórico de interação, presença operacional, leitura temática e próximos passos recomendados.</p>
         </div>
