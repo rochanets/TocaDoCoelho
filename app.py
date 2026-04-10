@@ -10405,7 +10405,7 @@ def _portfolio_generate_offer_from_llm(raw_input, input_file_base64='', input_fi
     settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_base_url', 'portfolio_sai_template_id'])
     api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
     base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-    template_id = (settings_map.get('portfolio_sai_template_id') or '').strip() or '69d7ed2af23db9ac00973dfa'
+    template_id = (settings_map.get('portfolio_sai_template_id') or '').strip() or '69d911c04908722b4e187583'
 
     raw = None
     if api_key:
