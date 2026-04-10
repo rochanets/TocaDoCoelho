@@ -15,6 +15,7 @@ import concurrent.futures
 import traceback
 import shutil
 import urllib.request
+import requests
 import urllib.error
 import urllib.parse
 import html
@@ -1742,22 +1743,26 @@ def _relation_report_build_topic_evidence(report_data):
 
 
 def _relation_report_fetch_market_context(account_name: str) -> str | None:
-    question = (
-        f"Você é um analista de negócios. Pesquise na web notícias e informações recentes "
-        f"sobre a empresa '{account_name}'. "
-        "Escreva um parágrafo executivo de 3 a 5 linhas descrevendo o momento atual "
-        "desta empresa no mercado: tendências, movimentos estratégicos, expansões, "
-        "desafios ou destaque setorial. "
-        "Use somente informações verificáveis e recentes. "
-        "Se não encontrar informações confiáveis, responda exatamente: SEM_DADOS"
-    )
-    raw = _sai_simple_prompt(question)
-    if not raw:
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if not api_key:
         return None
-    text = raw.strip()
-    if 'SEM_DADOS' in text or len(text) < 30:
+    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
+    try:
+        resp = requests.post(
+            f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
+            json={'inputs': {'search': search}},
+            headers={'X-Api-Key': api_key},
+            timeout=45,
+        )
+        resp.raise_for_status()
+        text = resp.text.strip()
+        if not text or len(text) < 30:
+            return None
+        return text
+    except Exception as e:
+        logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
         return None
-    return text
 
 
 def _relation_report_generate_highlights(report_data: dict) -> list[str]:
