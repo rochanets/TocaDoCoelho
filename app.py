@@ -10317,11 +10317,18 @@ def _portfolio_parse_llm_raw(raw):
 
 
 def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
-    prompt_instruction = (
-        "Analise o conteudo do PDF ou texto recebido e me escreva toda a ideia de forma estruturada, "
-        "buscando Problemas e apresentando soluções, restritos ao conteúdo enviado."
+    material = (raw_input or '').strip()[:30000]
+    if not material and input_file_data_url:
+        material = '[Arquivo PDF enviado em input_file para análise.]'
+    input_text = (
+        "Você é um especialista em posicionamento comercial B2B. "
+        "O usuario vai enviar um pdf ou  texto um para analise e extraia um portfólio comercial em português (Brasil). "
+        "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão:\n"
+        '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
+        '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}\n\n'
+        "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto.\n\n"
+        f"MATERIAL:\n{material}"
     )
-    input_text = f"{prompt_instruction}\n\nCONTEUDO RECEBIDO:\n{raw_input[:30000]}" if raw_input else prompt_instruction
 
     settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_base_url', 'portfolio_sai_template_id'])
     api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
