@@ -3423,7 +3423,7 @@
         function openAutoTocaMailingPreview() {
             const filtered = _getAutoTocaFilteredMailingClients();
             if (!filtered.length) return showInfo('Nenhum contato encontrado para esse filtro.');
-            autoTocaMailingSelection = filtered.map(c => c.id);
+            autoTocaMailingSelection = filtered.filter(c => String(c.email || '').trim()).map(c => c.id);
 
             let html = `<div class="modal active" id="autoTocaMailingPreviewModal" onclick="if(event.target===this) closeAutoTocaMailingPreview()">`;
             html += `<div class="modal-content" style="max-width:920px;">`;
@@ -3433,8 +3433,8 @@
             html += filtered.map(c => {
                 const noEmail = !String(c.email || '').trim();
                 const status = getAutoTocaMailingStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact);
-                return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noEmail ? 'rgba(245,158,11,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noEmail ? 'rgba(255,251,235,.7)' : 'rgba(236,253,245,.5)'};">
-                    <input type="checkbox" checked onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
+                return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noEmail ? 'rgba(156,163,175,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noEmail ? 'rgba(243,244,246,.7)' : 'rgba(236,253,245,.5)'}; ${noEmail ? 'opacity:.6; cursor:not-allowed;' : 'cursor:pointer;'}">
+                    <input type="checkbox" ${noEmail ? 'disabled' : 'checked'} onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
                     <img src="${c.photo_url || '/logo-coelho.png'}" style="width:40px;height:40px;border-radius:999px;object-fit:cover;">
                     <div style="min-width:0;">
                         <div style="font-weight:700; color:#065f46; display:flex; align-items:center; gap:6px;">
@@ -3455,7 +3455,10 @@
         }
 
         function toggleAutoTocaMailingContact(contactId, checked) {
+            const contact = autoTocaMailingClients.find(c => Number(c.id) === Number(contactId));
+            const hasEmail = String(contact?.email || '').trim();
             if (checked) {
+                if (!hasEmail) return;
                 if (!autoTocaMailingSelection.includes(contactId)) autoTocaMailingSelection.push(contactId);
                 return;
             }
