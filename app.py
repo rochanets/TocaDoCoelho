@@ -10193,6 +10193,15 @@ def _portfolio_encode_upload_as_data_url(file_storage):
     return f'data:{content_type};base64,{encoded}'
 
 
+def _portfolio_encode_upload_as_base64(file_storage):
+    if not file_storage:
+        return ''
+    file_bytes = file_storage.read()
+    if not file_bytes:
+        return ''
+    return base64.b64encode(file_bytes).decode('ascii')
+
+
 def _portfolio_parse_llm_raw(raw):
     def _try_parse_json(value):
         if not value:
@@ -10369,7 +10378,7 @@ def _portfolio_parse_llm_raw(raw):
     return {'title': title, 'summary': summary, 'items': items}
 
 
-def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
+def _portfolio_generate_offer_from_llm(raw_input, input_file_base64='', input_file_data_url=''):
     debug_info = {
         'sai_raw_preview': '',
         'openrouter_raw_preview': '',
@@ -10381,7 +10390,7 @@ def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
         return text[:limit]
 
     material = (raw_input or '').strip()[:30000]
-    if not material and input_file_data_url:
+    if not material and (input_file_base64 or input_file_data_url):
         material = '[Arquivo PDF enviado em input_file para análise.]'
     input_text = (
         "Você é um especialista em posicionamento comercial B2B. "
@@ -10401,11 +10410,13 @@ def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
     raw = None
     if api_key:
         payload = {
-            'inputs': {
-                'input': input_text,
-                'input_file': input_file_data_url or ''
+                'inputs': {
+                    'input': input_text,
+                    'input_file': input_file_base64 or input_file_data_url or '',
+                    # fallback para templates que esperam variação de formato do arquivo
+                    'input_file_data_url': input_file_data_url or '',
+                }
             }
-        }
         try:
             req = urllib.request.Request(
                 f'{base_url}/api/templates/{template_id}/execute',
@@ -10510,13 +10521,30 @@ def create_portfolio_offer():
     try:
         input_text = (request.form.get('raw_input') or '').strip()
         file_obj = request.files.get('pdf_file')
-        input_file_data_url = _portfolio_encode_upload_as_data_url(file_obj) if file_obj else ''
         raw_input = input_text
 
-        if not raw_input and not input_file_data_url:
+        if not raw_input and not file_obj:
             return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
 
-        parsed, source, debug_info = _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=input_file_data_url)
+        input_file_base64 = ''
+        input_file_data_url = ''
+        if file_obj:
+            try:
+                file_obj.stream.seek(0)
+            except Exception:
+                pass
+            input_file_base64 = _portfolio_encode_upload_as_base64(file_obj)
+            try:
+                file_obj.stream.seek(0)
+            except Exception:
+                pass
+            input_file_data_url = _portfolio_encode_upload_as_data_url(file_obj)
+
+        parsed, source, debug_info = _portfolio_generate_offer_from_llm(
+            raw_input,
+            input_file_base64=input_file_base64,
+            input_file_data_url=input_file_data_url
+        )
         if not parsed:
             if source == 'sem_llm':
                 return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
