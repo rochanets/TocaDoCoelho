@@ -4492,7 +4492,7 @@
                 html += '<div style="display:flex; justify-content:space-between; gap:20px; align-items:flex-start; flex-wrap:wrap;">';
                 html += '<div style="max-width:680px;">';
                 html += '<div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.9; margin-bottom:8px;">Report & Backup</div>';
-                html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relation Report</h2>';
+                html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relationship Report</h2>';
                 html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Abra um report executivo visual no navegador com identidade da conta, foto do usuário, cards dos contatos, contexto relacional, leitura temática e botão para imprimir ou salvar em PDF.</p>';
                 html += '</div>';
                 html += '</div>';
@@ -4502,7 +4502,7 @@
 
                 html += '<div style="background: rgba(255,255,255,0.92); padding: 22px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.24); box-shadow: 0 12px 34px rgba(15,23,42,0.05);">';
                 html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; flex-wrap:wrap;">';
-                html += '<div><h3 style="color:#047857; margin:0 0 6px 0;">Gerar Relation Report</h3><p style="color:#6b7280; margin:0; font-size:14px;">Selecione a conta e o período para montar o PDF completo.</p></div>';
+                html += '<div><h3 style="color:#047857; margin:0 0 6px 0;">Gerar Relationship Report</h3><p style="color:#6b7280; margin:0; font-size:14px;">Selecione a conta e o período para montar o PDF completo.</p></div>';
                 html += '<div style="background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; border-radius:999px; padding:8px 12px; font-size:12px; font-weight:600;">Resumo com IA incluído</div>';
                 html += '</div>';
                 html += '<div class="form-group" style="margin-bottom:14px;">';
@@ -4678,7 +4678,7 @@
             const startDate = document.getElementById('relationReportStart')?.value;
             const endDate = document.getElementById('relationReportEnd')?.value;
             if (!accountId) {
-                throw new Error('Selecione uma conta para gerar o Relation Report.');
+                throw new Error('Selecione uma conta para gerar o Relationship Report.');
             }
             if (!fullPeriod && (!startDate || !endDate)) {
                 throw new Error('Selecione data inicial e final ou marque todo o período.');
@@ -4702,10 +4702,10 @@
                 }
                 const targetUrl = `/report/relation/view?${params.toString()}`;
                 window.open(targetUrl, '_blank', 'noopener');
-                showToast('Abrindo Relation Report executivo...', 'success');
+                showToast('Abrindo Relationship Report executivo...', 'success');
             } catch (error) {
                 console.error(error);
-                showToast(error.message || 'Erro ao abrir Relation Report', 'error');
+                showToast(error.message || 'Erro ao abrir Relationship Report', 'error');
             } finally {
                 if (btn) {
                     btn.disabled = false;
