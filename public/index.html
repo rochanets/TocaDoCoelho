@@ -29,27 +29,26 @@
             top: 0;
             width: var(--sidebar-width);
             height: 100vh;
-            background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(12px);
-            border-right: 1px solid rgba(52, 211, 153, 0.2);
+            background: #0f4e2c;
+            border-right: 1px solid rgba(226, 223, 213, 0.24);
             display: flex;
             flex-direction: column;
             z-index: 100;
-            box-shadow: 0 8px 32px rgba(52, 211, 153, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
         }
 
         .sidebar-logo {
-            padding: 24px;
-            border-bottom: 1px solid rgba(52, 211, 153, 0.2);
+            padding: 10px 18px 6px;
+            border-bottom: 1px solid rgba(226, 223, 213, 0.24);
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 8px;
+            gap: 4px;
         }
 
         .sidebar-logo img {
-            width: 289px;
-            height: 138px;
+            width: 240px;
+            height: 92px;
             max-width: 100%;
             object-fit: contain;
             flex-shrink: 0;
@@ -83,7 +82,7 @@
 
         .sidebar-nav {
             flex: 1;
-            padding: 16px;
+            padding: 8px 14px 16px;
             display: flex;
             flex-direction: column;
             gap: 8px;
@@ -231,8 +230,8 @@
             border-radius: 12px;
             cursor: pointer;
             transition: all 0.2s;
-            color: rgba(5, 150, 105, 0.95);
-            font-weight: 500;
+            color: #e2dfd5;
+            font-weight: 700;
             border: none;
             background: none;
             width: 100%;
@@ -241,14 +240,14 @@
         }
 
         .nav-item:hover {
-            background: rgba(52, 211, 153, 0.1);
-            color: #047857;
+            background: rgba(226, 223, 213, 0.13);
+            color: #e2dfd5;
         }
 
         .nav-item.active {
-            background: rgba(52, 211, 153, 0.15);
-            color: #047857;
-            border: 1px solid rgba(52, 211, 153, 0.3);
+            background: rgba(226, 223, 213, 0.2);
+            color: #e2dfd5;
+            border: 1px solid rgba(226, 223, 213, 0.38);
         }
 
         .nav-item i {
@@ -258,10 +257,10 @@
 
         .sidebar-footer {
             padding: 16px;
-            border-top: 1px solid rgba(52, 211, 153, 0.2);
+            border-top: 1px solid rgba(226, 223, 213, 0.24);
             text-align: center;
             font-size: 12px;
-            color: rgba(52, 211, 153, 0.6);
+            color: rgba(226, 223, 213, 0.8);
         }
 
         /* Main Content */
@@ -270,9 +269,71 @@
             min-height: 100vh;
             width: calc(100vw - var(--sidebar-width));
             min-width: 0;
-            padding: 32px;
+            padding: 122px 32px 32px;
             overflow-x: auto;
             box-sizing: border-box;
+        }
+
+        .main-topbar {
+            position: fixed;
+            top: 0;
+            left: var(--sidebar-width);
+            width: calc(100vw - var(--sidebar-width));
+            height: 90px;
+            background: #0c422a;
+            z-index: 90;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 32px;
+        }
+
+        .topbar-module-title h1 {
+            font-size: 28px;
+            margin-bottom: 4px;
+            color: #e2dfd5;
+        }
+
+        .topbar-module-title p {
+            font-size: 14px;
+            color: rgba(226, 223, 213, 0.84);
+        }
+
+        .topbar-user-block {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            background: transparent;
+            border: none;
+            border-radius: 14px;
+            padding: 8px 14px;
+        }
+
+        .topbar-bell {
+            position: relative;
+            width: 40px;
+            height: 40px;
+            border-radius: 999px;
+            border: 1px solid rgba(12, 66, 42, 0.18);
+            background: transparent;
+            color: #e2dfd5;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 18px;
+        }
+
+        .topbar-bell.has-updates::after {
+            content: '';
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ef4444;
+            border: 1px solid #ffffff;
         }
 
         .main-content.iata-mode { background:#ffffff; }
@@ -1187,6 +1248,10 @@
             font-size: 13px;
         }
 
+        .tab-content > .page-header {
+            display: none;
+        }
+
         .calendar-cell.has-items {
             border-color: rgba(16, 185, 129, 0.45);
             background: rgba(16, 185, 129, 0.06);
@@ -1281,10 +1346,15 @@
             .sidebar {
                 width: 200px;
             }
+            .main-topbar {
+                left: 200px;
+                width: calc(100vw - 200px);
+                padding: 0 16px;
+            }
             .main-content {
                 margin-left: 200px;
                 width: calc(100vw - 200px);
-                padding: 16px;
+                padding: 106px 16px 16px;
             }
             .page-header h1 {
                 font-size: 24px;
@@ -1303,12 +1373,18 @@
                 width: 100%;
                 height: auto;
                 border-right: none;
-                border-bottom: 1px solid rgba(52, 211, 153, 0.2);
+                border-bottom: 1px solid rgba(226, 223, 213, 0.24);
+            }
+            .main-topbar {
+                left: 0;
+                width: 100vw;
+                top: 56px;
+                padding: 0 10px;
             }
             .main-content {
                 margin-left: 0;
                 width: 100vw;
-                padding: 16px;
+                padding: 156px 16px 16px;
             }
             .sidebar-nav {
                 flex-direction: row;
@@ -1365,19 +1441,8 @@
         .voice-btn.transcribing .voice-icon,
         .voice-btn.transcribing .voice-anim { display:none; }
         @keyframes voiceSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        /* Ícones coloridos por módulo */
-        .nav-iata i          { color: #7c3aed !important; }  /* roxo — IA/assistente */
-        .nav-dashboard i     { color: #2563eb !important; }  /* azul — visão geral */
-        .nav-wikitoca i      { color: #d97706 !important; }  /* âmbar — conhecimento */
-        .nav-kanban i        { color: #4f46e5 !important; }  /* índigo — gestão de tarefas */
-        .nav-gestao-conta i  { color: #ea580c !important; }  /* laranja — empresa/conta */
-        .nav-portfolio i     { color: #0891b2 !important; }  /* ciano — portifólio */
-        .nav-autotoca i      { color: #c026d3 !important; }  /* fúcsia — automação mágica */
-        .nav-atividades i    { color: #16a34a !important; }  /* verde — desempenho */
-        .nav-agenda i        { color: #dc2626 !important; }  /* vermelho — agenda/datas */
-        .nav-clientes i      { color: #0284c7 !important; }  /* azul-céu — contatos */
-        .nav-report i        { color: #78716c !important; }  /* pedra — dados/backup */
-        .nav-config i        { color: #71717a !important; }  /* zinco — configurações */
+        /* Ícones dos módulos seguindo a mesma cor do texto */
+        .nav-item i { color: inherit !important; }
         /* === Mapeamento Organizacional - Design Moderno === */
         #gestaoContaSubPanel_org { background: transparent; }
         /* Background azul claro degrado para branco quando o modulo esta ativo */
@@ -1745,6 +1810,18 @@
 
     <!-- Main Content -->
     <main class="main-content">
+        <div class="main-topbar">
+            <div id="topbarModuleTitle" class="topbar-module-title">
+                <h1>Dashboard</h1>
+                <p>Visão geral dos seus contatos e status de relacionamento</p>
+            </div>
+            <div class="topbar-user-block">
+                <button id="weekCommitmentsBell" class="topbar-bell" onclick="openWeekCommitmentsModal()" title="Compromissos da semana">
+                    <i class="fas fa-bell"></i>
+                </button>
+                <div id="dashboardGreeting" style="display:flex; align-items:center; gap:10px;"></div>
+            </div>
+        </div>
         <div class="alert alert-success" id="successMsg"></div>
         <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
@@ -1923,16 +2000,10 @@
 
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
-            <div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+            <div class="page-header">
                 <div>
                     <h1>Dashboard</h1>
                     <p>Visão geral dos seus contatos e status de relacionamento</p>
-                </div>
-                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
-                    <div id="dashboardGreeting" class="summary-banner" style="margin-bottom:0; display:flex; align-items:center; gap:10px;"></div>
-                    <div id="suggestionsIcon" style="display:none; cursor:pointer;" onclick="openSuggestionsModal()" title="Sugestões do Dia">
-                        <img src="/coelho-sugestoes.png" alt="Sugestões" style="width: 40px; height: 40px; object-fit: contain; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
-                    </div>
                 </div>
             </div>
             <div id="dashboardContent"></div>
@@ -2801,6 +2872,27 @@
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
         let _currentTab = 'dashboard';
+        const TOPBAR_MODULE_COPY = {
+            dashboard: { title: 'Dashboard', subtitle: 'Visão geral dos seus contatos e status de relacionamento' },
+            iata: { title: 'iToca', subtitle: 'Seu assistente ligeirinho para apoiar sua operação comercial.' },
+            wikitoca: { title: 'WikiToca', subtitle: 'Base de conhecimento e documentos da operação.' },
+            kanban: { title: 'Kanban', subtitle: 'Acompanhamento visual de cards e prioridades.' },
+            'gestao-conta': { title: 'Gestão de Conta', subtitle: 'Visão estratégica e mapeamento de contas.' },
+            portfolio: { title: 'Portifólio', subtitle: 'Indicadores e visão consolidada do portifólio.' },
+            autotoca: { title: 'AutoToca', subtitle: 'Automações e assistentes para tarefas comerciais.' },
+            atividades: { title: 'Atividades', subtitle: 'Registro e acompanhamento de interações.' },
+            agenda: { title: 'Agenda', subtitle: 'Compromissos, eventos e planejamento semanal.' },
+            clientes: { title: 'Gestão de Contatos', subtitle: 'Cadastro e manutenção de contatos estratégicos.' },
+            report: { title: 'Report & Backup', subtitle: 'Relatórios e rotinas de segurança da base.' },
+            configuracoes: { title: 'Configurações', subtitle: 'Parâmetros do sistema e integrações.' }
+        };
+
+        function updateTopbarModuleHeader(tabName) {
+            const container = document.getElementById('topbarModuleTitle');
+            if (!container) return;
+            const copy = TOPBAR_MODULE_COPY[tabName] || TOPBAR_MODULE_COPY.dashboard;
+            container.innerHTML = `<h1>${escapeHtml(copy.title)}</h1><p>${escapeHtml(copy.subtitle)}</p>`;
+        }
 
         function ensureAutoTocaPresence() {
             const nav = document.querySelector('.sidebar-nav');
@@ -2852,6 +2944,7 @@
 
             targetTab.classList.add('active');
             _currentTab = tabName;
+            updateTopbarModuleHeader(tabName);
 
             const mainContent = document.querySelector('.main-content');
             if (mainContent) mainContent.classList.toggle('iata-mode', tabName === 'iata');
@@ -4302,26 +4395,28 @@
             if (!greetingEl) return;
 
             try {
-                // Buscar perfil do usuário
                 const response = await fetch(`${API_BASE}/config/profile`);
                 const profile = await response.json();
                 
                 if (profile && profile.nickname && profile.photo_url) {
-                    // Usuário cadastrado - mostrar foto e apelido
-                    const photoHtml = `<img src="${profile.photo_url}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; margin-right: 12px; border: 2px solid #34d399;">`;
-                    greetingEl.innerHTML = `<div style="display: flex; align-items: center;">${photoHtml}<span style="font-size: 18px; font-weight: 600; color: #047857;">Olá ${profile.nickname}!</span></div>`;
+                    const photoHtml = `<img src="${profile.photo_url}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid rgba(226,223,213,.5);">`;
+                    greetingEl.innerHTML = `<div style="display:flex; align-items:center; gap:10px;"><span style="font-size: 18px; font-weight: 700; color: #e2dfd5;">Olá ${profile.nickname}</span>${photoHtml}</div>`;
                 } else {
-                    // Nenhum usuário cadastrado - mensagem padrão
-                    const hour = new Date().getHours();
-                    const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
-                    greetingEl.innerHTML = `${greeting}! Acompanhe seus clientes e mantenha os contatos em dia.`;
+                    greetingEl.innerHTML = `<span style="font-size: 18px; font-weight: 700; color: #e2dfd5;">Olá</span>`;
                 }
             } catch (error) {
-                // Em caso de erro, mostrar mensagem padrão
-                const hour = new Date().getHours();
-                const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
-                greetingEl.innerHTML = `${greeting}! Acompanhe seus clientes e mantenha os contatos em dia.`;
+                greetingEl.innerHTML = `<span style="font-size: 18px; font-weight: 700; color: #e2dfd5;">Olá</span>`;
             }
+        }
+
+        async function updateWeekCommitmentsBell() {
+            const bellEl = document.getElementById('weekCommitmentsBell');
+            if (!bellEl) return;
+            const weekCount = await loadWeekSummary();
+            bellEl.classList.toggle('has-updates', weekCount > 0);
+            bellEl.title = weekCount > 0
+                ? `Você tem ${weekCount} compromisso(s) nesta semana`
+                : 'Nenhum compromisso nesta semana';
         }
 
         async function loadDashboard() {
@@ -4330,12 +4425,12 @@
                 const data = await response.json();
                 clients = data;
                 await renderDashboardGreeting();
+                await updateWeekCommitmentsBell();
 
                 let html = '';
                 if (clients.length === 0) {
                     html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 } else {
-                    const weekCount = await loadWeekSummary();
                     const contactSearchTerm = (dashboardContactSearch || '').trim().toLocaleLowerCase('pt-BR');
                     let filteredClients = clients.filter(client => {
                         const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
@@ -4347,7 +4442,6 @@
 
                     const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
 
-                    html += `<div class="summary-banner" style="cursor:pointer;" onclick="openWeekCommitmentsModal()" title="Clique para ver os compromissos desta semana">Você tem <strong>${weekCount}</strong> compromisso(s) nesta semana.</div>`;
                     html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
                     html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
                                         html += '<th style="min-width:50px;"></th>';
@@ -4389,9 +4483,7 @@
                 }
 
                 document.getElementById('dashboardContent').innerHTML = html;
-                
-                // Carregar sugestões do dia
-                await loadDailySuggestions();
+                await updateWeekCommitmentsBell();
             } catch (error) {
                 showError('Erro ao carregar dashboard');
             }
@@ -7313,125 +7405,6 @@
             }
         }
 
-        // Funções de Sugestões Diárias
-        let dailySuggestions = [];
-
-        async function loadDailySuggestions() {
-            try {
-                const response = await fetch(`${API_BASE}/suggestions/today`);
-                dailySuggestions = await response.json();
-                
-                // Verificar se há sugestões pendentes
-                const hasPending = dailySuggestions.some(s => !s.completed);
-                
-                // Mostrar ou ocultar ícone
-                const icon = document.getElementById('suggestionsIcon');
-                if (icon) {
-                    icon.style.display = hasPending ? 'block' : 'none';
-                }
-            } catch (error) {
-                console.error('Erro ao carregar sugestões:', error);
-            }
-        }
-
-        function openSuggestionsModal() {
-            if (dailySuggestions.length === 0) return;
-            
-            let html = `<div class="modal active" id="suggestionsModal" onclick="if(event.target === this) closeSuggestionsModal()">`;
-            html += '<div class="modal-content" style="max-width: 700px;">';
-            html += '<h2 style="color: #047857; margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">';
-            html += '<img src="/coelho-sugestoes.png" alt="Sugestões" style="width: 40px; height: 40px; object-fit: contain;">';
-            html += 'Sugestões do Dia</h2>';
-            html += '<p style="color: #6b7280; margin-bottom: 20px;">Aqui estão algumas ações sugeridas para você hoje:</p>';
-            
-            html += '<div style="max-height: 500px; overflow-y: auto;">';
-            dailySuggestions.forEach((suggestion, index) => {
-                const isCompleted = suggestion.completed === 1;
-                const bgColor = isCompleted ? '#f0fdf4' : '#ffffff';
-                const borderColor = isCompleted ? '#34D399' : '#e5e7eb';
-                
-                html += `<div class="suggestion-item" style="position: relative; background: ${bgColor}; border: 2px solid ${borderColor}; border-radius: 12px; padding: 16px; margin-bottom: 12px; cursor: ${isCompleted ? 'default' : 'pointer'};" ${!isCompleted ? `onclick="executeSuggestion(${suggestion.id}, '${suggestion.suggestion_type}', ${JSON.stringify(suggestion.target_data).replace(/"/g, '&quot;')})"` : ''}>`;
-                
-                // Checkmark verde se concluído
-                if (isCompleted) {
-                    html += '<div style="position: absolute; top: -10px; right: -10px; background: #34D399; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(52, 211, 153, 0.4);">';
-                    html += '<i class="fas fa-check" style="color: white; font-size: 20px;"></i>';
-                    html += '</div>';
-                }
-                
-                html += `<div style="font-weight: 600; color: #1f2937; margin-bottom: 6px;">${escapeHtml(suggestion.title)}</div>`;
-                html += `<div style="color: #6b7280; font-size: 14px;">${escapeHtml(suggestion.description)}</div>`;
-                
-                if (!isCompleted) {
-                    html += '<div style="margin-top: 10px; font-size: 12px; color: #047857;"><i class="fas fa-hand-pointer"></i> Clique para executar</div>';
-                }
-                
-                html += '</div>';
-            });
-            html += '</div>';
-            
-            html += '<div style="margin-top: 20px; text-align: right;"><button class="btn btn-secondary" onclick="closeSuggestionsModal()">Fechar</button></div>';
-            html += '</div></div>';
-            
-            document.body.insertAdjacentHTML('beforeend', html);
-        }
-
-        function closeSuggestionsModal() {
-            const modal = document.getElementById('suggestionsModal');
-            if (modal) modal.remove();
-        }
-
-        async function executeSuggestion(suggestionId, type, targetDataStr) {
-            closeSuggestionsModal();
-            
-            const targetData = JSON.parse(targetDataStr);
-            
-            // Armazenar informação da sugestão para validação posterior
-            window.currentSuggestion = {
-                id: suggestionId,
-                type: type,
-                data: targetData
-            };
-            
-            switch(type) {
-                case 'contact_overdue':
-                    // Abrir modal de atividade para o cliente
-                    const client = clients.find(c => c.id === targetData.client_id);
-                    if (client) {
-                        openQuickActivityModal(client.id, client.name, client.company);
-                    }
-                    break;
-                    
-                case 'missing_position':
-                    // Abrir modal de novo cliente com empresa e cargo pré-preenchidos
-                    openClientModal();
-                    setTimeout(() => {
-                        document.getElementById('clientCompany').value = targetData.company;
-                        document.getElementById('clientPosition').value = targetData.position;
-                    }, 100);
-                    break;
-                    
-                case 'map_environment':
-                    // Abrir mapeamento de ambiente e depois o card específico
-                    switchTab(null, 'mapeamento');
-                    setTimeout(async () => {
-                        await loadMapeamento();
-                        setTimeout(() => {
-                            openMappingCardModal(targetData.card_id);
-                        }, 500);
-                    }, 300);
-                    break;
-                    
-                case 'incomplete_profile':
-                    // Abrir modal de edição do cliente
-                    editClient(targetData.client_id);
-                    break;
-            }
-            
-            // NÃO marcar como concluída automaticamente
-            // A validação será feita após a ação ser realmente executada
-        }
-
         async function markSuggestionComplete(suggestionId) {
             try {
                 const response = await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, {
@@ -7444,8 +7417,6 @@
                     return;
                 }
                 
-                // Recarregar sugestões
-                await loadDailySuggestions();
             } catch (error) {
                 console.error('Erro ao marcar sugestão como concluída:', error);
             }
