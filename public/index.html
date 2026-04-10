@@ -3546,19 +3546,44 @@
             const skipped = selectedContacts.length - contactsWithEmail.length;
 
             if (!contactsWithEmail.length) return showError('Nenhum contato selecionado possui e-mail.');
+
+            if (contactsWithEmail.length > 1) {
+                const confirmSend = await openSystemDialog({
+                    title: 'Atenção: pop-ups do navegador',
+                    message: `Serão abertas ${contactsWithEmail.length} abas no Outlook (uma por contato). Se seu navegador bloquear pop-ups, permita pop-ups para este site e tente novamente. Deseja continuar?`,
+                    showCancel: true
+                });
+                if (!confirmSend) return;
+            }
+
             if (contactsWithEmail.length > 20) {
                 showInfo('Lote grande detectado. Seu navegador pode bloquear pop-ups; permita pop-ups se necessário.');
             }
+
+            const popupWindows = contactsWithEmail.map(() => window.open('', '_blank'));
+            const blockedCount = popupWindows.filter(win => !win).length;
+            const OPEN_INTERVAL_MS = 350;
 
             contactsWithEmail.forEach((contact, idx) => {
                 setTimeout(() => {
                     const personalizedSubject = applyMergeFields(subjectTemplate, contact);
                     const personalizedBody = applyMergeFields(bodyTemplate, contact);
                     const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(personalizedSubject)}&body=${encodeURIComponent(personalizedBody)}`;
-                    window.open(outlookUrl, '_blank');
+                    const popupWindow = popupWindows[idx];
+
+                    if (popupWindow) {
+                        popupWindow.location.href = outlookUrl;
+                    } else {
+                        window.open(outlookUrl, '_blank');
+                    }
+
                     askRegisterActivityFromCommunication(contact.id, 'Email', personalizedBody);
-                }, idx * 300);
+                }, idx * OPEN_INTERVAL_MS);
             });
+
+            if (blockedCount > 0) {
+                showInfo(`${blockedCount} aba(s) foram bloqueadas pelo navegador. Habilite pop-ups para este site para abrir todos os e-mails.`);
+            }
 
             closeAutoTocaMailingComposer();
             showSuccess(`Mala direta iniciada para ${contactsWithEmail.length} contato(s).${skipped ? ` ${skipped} sem e-mail foram ignorados.` : ''}`);
