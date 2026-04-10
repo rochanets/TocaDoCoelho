@@ -10180,6 +10180,19 @@ def _portfolio_extract_pdf_text(file_storage):
     return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
 
 
+def _portfolio_encode_upload_as_data_url(file_storage):
+    if not file_storage:
+        return ''
+    file_bytes = file_storage.read()
+    if not file_bytes:
+        return ''
+    content_type = (file_storage.mimetype or '').strip().lower()
+    if not content_type:
+        content_type = 'application/pdf'
+    encoded = base64.b64encode(file_bytes).decode('ascii')
+    return f'data:{content_type};base64,{encoded}'
+
+
 def _portfolio_parse_llm_raw(raw):
     def _try_parse_json(value):
         if not value:
@@ -10303,14 +10316,38 @@ def _portfolio_parse_llm_raw(raw):
     return {'title': title, 'summary': summary, 'items': items}
 
 
-def _portfolio_generate_offer_from_llm(raw_input):
-    llm_prompt = (
+def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
+    prompt_instruction = (
         "Analise o conteudo do PDF ou texto recebido e me escreva toda a ideia de forma estruturada, "
-        "buscando Problemas e apresentando soluções, restritos ao conteúdo enviado.\n\n"
-        f"CONTEUDO RECEBIDO:\n{raw_input[:30000]}"
+        "buscando Problemas e apresentando soluções, restritos ao conteúdo enviado."
     )
+    input_text = f"{prompt_instruction}\n\nCONTEUDO RECEBIDO:\n{raw_input[:30000]}" if raw_input else prompt_instruction
 
-    raw = _sai_simple_prompt(llm_prompt)
+    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_base_url', 'portfolio_sai_template_id'])
+    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
+    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    template_id = (settings_map.get('portfolio_sai_template_id') or '').strip() or '69d7ed2af23db9ac00973dfa'
+
+    raw = None
+    if api_key:
+        payload = {
+            'inputs': {
+                'input': input_text,
+                'input_file': input_file_data_url or ''
+            }
+        }
+        try:
+            req = urllib.request.Request(
+                f'{base_url}/api/templates/{template_id}/execute',
+                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+                headers={'Content-Type': 'application/json', 'X-Api-Key': api_key},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            logger.warning(f'[Portfolio][SAI] falha: {e}')
+
     source = 'SAI'
     if raw is not None and not str(raw).strip():
         raw = None
@@ -10333,7 +10370,7 @@ def _portfolio_generate_offer_from_llm(raw_input):
                 'model': model,
                 'messages': [
                     {'role': 'system', 'content': 'Você é um analista comercial. Responda SEMPRE e SOMENTE com JSON válido.'},
-                    {'role': 'user', 'content': llm_prompt}
+                    {'role': 'user', 'content': input_text}
                 ],
                 'temperature': 0.2
             }
@@ -10397,13 +10434,13 @@ def create_portfolio_offer():
     try:
         input_text = (request.form.get('raw_input') or '').strip()
         file_obj = request.files.get('pdf_file')
-        pdf_text = _portfolio_extract_pdf_text(file_obj) if file_obj else ''
-        raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+        input_file_data_url = _portfolio_encode_upload_as_data_url(file_obj) if file_obj else ''
+        raw_input = input_text
 
-        if not raw_input:
+        if not raw_input and not input_file_data_url:
             return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
 
-        parsed, source = _portfolio_generate_offer_from_llm(raw_input)
+        parsed, source = _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=input_file_data_url)
         if not parsed:
             if source == 'sem_llm':
                 return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
