@@ -283,17 +283,28 @@
             background: #0c422a;
             z-index: 90;
             display: flex;
-            justify-content: flex-end;
+            justify-content: space-between;
             align-items: center;
             padding: 0 32px;
+        }
+
+        .topbar-module-title h1 {
+            font-size: 28px;
+            margin-bottom: 4px;
+            color: #e2dfd5;
+        }
+
+        .topbar-module-title p {
+            font-size: 14px;
+            color: rgba(226, 223, 213, 0.84);
         }
 
         .topbar-user-block {
             display: flex;
             align-items: center;
             gap: 14px;
-            background: #e2dfd6;
-            border: 1px solid rgba(12, 66, 42, 0.2);
+            background: transparent;
+            border: none;
             border-radius: 14px;
             padding: 8px 14px;
         }
@@ -304,8 +315,8 @@
             height: 40px;
             border-radius: 999px;
             border: 1px solid rgba(12, 66, 42, 0.18);
-            background: #f3f1ea;
-            color: #0c422a;
+            background: transparent;
+            color: #e2dfd5;
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -625,7 +636,6 @@
             width: 100%;
             padding: 10px;
             border: 2px solid #e5e7eb;
-            background: #e2dfd6;
             border-radius: 8px;
             font-family: inherit;
             font-size: 14px;
@@ -659,7 +669,7 @@
         }
 
         .modal-content {
-            background: #e2dfd6;
+            background: white;
             padding: 30px;
             border-radius: 16px;
             max-width: 500px;
@@ -714,7 +724,8 @@
         }
 
         .table-container {
-            background: #e2dfd6;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(4px);
             border-radius: 16px;
             border: 1px solid rgba(52, 211, 153, 0.2);
             box-shadow: 0 4px 12px rgba(52, 211, 153, 0.08);
@@ -1196,8 +1207,8 @@
         }
 
         .summary-banner {
-            background: #e2dfd6;
-            border: 1px solid rgba(12, 66, 42, 0.22);
+            background: rgba(52, 211, 153, 0.12);
+            border: 1px solid rgba(52, 211, 153, 0.28);
             border-radius: 12px;
             padding: 10px 14px;
             margin-bottom: 12px;
@@ -1209,18 +1220,10 @@
         }
 
         .calendar-wrap {
-            background: #e2dfd6;
+            background: rgba(255,255,255,0.82);
             border: 1px solid rgba(52, 211, 153, 0.2);
             border-radius: 16px;
             padding: 16px;
-        }
-
-        .card,
-        .section-title,
-        .history-item,
-        .wiki-card,
-        .kanban-card {
-            background: #e2dfd6;
         }
 
         .calendar-header {
@@ -1241,8 +1244,12 @@
             border: 1px solid rgba(52, 211, 153, 0.15);
             border-radius: 10px;
             padding: 6px;
-            background: #e2dfd6;
+            background: white;
             font-size: 13px;
+        }
+
+        .tab-content > .page-header {
+            display: none;
         }
 
         .calendar-cell.has-items {
@@ -1434,19 +1441,8 @@
         .voice-btn.transcribing .voice-icon,
         .voice-btn.transcribing .voice-anim { display:none; }
         @keyframes voiceSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        /* Ícones coloridos por módulo */
-        .nav-iata i          { color: #7c3aed !important; }  /* roxo — IA/assistente */
-        .nav-dashboard i     { color: #2563eb !important; }  /* azul — visão geral */
-        .nav-wikitoca i      { color: #d97706 !important; }  /* âmbar — conhecimento */
-        .nav-kanban i        { color: #4f46e5 !important; }  /* índigo — gestão de tarefas */
-        .nav-gestao-conta i  { color: #ea580c !important; }  /* laranja — empresa/conta */
-        .nav-portfolio i     { color: #0891b2 !important; }  /* ciano — portifólio */
-        .nav-autotoca i      { color: #c026d3 !important; }  /* fúcsia — automação mágica */
-        .nav-atividades i    { color: #16a34a !important; }  /* verde — desempenho */
-        .nav-agenda i        { color: #dc2626 !important; }  /* vermelho — agenda/datas */
-        .nav-clientes i      { color: #0284c7 !important; }  /* azul-céu — contatos */
-        .nav-report i        { color: #78716c !important; }  /* pedra — dados/backup */
-        .nav-config i        { color: #71717a !important; }  /* zinco — configurações */
+        /* Ícones dos módulos seguindo a mesma cor do texto */
+        .nav-item i { color: inherit !important; }
         /* === Mapeamento Organizacional - Design Moderno === */
         #gestaoContaSubPanel_org { background: transparent; }
         /* Background azul claro degrado para branco quando o modulo esta ativo */
@@ -1815,11 +1811,15 @@
     <!-- Main Content -->
     <main class="main-content">
         <div class="main-topbar">
+            <div id="topbarModuleTitle" class="topbar-module-title">
+                <h1>Dashboard</h1>
+                <p>Visão geral dos seus contatos e status de relacionamento</p>
+            </div>
             <div class="topbar-user-block">
-                <div id="dashboardGreeting" style="display:flex; align-items:center; gap:10px;"></div>
                 <button id="weekCommitmentsBell" class="topbar-bell" onclick="openWeekCommitmentsModal()" title="Compromissos da semana">
                     <i class="fas fa-bell"></i>
                 </button>
+                <div id="dashboardGreeting" style="display:flex; align-items:center; gap:10px;"></div>
             </div>
         </div>
         <div class="alert alert-success" id="successMsg"></div>
@@ -2872,6 +2872,27 @@
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
         let _currentTab = 'dashboard';
+        const TOPBAR_MODULE_COPY = {
+            dashboard: { title: 'Dashboard', subtitle: 'Visão geral dos seus contatos e status de relacionamento' },
+            iata: { title: 'iToca', subtitle: 'Seu assistente ligeirinho para apoiar sua operação comercial.' },
+            wikitoca: { title: 'WikiToca', subtitle: 'Base de conhecimento e documentos da operação.' },
+            kanban: { title: 'Kanban', subtitle: 'Acompanhamento visual de cards e prioridades.' },
+            'gestao-conta': { title: 'Gestão de Conta', subtitle: 'Visão estratégica e mapeamento de contas.' },
+            portfolio: { title: 'Portifólio', subtitle: 'Indicadores e visão consolidada do portifólio.' },
+            autotoca: { title: 'AutoToca', subtitle: 'Automações e assistentes para tarefas comerciais.' },
+            atividades: { title: 'Atividades', subtitle: 'Registro e acompanhamento de interações.' },
+            agenda: { title: 'Agenda', subtitle: 'Compromissos, eventos e planejamento semanal.' },
+            clientes: { title: 'Gestão de Contatos', subtitle: 'Cadastro e manutenção de contatos estratégicos.' },
+            report: { title: 'Report & Backup', subtitle: 'Relatórios e rotinas de segurança da base.' },
+            configuracoes: { title: 'Configurações', subtitle: 'Parâmetros do sistema e integrações.' }
+        };
+
+        function updateTopbarModuleHeader(tabName) {
+            const container = document.getElementById('topbarModuleTitle');
+            if (!container) return;
+            const copy = TOPBAR_MODULE_COPY[tabName] || TOPBAR_MODULE_COPY.dashboard;
+            container.innerHTML = `<h1>${escapeHtml(copy.title)}</h1><p>${escapeHtml(copy.subtitle)}</p>`;
+        }
 
         function ensureAutoTocaPresence() {
             const nav = document.querySelector('.sidebar-nav');
@@ -2923,6 +2944,7 @@
 
             targetTab.classList.add('active');
             _currentTab = tabName;
+            updateTopbarModuleHeader(tabName);
 
             const mainContent = document.querySelector('.main-content');
             if (mainContent) mainContent.classList.toggle('iata-mode', tabName === 'iata');
@@ -4377,13 +4399,13 @@
                 const profile = await response.json();
                 
                 if (profile && profile.nickname && profile.photo_url) {
-                    const photoHtml = `<img src="${profile.photo_url}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid #0c422a;">`;
-                    greetingEl.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${photoHtml}<span style="font-size: 18px; font-weight: 700; color: #0c422a;">Olá ${profile.nickname}</span></div>`;
+                    const photoHtml = `<img src="${profile.photo_url}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid rgba(226,223,213,.5);">`;
+                    greetingEl.innerHTML = `<div style="display:flex; align-items:center; gap:10px;"><span style="font-size: 18px; font-weight: 700; color: #e2dfd5;">Olá ${profile.nickname}</span>${photoHtml}</div>`;
                 } else {
-                    greetingEl.innerHTML = `<span style="font-size: 18px; font-weight: 700; color: #0c422a;">Olá</span>`;
+                    greetingEl.innerHTML = `<span style="font-size: 18px; font-weight: 700; color: #e2dfd5;">Olá</span>`;
                 }
             } catch (error) {
-                greetingEl.innerHTML = `<span style="font-size: 18px; font-weight: 700; color: #0c422a;">Olá</span>`;
+                greetingEl.innerHTML = `<span style="font-size: 18px; font-weight: 700; color: #e2dfd5;">Olá</span>`;
             }
         }
 
