@@ -10277,6 +10277,55 @@ def _portfolio_parse_llm_raw(raw):
             'items': items or [{'pain': 'Pontos de dor não identificados no retorno.', 'solution': 'Soluções não identificadas no retorno.'}]
         }
 
+    def _find_nested_candidate(value, depth=0):
+        if depth > 6 or value is None:
+            return None
+
+        parsed_direct = _try_parse_json(value)
+        if isinstance(parsed_direct, dict):
+            if any(key in parsed_direct for key in ('items', 'title', 'summary')):
+                return parsed_direct
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            # Alguns provedores retornam JSON como string escapada dentro de outra string
+            try:
+                unescaped = json.loads(stripped)
+                if unescaped != value:
+                    nested = _find_nested_candidate(unescaped, depth + 1)
+                    if nested:
+                        return nested
+            except Exception:
+                pass
+            return None
+
+        if isinstance(value, dict):
+            preferred_keys = (
+                'answer', 'output', 'outputs', 'result', 'results', 'text', 'content', 'response',
+                'data', 'message', 'messages', 'completion', 'completions', 'choices'
+            )
+            for key in preferred_keys:
+                if key in value:
+                    nested = _find_nested_candidate(value.get(key), depth + 1)
+                    if nested:
+                        return nested
+            for _, sub in value.items():
+                nested = _find_nested_candidate(sub, depth + 1)
+                if nested:
+                    return nested
+            return None
+
+        if isinstance(value, list):
+            for item in value:
+                nested = _find_nested_candidate(item, depth + 1)
+                if nested:
+                    return nested
+            return None
+
+        return None
+
     parsed = _try_parse_json(raw)
     if parsed and 'items' not in parsed:
         for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message', 'answer'):
@@ -10285,6 +10334,10 @@ def _portfolio_parse_llm_raw(raw):
             if nested:
                 parsed = nested
                 break
+    if not parsed or 'items' not in (parsed or {}):
+        nested_candidate = _find_nested_candidate(raw)
+        if nested_candidate:
+            parsed = nested_candidate
     if not parsed:
         fallback = _parse_structured_text_fallback(raw)
         if fallback:
