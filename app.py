@@ -10370,6 +10370,16 @@ def _portfolio_parse_llm_raw(raw):
 
 
 def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
+    debug_info = {
+        'sai_raw_preview': '',
+        'openrouter_raw_preview': '',
+        'parse_status': '',
+    }
+
+    def _preview(value, limit=1200):
+        text = '' if value is None else str(value)
+        return text[:limit]
+
     material = (raw_input or '').strip()[:30000]
     if not material and input_file_data_url:
         material = '[Arquivo PDF enviado em input_file para análise.]'
@@ -10405,6 +10415,7 @@ def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
             )
             with urllib.request.urlopen(req, timeout=60) as resp:
                 raw = resp.read().decode('utf-8', errors='ignore')
+                debug_info['sai_raw_preview'] = _preview(raw)
         except Exception as e:
             logger.warning(f'[Portfolio][SAI] falha: {e}')
 
@@ -10414,13 +10425,15 @@ def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
     if raw is not None:
         parsed = _portfolio_parse_llm_raw(raw)
         if parsed:
-            return parsed, source
-        logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta. Tentando OpenRouter.')
+            debug_info['parse_status'] = 'sai_ok'
+            return parsed, source, debug_info
+        debug_info['parse_status'] = 'sai_invalid_response'
+        logger.warning(f"[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta. Preview: {debug_info['sai_raw_preview']}")
 
     if raw is None:
         or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
         if not or_key:
-            return None, 'sem_llm'
+            return None, 'sem_llm', debug_info
         or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
         model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
         site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
@@ -10449,17 +10462,20 @@ def _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=''):
                 data = json.loads(resp.read().decode('utf-8'))
             choices = data.get('choices') or []
             raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            debug_info['openrouter_raw_preview'] = _preview(raw)
             source = 'OpenRouter'
             parsed = _portfolio_parse_llm_raw(raw)
             if parsed:
-                return parsed, source
-            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta.')
-            return None, 'llm_invalid_response'
+                debug_info['parse_status'] = 'openrouter_ok'
+                return parsed, source, debug_info
+            debug_info['parse_status'] = 'openrouter_invalid_response'
+            logger.warning(f"[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta. Preview: {debug_info['openrouter_raw_preview']}")
+            return None, 'llm_invalid_response', debug_info
         except Exception as e:
             logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}')
-            return None, 'sem_llm'
+            return None, 'sem_llm', debug_info
 
-    return None, 'llm_invalid_response'
+    return None, 'llm_invalid_response', debug_info
 
 
 def _portfolio_fetch_offer(c, offer_id):
@@ -10500,11 +10516,19 @@ def create_portfolio_offer():
         if not raw_input and not input_file_data_url:
             return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
 
-        parsed, source = _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=input_file_data_url)
+        parsed, source, debug_info = _portfolio_generate_offer_from_llm(raw_input, input_file_data_url=input_file_data_url)
         if not parsed:
             if source == 'sem_llm':
                 return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
-            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}), 502
+            payload = {'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}
+            if app.debug:
+                payload['debug'] = {
+                    'source': source,
+                    'parse_status': debug_info.get('parse_status'),
+                    'sai_raw_preview': debug_info.get('sai_raw_preview'),
+                    'openrouter_raw_preview': debug_info.get('openrouter_raw_preview'),
+                }
+            return jsonify(payload), 502
 
         conn = get_db()
         c = conn.cursor()
