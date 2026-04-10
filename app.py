@@ -2195,10 +2195,10 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
     if market_context_text:
         market_context_html = f"""
         <div class='rr-market-context'>
-          <h3 style='font-size:13px; color:#6b7280; text-transform:uppercase; letter-spacing:.05em; margin:18px 0 6px;'>
+          <h3 style='font-size:13px; color:#ffffff; text-transform:uppercase; letter-spacing:.05em; margin:18px 0 6px;'>
             Contexto de Mercado
           </h3>
-          <p style='font-size:14px; line-height:1.7; color:#374151;'>
+          <p style='font-size:14px; line-height:1.7; color:#ffffff;'>
             {esc(market_context_text)}
           </p>
         </div>
