@@ -42,8 +42,9 @@
             padding: 24px;
             border-bottom: 1px solid rgba(52, 211, 153, 0.2);
             display: flex;
+            flex-direction: column;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
         }
 
         .sidebar-logo img {
@@ -68,7 +69,7 @@
         .beta-badge {
             display: inline-flex;
             align-items: center;
-            margin-left: 6px;
+            margin-left: 0;
             padding: 2px 6px;
             border-radius: 4px;
             background: #ef4444;
@@ -1683,10 +1684,6 @@
     <aside class="sidebar">
         <div class="sidebar-logo">
             <img src="/logo-coelho.png" alt="Coelho Toca do Coelho" style="width: 120px; height: 120px; object-fit: contain;">
-            <div class="sidebar-logo-text">
-                <h1>Toca do Coelho</h1>
-                <p>Sales Engagement</p>
-            </div>
         </div>
 
         <nav class="sidebar-nav">
@@ -2746,12 +2743,12 @@
                 if (!response.ok) return;
                 systemConfig = await response.json();
                 if ((systemConfig.env || '').toLowerCase() === 'beta') {
-                    const logoText = document.querySelector('.sidebar-logo-text h1');
-                    if (logoText && !logoText.querySelector('.beta-badge')) {
+                    const logoContainer = document.querySelector('.sidebar-logo');
+                    if (logoContainer && !logoContainer.querySelector('.beta-badge')) {
                         const betaBadge = document.createElement('span');
                         betaBadge.className = 'beta-badge';
                         betaBadge.textContent = 'BETA';
-                        logoText.appendChild(betaBadge);
+                        logoContainer.appendChild(betaBadge);
                     }
                 }
             } catch (error) {
