@@ -17,6 +17,7 @@ import shutil
 import urllib.request
 import urllib.error
 import urllib.parse
+import requests
 import html
 import time
 import ssl
@@ -1817,36 +1818,32 @@ def _relation_report_call_sai_narrative_template(
         'relation_report_sai_base_url'
     ])
     api_key = (settings_map.get('relation_report_sai_api_key') or '').strip() or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip() or 'RuWKlxg1Sk+/3PpzUKof+w'
-    template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '69b83e37025459101ee6735d'
+    template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '67dc479828232c97f38a887f'
     base_url = (settings_map.get('relation_report_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
     if not api_key:
         return None
 
     url = f'{base_url}/api/templates/{template_id}/execute'
-    headers = {
-        'Content-Type': 'application/json',
-        'X-Api-Key': api_key
-    }
-    payload = {
+    headers = {'X-Api-Key': api_key}
+    # O novo template recebe um único campo 'search' com todo o contexto consolidado
+    search_context = (
+        f"Conta: {account_name}\n"
+        f"Período: {report_period}\n\n"
+        f"=== SNAPSHOT DA CONTA ===\n{account_snapshot}\n\n"
+        f"=== SNAPSHOT DE RELACIONAMENTO ===\n{relationship_snapshot}\n\n"
+        f"=== EVIDÊNCIAS TEMÁTICAS ===\n{topic_evidence}\n\n"
+        f"=== ESTILO DE SAÍDA ===\n{output_style}"
+    )
+    data = {
         'inputs': {
-            'account_name': account_name,
-            'report_period': report_period,
-            'account_snapshot': account_snapshot,
-            'relationship_snapshot': relationship_snapshot,
-            'topic_evidence': topic_evidence,
-            'output_style': output_style,
+            'search': search_context,
         }
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST'
-    )
 
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read().decode('utf-8')
+    resp = requests.post(url, json=data, headers=headers, timeout=60)
+    resp.raise_for_status()
+    raw = resp.text
 
     logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
     parsed_outer = None

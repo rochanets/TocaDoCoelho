@@ -4778,12 +4778,13 @@
                     params.set('start_date', startDate);
                     params.set('end_date', endDate);
                 }
-                // Mantém o gesto do usuário para evitar bloqueio de pop-up após await.
+                // Abre a janela imediatamente (dentro do gesto do usuário) para evitar bloqueio de pop-up.
+                // Não usar 'noopener' nem setar opener=null: isso tornaria a janela cross-origin
+                // e impediria o document.write() após o fetch assíncrono.
                 reportWindow = window.open('about:blank', '_blank');
                 if (!reportWindow) {
                     throw new Error('Não foi possível abrir uma nova aba. Verifique o bloqueador de pop-up do navegador.');
                 }
-                try { reportWindow.opener = null; } catch (e) { /* noop */ }
                 reportWindow.document.open();
                 reportWindow.document.write('<!doctype html><html><head><title>Gerando Relation Report...</title><style>body{font-family:Arial,sans-serif;background:#f8fafc;color:#374151;display:flex;align-items:center;justify-content:center;height:100vh;margin:0} .box{padding:20px 24px;border:1px solid #d1fae5;border-radius:12px;background:#fff;box-shadow:0 10px 28px rgba(0,0,0,.08)} strong{color:#047857}</style></head><body><div class="box"><strong>Gerando Relation Report...</strong><div style="margin-top:8px;font-size:14px">Aguarde alguns segundos.</div></div></body></html>');
                 reportWindow.document.close();
