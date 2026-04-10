@@ -11,7 +11,9 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         :root {
-            --sidebar-width: clamp(210px, 18vw, 256px);
+            --sidebar-expanded-width: clamp(210px, 18vw, 256px);
+            --sidebar-collapsed-width: 84px;
+            --sidebar-width: var(--sidebar-collapsed-width);
         }
         
         body { 
@@ -35,6 +37,7 @@
             flex-direction: column;
             z-index: 100;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            transition: width 0.24s ease;
         }
 
         .sidebar-logo {
@@ -52,6 +55,16 @@
             max-width: 100%;
             object-fit: contain;
             flex-shrink: 0;
+        }
+
+        .sidebar-logo-expanded {
+            display: none;
+        }
+
+        .sidebar-logo-collapsed {
+            display: block;
+            width: 56px !important;
+            height: 56px !important;
         }
 
         .sidebar-logo-text h1 {
@@ -231,7 +244,7 @@
             cursor: pointer;
             transition: all 0.2s;
             color: #e2dfd5;
-            font-weight: 700;
+            font-weight: 500;
             border: none;
             background: none;
             width: 100%;
@@ -245,9 +258,11 @@
         }
 
         .nav-item.active {
-            background: rgba(226, 223, 213, 0.2);
-            color: #e2dfd5;
-            border: 1px solid rgba(226, 223, 213, 0.38);
+            background: rgba(164, 224, 188, 0.56);
+            color: #0c422a;
+            border: 1px solid rgba(226, 223, 213, 0.3);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
         }
 
         .nav-item i {
@@ -272,6 +287,7 @@
             padding: 122px 32px 32px;
             overflow-x: auto;
             box-sizing: border-box;
+            transition: margin-left 0.24s ease, width 0.24s ease;
         }
 
         .main-topbar {
@@ -286,6 +302,7 @@
             justify-content: space-between;
             align-items: center;
             padding: 0 32px;
+            transition: left 0.24s ease, width 0.24s ease;
         }
 
         .topbar-module-title h1 {
@@ -307,6 +324,67 @@
             border: none;
             border-radius: 14px;
             padding: 8px 14px;
+        }
+
+        .topbar-settings-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 999px;
+            border: 1px solid rgba(226, 223, 213, 0.3);
+            background: rgba(226, 223, 213, 0.08);
+            color: #e2dfd5;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .topbar-settings-btn:hover,
+        .topbar-settings-btn.active {
+            background: rgba(164, 224, 188, 0.56);
+            color: #0c422a;
+            border-color: rgba(226, 223, 213, 0.34);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        .sidebar:hover {
+            width: var(--sidebar-expanded-width);
+        }
+
+        .sidebar:hover .sidebar-logo-expanded {
+            display: block;
+        }
+
+        .sidebar:hover .sidebar-logo-collapsed {
+            display: none;
+        }
+
+        .sidebar:hover .nav-item span,
+        .sidebar:hover .sidebar-footer {
+            opacity: 1;
+            visibility: visible;
+            max-width: 260px;
+        }
+
+        .sidebar:hover ~ .main-content {
+            margin-left: var(--sidebar-expanded-width);
+            width: calc(100vw - var(--sidebar-expanded-width));
+        }
+
+        .sidebar:hover ~ .main-content .main-topbar {
+            left: var(--sidebar-expanded-width);
+            width: calc(100vw - var(--sidebar-expanded-width));
+        }
+
+        .nav-item span,
+        .sidebar-footer {
+            opacity: 0;
+            visibility: hidden;
+            max-width: 0;
+            overflow: hidden;
+            transition: opacity 0.18s ease, visibility 0.18s ease, max-width 0.22s ease;
         }
 
         .topbar-bell {
@@ -1343,6 +1421,9 @@
         }
 
         @media (max-width: 768px) {
+            :root {
+                --sidebar-width: 200px;
+            }
             .sidebar {
                 width: 200px;
             }
@@ -1369,11 +1450,26 @@
         }
 
         @media (max-width: 640px) {
+            :root {
+                --sidebar-width: 100%;
+            }
             .sidebar {
                 width: 100%;
                 height: auto;
                 border-right: none;
                 border-bottom: 1px solid rgba(226, 223, 213, 0.24);
+            }
+            .sidebar-logo-expanded,
+            .sidebar-logo-collapsed,
+            .nav-item span,
+            .sidebar-footer {
+                display: initial;
+                opacity: 1;
+                visibility: visible;
+                max-width: none;
+            }
+            .sidebar:hover {
+                width: 100%;
             }
             .main-topbar {
                 left: 0;
@@ -1749,7 +1845,8 @@
     <!-- Sidebar -->
     <aside class="sidebar">
         <div class="sidebar-logo">
-            <img src="/logo-coelho.png" alt="Coelho Toca do Coelho">
+            <img class="sidebar-logo-collapsed" src="/logo-coelho-collapsed.png" alt="Coelho Toca do Coelho (compacto)">
+            <img class="sidebar-logo-expanded" src="/logo-coelho.png" alt="Coelho Toca do Coelho">
         </div>
 
         <nav class="sidebar-nav">
@@ -1797,10 +1894,6 @@
                 <i class="fas fa-database"></i>
                 <span>Report & Backup</span>
             </button>
-            <button class="nav-item nav-config nav-item-settings" onclick="switchTab(event, 'configuracoes')">
-                <i class="fas fa-cog"></i>
-                <span>Configurações</span>
-            </button>
         </nav>
 
         <div class="sidebar-footer">
@@ -1818,6 +1911,9 @@
             <div class="topbar-user-block">
                 <button id="weekCommitmentsBell" class="topbar-bell" onclick="openWeekCommitmentsModal()" title="Compromissos da semana">
                     <i class="fas fa-bell"></i>
+                </button>
+                <button id="topbarSettingsButton" class="topbar-settings-btn" onclick="switchTab(event, 'configuracoes')" title="Configurações">
+                    <i class="fas fa-cog"></i>
                 </button>
                 <div id="dashboardGreeting" style="display:flex; align-items:center; gap:10px;"></div>
             </div>
@@ -2894,6 +2990,14 @@
             container.innerHTML = `<h1>${escapeHtml(copy.title)}</h1><p>${escapeHtml(copy.subtitle)}</p>`;
         }
 
+        function updateTopbarSettingsState(tabName) {
+            const settingsBtn = document.getElementById('topbarSettingsButton');
+            if (!settingsBtn) return;
+            const isActive = tabName === 'configuracoes';
+            settingsBtn.classList.toggle('active', isActive);
+            settingsBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        }
+
         function ensureAutoTocaPresence() {
             const nav = document.querySelector('.sidebar-nav');
             if (!nav) return;
@@ -2945,6 +3049,7 @@
             targetTab.classList.add('active');
             _currentTab = tabName;
             updateTopbarModuleHeader(tabName);
+            updateTopbarSettingsState(tabName);
 
             const mainContent = document.querySelector('.main-content');
             if (mainContent) mainContent.classList.toggle('iata-mode', tabName === 'iata');

@@ -47,10 +47,10 @@ SectionEnd
 Section "Criar Atalhos" SecShortcuts
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory "$SMPROGRAMS\$StartMenuFolder"
-    CreateShortCut "$SMPROGRAMS\$StartMenuFolder\Toca do Coelho.lnk" "$INSTDIR\TocaDoCoelho.exe" "" "$INSTDIR\coelho_icon_transparent.ico" 0 SW_SHOWNORMAL
+    CreateShortCut "$SMPROGRAMS\$StartMenuFolder\Toca.lnk" "$INSTDIR\TocaDoCoelho.exe" "" "$INSTDIR\coelho_icon_transparent.ico" 0 SW_SHOWNORMAL
     CreateShortCut "$SMPROGRAMS\$StartMenuFolder\Desinstalar.lnk" "$INSTDIR\uninstall.exe"
     !insertmacro MUI_STARTMENU_WRITE_END
-    CreateShortCut "$DESKTOP\Toca do Coelho.lnk" "$INSTDIR\TocaDoCoelho.exe" "" "$INSTDIR\coelho_icon_transparent.ico" 0 SW_SHOWNORMAL
+    CreateShortCut "$DESKTOP\Toca.lnk" "$INSTDIR\TocaDoCoelho.exe" "" "$INSTDIR\coelho_icon_transparent.ico" 0 SW_SHOWNORMAL
 SectionEnd
 
 Section /o "Iniciar com o Windows" SecAutoStart
@@ -60,10 +60,10 @@ SectionEnd
 Section "Uninstall"
     RMDir /r "$INSTDIR"
     !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
-    Delete "$SMPROGRAMS\$StartMenuFolder\Toca do Coelho.lnk"
+    Delete "$SMPROGRAMS\$StartMenuFolder\Toca.lnk"
     Delete "$SMPROGRAMS\$StartMenuFolder\Desinstalar.lnk"
     RMDir "$SMPROGRAMS\$StartMenuFolder"
-    Delete "$DESKTOP\Toca do Coelho.lnk"
+    Delete "$DESKTOP\Toca.lnk"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TocaDoCoelho"
     DeleteRegKey HKCU "Software\TocaDoCoelho"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho"
