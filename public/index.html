@@ -27,19 +27,34 @@
         /* Sidebar */
         .sidebar {
             position: fixed;
-            left: 0;
-            top: 0;
+            left: 12px;
+            top: 12px;
+            bottom: 12px;
             width: var(--sidebar-width);
-            height: 100vh;
-            background: linear-gradient(180deg, rgba(15, 78, 44, 0.92) 0%, rgba(12, 66, 42, 0.88) 100%);
-            backdrop-filter: blur(16px) saturate(180%);
-            -webkit-backdrop-filter: blur(16px) saturate(180%);
-            border-right: 1px solid rgba(255, 255, 255, 0.12);
+            height: calc(100vh - 24px);
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+            backdrop-filter: blur(20px) saturate(160%);
+            -webkit-backdrop-filter: blur(20px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 24px;
             display: flex;
             flex-direction: column;
             z-index: 100;
-            box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.05), 4px 0 24px rgba(0, 0, 0, 0.2);
-            transition: width 0.24s ease;
+            box-shadow: 
+                inset 0 0 20px rgba(255, 255, 255, 0.05),
+                0 8px 32px rgba(0, 0, 0, 0.3);
+            transition: width 0.24s ease, left 0.24s ease;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #0f4e2c;
+            z-index: -1;
         }
 
         .sidebar-logo {
@@ -282,11 +297,11 @@
 
         /* Main Content */
         .main-content {
-            margin-left: var(--sidebar-width);
+            margin-left: calc(var(--sidebar-width) + 12px);
             min-height: 100vh;
-            width: calc(100vw - var(--sidebar-width));
+            width: calc(100vw - var(--sidebar-width) - 12px);
             min-width: 0;
-            padding: 122px 32px 32px;
+            padding: 112px 24px 24px;
             overflow-x: auto;
             box-sizing: border-box;
             transition: margin-left 0.24s ease, width 0.24s ease;
@@ -294,21 +309,25 @@
 
         .main-topbar {
             position: fixed;
-            top: 0;
-            left: var(--sidebar-width);
-            width: calc(100vw - var(--sidebar-width));
-            height: 90px;
-            background: linear-gradient(90deg, rgba(12, 66, 42, 0.94) 0%, rgba(15, 78, 44, 0.9) 100%);
-            backdrop-filter: blur(16px) saturate(180%);
-            -webkit-backdrop-filter: blur(16px) saturate(180%);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            top: 12px;
+            left: calc(var(--sidebar-width) + 24px);
+            right: 12px;
+            width: auto;
+            height: 80px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+            backdrop-filter: blur(20px) saturate(160%);
+            -webkit-backdrop-filter: blur(20px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 20px;
             z-index: 90;
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 0 32px;
-            box-shadow: inset 0 0 15px rgba(255, 255, 255, 0.03), 0 4px 20px rgba(0, 0, 0, 0.1);
-            transition: left 0.24s ease, width 0.24s ease;
+            box-shadow: 
+                inset 0 0 15px rgba(255, 255, 255, 0.05),
+                0 8px 32px rgba(0, 0, 0, 0.2);
+            transition: left 0.24s ease, right 0.24s ease;
         }
 
         .topbar-module-title h1 {
