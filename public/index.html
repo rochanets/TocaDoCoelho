@@ -63,12 +63,9 @@
 
         .sidebar-logo-collapsed {
             display: block;
-            width: 56px;
-            height: 56px;
-            background-image: url('/logo-coelho.png');
-            background-size: auto 56px;
-            background-position: left center;
-            background-repeat: no-repeat;
+            width: 56px !important;
+            height: 56px !important;
+            object-fit: contain;
             flex-shrink: 0;
         }
 
@@ -1850,7 +1847,7 @@
     <!-- Sidebar -->
     <aside class="sidebar">
         <div class="sidebar-logo">
-            <div class="sidebar-logo-collapsed" title="Toca do Coelho"></div>
+            <img class="sidebar-logo-collapsed" src="/images/favicon-toca.png" alt="Toca do Coelho">
             <img class="sidebar-logo-expanded" src="/logo-coelho.png" alt="Coelho Toca do Coelho">
         </div>
 
