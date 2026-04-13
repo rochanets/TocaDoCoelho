@@ -9984,6 +9984,12 @@
                             <button class="btn btn-secondary" onclick="closePortfolioModal('portfolioNewModal')">Cancelar</button>
                             <button id="portfolioSubmitBtn" class="btn btn-auto-mapping btn-small" onclick="submitNewOffer()"><span class="ai-star-icon">✦</span> Analisar com IA</button>
                         </div>
+                        <div id="portfolioProgressWrap" style="display:none; margin-top:12px;">
+                            <div id="portfolioProgressLabel" style="font-size:12px; color:#6b7280; margin-bottom:6px;">Preparando...</div>
+                            <div style="width:100%; height:10px; border-radius:999px; background:#e5e7eb; overflow:hidden;">
+                                <div id="portfolioProgressBar" style="height:100%; width:0%; background:#2563eb; transition:width .3s ease;"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -9999,17 +10005,48 @@
             }
             const btn = document.getElementById('portfolioSubmitBtn');
             const original = btn ? btn.innerHTML : '';
+            const progressWrap = document.getElementById('portfolioProgressWrap');
+            const progressBar = document.getElementById('portfolioProgressBar');
+            const progressLabel = document.getElementById('portfolioProgressLabel');
             if (btn) {
                 btn.disabled = true;
                 btn.innerHTML = '<span class="ai-star-icon">✦</span> Analisando...';
             }
+            if (progressWrap) progressWrap.style.display = 'block';
+            if (progressBar) progressBar.style.width = '3%';
+            if (progressLabel) progressLabel.textContent = 'Enviando material...';
             try {
                 const fd = new FormData();
                 if (input) fd.append('raw_input', input);
                 if (pdfFile) fd.append('pdf_file', pdfFile);
-                const response = await fetch(`${API_BASE}/portfolio/offers`, { method: 'POST', body: fd });
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Erro ao criar oferta.');
+                const startResponse = await fetch(`${API_BASE}/portfolio/offers/jobs`, { method: 'POST', body: fd });
+                const startPayload = await startResponse.json().catch(() => ({}));
+                if (!startResponse.ok) throw new Error(startPayload.error || 'Erro ao iniciar processamento.');
+                const jobId = startPayload.job_id;
+                if (!jobId) throw new Error('Job não retornado pelo servidor.');
+
+                let finalJob = null;
+                for (let i = 0; i < 300; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    const pollRes = await fetch(`${API_BASE}/portfolio/offers/jobs/${encodeURIComponent(jobId)}`);
+                    const pollPayload = await pollRes.json().catch(() => ({}));
+                    if (!pollRes.ok) throw new Error(pollPayload.error || 'Falha ao acompanhar progresso.');
+                    const progress = Math.max(0, Math.min(100, Number(pollPayload.progress || 0)));
+                    if (progressBar) progressBar.style.width = `${progress}%`;
+                    if (progressLabel) progressLabel.textContent = pollPayload.message || `Processando... ${progress}%`;
+
+                    if (pollPayload.status === 'completed') {
+                        finalJob = pollPayload;
+                        break;
+                    }
+                    if (pollPayload.status === 'failed') {
+                        throw new Error(pollPayload.message || 'Falha no processamento da oferta.');
+                    }
+                }
+                if (!finalJob) throw new Error('Tempo limite excedido aguardando processamento da oferta.');
+
+                if (progressBar) progressBar.style.width = '100%';
+                if (progressLabel) progressLabel.textContent = 'Concluído.';
                 closePortfolioModal('portfolioNewModal');
                 showSuccess('Oferta criada com sucesso.');
                 await loadPortfolio();

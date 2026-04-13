@@ -10180,6 +10180,26 @@ def _portfolio_extract_pdf_text(file_storage):
     return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
 
 
+def _portfolio_extract_pdf_text_from_bytes(file_bytes, progress_callback=None):
+    if not file_bytes:
+        return ''
+    if not PDFPLUMBER_AVAILABLE:
+        raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
+
+    text_parts = []
+    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+        pages = pdf.pages or []
+        total = max(1, len(pages))
+        for idx, page in enumerate(pages, start=1):
+            try:
+                text_parts.append(page.extract_text() or '')
+            except Exception:
+                pass
+            if progress_callback:
+                progress_callback(idx, total)
+    return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
+
+
 def _portfolio_encode_upload_as_data_url(file_storage):
     if not file_storage:
         return ''
@@ -10460,6 +10480,70 @@ def _portfolio_generate_offer_from_llm(raw_input):
     return None, 'llm_invalid_response', debug_info
 
 
+PORTFOLIO_JOBS = {}
+PORTFOLIO_JOBS_LOCK = threading.Lock()
+
+
+def _portfolio_set_job(job_id, **fields):
+    with PORTFOLIO_JOBS_LOCK:
+        job = PORTFOLIO_JOBS.get(job_id, {})
+        job.update(fields)
+        PORTFOLIO_JOBS[job_id] = job
+        return dict(job)
+
+
+def _portfolio_process_job(job_id, input_text, pdf_bytes):
+    try:
+        _portfolio_set_job(job_id, status='processing', progress=5, message='Iniciando análise...')
+        pdf_text = ''
+        if pdf_bytes:
+            _portfolio_set_job(job_id, progress=10, message='Extraindo texto do PDF...')
+
+            def _on_pdf_progress(page_idx, total_pages):
+                ratio = page_idx / max(1, total_pages)
+                progress = 10 + int(ratio * 40)
+                _portfolio_set_job(job_id, progress=min(50, progress), message=f'Processando PDF: página {page_idx}/{total_pages}')
+
+            pdf_text = _portfolio_extract_pdf_text_from_bytes(pdf_bytes, progress_callback=_on_pdf_progress)
+
+        raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+        if not raw_input:
+            raise RuntimeError('Informe um texto ou envie um PDF para análise.')
+
+        _portfolio_set_job(job_id, progress=60, message='Enviando conteúdo para IA...')
+        parsed, source, debug_info = _portfolio_generate_offer_from_llm(raw_input)
+        if not parsed:
+            if source == 'sem_llm':
+                raise RuntimeError('Nenhum serviço de IA configurado (SAI ou OpenRouter).')
+            _portfolio_set_job(job_id, status='failed', progress=100, message='Falha ao interpretar resposta da IA.', debug=debug_info)
+            return
+
+        _portfolio_set_job(job_id, progress=85, message='Salvando oferta...')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+            (parsed['title'], parsed['summary'], raw_input)
+        )
+        offer_id = c.lastrowid
+        for idx, item in enumerate(parsed.get('items') or []):
+            c.execute(
+                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
+            )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if offer is None:
+            raise RuntimeError('Falha ao carregar oferta criada.')
+        offer['llm_source'] = source
+        _portfolio_set_job(job_id, status='completed', progress=100, message='Concluído.', result=offer)
+    except Exception as e:
+        logger.exception(f'[Portfolio][Job] Erro ao processar job {job_id}: {e}')
+        _portfolio_set_job(job_id, status='failed', progress=100, message=str(e))
+
+
 def _portfolio_fetch_offer(c, offer_id):
     c.execute('SELECT * FROM portfolio_offers WHERE id = ?', (offer_id,))
     offer = dict_from_row(c.fetchone())
@@ -10537,6 +10621,40 @@ def create_portfolio_offer():
     except Exception as e:
         logger.exception(f'[Portfolio] Erro ao criar oferta: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/jobs', methods=['POST'])
+def create_portfolio_offer_job():
+    try:
+        input_text = (request.form.get('raw_input') or '').strip()
+        file_obj = request.files.get('pdf_file')
+        pdf_bytes = b''
+        if file_obj:
+            pdf_bytes = file_obj.read() or b''
+
+        if not input_text and not pdf_bytes:
+            return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
+
+        job_id = uuid.uuid4().hex
+        _portfolio_set_job(job_id, id=job_id, status='queued', progress=0, message='Aguardando processamento...')
+        threading.Thread(
+            target=_portfolio_process_job,
+            args=(job_id, input_text, pdf_bytes),
+            daemon=True
+        ).start()
+        return jsonify({'job_id': job_id}), 202
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao iniciar job de oferta: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/jobs/<job_id>', methods=['GET'])
+def get_portfolio_offer_job(job_id):
+    with PORTFOLIO_JOBS_LOCK:
+        job = PORTFOLIO_JOBS.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job não encontrado.'}), 404
+    return jsonify(job)
 
 
 @app.route('/api/portfolio/offers/<int:offer_id>', methods=['PUT'])
