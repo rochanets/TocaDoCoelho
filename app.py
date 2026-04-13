@@ -10223,6 +10223,28 @@ def _portfolio_encode_upload_as_base64(file_storage):
 
 
 def _portfolio_parse_llm_raw(raw):
+    def _normalize_items_list(items):
+        normalized = []
+        for item in (items or []):
+            if not isinstance(item, dict):
+                continue
+            pain = (item.get('pain') or '').strip()
+            solution = (item.get('solution') or '').strip()
+
+            # Corrige casos em que a solução veio concatenada dentro do bloco da dor
+            if pain and not solution:
+                split_match = re.search(
+                    r'(?is)\b(?:como\s+a\s+stefanini\s+resolve|solução(?:\s+stefanini)?)\s*:\s*(.+)$',
+                    pain
+                )
+                if split_match:
+                    solution = split_match.group(1).strip()
+                    pain = pain[:split_match.start()].strip(' -•\t')
+
+            if pain or solution:
+                normalized.append({'pain': pain, 'solution': solution})
+        return normalized
+
     def _try_parse_json(value):
         if not value:
             return None
@@ -10282,7 +10304,7 @@ def _portfolio_parse_llm_raw(raw):
 
             if items:
                 summary = 'Dores e soluções estruturadas extraídas do conteúdo enviado.'
-                return {'title': 'Oferta gerada por IA', 'summary': summary, 'items': items}
+                return {'title': 'Oferta gerada por IA', 'summary': summary, 'items': _normalize_items_list(items)}
 
         def _extract_numbered_items(section_title):
             section_pattern = rf'(?is){re.escape(section_title)}\s*(.*?)(?:\n\s*(?:##+|\-\-\-)|\Z)'
@@ -10330,7 +10352,7 @@ def _portfolio_parse_llm_raw(raw):
         return {
             'title': 'Oferta gerada por IA',
             'summary': summary or 'Resumo estruturado gerado a partir da análise do conteúdo enviado.',
-            'items': items or [{'pain': 'Pontos de dor não identificados no retorno.', 'solution': 'Soluções não identificadas no retorno.'}]
+            'items': _normalize_items_list(items) or [{'pain': 'Pontos de dor não identificados no retorno.', 'solution': 'Soluções não identificadas no retorno.'}]
         }
 
     def _find_nested_candidate(value, depth=0):
@@ -10406,13 +10428,7 @@ def _portfolio_parse_llm_raw(raw):
     if not isinstance(raw_items, list):
         raw_items = []
 
-    items = []
-    for item in raw_items:
-        if isinstance(item, dict):
-            pain = (item.get('pain') or '').strip()
-            solution = (item.get('solution') or '').strip()
-            if pain or solution:
-                items.append({'pain': pain, 'solution': solution})
+    items = _normalize_items_list(raw_items)
 
     if not title and not summary and not items:
         return None
@@ -10436,11 +10452,12 @@ def _portfolio_generate_offer_from_llm(raw_input):
         text = '' if value is None else str(value)
         return text[:limit]
 
-    material = (raw_input or '').strip()[:30000]
+    material = (raw_input or '').strip()[:12000]
     input_text = (
         "Você é um analista de soluções de uma consultoria de TI. "
         "Analise os dados abaixo e me retorne até 10 dores e soluções. "
-        "Dores devem ser cenários de problemas aos clientes e soluções o que ou como a Stefanini resolve/resolveu aquele problema.\n\n"
+        "Dores devem ser cenários de problemas aos clientes e soluções o que ou como a Stefanini resolve/resolveu aquele problema. "
+        "Não misture solução dentro da dor. Se o conteúdo for longo, retorne menos itens, mas sempre completos (sem cortar no final).\n\n"
         f"{material}"
     )
 
