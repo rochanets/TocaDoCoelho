@@ -3738,7 +3738,7 @@
                 .replaceAll('<email>', contact.email || '');
         }
 
-        async function sendAutoTocaMailingBatch() {
+        function sendAutoTocaMailingBatch() {
             const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
             const subjectTemplate = document.getElementById('autoTocaMailingSubject')?.value || '';
             const bodyTemplate = document.getElementById('autoTocaMailingBody')?.value || '';
@@ -3750,18 +3750,77 @@
                 showInfo('Lote grande detectado. Seu navegador pode bloquear pop-ups; permita pop-ups se necessário.');
             }
 
-            contactsWithEmail.forEach((contact, idx) => {
-                setTimeout(() => {
-                    const personalizedSubject = applyMergeFields(subjectTemplate, contact);
-                    const personalizedBody = applyMergeFields(bodyTemplate, contact);
-                    const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(personalizedSubject)}&body=${encodeURIComponent(personalizedBody)}`;
-                    window.open(outlookUrl, '_blank');
-                    askRegisterActivityFromCommunication(contact.id, 'Email', personalizedBody);
-                }, idx * 300);
-            });
+            // IMPORTANTE: abrimos todas as janelas do Outlook SINCRONICAMENTE dentro do
+            // handler do clique para preservar o "user gesture" — caso contrário o
+            // bloqueador de pop-ups do navegador derruba todas as janelas após a primeira.
+            // Também evitamos chamar uiConfirm() em loop, pois openSystemDialog usa um
+            // único resolve global que é sobrescrito a cada chamada, fazendo com que
+            // atividades acabem sendo registradas para o contato errado.
+            const opened = [];
+            const blocked = [];
+            for (const contact of contactsWithEmail) {
+                const personalizedSubject = applyMergeFields(subjectTemplate, contact);
+                const personalizedBody = applyMergeFields(bodyTemplate, contact);
+                const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(personalizedSubject)}&body=${encodeURIComponent(personalizedBody)}`;
+                const win = window.open(outlookUrl, '_blank');
+                if (win) {
+                    opened.push({ contact, personalizedBody });
+                } else {
+                    blocked.push(contact);
+                }
+            }
 
             closeAutoTocaMailingComposer();
-            showSuccess(`Mala direta iniciada para ${contactsWithEmail.length} contato(s).${skipped ? ` ${skipped} sem e-mail foram ignorados.` : ''}`);
+
+            // Resumo imediato do que o navegador permitiu abrir.
+            const summaryParts = [];
+            summaryParts.push(`${opened.length} e-mail(is) aberto(s) no Outlook`);
+            if (skipped) summaryParts.push(`${skipped} sem e-mail ignorado(s)`);
+            if (blocked.length) summaryParts.push(`${blocked.length} bloqueado(s) pelo navegador`);
+            const summary = `Mala direta: ${summaryParts.join(', ')}.`;
+
+            if (blocked.length && !opened.length) {
+                showError(`${summary} Permita pop-ups para este site e tente novamente.`);
+                return;
+            }
+            if (blocked.length) {
+                showInfo(`${summary} Permita pop-ups para abrir os demais.`);
+            } else {
+                showSuccess(summary);
+            }
+
+            if (!opened.length) return;
+
+            // Agora (fora do user gesture) podemos aguardar a confirmação UMA vez
+            // e registrar as atividades diretamente via API, sem passar pelo uiConfirm
+            // em loop (que teria o mesmo bug do resolve global sendo sobrescrito).
+            (async () => {
+                const shouldRegister = await uiConfirm(
+                    `Deseja registrar uma atividade de Email para os ${opened.length} destinatário(s) da mala direta?`
+                );
+                if (!shouldRegister) return;
+
+                let registered = 0;
+                for (const { contact, personalizedBody } of opened) {
+                    try {
+                        const formData = new FormData();
+                        formData.set('client_id', contact.id);
+                        formData.set('contact_type', 'Email');
+                        formData.set('information', personalizedBody || 'Email enviado.');
+                        const response = await fetch(`${API_BASE}/atividades`, { method: 'POST', body: formData });
+                        if (response.ok) registered++;
+                    } catch (e) {
+                        // falha individual não interrompe o lote
+                    }
+                }
+
+                if (registered) {
+                    try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+                    showSuccess(`Atividade registrada para ${registered} destinatário(s).`);
+                } else {
+                    showError('Não foi possível registrar as atividades da mala direta.');
+                }
+            })();
         }
 
         async function buscarEnderecoAutoToca(evt) {
