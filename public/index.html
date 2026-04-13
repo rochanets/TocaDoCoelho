@@ -53,7 +53,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: #0f4e2c;
+            background: #194b3c;
             z-index: -1;
         }
 
@@ -112,34 +112,6 @@
             vertical-align: middle;
         }
 
-        .sidebar-nav {
-            flex: 1;
-            padding: 8px 14px 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            min-height: 0;
-            overflow-y: auto;
-            scrollbar-gutter: stable;
-        }
-
-        .sidebar-nav::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .sidebar-nav::-webkit-scrollbar-track {
-            background: rgba(52, 211, 153, 0.08);
-            border-radius: 999px;
-        }
-
-        .sidebar-nav::-webkit-scrollbar-thumb {
-            background: rgba(52, 211, 153, 0.45);
-            border-radius: 999px;
-        }
-
-        .sidebar-nav::-webkit-scrollbar-thumb:hover {
-            background: rgba(5, 150, 105, 0.6);
-        }
 
         .nav-item-settings {
             margin-top: auto;
@@ -257,6 +229,7 @@
         .nav-item {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 12px;
             padding: 12px 16px;
             border-radius: 12px;
@@ -264,7 +237,7 @@
             transition: all 0.2s;
             color: #e2dfd5;
             font-weight: 500;
-            border: none;
+            border: 1px solid transparent;
             background: none;
             width: 100%;
             text-align: left;
@@ -388,6 +361,10 @@
             display: none;
         }
 
+        .sidebar:hover .nav-item {
+            justify-content: flex-start;
+        }
+
         .sidebar:hover .nav-item span,
         .sidebar:hover .sidebar-footer {
             opacity: 1;
@@ -401,8 +378,8 @@
         }
 
         .sidebar:hover ~ .main-content .main-topbar {
-            left: var(--sidebar-expanded-width);
-            width: calc(100vw - var(--sidebar-expanded-width));
+            left: calc(var(--sidebar-expanded-width) + 24px);
+            width: auto;
         }
 
         .nav-item span,
@@ -488,13 +465,13 @@
         .page-header h1 {
             font-size: 32px;
             font-weight: 700;
-            color: #047857;
+            color: #e2dfd5;
             margin-bottom: 8px;
         }
 
         .page-header p {
             font-size: 16px;
-            color: rgba(52, 211, 153, 0.7);
+            color: rgba(226, 223, 213, 0.84);
         }
 
         /* Buttons */
@@ -1574,8 +1551,8 @@
         #orgSuccessMsg { position: fixed; top: 20px; right: 24px; z-index: 9999; padding: 14px 22px; border-radius: 10px; background: #daf0f9; color: #0d3a52; border: 1px solid #a8ddf0; font-size: 14px; font-weight: 600; box-shadow: 0 4px 18px rgba(96,187,217,0.25); display: none; }
         #orgSuccessMsg.show { display: block; animation: fadeInDown 0.3s ease; }
         @keyframes fadeInDown { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
-        #gestaoContaSubPanel_org .page-header h1 { color: #0d3a52; }
-        #gestaoContaSubPanel_org .page-header p { color: rgba(96,187,217,0.85); }
+        #gestaoContaSubPanel_org .page-header h1 { color: #e2dfd5; }
+        #gestaoContaSubPanel_org .page-header p { color: rgba(226, 223, 213, 0.84); }
         #gestaoContaSubPanel_org .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
         .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; min-height: calc(100vh - 170px); }
         .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 170px); border-radius: 0 0 20px 20px; }
@@ -1876,7 +1853,6 @@
             <img class="sidebar-logo-expanded" src="/logo-coelho.png" alt="Coelho Toca do Coelho">
         </div>
 
-        <nav class="sidebar-nav">
             <button class="nav-item nav-iata" onclick="switchTab(event, 'iata')">
                 <i class="fas fa-robot"></i>
                 <span>iToca</span>
@@ -1921,7 +1897,6 @@
                 <i class="fas fa-database"></i>
                 <span>Report & Backup</span>
             </button>
-        </nav>
 
         <div class="sidebar-footer">
             Versão 2.0.0
@@ -2179,7 +2154,7 @@
                     </div>
                 </div>
                 <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #047857;">Selecionar Conta:</label>
+                    <label style="display: block; margin-bottom: 8px; font-weight: 500; color: #e2dfd5;">Selecionar Conta:</label>
                     <select id="mappingClientFilter" onchange="loadMapeamento()" class="input-minimal">
                         <option value="">Selecione uma conta</option>
                     </select>
@@ -2201,13 +2176,13 @@
                 </div>
                 <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px;">
                     <div style="min-width:280px; flex:1;">
-                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#0d3a52;">Conta</label>
+                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Conta</label>
                         <select id="orgAccountFilterSelect" onchange="setOrgAccountFilter(this.value)" style="width:100%; max-width:340px; padding:8px 10px; border:1px solid #bfe5f1; border-radius:8px; background:#fff; color:#0f172a; font-size:13px;">
                             <option value="">Selecione uma conta</option>
                         </select>
                     </div>
                     <div style="min-width:220px;">
-                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#0d3a52;">Agrupar colunas por</label>
+                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Agrupar colunas por</label>
                         <select id="orgGroupingModeSelect" onchange="setOrgGroupingMode(this.value)" style="width:100%; padding:10px 12px; border:1px solid #bfe5f1; border-radius:10px; background:#fff; color:#0f172a;">
                             <option value="position">Cargo</option>
                             <option value="area">Área de Atuação</option>
@@ -9536,7 +9511,7 @@
             const el = document.getElementById('accountsContent');
             if (!el) return;
             if (!accounts.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta cadastrada.</p></div>'; return; }
-            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:#6b7280;">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="display:inline-flex; width:auto; max-width:100%; padding:4px 9px; border-radius:999px; background:rgba(16,185,129,.16); border:1px solid rgba(16,185,129,.26); font-size:12px; font-weight:700;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
+            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#e2dfd5;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:rgba(226,223,213,0.7);">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="display:inline-flex; width:auto; max-width:100%; padding:4px 9px; border-radius:999px; background:linear-gradient(135deg,#bbf7d0 0%,#4ade80 100%); color:#064e3b; border:1px solid rgba(255,255,255,0.2); box-shadow:0 4px 15px rgba(74,222,128,0.3); font-size:12px; font-weight:700;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
         }
 
         function formatIntegerPtBr(value) {
