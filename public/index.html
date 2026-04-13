@@ -2161,27 +2161,27 @@
                 <div id="autoMappingQueriesSection" style="margin-top:20px;"></div>
             </div>
             <div id="gestaoContaSubPanel_org" data-subtab="org" style="display:none;">
-                <div class="page-header" style="margin-top:6px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px; margin-top:6px;">
+                    <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+                        <div style="min-width:280px; width:410px;">
+                            <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Conta</label>
+                            <select id="orgAccountFilterSelect" onchange="setOrgAccountFilter(this.value)" style="width:100%; padding:8px 10px; border:1px solid #bfe5f1; border-radius:8px; background:#fff; color:#0f172a; font-size:13px;">
+                                <option value="">Selecione uma conta</option>
+                            </select>
+                        </div>
+                        <div style="min-width:220px; width:260px;">
+                            <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Agrupar colunas por</label>
+                            <select id="orgGroupingModeSelect" onchange="setOrgGroupingMode(this.value)" style="width:100%; padding:10px 12px; border:1px solid #bfe5f1; border-radius:10px; background:#fff; color:#0f172a;">
+                                <option value="position">Cargo</option>
+                                <option value="area">Área de Atuação</option>
+                                <option value="position_area">Cargo + Área de Atuação</option>
+                            </select>
+                        </div>
+                    </div>
                     <button class="btn btn-org-export" onclick="openOrgExportModal()" title="Exportar tabela para Excel">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                         Exportar
                     </button>
-                </div>
-                <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px;">
-                    <div style="min-width:280px; flex:1;">
-                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Conta</label>
-                        <select id="orgAccountFilterSelect" onchange="setOrgAccountFilter(this.value)" style="width:100%; max-width:340px; padding:8px 10px; border:1px solid #bfe5f1; border-radius:8px; background:#fff; color:#0f172a; font-size:13px;">
-                            <option value="">Selecione uma conta</option>
-                        </select>
-                    </div>
-                    <div style="min-width:220px;">
-                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Agrupar colunas por</label>
-                        <select id="orgGroupingModeSelect" onchange="setOrgGroupingMode(this.value)" style="width:100%; padding:10px 12px; border:1px solid #bfe5f1; border-radius:10px; background:#fff; color:#0f172a;">
-                            <option value="position">Cargo</option>
-                            <option value="area">Área de Atuação</option>
-                            <option value="position_area">Cargo + Área de Atuação</option>
-                        </select>
-                    </div>
                 </div>
                 <div id="organizationalContent"></div>
             </div>
