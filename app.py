@@ -10257,6 +10257,33 @@ def _portfolio_parse_llm_raw(raw):
         if not text:
             return None
 
+        # Formato comum: "## 🔴 DOR 1 — ...", com blocos "Cenário do Problema" e "✅ Solução"
+        dor_blocks = list(re.finditer(r'(?is)^\s*##\s*.*?\bDOR\s*\d+\s*[—-]\s*(.+?)\n(.*?)(?=^\s*##\s*.*?\bDOR\s*\d+\b|\Z)', text, flags=re.MULTILINE))
+        if dor_blocks:
+            items = []
+            for block in dor_blocks[:10]:
+                title = (block.group(1) or '').strip()
+                body = block.group(2) or ''
+                pain = ''
+                solution = ''
+
+                pain_match = re.search(r'(?is)\*\*Cenário do Problema:\*\*\s*(.*?)(?=\n\s*\*\*.*?Solução|^\s*---|\Z)', body, flags=re.MULTILINE)
+                if pain_match:
+                    pain = re.sub(r'\s+', ' ', pain_match.group(1)).strip(' -•\t')
+                if not pain:
+                    pain = title
+
+                sol_match = re.search(r'(?is)\*\*[^*]*Solução[^*]*\*\*\s*(.*?)(?=^\s*---|^\s*##\s*.*?\bDOR\s*\d+\b|\Z)', body, flags=re.MULTILINE)
+                if sol_match:
+                    solution = re.sub(r'\s+', ' ', sol_match.group(1)).strip(' -•\t')
+
+                if pain or solution:
+                    items.append({'pain': pain[:800], 'solution': solution[:1200]})
+
+            if items:
+                summary = 'Dores e soluções estruturadas extraídas do conteúdo enviado.'
+                return {'title': 'Oferta gerada por IA', 'summary': summary, 'items': items}
+
         def _extract_numbered_items(section_title):
             section_pattern = rf'(?is){re.escape(section_title)}\s*(.*?)(?:\n\s*(?:##+|\-\-\-)|\Z)'
             section_match = re.search(section_pattern, text)
