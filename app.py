@@ -10378,7 +10378,7 @@ def _portfolio_parse_llm_raw(raw):
     return {'title': title, 'summary': summary, 'items': items}
 
 
-def _portfolio_generate_offer_from_llm(raw_input, input_file_base64='', input_file_data_url=''):
+def _portfolio_generate_offer_from_llm(raw_input):
     debug_info = {
         'sai_raw_preview': '',
         'openrouter_raw_preview': '',
@@ -10390,45 +10390,16 @@ def _portfolio_generate_offer_from_llm(raw_input, input_file_base64='', input_fi
         return text[:limit]
 
     material = (raw_input or '').strip()[:30000]
-    if not material and (input_file_base64 or input_file_data_url):
-        material = '[Arquivo PDF enviado em input_file para análise.]'
     input_text = (
-        "Você é um especialista em posicionamento comercial B2B. "
-        "O usuario vai enviar um pdf ou  texto um para analise e extraia um portfólio comercial em português (Brasil). "
-        "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão:\n"
-        '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
-        '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}\n\n'
-        "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto.\n\n"
-        f"MATERIAL:\n{material}"
+        "Você é um analista de soluções de uma consultoria de TI. "
+        "Analise os dados abaixo e me retorne até 10 dores e soluções. "
+        "Dores devem ser cenários de problemas aos clientes e soluções o que ou como a Stefanini resolve/resolveu aquele problema.\n\n"
+        f"{material}"
     )
 
-    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_base_url', 'portfolio_sai_template_id'])
-    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
-    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-    template_id = (settings_map.get('portfolio_sai_template_id') or '').strip() or '69d911c04908722b4e187583'
-
     raw = None
-    if api_key:
-        payload = {
-                'inputs': {
-                    'input': input_text,
-                    'input_file': input_file_base64 or input_file_data_url or '',
-                    # fallback para templates que esperam variação de formato do arquivo
-                    'input_file_data_url': input_file_data_url or '',
-                }
-            }
-        try:
-            req = urllib.request.Request(
-                f'{base_url}/api/templates/{template_id}/execute',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={'Content-Type': 'application/json', 'X-Api-Key': api_key},
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                raw = resp.read().decode('utf-8', errors='ignore')
-                debug_info['sai_raw_preview'] = _preview(raw)
-        except Exception as e:
-            logger.warning(f'[Portfolio][SAI] falha: {e}')
+    raw = _sai_simple_prompt(input_text)
+    debug_info['sai_raw_preview'] = _preview(raw)
 
     source = 'SAI'
     if raw is not None and not str(raw).strip():
@@ -10521,30 +10492,13 @@ def create_portfolio_offer():
     try:
         input_text = (request.form.get('raw_input') or '').strip()
         file_obj = request.files.get('pdf_file')
-        raw_input = input_text
+        pdf_text = _portfolio_extract_pdf_text(file_obj) if file_obj else ''
+        raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
 
-        if not raw_input and not file_obj:
+        if not raw_input:
             return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
 
-        input_file_base64 = ''
-        input_file_data_url = ''
-        if file_obj:
-            try:
-                file_obj.stream.seek(0)
-            except Exception:
-                pass
-            input_file_base64 = _portfolio_encode_upload_as_base64(file_obj)
-            try:
-                file_obj.stream.seek(0)
-            except Exception:
-                pass
-            input_file_data_url = _portfolio_encode_upload_as_data_url(file_obj)
-
-        parsed, source, debug_info = _portfolio_generate_offer_from_llm(
-            raw_input,
-            input_file_base64=input_file_base64,
-            input_file_data_url=input_file_data_url
-        )
+        parsed, source, debug_info = _portfolio_generate_offer_from_llm(raw_input)
         if not parsed:
             if source == 'sem_llm':
                 return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
