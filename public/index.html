@@ -418,7 +418,7 @@
             border: 1px solid #ffffff;
         }
 
-        .main-content.iata-mode { background:#ffffff; }
+        .main-content.iata-mode { background: transparent; }
 
         /* Dashboard específico: wrapper para scroll lateral quando necessário */
         .dashboard-scroll-wrapper {
@@ -1554,8 +1554,8 @@
         #gestaoContaSubPanel_org .page-header h1 { color: #e2dfd5; }
         #gestaoContaSubPanel_org .page-header p { color: rgba(226, 223, 213, 0.84); }
         #gestaoContaSubPanel_org .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-        .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; min-height: calc(100vh - 170px); }
-        .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 170px); border-radius: 0 0 20px 20px; }
+        .org-map-container { background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); border-radius: 20px; border: 1px solid rgba(96,187,217,0.25); box-shadow: 0 8px 32px rgba(96,187,217,0.12); overflow: hidden; min-height: calc(100vh - 130px); }
+        .org-table-wrap { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 130px); border-radius: 0 0 20px 20px; }
         .org-table-wrap::-webkit-scrollbar { width:6px; height:6px; }
         .org-table-wrap::-webkit-scrollbar-track { background:rgba(96,187,217,0.08); }
         .org-table-wrap::-webkit-scrollbar-thumb { background:rgba(96,187,217,0.45); border-radius:4px; }
@@ -1602,10 +1602,9 @@
         .iata-file-btn.has-file { background:#10b981; color:#fff; border-color:#059669; }
 
         #iata,
-        #iata .page-header,
         #iata .iata-center,
         #iata .iata-input-row {
-            background: #ffffff !important;
+            background: #ffffff;
         }
 
         .activity-compact .form-group { margin-bottom: 10px; }
@@ -2114,7 +2113,6 @@
                 <p>Cadastre e gerencie seus clientes</p>
             </div>
             <div class="section-title">
-                <h2>Clientes Cadastrados</h2>
                 <div style="display: flex; gap: 10px;">
                     <button class="btn btn-primary" onclick="openClientModal()">
                         <i class="fas fa-plus"></i> Novo Cliente
@@ -2147,7 +2145,6 @@
             </div>
             <div id="gestaoContaSubPanel_environment" data-subtab="environment" style="display:none;">
                 <div class="page-header" style="margin-top:6px;">
-                    <h1>Mapeamento de Ambiente</h1>
                     <div style="display:flex; gap:10px; flex-wrap:wrap;">
                         <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
                         <button class="btn btn-auto-mapping" onclick="openAutoMappingModal()"><span class="ai-star-icon">✦</span> AutoMapping</button>
@@ -2164,17 +2161,7 @@
                 <div id="autoMappingQueriesSection" style="margin-top:20px;"></div>
             </div>
             <div id="gestaoContaSubPanel_org" data-subtab="org" style="display:none;">
-                <div class="page-header" style="margin-top:6px;">
-                    <div>
-                        <h1>Mapeamento Organizacional</h1>
-                        <p>Visualize clientes por empresa e cargos com acesso rápido à ficha.</p>
-                    </div>
-                    <button class="btn btn-org-export" onclick="openOrgExportModal()" title="Exportar tabela para Excel">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        Exportar
-                    </button>
-                </div>
-                <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px; margin-top:6px;">
                     <div style="min-width:280px; flex:1;">
                         <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Conta</label>
                         <select id="orgAccountFilterSelect" onchange="setOrgAccountFilter(this.value)" style="width:100%; max-width:340px; padding:8px 10px; border:1px solid #bfe5f1; border-radius:8px; background:#fff; color:#0f172a; font-size:13px;">
@@ -2189,6 +2176,10 @@
                             <option value="position_area">Cargo + Área de Atuação</option>
                         </select>
                     </div>
+                    <button class="btn btn-org-export" onclick="openOrgExportModal()" title="Exportar tabela para Excel">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Exportar
+                    </button>
                 </div>
                 <div id="organizationalContent"></div>
             </div>
@@ -2200,7 +2191,7 @@
                 <p>Organize ofertas comerciais com pares de dor do cliente e solução.</p>
             </div>
             <div style="margin-bottom:12px;">
-                <button class="btn btn-auto-mapping btn-small" onclick="openNewOfferModal()"><span class="ai-star-icon">✦</span> Nova Oferta</button>
+                <button class="btn btn-auto-mapping btn-small" onclick="openNewOfferModal()"><span class="ai-star-icon">✦</span> + Nova Oferta</button>
             </div>
             <div id="portfolioContent"></div>
         </div>
@@ -2211,7 +2202,6 @@
                 <p>Registre contatos e atividades com seus clientes</p>
             </div>
             <div class="section-title">
-                <h2>Registro de Atividades</h2>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <button class="btn btn-primary" onclick="openActivityModal()">
                         <i class="fas fa-plus"></i> Nova Atividade
@@ -2316,9 +2306,9 @@
             </div>
             <div id="autotocaExtensionStatus" style="display:none; margin-bottom:16px; background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46; border-radius:12px; padding:12px 16px; font-size:13px;"></div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
-                <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
-                <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('resumo-linkedin')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
-                <button class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
+                <button id="autoTocaBtn_chamado-juridico" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
+                <button id="autoTocaBtn_resumo-linkedin" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('resumo-linkedin')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
+                <button id="autoTocaBtn_mala-direta" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
             </div>
             <div id="autoTocaResumoLinkedin" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
                 <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
@@ -3521,18 +3511,35 @@
                 'resumo-linkedin': 'autoTocaResumoLinkedin',
                 'mala-direta': 'autoTocaMalaDireta'
             };
+            const buttons = {
+                'chamado-juridico': 'autoTocaBtn_chamado-juridico',
+                'resumo-linkedin': 'autoTocaBtn_resumo-linkedin',
+                'mala-direta': 'autoTocaBtn_mala-direta'
+            };
             const targetId = panels[key];
             if (!targetId) return;
             const target = document.getElementById(targetId);
             if (!target) return;
             const isOpening = target.style.display === 'none';
             // Fecha todos os painéis
-            Object.values(panels).forEach(id => {
+            Object.entries(panels).forEach(([panelKey, id]) => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
+                const btn = document.getElementById(buttons[panelKey]);
+                if (btn) {
+                    btn.classList.remove('btn-auto-mapping');
+                    btn.classList.add('btn-secondary');
+                }
             });
             // Abre o selecionado (toggle)
-            if (isOpening) target.style.display = 'block';
+            if (isOpening) {
+                target.style.display = 'block';
+                const activeBtn = document.getElementById(buttons[key]);
+                if (activeBtn) {
+                    activeBtn.classList.remove('btn-secondary');
+                    activeBtn.classList.add('btn-auto-mapping');
+                }
+            }
         }
 
         async function loadAutoTocaMailingData() {
@@ -9898,7 +9905,7 @@
             const container = document.getElementById('portfolioContent');
             if (!container) return;
             if (!offers.length) {
-                container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📁</div><h3>Nenhuma oferta cadastrada</h3><p>Clique em "Nova Oferta" para analisar um texto/PDF com IA.</p></div>`;
+                container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📁</div><h3 style="color:#e2dfd5;">Nenhuma oferta cadastrada</h3><p style="color:#e2dfd5;">Clique em "Nova Oferta" para analisar um texto/PDF com IA.</p></div>`;
                 return;
             }
             container.innerHTML = offers.map(offer => {
