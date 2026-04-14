@@ -4083,6 +4083,20 @@
             draft.status = 'sent';
             _updateAutoTocaMailingDispatchRow(idx);
 
+            // Pergunta UMA vez, por contato, se deseja registrar a atividade.
+            // O modal de despacho garante que este fluxo é serial (um clique por vez),
+            // então não há o problema de concorrência do resolve global do openSystemDialog.
+            const contactName = draft.contact.name || draft.contact.email;
+            const shouldRegister = await uiConfirm(
+                `Deseja registrar essa interação de Email como atividade em "${contactName}"?`
+            );
+            tocaDebug('mala-direta.dispatch-one', 'Decisão sobre registro da atividade', {
+                idx,
+                contact_id: draft.contact.id,
+                register: !!shouldRegister
+            });
+            if (!shouldRegister) return;
+
             const ok = await _registerAutoTocaMailingActivity(draft);
             if (ok) {
                 try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
@@ -4107,10 +4121,13 @@
                 results.push({ draft, opened: !!win });
             }
 
-            // Depois do loop síncrono, processamos os resultados e registramos atividades.
+            // Depois do loop síncrono, processamos os resultados e pedimos uma ÚNICA
+            // confirmação para registrar todas as atividades dos e-mails que abriram
+            // (evita N diálogos consecutivos num único clique "abrir todos").
             (async () => {
                 let sent = 0;
                 let blocked = 0;
+                const openedDrafts = [];
                 for (const { draft, opened } of results) {
                     if (!opened) {
                         blocked++;
@@ -4123,18 +4140,36 @@
                     draft.status = 'sent';
                     _updateAutoTocaMailingDispatchRow(draft.idx);
                     sent++;
-                    await _registerAutoTocaMailingActivity(draft);
+                    openedDrafts.push(draft);
                 }
-                if (sent) {
-                    try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+
+                let registered = 0;
+                if (openedDrafts.length) {
+                    const shouldRegister = await uiConfirm(
+                        `Deseja registrar essas ${openedDrafts.length} interações de Email como atividades nos contatos correspondentes?`
+                    );
+                    tocaDebug('mala-direta.dispatch-all', 'Decisão sobre registro em lote', {
+                        count: openedDrafts.length,
+                        register: !!shouldRegister
+                    });
+                    if (shouldRegister) {
+                        for (const draft of openedDrafts) {
+                            const ok = await _registerAutoTocaMailingActivity(draft);
+                            if (ok) registered++;
+                        }
+                        if (registered) {
+                            try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+                        }
+                    }
                 }
-                tocaDebug('mala-direta.dispatch-all', 'Resultado do lote', { sent, blocked });
+
+                tocaDebug('mala-direta.dispatch-all', 'Resultado do lote', { sent, blocked, registered });
                 if (blocked && !sent) {
                     showError(`O navegador bloqueou todas as ${blocked} janelas. Permita pop-ups para este site ou clique em cada linha individualmente.`);
                 } else if (blocked) {
-                    showInfo(`${sent} e-mail(is) aberto(s). ${blocked} foram bloqueado(s) pelo navegador — clique individualmente nas linhas pendentes.`);
+                    showInfo(`${sent} e-mail(is) aberto(s)${registered ? ` — ${registered} atividade(s) registrada(s)` : ''}. ${blocked} foram bloqueado(s) pelo navegador — clique individualmente nas linhas pendentes.`);
                 } else {
-                    showSuccess(`${sent} e-mail(is) aberto(s) e atividades registradas.`);
+                    showSuccess(`${sent} e-mail(is) aberto(s)${registered ? ` — ${registered} atividade(s) registrada(s)` : ''}.`);
                 }
             })();
         }
