@@ -26,3 +26,9 @@ Este documento registra aprendizados de revisão para mudanças futuras.
 ## 6) Testes mínimos recomendados
 - Rodar validações rápidas (ex.: sintaxe/execução básica) e documentar claramente no PR.
 - Quando aplicável, validar comportamento visual no fluxo real da funcionalidade.
+
+## 7) UI Polish com referência da skill Emil
+- A skill de design engineering instalada em `.claude/skills/emil-design-eng/SKILL.md` deve ser usada como referência para mudanças de interface, mesmo em tarefas conduzidas pelo Codex.
+- Em alterações visuais, documentar decisões de animação no formato `Before | After | Why`.
+- Priorizar: feedback tátil em botões (`:active`), durações curtas (<300ms), `ease-out` para entradas e evitar `scale(0)`.
+- Ver guia operacional em `docs/EMIL_SKILL_ADAPTACAO_CODEX.md`.
