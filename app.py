@@ -5864,6 +5864,88 @@ def get_ui_config():
         return jsonify({'error': str(e)}), 500
 
 
+# =====================================================
+# Logs de Depuração
+# Endpoints para o painel "Logs de Depuração" em Configurações.
+# - GET  /api/config/logs        -> retorna as últimas N linhas de LOG_FILE
+# - POST /api/config/logs/client -> recebe entradas de log do cliente
+#                                   (tocaDebug) e grava no mesmo LOG_FILE
+# =====================================================
+
+_CLIENT_LOGGER = logging.getLogger('toca-do-coelho.client')
+
+
+@app.route('/api/config/logs', methods=['GET'])
+def get_debug_logs():
+    try:
+        try:
+            lines_limit = int(request.args.get('limit', 500))
+        except (TypeError, ValueError):
+            lines_limit = 500
+        lines_limit = max(50, min(lines_limit, 5000))
+
+        if not LOG_FILE.exists():
+            return jsonify({
+                'lines': [],
+                'path': str(LOG_FILE),
+                'total_lines': 0,
+                'returned_lines': 0,
+                'size': 0
+            })
+
+        with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+
+        tail = all_lines[-lines_limit:] if len(all_lines) > lines_limit else all_lines
+        return jsonify({
+            'lines': [line.rstrip('\n') for line in tail],
+            'path': str(LOG_FILE),
+            'total_lines': len(all_lines),
+            'returned_lines': len(tail),
+            'size': LOG_FILE.stat().st_size
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/logs: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/logs/client', methods=['POST'])
+def receive_client_logs():
+    try:
+        data = request.get_json(silent=True) or {}
+        entries = data.get('entries') or []
+        if not isinstance(entries, list):
+            return jsonify({'error': 'entries deve ser uma lista'}), 400
+
+        accepted = 0
+        for entry in entries[:500]:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                ts = str(entry.get('ts') or '')
+                tag = str(entry.get('tag') or 'client')
+                message = str(entry.get('message') or '')
+                payload = entry.get('data')
+                if payload is None:
+                    payload_str = ''
+                else:
+                    try:
+                        payload_str = json.dumps(payload, ensure_ascii=False, default=str)
+                    except Exception:
+                        payload_str = str(payload)
+                _CLIENT_LOGGER.info(
+                    f'[client:{tag}] ts={ts} msg={message} data={payload_str}'
+                )
+                accepted += 1
+            except Exception:
+                continue
+
+        return jsonify({'received': accepted})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/logs/client: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/config/integrations', methods=['GET'])
 def get_integrations_config():
     try:
