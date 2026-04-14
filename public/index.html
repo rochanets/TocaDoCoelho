@@ -2567,6 +2567,28 @@
                     <small id="startupSettingStatus" style="color:#6b7280; display:block; margin-top:8px;"></small>
                 </section>
 
+                <section class="settings-card" id="debugLogsSettingsCard">
+                    <h3>Logs de Depuração</h3>
+                    <p style="margin-bottom:10px; color:#4b5563;">Habilite para capturar eventos detalhados do cliente (janelas abertas, chamadas à API, erros) e sincronizá-los com o log do servidor. Útil para diagnosticar falhas intermitentes — como pop-ups bloqueados na Mala Direta.</p>
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:10px;">
+                        <div>
+                            <strong>Modo depuração</strong>
+                            <p style="margin:4px 0 0; color:#6b7280; font-size:13px;">Quando ligado, o cliente imprime no console e envia as entradas para o <code>app.log</code> do servidor.</p>
+                        </div>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;">
+                            <input type="checkbox" id="debugLogsEnabledToggle" onchange="onDebugLogsToggle(this.checked)" style="width:18px; height:18px; cursor:pointer; accent-color:#10b981;">
+                            <span id="debugLogsEnabledLabel" style="font-size:13px; color:#6b7280;">Desativado</span>
+                        </label>
+                    </div>
+                    <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-secondary btn-small" onclick="refreshDebugLogsViewer()"><i class="fas fa-rotate"></i> Atualizar</button>
+                        <button type="button" class="btn btn-secondary btn-small" onclick="downloadDebugLogs()"><i class="fas fa-download"></i> Baixar</button>
+                        <button type="button" class="btn btn-secondary btn-small" onclick="clearClientDebugBuffer()"><i class="fas fa-broom"></i> Limpar buffer do cliente</button>
+                        <span id="debugLogsMeta" style="align-self:center; font-size:12px; color:#6b7280;"></span>
+                    </div>
+                    <pre id="debugLogsViewer" style="max-height:340px; min-height:140px; overflow:auto; background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px; font-size:11px; font-family:'Courier New',monospace; white-space:pre-wrap; margin:0;">Clique em "Atualizar" para carregar os logs do servidor.</pre>
+                </section>
+
                 <section class="settings-card">
                     <h3>MSG Padrão</h3>
                     <form onsubmit="saveMessageTemplate(event)">
@@ -2899,6 +2921,78 @@
         const API_BASE = '/api';
         let systemConfig = { env: 'production' };
 
+        // =====================================================
+        // Logs de Depuração — buffer do cliente + sincronização opcional
+        // Uso: tocaDebug('tag', 'mensagem', { dadosExtras })
+        // - sempre guarda em window._tocaDebugBuffer (máx. 1000 entradas)
+        // - se o modo debug está ligado, imprime no console e envia batches ao backend
+        // =====================================================
+        const TOCA_DEBUG_BUFFER_MAX = 1000;
+        const TOCA_DEBUG_SYNC_DEBOUNCE_MS = 1500;
+        window._tocaDebugBuffer = window._tocaDebugBuffer || [];
+        let _tocaDebugEnabled = false;
+        let _tocaDebugSyncTimer = null;
+        let _tocaDebugSyncQueue = [];
+        try {
+            _tocaDebugEnabled = localStorage.getItem('toca.debug.enabled') === '1';
+        } catch (e) { /* ignore */ }
+
+        function isTocaDebugEnabled() { return !!_tocaDebugEnabled; }
+
+        function setTocaDebugEnabled(enabled) {
+            _tocaDebugEnabled = !!enabled;
+            try { localStorage.setItem('toca.debug.enabled', _tocaDebugEnabled ? '1' : '0'); } catch (e) {}
+            tocaDebug('debug.toggle', `Debug mode ${_tocaDebugEnabled ? 'ativado' : 'desativado'}`);
+        }
+
+        function tocaDebug(tag, message, data) {
+            try {
+                const entry = {
+                    ts: new Date().toISOString(),
+                    tag: String(tag || 'debug'),
+                    message: String(message || ''),
+                    data: data === undefined ? null : data
+                };
+                window._tocaDebugBuffer.push(entry);
+                if (window._tocaDebugBuffer.length > TOCA_DEBUG_BUFFER_MAX) {
+                    window._tocaDebugBuffer.splice(0, window._tocaDebugBuffer.length - TOCA_DEBUG_BUFFER_MAX);
+                }
+                if (_tocaDebugEnabled) {
+                    try { console.log(`[toca:${entry.tag}]`, entry.message, entry.data ?? ''); } catch (e) {}
+                    _tocaDebugSyncQueue.push(entry);
+                    if (!_tocaDebugSyncTimer) {
+                        _tocaDebugSyncTimer = setTimeout(_tocaDebugFlushSync, TOCA_DEBUG_SYNC_DEBOUNCE_MS);
+                    }
+                }
+            } catch (e) { /* nunca deixar o logger derrubar a app */ }
+        }
+
+        async function _tocaDebugFlushSync() {
+            _tocaDebugSyncTimer = null;
+            if (!_tocaDebugSyncQueue.length) return;
+            const batch = _tocaDebugSyncQueue.splice(0, _tocaDebugSyncQueue.length);
+            try {
+                await fetch(`${API_BASE}/config/logs/client`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ entries: batch })
+                });
+            } catch (e) { /* servidor indisponível: mantemos só o buffer local */ }
+        }
+
+        window.addEventListener('error', (ev) => {
+            if (!_tocaDebugEnabled) return;
+            tocaDebug('window.error', ev.message || 'Uncaught error', {
+                source: ev.filename,
+                line: ev.lineno,
+                col: ev.colno
+            });
+        });
+        window.addEventListener('unhandledrejection', (ev) => {
+            if (!_tocaDebugEnabled) return;
+            tocaDebug('promise.rejection', String(ev.reason || 'Unhandled rejection'));
+        });
+
         async function loadSystemConfig() {
             try {
                 const response = await fetch(`${API_BASE}/system/config`);
@@ -3110,6 +3204,7 @@
         async function loadSettings() {
             setupSettingsCards();
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig(), loadStartupConfig()]);
+            loadDebugLogsConfig();
             renderSettings();
         }
 
@@ -3158,6 +3253,97 @@
             } finally {
                 if (toggle) toggle.disabled = false;
             }
+        }
+
+        // =====================================================
+        // Painel "Logs de Depuração" em Configurações
+        // =====================================================
+        function loadDebugLogsConfig() {
+            const toggle = document.getElementById('debugLogsEnabledToggle');
+            const label = document.getElementById('debugLogsEnabledLabel');
+            if (toggle) toggle.checked = isTocaDebugEnabled();
+            if (label) label.textContent = isTocaDebugEnabled() ? 'Ativado' : 'Desativado';
+        }
+
+        function onDebugLogsToggle(enabled) {
+            setTocaDebugEnabled(!!enabled);
+            const label = document.getElementById('debugLogsEnabledLabel');
+            if (label) label.textContent = enabled ? 'Ativado' : 'Desativado';
+            if (enabled) showSuccess('Modo depuração ativado. Eventos serão capturados a partir de agora.');
+            else showInfo('Modo depuração desativado.');
+        }
+
+        async function refreshDebugLogsViewer() {
+            const viewer = document.getElementById('debugLogsViewer');
+            const meta = document.getElementById('debugLogsMeta');
+            if (!viewer) return;
+            viewer.textContent = 'Carregando logs do servidor...';
+            try {
+                // Antes de buscar, força um flush do buffer local para que o viewer
+                // já mostre os eventos mais recentes do cliente que ainda não foram enviados.
+                if (isTocaDebugEnabled()) {
+                    try { await _tocaDebugFlushSync(); } catch (e) {}
+                }
+                const response = await fetch(`${API_BASE}/config/logs?limit=500`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+
+                const serverLines = Array.isArray(data.lines) ? data.lines : [];
+                const clientBuffer = (window._tocaDebugBuffer || []).map(e => {
+                    const payload = e.data == null ? '' : ` data=${JSON.stringify(e.data)}`;
+                    return `[${e.ts}] [CLIENT] [${e.tag}] ${e.message}${payload}`;
+                });
+
+                const combined = [
+                    '===== SERVIDOR (últimas ' + serverLines.length + ' linhas) =====',
+                    ...serverLines,
+                    '',
+                    '===== CLIENTE (buffer local — ' + clientBuffer.length + ' entradas) =====',
+                    ...clientBuffer
+                ];
+                viewer.textContent = combined.join('\n');
+                viewer.scrollTop = viewer.scrollHeight;
+
+                if (meta) {
+                    const sizeKb = data.size ? (data.size / 1024).toFixed(1) : '0.0';
+                    meta.textContent = `Servidor: ${data.total_lines || 0} linhas (${sizeKb} KB) • Cliente: ${clientBuffer.length} entradas`;
+                }
+            } catch (e) {
+                viewer.textContent = 'Erro ao carregar logs: ' + (e.message || e);
+                if (meta) meta.textContent = '';
+            }
+        }
+
+        function downloadDebugLogs() {
+            const viewer = document.getElementById('debugLogsViewer');
+            const content = viewer ? viewer.textContent : '';
+            if (!content || content.startsWith('Clique em "Atualizar"')) {
+                showInfo('Clique em "Atualizar" primeiro para carregar os logs.');
+                return;
+            }
+            try {
+                const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+                a.href = url;
+                a.download = `toca-debug-logs-${stamp}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                tocaDebug('debug.download', 'Logs baixados', { bytes: content.length });
+            } catch (e) {
+                showError('Falha ao gerar o arquivo: ' + (e.message || e));
+            }
+        }
+
+        function clearClientDebugBuffer() {
+            const count = (window._tocaDebugBuffer || []).length;
+            window._tocaDebugBuffer = [];
+            _tocaDebugSyncQueue = [];
+            showSuccess(`Buffer do cliente limpo (${count} entradas removidas).`);
+            refreshDebugLogsViewer();
         }
 
         let _outlookEventSource = null;
@@ -3747,7 +3933,10 @@
                 .replaceAll('<email>', contact.email || '');
         }
 
-        async function sendAutoTocaMailingBatch() {
+        // Estado global do despacho da mala direta (uma lista por vez).
+        let autoTocaMailingDispatchDrafts = [];
+
+        function sendAutoTocaMailingBatch() {
             const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
             const subjectTemplate = document.getElementById('autoTocaMailingSubject')?.value || '';
             const bodyTemplate = document.getElementById('autoTocaMailingBody')?.value || '';
@@ -3755,22 +3944,243 @@
             const skipped = selectedContacts.length - contactsWithEmail.length;
 
             if (!contactsWithEmail.length) return showError('Nenhum contato selecionado possui e-mail.');
-            if (contactsWithEmail.length > 20) {
-                showInfo('Lote grande detectado. Seu navegador pode bloquear pop-ups; permita pop-ups se necessário.');
-            }
 
-            contactsWithEmail.forEach((contact, idx) => {
-                setTimeout(() => {
-                    const personalizedSubject = applyMergeFields(subjectTemplate, contact);
-                    const personalizedBody = applyMergeFields(bodyTemplate, contact);
-                    const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(personalizedSubject)}&body=${encodeURIComponent(personalizedBody)}`;
-                    window.open(outlookUrl, '_blank');
-                    askRegisterActivityFromCommunication(contact.id, 'Email', personalizedBody);
-                }, idx * 300);
+            tocaDebug('mala-direta.send', 'Iniciando despacho', {
+                selected: selectedContacts.length,
+                withEmail: contactsWithEmail.length,
+                skipped
+            });
+
+            autoTocaMailingDispatchDrafts = contactsWithEmail.map((contact, idx) => {
+                const subject = applyMergeFields(subjectTemplate, contact);
+                const body = applyMergeFields(bodyTemplate, contact);
+                return {
+                    idx,
+                    contact,
+                    subject,
+                    body,
+                    url: `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+                    status: 'pending'
+                };
             });
 
             closeAutoTocaMailingComposer();
-            showSuccess(`Mala direta iniciada para ${contactsWithEmail.length} contato(s).${skipped ? ` ${skipped} sem e-mail foram ignorados.` : ''}`);
+            openAutoTocaMailingDispatchModal(skipped);
+        }
+
+        function openAutoTocaMailingDispatchModal(skipped = 0) {
+            const drafts = autoTocaMailingDispatchDrafts;
+            if (!drafts.length) return;
+
+            const rowsHtml = drafts.map((d, i) => `
+                <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
+                    <div style="min-width:0; overflow:hidden;">
+                        <div style="font-weight:600; color:#065f46;">${escapeHtml(d.contact.name || '-')}</div>
+                        <div style="font-size:12px; color:#6b7280;">${escapeHtml(d.contact.email)}</div>
+                        <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>
+                    </div>
+                    <span class="mailing-dispatch-status" id="mailingDispatchStatus_${i}" style="font-size:12px; color:#92400e; white-space:nowrap;">Pendente</span>
+                    <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})"><i class="fas fa-paper-plane"></i> Abrir no Outlook</button>
+                </div>
+            `).join('');
+
+            const html = `
+                <div class="modal active" id="autoTocaMailingDispatchModal" onclick="if(event.target===this) closeAutoTocaMailingDispatchModal()">
+                    <div class="modal-content" style="max-width:900px;">
+                        <h2 style="color:#047857; margin-bottom:8px;">Mala Direta — Despacho</h2>
+                        <p style="color:#4b5563; font-size:13px; margin-bottom:10px; line-height:1.45;">
+                            Para evitar o bloqueador de pop-ups do navegador, cada janela do Outlook é aberta por um clique individual.
+                            Clique em <strong>Abrir no Outlook</strong> em cada linha para disparar a janela correspondente e registrar automaticamente a atividade daquele contato.
+                            Se você já autorizou pop-ups deste site, pode tentar o modo em lote no botão abaixo.
+                        </p>
+                        ${skipped ? `<p style="color:#92400e; font-size:12px; margin-bottom:10px;">${skipped} contato(s) sem e-mail foram ignorados.</p>` : ''}
+                        <div style="display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap;">
+                            <button class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>
+                            <span id="mailingDispatchCounter" style="font-size:12px; color:#6b7280;">0 de ${drafts.length} enviados</span>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:8px; max-height:55vh; overflow:auto; padding-right:4px;">
+                            ${rowsHtml}
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+                            <button class="btn btn-secondary" onclick="closeAutoTocaMailingDispatchModal()">Fechar</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+            tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length });
+        }
+
+        function closeAutoTocaMailingDispatchModal() {
+            document.getElementById('autoTocaMailingDispatchModal')?.remove();
+            autoTocaMailingDispatchDrafts = [];
+        }
+
+        function _updateAutoTocaMailingDispatchRow(idx) {
+            const draft = autoTocaMailingDispatchDrafts[idx];
+            if (!draft) return;
+            const statusEl = document.getElementById(`mailingDispatchStatus_${idx}`);
+            const btnEl = document.getElementById(`mailingDispatchBtn_${idx}`);
+            const rowEl = document.getElementById(`mailingDispatchRow_${idx}`);
+            if (statusEl) {
+                statusEl.textContent = 'Enviado';
+                statusEl.style.color = '#065f46';
+            }
+            if (btnEl) {
+                btnEl.disabled = true;
+                btnEl.innerHTML = '<i class="fas fa-check"></i> Enviado';
+            }
+            if (rowEl) {
+                rowEl.style.background = 'rgba(236,253,245,.55)';
+                rowEl.style.borderColor = 'rgba(16,185,129,.35)';
+            }
+            const sentCount = autoTocaMailingDispatchDrafts.filter(d => d.status === 'sent').length;
+            const counterEl = document.getElementById('mailingDispatchCounter');
+            if (counterEl) counterEl.textContent = `${sentCount} de ${autoTocaMailingDispatchDrafts.length} enviados`;
+        }
+
+        async function _registerAutoTocaMailingActivity(draft) {
+            try {
+                const formData = new FormData();
+                formData.set('client_id', draft.contact.id);
+                formData.set('contact_type', 'Email');
+                formData.set('information', draft.body || 'Email enviado.');
+                const response = await fetch(`${API_BASE}/atividades`, { method: 'POST', body: formData });
+                if (!response.ok) {
+                    tocaDebug('mala-direta.activity', 'Falha HTTP ao registrar atividade', {
+                        idx: draft.idx,
+                        contact_id: draft.contact.id,
+                        status: response.status
+                    });
+                    return false;
+                }
+                tocaDebug('mala-direta.activity', 'Atividade registrada', {
+                    idx: draft.idx,
+                    contact_id: draft.contact.id
+                });
+                return true;
+            } catch (e) {
+                tocaDebug('mala-direta.activity', 'Erro ao registrar atividade', {
+                    idx: draft.idx,
+                    contact_id: draft.contact.id,
+                    error: String(e)
+                });
+                return false;
+            }
+        }
+
+        async function sendAutoTocaMailingDispatchOne(idx) {
+            const draft = autoTocaMailingDispatchDrafts[idx];
+            if (!draft || draft.status === 'sent') return;
+
+            tocaDebug('mala-direta.dispatch-one', 'Abrindo janela individual', {
+                idx,
+                contact_id: draft.contact.id,
+                email: draft.contact.email
+            });
+
+            const win = window.open(draft.url, '_blank');
+            if (!win) {
+                tocaDebug('mala-direta.dispatch-one', 'window.open retornou null (pop-up bloqueado)', {
+                    idx,
+                    contact_id: draft.contact.id
+                });
+                showError('O navegador bloqueou a janela. Permita pop-ups para este site e tente novamente.');
+                return;
+            }
+
+            draft.status = 'sent';
+            _updateAutoTocaMailingDispatchRow(idx);
+
+            // Pergunta UMA vez, por contato, se deseja registrar a atividade.
+            // O modal de despacho garante que este fluxo é serial (um clique por vez),
+            // então não há o problema de concorrência do resolve global do openSystemDialog.
+            const contactName = draft.contact.name || draft.contact.email;
+            const shouldRegister = await uiConfirm(
+                `Deseja registrar essa interação de Email como atividade em "${contactName}"?`
+            );
+            tocaDebug('mala-direta.dispatch-one', 'Decisão sobre registro da atividade', {
+                idx,
+                contact_id: draft.contact.id,
+                register: !!shouldRegister
+            });
+            if (!shouldRegister) return;
+
+            const ok = await _registerAutoTocaMailingActivity(draft);
+            if (ok) {
+                try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+            }
+        }
+
+        function sendAutoTocaMailingDispatchAll() {
+            const pending = autoTocaMailingDispatchDrafts.filter(d => d.status === 'pending');
+            if (!pending.length) {
+                showInfo('Não há e-mails pendentes para abrir.');
+                return;
+            }
+
+            tocaDebug('mala-direta.dispatch-all', 'Tentando abrir todas as janelas pendentes', {
+                pending: pending.length
+            });
+
+            // IMPORTANTE: o loop precisa ser SÍNCRONO para preservar o "user gesture".
+            const results = [];
+            for (const draft of pending) {
+                const win = window.open(draft.url, '_blank');
+                results.push({ draft, opened: !!win });
+            }
+
+            // Depois do loop síncrono, processamos os resultados e pedimos uma ÚNICA
+            // confirmação para registrar todas as atividades dos e-mails que abriram
+            // (evita N diálogos consecutivos num único clique "abrir todos").
+            (async () => {
+                let sent = 0;
+                let blocked = 0;
+                const openedDrafts = [];
+                for (const { draft, opened } of results) {
+                    if (!opened) {
+                        blocked++;
+                        tocaDebug('mala-direta.dispatch-all', 'Pop-up bloqueado em lote', {
+                            idx: draft.idx,
+                            contact_id: draft.contact.id
+                        });
+                        continue;
+                    }
+                    draft.status = 'sent';
+                    _updateAutoTocaMailingDispatchRow(draft.idx);
+                    sent++;
+                    openedDrafts.push(draft);
+                }
+
+                let registered = 0;
+                if (openedDrafts.length) {
+                    const shouldRegister = await uiConfirm(
+                        `Deseja registrar essas ${openedDrafts.length} interações de Email como atividades nos contatos correspondentes?`
+                    );
+                    tocaDebug('mala-direta.dispatch-all', 'Decisão sobre registro em lote', {
+                        count: openedDrafts.length,
+                        register: !!shouldRegister
+                    });
+                    if (shouldRegister) {
+                        for (const draft of openedDrafts) {
+                            const ok = await _registerAutoTocaMailingActivity(draft);
+                            if (ok) registered++;
+                        }
+                        if (registered) {
+                            try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+                        }
+                    }
+                }
+
+                tocaDebug('mala-direta.dispatch-all', 'Resultado do lote', { sent, blocked, registered });
+                if (blocked && !sent) {
+                    showError(`O navegador bloqueou todas as ${blocked} janelas. Permita pop-ups para este site ou clique em cada linha individualmente.`);
+                } else if (blocked) {
+                    showInfo(`${sent} e-mail(is) aberto(s)${registered ? ` — ${registered} atividade(s) registrada(s)` : ''}. ${blocked} foram bloqueado(s) pelo navegador — clique individualmente nas linhas pendentes.`);
+                } else {
+                    showSuccess(`${sent} e-mail(is) aberto(s)${registered ? ` — ${registered} atividade(s) registrada(s)` : ''}.`);
+                }
+            })();
         }
 
         async function buscarEnderecoAutoToca(evt) {
