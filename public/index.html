@@ -10937,6 +10937,10 @@
         // -----------------------------------------------------------------------
         // LinkedIn — Preparar Reunião
         // -----------------------------------------------------------------------
+        let atLinkedinLastImportedPhotoUrl = '';
+        let atLinkedinLastImportedPhotoSource = '';
+        let atLinkedinImportedAt = null;
+        let atLinkedinLastImportedProfileUrl = '';
 
         async function gerarResumoLinkedIn() {
             const url = (document.getElementById('atLinkedinUrl')?.value || '').trim();
@@ -10955,10 +10959,18 @@
             resultArea.innerHTML = '<div class="loading"><div class="spinner"></div>Analisando perfil e gerando resumo executivo...</div>';
 
             try {
+                const shouldUseImportedPhoto = !!atLinkedinLastImportedPhotoUrl && (
+                    !url || !atLinkedinLastImportedProfileUrl || url === atLinkedinLastImportedProfileUrl
+                );
                 const resp = await fetch(`${API_BASE}/linkedin/summarize`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ linkedin_url: url, profile_text: profileText, meeting_context: meetingCtx })
+                    body: JSON.stringify({
+                        linkedin_url: url,
+                        profile_text: profileText,
+                        meeting_context: meetingCtx,
+                        extension_photo_url: shouldUseImportedPhoto ? atLinkedinLastImportedPhotoUrl : ''
+                    })
                 });
                 const data = await resp.json();
 
@@ -10976,7 +10988,7 @@
                     : '';
 
                 if (s) {
-                    resultArea.innerHTML = limitedDataWarning + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url);
+                    resultArea.innerHTML = limitedDataWarning + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source);
                 } else if (data.raw) {
                     // Exibe resposta bruta se não conseguiu parsear JSON
                     resultArea.innerHTML = limitedDataWarning + `
@@ -11003,13 +11015,21 @@
             return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         }
 
-        function _renderLinkedInSummary(s, source, fetchedFromUrl, photoUrl) {
+        function _renderLinkedInSummary(s, source, fetchedFromUrl, photoUrl, photoSource = '') {
             const listItems = (arr) => (Array.isArray(arr) && arr.length)
                 ? arr.map(i => `<li style="margin-bottom:4px;">${_escHtml(i)}</li>`).join('')
                 : '<li style="color:#9ca3af;">Não identificado</li>';
 
             const badge = `<span style="background:#d1fae5; color:#065f46; font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600;">${_escHtml(source)}</span>`;
             const fetchBadge = fetchedFromUrl ? `<span style="background:#dbeafe; color:#1e40af; font-size:11px; padding:2px 8px; border-radius:12px;"><i class="fas fa-link"></i> dados da URL</span>` : '';
+            const photoSourceLabelMap = {
+                extension_profile_photo: 'foto da extensão',
+                linkedin_og_image: 'foto og:image',
+                web_search_fallback: 'foto de busca web (fallback)'
+            };
+            const photoBadge = photoSource
+                ? `<span style="background:#ede9fe; color:#5b21b6; font-size:11px; padding:2px 8px; border-radius:12px;"><i class="fas fa-image"></i> ${_escHtml(photoSourceLabelMap[photoSource] || photoSource)}</span>`
+                : '';
 
             const photoHtml = photoUrl
                 ? `<img src="${_escHtml(photoUrl)}" alt="Foto de perfil"
@@ -11022,13 +11042,19 @@
             return `
             <div id="atLinkedinResumoCard">
             <div class="settings-card" style="margin-bottom:16px;">
+                <div style="margin-bottom:12px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <span style="font-size:12px; color:#374151; font-weight:600;">Validação da foto:</span>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="confirmarFotoLinkedIn()"><i class="fas fa-check"></i> Confirmar foto</button>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="trocarFotoLinkedIn()"><i class="fas fa-link"></i> Trocar URL</button>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="removerFotoLinkedIn()"><i class="fas fa-user-slash"></i> Sem foto</button>
+                </div>
                 <!-- Cabeçalho: foto + nome + cargo + badges + botões export -->
                 <div style="display:flex; align-items:center; gap:16px; margin-bottom:20px; flex-wrap:wrap;">
                     ${photoHtml}
                     <div style="flex:1; min-width:0;">
                         <h2 style="color:#065f46; margin:0 0 4px; font-size:20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${_escHtml(s.nome || '—')}</h2>
                         <p style="color:#6b7280; margin:0 0 8px; font-size:14px;">${_escHtml(s.cargo_atual || '')}</p>
-                        <div style="display:flex; gap:6px; flex-wrap:wrap;">${badge}${fetchBadge}</div>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap;">${badge}${fetchBadge}${photoBadge}</div>
                     </div>
                     <div style="display:flex; gap:8px; flex-shrink:0; flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-small" onclick="exportarResumoLinkedIn('jpeg')" title="Exportar como imagem JPEG">
@@ -11073,6 +11099,25 @@
                 <p style="margin:0; font-size:14px; color:#065f46; font-weight:500;">${_escHtml(s.tom_sugerido)}</p>
             </div>` : ''}
             </div>`;
+        }
+
+        function confirmarFotoLinkedIn() {
+            showSuccess('Foto confirmada para este resumo.');
+        }
+
+        function trocarFotoLinkedIn() {
+            const current = atLinkedinLastImportedPhotoUrl || '';
+            const nextUrl = (prompt('Cole a URL da nova foto de perfil:', current) || '').trim();
+            if (!nextUrl) return;
+            atLinkedinLastImportedPhotoUrl = nextUrl;
+            atLinkedinLastImportedPhotoSource = 'manual_override';
+            gerarResumoLinkedIn();
+        }
+
+        function removerFotoLinkedIn() {
+            atLinkedinLastImportedPhotoUrl = '';
+            atLinkedinLastImportedPhotoSource = 'manual_remove';
+            gerarResumoLinkedIn();
         }
 
         async function exportarResumoLinkedIn(formato) {
@@ -11171,10 +11216,16 @@
                 if (profileTextArea) profileTextArea.value = result.profileText || '';
                 const urlInput = document.getElementById('atLinkedinUrl');
                 if (urlInput && result.profileUrl) urlInput.value = result.profileUrl;
+                atLinkedinLastImportedProfileUrl = (result.profileUrl || '').trim();
+                atLinkedinLastImportedPhotoUrl = (result.profilePhotoUrl || '').trim();
+                atLinkedinLastImportedPhotoSource = result.profilePhotoSource || 'extension_payload';
+                atLinkedinImportedAt = result.capturedAt || new Date().toISOString();
+
+                const photoImported = atLinkedinLastImportedPhotoUrl ? 'com foto do perfil' : 'sem foto detectada';
 
                 resultArea.innerHTML = `<div style="background:#ecfdf5; border:1px solid #6ee7b7; border-radius:8px; padding:10px 14px; font-size:13px; color:#065f46; margin-bottom:8px;">
                     <i class="fas fa-check-circle" style="margin-right:6px;"></i>
-                    <strong>Perfil importado!</strong> Capturado em ${new Date(result.capturedAt || Date.now()).toLocaleTimeString('pt-BR')}. Gerando resumo...
+                    <strong>Perfil importado!</strong> Capturado em ${new Date(atLinkedinImportedAt).toLocaleTimeString('pt-BR')} (${photoImported}). Gerando resumo...
                 </div>`;
 
                 // Dispara a geração do resumo automaticamente

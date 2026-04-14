@@ -1243,6 +1243,43 @@ def _download_remote_image_to_uploads(image_url, prefix='autofind'):
     return f'/uploads/{filename}'
 
 
+def _linkedin_extract_og_image(linkedin_url):
+    """Tenta extrair og:image da página pública do LinkedIn."""
+    if not linkedin_url or 'linkedin.com' not in linkedin_url:
+        return None
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(linkedin_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        })
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            raw_html = resp.read().decode('utf-8', errors='ignore')
+        meta_match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            raw_html,
+            flags=re.IGNORECASE
+        )
+        if not meta_match:
+            meta_match = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+                raw_html,
+                flags=re.IGNORECASE
+            )
+        if not meta_match:
+            return None
+        candidate = html.unescape(meta_match.group(1)).strip()
+        if not candidate.startswith(('http://', 'https://')):
+            return None
+        return candidate
+    except Exception as e:
+        logger.debug(f'[LinkedIn] Falha ao extrair og:image: {e}')
+        return None
+
+
 def parse_currency_to_cents(value):
     if value is None:
         return None
@@ -10793,6 +10830,7 @@ def linkedin_summarize():
         linkedin_url = (data.get('linkedin_url') or '').strip()
         profile_text = (data.get('profile_text') or '').strip()
         meeting_context = (data.get('meeting_context') or '').strip()
+        extension_photo_url = (data.get('extension_photo_url') or '').strip()
 
         if not linkedin_url and not profile_text:
             return jsonify({'error': 'Informe a URL do LinkedIn ou cole o texto do perfil.'}), 400
@@ -10817,8 +10855,29 @@ def linkedin_summarize():
         parsed = _linkedin_parse_summary(raw)
 
         # Tenta buscar foto e baixar localmente (evita CORS no html2canvas)
+        # Prioridade:
+        # 1) foto capturada pela extensão;
+        # 2) og:image da URL pública;
+        # 3) busca web por nome+cargo (fallback).
         photo_url = None
-        if parsed and parsed.get('nome'):
+        photo_source = None
+        if extension_photo_url:
+            try:
+                photo_url = _download_remote_image_to_uploads(extension_photo_url, prefix='linkedin-profile-ext')
+                photo_source = 'extension_profile_photo'
+            except Exception as e:
+                logger.debug(f'[LinkedIn] Falha ao baixar foto da extensão: {e}')
+
+        if not photo_url and linkedin_url:
+            try:
+                og_image = _linkedin_extract_og_image(linkedin_url)
+                if og_image:
+                    photo_url = _download_remote_image_to_uploads(og_image, prefix='linkedin-profile-og')
+                    photo_source = 'linkedin_og_image'
+            except Exception as e:
+                logger.debug(f'[LinkedIn] Falha ao usar og:image: {e}')
+
+        if not photo_url and parsed and parsed.get('nome'):
             try:
                 nome = parsed['nome']
                 cargo = parsed.get('cargo_atual', '')
@@ -10826,6 +10885,7 @@ def linkedin_summarize():
                 candidates = _find_image_candidates_on_web(query, limit=3)
                 if candidates:
                     photo_url = _download_remote_image_to_uploads(candidates[0], prefix='linkedin-profile')
+                    photo_source = 'web_search_fallback'
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao buscar/baixar foto: {e}')
 
@@ -10835,7 +10895,8 @@ def linkedin_summarize():
             'source': source,
             'fetched_from_url': fetched_text is not None,
             'limited_data': limited_data,
-            'photo_url': photo_url
+            'photo_url': photo_url,
+            'photo_source': photo_source
         })
     except Exception as e:
         logger.exception(f'[LinkedIn] Erro: {e}')

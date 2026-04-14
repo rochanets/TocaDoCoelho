@@ -185,6 +185,28 @@
     return parts.join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 10000);
   }
 
+  function extractLinkedInPhoto() {
+    const selectors = [
+      '.pv-top-card-profile-picture__image--show',
+      '.pv-top-card-profile-picture__image',
+      '.profile-photo-edit__preview',
+      '.ph5 img.pv-top-card-profile-picture__image',
+      'main img[alt*="foto de perfil"]',
+      'main img[alt*="profile photo"]',
+    ];
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      const src = el?.getAttribute('src')?.trim() || '';
+      if (src && /^https?:\/\//i.test(src)) return src;
+    }
+    const topImg = Array.from(document.querySelectorAll('main img')).find(img => {
+      const src = img?.getAttribute('src') || '';
+      const alt = (img?.getAttribute('alt') || '').toLowerCase();
+      return /^https?:\/\//i.test(src) && (alt.includes('profile') || alt.includes('perfil'));
+    });
+    return topImg?.getAttribute('src')?.trim() || null;
+  }
+
   function injectLinkedInButton() {
     if (document.getElementById('autotoca-li-btn')) return;
 
@@ -227,8 +249,15 @@
 
     const profileText = extractLinkedInText();
     const profileUrl  = window.location.href;
-
-    const data = { text: profileText, url: profileUrl, capturedAt: new Date().toISOString() };
+    const profilePhotoUrl = extractLinkedInPhoto();
+    const data = {
+      schemaVersion: 2,
+      text: profileText,
+      url: profileUrl,
+      photoUrl: profilePhotoUrl || null,
+      photoSource: profilePhotoUrl ? 'linkedin_extension' : 'none',
+      capturedAt: new Date().toISOString(),
+    };
 
     // Salva em chrome.storage.local (persistente entre tabs)
     try {
@@ -304,11 +333,24 @@
         emitResult({ ok: false, command, reason: 'no_pending_profile', message: 'Nenhum perfil LinkedIn capturado ainda. Abra um perfil no LinkedIn e clique em "Analisar com AutoToca".' });
         return;
       }
-      // Limpa após consumir
+      emitResult({
+        ok: true,
+        command,
+        schemaVersion: pending.schemaVersion || 1,
+        profileText: pending.text,
+        profileUrl: pending.url,
+        profilePhotoUrl: pending.photoUrl || null,
+        profilePhotoSource: pending.photoSource || 'unknown',
+        capturedAt: pending.capturedAt
+      });
+      return;
+    }
+
+    if (command === 'clear_linkedin_profile') {
       try { await chrome.storage.local.remove(LINKEDIN_KEY); } catch (_) {
         try { localStorage.removeItem(LINKEDIN_KEY); } catch (__) {}
       }
-      emitResult({ ok: true, command, profileText: pending.text, profileUrl: pending.url, capturedAt: pending.capturedAt });
+      emitResult({ ok: true, command, message: 'Perfil capturado removido da extensão.' });
       return;
     }
   }
