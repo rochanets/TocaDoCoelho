@@ -3884,7 +3884,7 @@
                 <div style="font-weight:700; color:#065f46; margin-bottom:8px;">Chaves de merge</div>
                 <p style="font-size:12px; color:#4b5563; line-height:1.45;">Use as chaves ao lado para personalizar o texto. Cada chave será substituída automaticamente pelo dado real de cada contato no momento do envio.</p>
                 <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
-                    ${mergeTags.map(tag => `<button type="button" class="btn btn-secondary btn-small" onclick="copyAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`).join('')}
+                    ${mergeTags.map(tag => `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`).join('')}
                 </div>
             </div>`;
             html += `<div>
@@ -3919,14 +3919,34 @@
             document.getElementById('autoTocaMailingComposerModal')?.remove();
         }
 
-        function copyAutoTocaMergeTag(tag) {
-            navigator.clipboard?.writeText(tag);
-            showSuccess(`Chave copiada: ${tag}`);
+        function insertAutoTocaMergeTag(tag) {
+            const subjectEl = document.getElementById('autoTocaMailingSubject');
+            const bodyEl = document.getElementById('autoTocaMailingBody');
+            const activeEl = document.activeElement;
+            const target = (activeEl === subjectEl || activeEl === bodyEl)
+                ? activeEl
+                : (bodyEl || subjectEl);
+
+            if (!target) return;
+            target.focus();
+
+            const start = Number.isFinite(target.selectionStart) ? target.selectionStart : target.value.length;
+            const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+            const before = target.value.slice(0, start);
+            const after = target.value.slice(end);
+            target.value = `${before}${tag}${after}`;
+            const cursorPos = start + tag.length;
+            target.setSelectionRange(cursorPos, cursorPos);
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        function getAutoTocaContactFirstName(name) {
+            return String(name || '').trim().split(/\s+/)[0] || '';
         }
 
         function applyMergeFields(template, contact) {
             return String(template || '')
-                .replaceAll('<nome do contato>', contact.name || '')
+                .replaceAll('<nome do contato>', getAutoTocaContactFirstName(contact.name))
                 .replaceAll('<conta>', contact.company || '')
                 .replaceAll('<cargo>', contact.position || '')
                 .replaceAll('<area de atuacao>', contact.area_of_activity || '')
