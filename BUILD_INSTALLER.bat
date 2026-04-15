@@ -31,14 +31,25 @@ if not exist "%NSIS_EXE%" (
 echo [OK] NSIS encontrado
 echo.
 
+set "APP_VERSION=%TOCA_APP_VERSION%"
+if "%APP_VERSION%"=="" set "APP_VERSION=1.0.0"
+
+echo [INFO] Versao do build: %APP_VERSION%
+echo %APP_VERSION%> "dist\TocaDoCoelho\version.txt"
+if not exist "dist\TocaDoCoelho\version.txt" (
+    echo [ERRO] Nao foi possivel gerar dist\TocaDoCoelho\version.txt
+    pause
+    exit /b 1
+)
+
 echo [INFO] Compilando instalador...
 cd /d "%CD%"
-"%NSIS_EXE%" /V4 installer.nsi
+"%NSIS_EXE%" /V4 /DAPP_VERSION=%APP_VERSION% installer.nsi
 
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo [OK] Instalador gerado com sucesso!
-    echo [OK] Arquivo: TocaDoCoelho-1.0.0-Setup.exe
+    echo [OK] Arquivo: TocaDoCoelho-%APP_VERSION%-Setup.exe
     echo.
 ) else (
     echo.

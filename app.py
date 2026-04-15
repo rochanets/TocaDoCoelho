@@ -15,6 +15,7 @@ import concurrent.futures
 import traceback
 import shutil
 import urllib.request
+import requests
 import urllib.error
 import urllib.parse
 import html
@@ -203,7 +204,35 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
 
-APP_VERSION = os.environ.get('TOCA_APP_VERSION', '1.0.0').strip() or '1.0.0'
+def _resolve_app_version():
+    default_version = '1.0.0'
+    env_version = (os.environ.get('TOCA_APP_VERSION') or '').strip()
+    candidate_dirs = [Path(__file__).resolve().parent]
+
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidate_dirs.append(Path(meipass))
+        candidate_dirs.append(Path(sys.executable).resolve().parent)
+
+    for base_dir in candidate_dirs:
+        version_file = base_dir / 'version.txt'
+        try:
+            if version_file.exists():
+                file_version = version_file.read_text(encoding='utf-8').strip()
+                if file_version:
+                    return file_version
+        except Exception as error:
+            logger.warning(
+                '[Update] Não foi possível ler %s: %s',
+                version_file,
+                error
+            )
+
+    return env_version or default_version
+
+
+APP_VERSION = _resolve_app_version()
 DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
 
@@ -438,6 +467,7 @@ def init_db():
         area_of_activity TEXT,
         email TEXT,
         phone TEXT,
+        linkedin TEXT,
         photo_url TEXT,
         is_target INTEGER DEFAULT 0,
         is_cold_contact INTEGER DEFAULT 0,
@@ -586,6 +616,26 @@ def init_db():
         available_email INTEGER DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS portfolio_offers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        summary TEXT,
+        raw_input TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS portfolio_offer_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        offer_id INTEGER NOT NULL,
+        pain TEXT,
+        solution TEXT,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(offer_id) REFERENCES portfolio_offers(id) ON DELETE CASCADE
     )''')
     
     # Tabela de compromissos (agenda)
@@ -761,6 +811,8 @@ def init_db():
         c.execute('ALTER TABLE clients ADD COLUMN area_of_activity TEXT')
     if 'is_cold_contact' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN is_cold_contact INTEGER DEFAULT 0')
+    if 'linkedin' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN linkedin TEXT')
 
     c.execute("PRAGMA table_info(commitments)")
     commitment_columns = [col[1] for col in c.fetchall()]
@@ -1690,6 +1742,162 @@ def _relation_report_build_topic_evidence(report_data):
     return '\n\n'.join(sections)
 
 
+def _relation_report_fetch_market_context(account_name: str) -> str | None:
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if not api_key:
+        return None
+    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
+    try:
+        resp = requests.post(
+            f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
+            json={'inputs': {'search': search}},
+            headers={'X-Api-Key': api_key},
+            timeout=45,
+        )
+        resp.raise_for_status()
+        text = resp.text.strip()
+        if not text or len(text) < 30:
+            return None
+        return text
+    except Exception as e:
+        logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
+        return None
+
+
+def _relation_report_generate_highlights(report_data: dict) -> list[str]:
+    account_name = ((report_data.get('account') or {}).get('name') or 'Conta').strip()
+    activities = report_data.get('activities') or []
+    account_activities = report_data.get('account_activities') or []
+
+    lines = []
+    for activity in (account_activities + activities)[:40]:
+        desc = (activity.get('description') or activity.get('notes') or activity.get('information') or '').strip()
+        date = (
+            activity.get('date')
+            or activity.get('activity_date')
+            or activity.get('created_at')
+            or ''
+        )
+        atype = (activity.get('type') or activity.get('category') or activity.get('origin') or '').strip()
+        if desc:
+            lines.append(f"[{str(date)[:10]}][{atype}] {desc}")
+
+    if not lines:
+        return []
+
+    activities_text = '\n'.join(lines)
+    question = (
+        f"Analise as atividades abaixo registradas na conta '{account_name}'. "
+        "Gere de 4 a 6 bullets executivos destacando os pontos mais relevantes: "
+        "temas estratégicos discutidos, avanços concretos de relacionamento, "
+        "pendências ou oportunidades identificadas, e padrão de engajamento. "
+        "Seja direto, use verbos no passado ou presente, sem inventar fatos. "
+        "Retorne SOMENTE os bullets, um por linha, começando cada linha com '- '. "
+        "Atividades:\n" + activities_text
+    )
+    raw = _sai_simple_prompt(question)
+    if not raw:
+        return []
+
+    bullets = [
+        line.lstrip('- •*').strip()
+        for line in raw.strip().splitlines()
+        if line.strip().startswith(('-', '•', '*')) and len(line.strip()) > 10
+    ]
+    return bullets[:6]
+
+
+def _relation_report_call_sai_narrative_template(
+    account_name,
+    report_period,
+    account_snapshot,
+    relationship_snapshot,
+    topic_evidence,
+    output_style,
+):
+    settings_map = _load_app_settings_map([
+        'relation_report_sai_api_key',
+        'relation_report_sai_template_id',
+        'relation_report_sai_base_url'
+    ])
+    api_key = (settings_map.get('relation_report_sai_api_key') or '').strip() or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip() or 'RuWKlxg1Sk+/3PpzUKof+w'
+    template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '69b83e37025459101ee6735d'
+    base_url = (settings_map.get('relation_report_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    if not api_key:
+        return None
+
+    url = f'{base_url}/api/templates/{template_id}/execute'
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Api-Key': api_key
+    }
+    payload = {
+        'inputs': {
+            'account_name': account_name,
+            'report_period': report_period,
+            'account_snapshot': account_snapshot,
+            'relationship_snapshot': relationship_snapshot,
+            'topic_evidence': topic_evidence,
+            'output_style': output_style,
+        }
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        headers=headers,
+        method='POST'
+    )
+
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read().decode('utf-8')
+
+    logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
+    parsed_outer = None
+    try:
+        parsed_outer = json.loads(raw)
+    except Exception:
+        parsed_outer = None
+
+    candidate_texts = []
+    if isinstance(parsed_outer, dict):
+        for key in ['answer', 'output', 'result', 'text', 'response', 'data']:
+            value = parsed_outer.get(key)
+            if isinstance(value, str):
+                candidate_texts.append(value)
+            elif isinstance(value, dict):
+                candidate_texts.append(json.dumps(value, ensure_ascii=False))
+        candidate_texts.append(raw)
+    else:
+        candidate_texts.append(raw)
+
+    parsed = None
+    for candidate in candidate_texts:
+        try:
+            obj = json.loads((candidate or '').strip())
+            if isinstance(obj, dict):
+                parsed = obj
+                break
+        except Exception:
+            obj = _extract_json_object_from_text(candidate or '')
+            if isinstance(obj, dict):
+                parsed = obj
+                break
+
+    if not isinstance(parsed, dict):
+        return None
+
+    return {
+        'executive_summary': (parsed.get('executive_summary') or '').strip(),
+        'relationship_maturity': (parsed.get('relationship_maturity') or 'Em evolução').strip(),
+        'next_steps': [str(x).strip() for x in (parsed.get('next_steps') or []) if str(x).strip()][:5],
+        'topic_breakdown': parsed.get('topic_breakdown') or {},
+        'highlights': [str(x).strip() for x in (parsed.get('highlights') or []) if str(x).strip()][:6],
+        'llm_used': True
+    }
+
+
 def _relation_report_generate_narrative(report_data):
     account = report_data.get('account') or {}
     period = report_data.get('period') or {}
@@ -1700,81 +1908,44 @@ def _relation_report_generate_narrative(report_data):
     topic_evidence = _relation_report_build_topic_evidence(report_data)
     output_style = 'Tom executivo, objetivo, claro, elegante e sem inventar fatos. Use sempre a expressão Power Mapping. Não trate faturamento de mercado da conta como receita da Stefanini. Só classifique o relacionamento como profundo quando houver evidências concretas de avanço, reuniões realizadas, discussões de conteúdo, entregas, proposta, assessment, workshop, roadmap ou desdobramentos objetivos. Se o histórico indicar apenas tentativa de agenda, cobrança ou follow-up sem avanço real, deixe isso explícito. Considere também o conteúdo dos cards de Kanban para explicar como eles se relacionam com a conta.'
 
-    settings_map = _load_app_settings_map([
-        'relation_report_sai_api_key',
-        'relation_report_sai_template_id',
-        'relation_report_sai_base_url'
-    ])
-    api_key = (settings_map.get('relation_report_sai_api_key') or '').strip() or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip() or 'RuWKlxg1Sk+/3PpzUKof+w'
-    template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '69b83e37025459101ee6735d'
-    base_url = (settings_map.get('relation_report_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+    narrative_data = None
+    market_context = None
+    llm_highlights = []
 
-    if api_key:
-        url = f'{base_url}/api/templates/{template_id}/execute'
-        headers = {
-            'Content-Type': 'application/json',
-            'X-Api-Key': api_key
-        }
-        payload = {
-            'inputs': {
-                'account_name': account_name,
-                'report_period': report_period,
-                'account_snapshot': account_snapshot,
-                'relationship_snapshot': relationship_snapshot,
-                'topic_evidence': topic_evidence,
-                'output_style': output_style,
-            }
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers=headers,
-            method='POST'
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                raw = resp.read().decode('utf-8')
-            logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
-            parsed_outer = None
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            f_narrative = executor.submit(
+                _relation_report_call_sai_narrative_template,
+                account_name,
+                report_period,
+                account_snapshot,
+                relationship_snapshot,
+                topic_evidence,
+                output_style,
+            )
+            f_market = executor.submit(_relation_report_fetch_market_context, account_name)
+            f_highlights = executor.submit(_relation_report_generate_highlights, report_data)
+
             try:
-                parsed_outer = json.loads(raw)
-            except Exception:
-                parsed_outer = None
-            candidate_texts = []
-            if isinstance(parsed_outer, dict):
-                for key in ['answer', 'output', 'result', 'text', 'response', 'data']:
-                    value = parsed_outer.get(key)
-                    if isinstance(value, str):
-                        candidate_texts.append(value)
-                    elif isinstance(value, dict):
-                        candidate_texts.append(json.dumps(value, ensure_ascii=False))
-                candidate_texts.append(raw)
-            else:
-                candidate_texts.append(raw)
+                narrative_data = f_narrative.result()
+            except Exception as e:
+                logger.warning(f'[RelationReport] Falha ao gerar narrativa com SAI: {e}')
+            try:
+                market_context = f_market.result()
+            except Exception as e:
+                logger.warning(f'[RelationReport] Falha ao gerar contexto de mercado: {e}')
+            try:
+                llm_highlights = f_highlights.result() or []
+            except Exception as e:
+                logger.warning(f'[RelationReport] Falha ao gerar destaques via LLM: {e}')
+    except Exception as e:
+        logger.warning(f'[RelationReport] Falha no executor paralelo da narrativa: {e}')
 
-            parsed = None
-            for candidate in candidate_texts:
-                try:
-                    obj = json.loads((candidate or '').strip())
-                    if isinstance(obj, dict):
-                        parsed = obj
-                        break
-                except Exception:
-                    obj = _extract_json_object_from_text(candidate or '')
-                    if isinstance(obj, dict):
-                        parsed = obj
-                        break
-            if isinstance(parsed, dict):
-                return {
-                    'executive_summary': (parsed.get('executive_summary') or '').strip(),
-                    'relationship_maturity': (parsed.get('relationship_maturity') or 'Em evolução').strip(),
-                    'next_steps': [str(x).strip() for x in (parsed.get('next_steps') or []) if str(x).strip()][:5],
-                    'topic_breakdown': parsed.get('topic_breakdown') or {},
-                    'highlights': [str(x).strip() for x in (parsed.get('highlights') or []) if str(x).strip()][:6],
-                    'llm_used': True
-                }
-        except Exception as e:
-            logger.warning(f'[RelationReport] Falha ao gerar narrativa com SAI: {e}')
+    if isinstance(narrative_data, dict):
+        if len(llm_highlights) >= 2:
+            narrative_data['highlights'] = llm_highlights
+        narrative_data['market_context'] = market_context
+        return narrative_data
 
     latest = report_data.get('latest_interaction') or {}
     counts = report_data.get('summary_counts') or {}
@@ -1796,7 +1967,7 @@ def _relation_report_generate_narrative(report_data):
             topic_breakdown[topic] = f"Há {len(items)} evidência(s) relacionadas a {topic.lower()} no período, com destaque para registros de {sample.get('source')} e menções envolvendo {sample.get('person') or 'contatos da conta'}."
         else:
             topic_breakdown[topic] = f"Não foram encontradas evidências relevantes sobre {topic.lower()} no período analisado."
-    return {
+    fallback_narrative = {
         'executive_summary': executive_summary,
         'relationship_maturity': 'Em evolução' if counts.get('activities', 0) < 8 else 'Estruturado',
         'next_steps': [
@@ -1810,8 +1981,12 @@ def _relation_report_generate_narrative(report_data):
             f"{counts.get('mapping_items', 0)} item(ns) de mapeamento de ambiente registrados.",
             f"Última interação em {_relation_report_format_dt(latest.get('date'))}."
         ],
-        'llm_used': False
+        'llm_used': False,
+        'market_context': market_context,
     }
+    if len(llm_highlights) >= 2:
+        fallback_narrative['highlights'] = llm_highlights
+    return fallback_narrative
 
 
 def _relation_report_draw_paragraph(c, text, x, y, width, style):
@@ -1833,7 +2008,7 @@ def _relation_report_draw_header(c, report_data, colors_map, page_width, page_he
         c.drawImage(account_logo, page_width - 40 * mm, page_height - 38 * mm, width=18 * mm, height=18 * mm, mask='auto', preserveAspectRatio=True)
     c.setFillColor(colors.white)
     c.setFont('Helvetica-Bold', 18)
-    c.drawString(44 * mm, page_height - 27 * mm, 'Relation Report')
+    c.drawString(44 * mm, page_height - 27 * mm, 'Relationship Report')
     c.setFont('Helvetica', 10)
     c.drawString(44 * mm, page_height - 33 * mm, 'Toca do Coelho')
     c.setFont('Helvetica-Bold', 14)
@@ -1990,6 +2165,11 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
             meta.append(esc(contact.get('email')))
         if contact.get('phone'):
             meta.append(esc(contact.get('phone')))
+        linkedin_raw = str(contact.get('linkedin') or '').strip()
+        linkedin_html = ''
+        if linkedin_raw:
+            linkedin_safe = esc(linkedin_raw)
+            linkedin_html = f"<div class='rr-contact-linkedin'><a href='{linkedin_safe}' target='_blank' rel='noopener noreferrer'>LinkedIn</a></div>"
         activities = [a for a in (report_data.get('activities') or []) if a.get('client_id') == contact.get('id')]
         last_contact = activities[0] if activities else None
         last_contact_line = f"Última interação: {esc(_relation_report_format_dt(last_contact.get('activity_date')))}" if last_contact else 'Última interação: não registrada'
@@ -2001,6 +2181,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
                 <div>
                     <div class='rr-contact-name'>{esc(contact.get('name'))}</div>
                     <div class='rr-contact-meta'>{' · '.join(meta) if meta else 'Sem detalhes complementares'}</div>
+                    {linkedin_html}
                 </div>
             </div>
             <div class='rr-badge-row'>{''.join(badges)}</div>
@@ -2009,6 +2190,19 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
         """)
 
     highlights_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('highlights') or [])]) or '<li>Sem destaques adicionais.</li>'
+    market_context_text = (narrative.get('market_context') or '').strip()
+    market_context_html = ''
+    if market_context_text:
+        market_context_html = f"""
+        <div class='rr-market-context'>
+          <h3 style='font-size:13px; color:#ffffff; text-transform:uppercase; letter-spacing:.05em; margin:18px 0 6px;'>
+            Contexto de Mercado
+          </h3>
+          <p style='font-size:14px; line-height:1.7; color:#ffffff;'>
+            {esc(market_context_text)}
+          </p>
+        </div>
+        """
     next_steps_html = ''.join([f"<li>{esc(item)}</li>" for item in (narrative.get('next_steps') or [])]) or '<li>Sem próximos passos sugeridos.</li>'
     account_logo = _inline_image_url(account_logo)
     account_logo_html = f"<img src='{esc(account_logo)}' alt='Logo da conta'>" if account_logo else "📊"
@@ -2026,7 +2220,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
 <head>
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-<title>Relation Report - {esc(account_name)}</title>
+<title>Relationship Report - {esc(account_name)}</title>
 <style>
 :root {{ --green:#059669; --green-dark:#065f46; --mint:#d1fae5; --bg:#f6fffb; --text:#1f2937; --muted:#6b7280; --card:#ffffff; --line:#d1fae5; }}
 * {{ box-sizing:border-box; }}
@@ -2072,6 +2266,9 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-contact-photo-fallback {{ display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--green-dark); font-size:22px; }}
 .rr-contact-name {{ font-size:17px; font-weight:800; color:#111827; }}
 .rr-contact-meta {{ font-size:13px; color:#6b7280; margin-top:3px; line-height:1.4; }}
+.rr-contact-linkedin {{ margin-top:6px; }}
+.rr-contact-linkedin a {{ color:#0a66c2; text-decoration:none; font-size:12px; font-weight:600; }}
+.rr-contact-linkedin a:hover {{ text-decoration:underline; }}
 .rr-badge-row {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }}
 .rr-badge {{ font-size:11px; font-weight:700; border-radius:999px; padding:6px 10px; display:inline-flex; align-items:center; }}
 .rr-badge-primary {{ background:#dcfce7; color:#166534; }}
@@ -2089,6 +2286,121 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 .rr-btn {{ border:none; border-radius:14px; padding:10px 16px; font-weight:700; cursor:pointer; }}
 .rr-btn-primary {{ background:#10b981; color:#fff; }}
 .rr-btn-secondary {{ background:#e5e7eb; color:#111827; }}
+/* ── FireShot Modal ── */
+#rr-fireshot-modal {{
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 9999;
+  align-items: center;
+  justify-content: center;
+}}
+#rr-fireshot-modal.active {{
+  display: flex;
+}}
+.rr-fs-box {{
+  background: #fff;
+  border-radius: 18px;
+  padding: 32px 28px 24px;
+  max-width: 480px;
+  width: 92%;
+  box-shadow: 0 24px 64px rgba(4,120,87,0.18);
+  border-top: 4px solid #10b981;
+}}
+.rr-fs-header {{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}}
+.rr-fs-title {{
+  font-size: 18px;
+  font-weight: 700;
+  color: #047857;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}}
+.rr-fs-close {{
+  background: none;
+  border: none;
+  font-size: 22px;
+  color: #6b7280;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}}
+.rr-fs-close:hover {{ color: #1f2937; }}
+.rr-fs-steps {{
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}}
+.rr-fs-steps li {{
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 13.5px;
+  color: #1f2937;
+  line-height: 1.5;
+}}
+.rr-fs-step-num {{
+  background: #10b981;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  border-radius: 50%;
+  min-width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}}
+.rr-fs-note {{
+  background: #ecfdf5;
+  border: 1px solid #d1fae5;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: #047857;
+  margin-bottom: 20px;
+}}
+.rr-fs-actions {{
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}}
+.rr-fs-btn-install {{
+  background: #10b981;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}}
+.rr-fs-btn-install:hover {{ background: #047857; }}
+.rr-fs-btn-ok {{
+  background: #e5e7eb;
+  color: #1f2937;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}}
+.rr-fs-btn-ok:hover {{ background: #d1d5db; }}
 @media (max-width: 1024px) {{ .rr-hero-grid,.rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ grid-template-columns:1fr; }} }}
 @page {{ size: landscape; margin: 12mm 10mm; }}
 @media print {{ .rr-toolbar {{ display:none !important; }} html, body {{ background:#fff !important; width:100%; height:auto; margin:0 !important; padding:0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }} .rr-shell {{ max-width:none !important; width:100% !important; padding:0 !important; margin:0 !important; }} .rr-hero {{ min-height:auto !important; padding:16px !important; margin-top:0 !important; border-radius:18px !important; overflow:visible !important; }} .rr-hero:after {{ display:none !important; }} .rr-top {{ display:grid !important; grid-template-columns:minmax(0,1fr) 220px !important; gap:14px !important; align-items:start !important; }} .rr-brand {{ gap:12px !important; align-items:flex-start !important; min-width:0 !important; }} .rr-user {{ justify-self:end !important; align-self:start !important; width:220px !important; }} .rr-brand-copy p {{ max-width:none !important; }} .rr-section,.rr-kpi,.rr-panel,.rr-contact-card,.rr-topic-card,.rr-info-item {{ box-shadow:none !important; break-inside:avoid; page-break-inside:avoid; }} .rr-hero {{ break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-grid,.rr-kpis,.rr-contact-grid,.rr-topic-grid,.rr-info-list {{ display:grid !important; }} .rr-kpis {{ grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:10px !important; margin-top:12px !important; }} .rr-grid {{ grid-template-columns:1.1fr .9fr !important; gap:14px !important; margin-top:16px !important; }} .rr-hero-grid {{ display:block !important; margin-top:10px !important; }} .rr-panel-summary {{ display:block !important; width:100% !important; background:rgba(255,255,255,.14) !important; border:1px solid rgba(255,255,255,.18) !important; padding:14px !important; border-radius:18px !important; margin-top:8px !important; break-inside:avoid !important; page-break-inside:avoid !important; }} .rr-contact-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-topic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }} .rr-info-list {{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:10px !important; }} .rr-kpi,.rr-section,.rr-contact-card,.rr-topic-card,.rr-info-item,.rr-panel {{ margin-bottom:10px !important; }} .rr-section {{ padding:16px !important; border-radius:18px !important; }} .rr-contact-card {{ min-height:0 !important; padding:14px !important; }} .rr-topic-card {{ min-height:0 !important; padding:14px !important; }} .rr-kpi {{ padding:14px !important; }} .rr-user-photo {{ width:68px !important; height:68px !important; }} .rr-brand-mark {{ max-width:170px !important; height:52px !important; border-radius:16px !important; }} .rr-brand-mark img {{ max-width:150px !important; max-height:38px !important; }} .rr-title {{ font-size:26px !important; line-height:1.08 !important; margin-bottom:6px !important; }} .rr-subtitle {{ font-size:12px !important; line-height:1.4 !important; margin-top:4px !important; max-width:none !important; }} .rr-panel-summary h3 {{ margin:0 0 10px !important; font-size:16px !important; color:#ffffff !important; }} .rr-lead {{ font-size:12px !important; line-height:1.5 !important; color:#ffffff !important; display:block !important; visibility:visible !important; opacity:1 !important; }} .rr-context-pills {{ gap:8px !important; margin-bottom:10px !important; }} .rr-context-pill {{ padding:6px 9px !important; font-size:10px !important; }} .rr-contact-meta, .rr-muted, .rr-user-role, .rr-info-item-value {{ font-size:10px !important; }} .rr-page-break-before {{ break-before:page; page-break-before:always; }} }}
@@ -2096,11 +2408,12 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
 </head>
 <body>
 <div class='rr-toolbar'>
-  <div class='rr-toolbar-title'>Relation Report · {esc(account_name)}</div>
+  <div class='rr-toolbar-title'>Relationship Report · {esc(account_name)}</div>
   <div class='rr-toolbar-actions'>
     <button class='rr-btn rr-btn-secondary' onclick='window.close()'>✕ Fechar</button>
-    <button class='rr-btn rr-btn-secondary' onclick='window.location.href=window.location.pathname.replace("/view","/export-html") + window.location.search'>Exportar HTML</button>
-    <button class='rr-btn rr-btn-primary' onclick="window.location.href='/api/report/relation' + window.location.search">Exportar PDF</button>
+    <button class='rr-btn rr-btn-primary' onclick='rrShowFireshotModal()'>
+      <span style='font-size:15px;'>📷</span> Exportar JPG
+    </button>
   </div>
 </div>
 <div class='rr-shell'>
@@ -2109,7 +2422,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
       <div class='rr-brand'>
         <div class='rr-brand-mark'>{account_logo_html}</div>
         <div>
-          <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relation Report</p>
+          <p style='margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:rgba(255,255,255,.72);'>Toca do Coelho · Executive Relationship Report</p>
           <h1 class='rr-title'>{esc(account_name)}</h1>
           <p class='rr-subtitle'>Visão executiva do relacionamento da conta, combinando Power Mapping, histórico de interação, presença operacional, leitura temática e próximos passos recomendados.</p>
         </div>
@@ -2127,6 +2440,7 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
         <h3>Resumo executivo</h3>
         <div class='rr-context-pills'>{context_badges_html}</div>
         <div class='rr-lead'>{esc((narrative.get('executive_summary') or 'Sem resumo gerado.').replace('powermapping', 'Power Mapping').replace('Powermapping', 'Power Mapping'))}</div>
+        {market_context_html}
       </div>
     </div>
   </section>
@@ -2173,6 +2487,57 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
     </div>
   </section>
 </div>
+<div id='rr-fireshot-modal' onclick="if(event.target===this)rrCloseFireshotModal()">
+  <div class='rr-fs-box'>
+    <div class='rr-fs-header'>
+      <div class='rr-fs-title'>
+        <span>📷</span> Exportar como JPG
+      </div>
+      <button class='rr-fs-close' onclick='rrCloseFireshotModal()'>&#215;</button>
+    </div>
+    <ol class='rr-fs-steps'>
+      <li>
+        <span class='rr-fs-step-num'>1</span>
+        <span>Instale a extensão <strong>FireShot</strong> no Google Chrome (gratuita).</span>
+      </li>
+      <li>
+        <span class='rr-fs-step-num'>2</span>
+        <span>Feche este popup e, com o relatório aberto, clique com o botão <strong>direito</strong> em qualquer área da página.</span>
+      </li>
+      <li>
+        <span class='rr-fs-step-num'>3</span>
+        <span>No menu de contexto, selecione <strong>"Capturar página inteira"</strong> → <strong>"Salvar como imagem"</strong>.</span>
+      </li>
+      <li>
+        <span class='rr-fs-step-num'>4</span>
+        <span>Escolha o formato <strong>JPG</strong> e salve o arquivo.</span>
+      </li>
+    </ol>
+    <div class='rr-fs-note'>
+      💡 Se preferir, use o ícone do FireShot na barra de extensões do Chrome e selecione <em>"Capturar página inteira"</em>.
+    </div>
+    <div class='rr-fs-actions'>
+      <a class='rr-fs-btn-install'
+         href='https://chrome.google.com/webstore/detail/fireshot/mcbpblocgmgfnpjjppndjkmgjaogfceg'
+         target='_blank' rel='noopener'>
+        ⬇ Instalar FireShot
+      </a>
+      <button class='rr-fs-btn-ok' onclick='rrCloseFireshotModal()'>Entendido</button>
+    </div>
+  </div>
+</div>
+<script>
+function rrShowFireshotModal() {{
+  document.getElementById('rr-fireshot-modal').classList.add('active');
+}}
+function rrCloseFireshotModal() {{
+  document.getElementById('rr-fireshot-modal').classList.remove('active');
+}}
+// Fechar com ESC
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') rrCloseFireshotModal();
+}});
+</script>
 </body>
 </html>"""
 
@@ -2314,9 +2679,11 @@ def _relation_report_render_pdf(report_data):
         c.drawString(22 * mm, y - 6 * mm, f"{contact.get('name') or 'Contato'} — {contact.get('position') or 'Cargo não informado'}")
         c.setFont('Helvetica', 8.3)
         c.setFillColor(colors.HexColor('#4b5563'))
+        linkedin_value = str(contact.get('linkedin') or '').strip() or 'Não informado'
         c.drawString(22 * mm, y - 10 * mm, f"Área: {contact.get('area_of_activity') or 'Não informada'} | Email: {contact.get('email') or 'Não informado'}")
-        c.drawString(22 * mm, y - 14 * mm, f"Cards: atividades {rel.get('activities_count',0)} | mapeamento {rel.get('mapping_count',0)} | kanban {rel.get('kanban_count',0)} | último contato {_relation_report_format_dt((rel.get('last_contact') or {}).get('date'))}")
-        y -= 19 * mm
+        c.drawString(22 * mm, y - 12.5 * mm, f"LinkedIn: {linkedin_value[:95]}")
+        c.drawString(22 * mm, y - 15 * mm, f"Cards: atividades {rel.get('activities_count',0)} | mapeamento {rel.get('mapping_count',0)} | kanban {rel.get('kanban_count',0)} | último contato {_relation_report_format_dt((rel.get('last_contact') or {}).get('date'))}")
+        y -= 20 * mm
 
     y = ensure_space(y, 45 * mm)
     c.setFillColor(colors_map['secondary'])
@@ -2486,6 +2853,7 @@ def preview_relation_report_data():
             'latest_interaction': report_data['latest_interaction'],
             'relationship_cards': report_data['relationship_cards'][:12],
             'topics': {k: len(v) for k, v in report_data['topics'].items()},
+            'highlights': narrative.get('highlights') or [],
             'narrative': narrative,
             'period': {
                 'full_period': report_data['full_period'],
@@ -5224,6 +5592,34 @@ def get_positions():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/autotoca/mala-direta/positions', methods=['GET'])
+def get_autotoca_mailing_positions():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != "" ORDER BY position COLLATE NOCASE')
+        positions = [row['position'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(positions)
+    except Exception as e:
+        print(f'[ERROR] GET /api/autotoca/mala-direta/positions: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/mala-direta/areas', methods=['GET'])
+def get_autotoca_mailing_areas():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT area_of_activity FROM clients WHERE area_of_activity IS NOT NULL AND TRIM(area_of_activity) != "" ORDER BY area_of_activity COLLATE NOCASE')
+        areas = [row['area_of_activity'] for row in c.fetchall()]
+        conn.close()
+        return jsonify(areas)
+    except Exception as e:
+        print(f'[ERROR] GET /api/autotoca/mala-direta/areas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/empresas', methods=['GET'])
 def get_companies():
     try:
@@ -5465,6 +5861,88 @@ def get_ui_config():
         return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
     except Exception as e:
         print(f'[ERROR] GET /api/config/ui: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# =====================================================
+# Logs de Depuração
+# Endpoints para o painel "Logs de Depuração" em Configurações.
+# - GET  /api/config/logs        -> retorna as últimas N linhas de LOG_FILE
+# - POST /api/config/logs/client -> recebe entradas de log do cliente
+#                                   (tocaDebug) e grava no mesmo LOG_FILE
+# =====================================================
+
+_CLIENT_LOGGER = logging.getLogger('toca-do-coelho.client')
+
+
+@app.route('/api/config/logs', methods=['GET'])
+def get_debug_logs():
+    try:
+        try:
+            lines_limit = int(request.args.get('limit', 500))
+        except (TypeError, ValueError):
+            lines_limit = 500
+        lines_limit = max(50, min(lines_limit, 5000))
+
+        if not LOG_FILE.exists():
+            return jsonify({
+                'lines': [],
+                'path': str(LOG_FILE),
+                'total_lines': 0,
+                'returned_lines': 0,
+                'size': 0
+            })
+
+        with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+
+        tail = all_lines[-lines_limit:] if len(all_lines) > lines_limit else all_lines
+        return jsonify({
+            'lines': [line.rstrip('\n') for line in tail],
+            'path': str(LOG_FILE),
+            'total_lines': len(all_lines),
+            'returned_lines': len(tail),
+            'size': LOG_FILE.stat().st_size
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/logs: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/logs/client', methods=['POST'])
+def receive_client_logs():
+    try:
+        data = request.get_json(silent=True) or {}
+        entries = data.get('entries') or []
+        if not isinstance(entries, list):
+            return jsonify({'error': 'entries deve ser uma lista'}), 400
+
+        accepted = 0
+        for entry in entries[:500]:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                ts = str(entry.get('ts') or '')
+                tag = str(entry.get('tag') or 'client')
+                message = str(entry.get('message') or '')
+                payload = entry.get('data')
+                if payload is None:
+                    payload_str = ''
+                else:
+                    try:
+                        payload_str = json.dumps(payload, ensure_ascii=False, default=str)
+                    except Exception:
+                        payload_str = str(payload)
+                _CLIENT_LOGGER.info(
+                    f'[client:{tag}] ts={ts} msg={message} data={payload_str}'
+                )
+                accepted += 1
+            except Exception:
+                continue
+
+        return jsonify({'received': accepted})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/logs/client: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -7461,6 +7939,7 @@ def create_client():
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        linkedin = request.form.get('linkedin', '').strip()
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
@@ -7502,9 +7981,9 @@ def create_client():
         
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, photo_url, is_target, is_cold_contact)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact))
+        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact))
         client_id = c.lastrowid
         ensure_account_for_company(c, company)
         conn.commit()
@@ -7532,6 +8011,7 @@ def update_client(client_id):
         position = request.form.get('position', '').strip()
         email = request.form.get('email', '').strip()
         phone = normalize_phone(request.form.get('phone', '').strip())
+        linkedin = request.form.get('linkedin', '').strip()
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         remove_photo = request.form.get('remove_photo', '0') == '1'
@@ -7560,9 +8040,9 @@ def update_client(client_id):
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
         
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
+        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, photo_url, is_target, is_cold_contact, client_id))
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, client_id))
         ensure_account_for_company(c, company)
         conn.commit()
         conn.close()
@@ -8082,28 +8562,56 @@ def export_clientes():
     try:
         import csv
         from io import StringIO
-        
+
+        allowed_fields = {
+            'id': ('id', 'ID'),
+            'name': ('name', 'Nome'),
+            'company': ('company', 'Empresa'),
+            'position': ('position', 'Cargo'),
+            'area_of_activity': ('area_of_activity', 'Área de Atuação'),
+            'email': ('email', 'Email'),
+            'phone': ('phone', 'Telefone'),
+            'linkedin': ('linkedin', 'LinkedIn'),
+            'photo_url': ('photo_url', 'Foto (URL)'),
+            'is_target': ('is_target', 'Contato-Alvo'),
+            'is_cold_contact': ('is_cold_contact', 'Contato Frio'),
+            'created_at': ('created_at', 'Data de Cadastro'),
+            'updated_at': ('updated_at', 'Última Atualização'),
+        }
+
+        default_fields = ['id', 'name', 'company', 'position', 'email', 'phone', 'linkedin', 'created_at']
+        requested_fields = (request.args.get('fields') or '').strip()
+
+        selected_fields = []
+        if requested_fields:
+            seen = set()
+            for raw_field in requested_fields.split(','):
+                field = raw_field.strip()
+                if not field or field in seen:
+                    continue
+                if field in allowed_fields:
+                    selected_fields.append(field)
+                    seen.add(field)
+
+            if not selected_fields:
+                return jsonify({'error': 'Nenhum campo válido foi informado para exportação.'}), 400
+        else:
+            selected_fields = default_fields
+
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id, name, company, position, email, phone, created_at FROM clients ORDER BY name')
+        db_fields = ', '.join([allowed_fields[field][0] for field in selected_fields])
+        c.execute(f'SELECT {db_fields} FROM clients ORDER BY name')
         rows = c.fetchall()
         conn.close()
         
         # Criar CSV em memoria
         output = StringIO()
         writer = csv.writer(output)
-        writer.writerow(['ID', 'Nome', 'Empresa', 'Cargo', 'Email', 'Telefone', 'Data de Cadastro'])
-        
+        writer.writerow([allowed_fields[field][1] for field in selected_fields])
+
         for row in rows:
-            writer.writerow([
-                row['id'],
-                row['name'],
-                row['company'],
-                row['position'],
-                row['email'] or '',
-                row['phone'] or '',
-                row['created_at']
-            ])
+            writer.writerow([row[field] if row[field] is not None else '' for field in selected_fields])
         
         # Retornar como arquivo
         from flask import Response
@@ -8285,6 +8793,7 @@ def import_clients():
             position = row[2].strip() if len(row) > 2 else ''
             email = row[3].strip() if len(row) > 3 else None
             phone = row[4].strip() if len(row) > 4 else None
+            linkedin = row[5].strip() if len(row) > 5 else None
             
             # VALIDACAO 4: Campos obrigatorios nao podem estar vazios
             if not name or not company or not position:
@@ -8306,7 +8815,8 @@ def import_clients():
                 'company': company,
                 'position': position,
                 'email': email,
-                'phone': phone
+                'phone': phone,
+                'linkedin': linkedin
             })
         
         # Se houver erros de validacao, retornar sem importar nada
@@ -8333,10 +8843,10 @@ def import_clients():
                     continue
                 
                 # Inserir novo cliente
-                c.execute('''INSERT INTO clients (name, company, position, email, phone, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                c.execute('''INSERT INTO clients (name, company, position, email, phone, linkedin, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
                          (row_data['name'], row_data['company'], row_data['position'], 
-                          row_data['email'], row_data['phone']))
+                          row_data['email'], row_data['phone'], row_data.get('linkedin')))
                 ensure_account_for_company(c, row_data['company'])
                 imported_count += 1
             
@@ -8868,6 +9378,174 @@ def get_card_all_responses(card_id):
         return jsonify({'error': str(e)}), 500
 
 # Rotas de backup e restore do banco de dados
+def _normalize_merge_text(value):
+    return str(value or '').strip().lower()
+
+
+def _normalize_merge_phone(value):
+    digits = re.sub(r'\D+', '', str(value or ''))
+    if len(digits) >= 11:
+        return digits[-11:]
+    if len(digits) == 10:
+        return f"{digits[:2]}9{digits[2:]}"
+    return digits
+
+
+def _is_empty_merge_value(value):
+    return value is None or str(value).strip() == ''
+
+
+def _merge_clients_from_db(temp_db_path):
+    incoming_conn = sqlite3.connect(str(temp_db_path))
+    incoming_conn.row_factory = sqlite3.Row
+    current_conn = sqlite3.connect(str(DB_PATH))
+    current_conn.row_factory = sqlite3.Row
+
+    try:
+        incoming_cur = incoming_conn.cursor()
+        current_cur = current_conn.cursor()
+
+        incoming_cur.execute('PRAGMA table_info(clients)')
+        incoming_client_columns = [row['name'] for row in incoming_cur.fetchall()]
+        if not incoming_client_columns:
+            return {
+                'processed': 0,
+                'imported': 0,
+                'updated': 0,
+                'unchanged': 0,
+                'conflicts': 0,
+                'skipped': 0,
+                'conflict_rows': []
+            }
+
+        current_cur.execute('PRAGMA table_info(clients)')
+        current_client_columns = [row['name'] for row in current_cur.fetchall()]
+
+        updatable_columns = [col for col in incoming_client_columns if col in current_client_columns and col != 'id']
+        if not updatable_columns:
+            return {
+                'processed': 0,
+                'imported': 0,
+                'updated': 0,
+                'unchanged': 0,
+                'conflicts': 0,
+                'skipped': 0,
+                'conflict_rows': []
+            }
+
+        def load_current_clients():
+            current_cur.execute('SELECT * FROM clients')
+            rows = [dict(row) for row in current_cur.fetchall()]
+            index_name = {}
+            index_email = {}
+            index_phone = {}
+            for row in rows:
+                rid = row.get('id')
+                name_key = _normalize_merge_text(row.get('name'))
+                email_key = _normalize_merge_text(row.get('email'))
+                phone_key = _normalize_merge_phone(row.get('phone'))
+                if name_key:
+                    index_name.setdefault(name_key, rid)
+                if email_key:
+                    index_email.setdefault(email_key, rid)
+                if phone_key:
+                    index_phone.setdefault(phone_key, rid)
+            return rows, index_name, index_email, index_phone
+
+        rows, index_name, index_email, index_phone = load_current_clients()
+        current_by_id = {row['id']: row for row in rows}
+
+        incoming_cur.execute('SELECT * FROM clients ORDER BY id ASC')
+        incoming_rows = [dict(row) for row in incoming_cur.fetchall()]
+
+        summary = {
+            'processed': len(incoming_rows),
+            'imported': 0,
+            'updated': 0,
+            'unchanged': 0,
+            'conflicts': 0,
+            'skipped': 0,
+            'conflict_rows': []
+        }
+
+        for incoming in incoming_rows:
+            name_key = _normalize_merge_text(incoming.get('name'))
+            email_key = _normalize_merge_text(incoming.get('email'))
+            phone_key = _normalize_merge_phone(incoming.get('phone'))
+
+            match_id = None
+            match_basis = None
+            if name_key and name_key in index_name:
+                match_id = index_name[name_key]
+                match_basis = 'name'
+            elif email_key and email_key in index_email:
+                match_id = index_email[email_key]
+                match_basis = 'email'
+            elif phone_key and phone_key in index_phone:
+                match_id = index_phone[phone_key]
+                match_basis = 'phone'
+
+            if not match_id:
+                insert_cols = [col for col in updatable_columns if col in incoming]
+                insert_values = [incoming.get(col) for col in insert_cols]
+                placeholders = ','.join(['?'] * len(insert_cols))
+                current_cur.execute(
+                    f"INSERT INTO clients ({','.join(insert_cols)}) VALUES ({placeholders})",
+                    tuple(insert_values)
+                )
+                new_id = current_cur.lastrowid
+                summary['imported'] += 1
+                if name_key:
+                    index_name.setdefault(name_key, new_id)
+                if email_key:
+                    index_email.setdefault(email_key, new_id)
+                if phone_key:
+                    index_phone.setdefault(phone_key, new_id)
+                continue
+
+            current_row = current_by_id.get(match_id) or {}
+            updates = {}
+            conflict_fields = []
+            for col in updatable_columns:
+                incoming_val = incoming.get(col)
+                current_val = current_row.get(col)
+                if _is_empty_merge_value(incoming_val):
+                    continue
+                if _is_empty_merge_value(current_val):
+                    updates[col] = incoming_val
+                    continue
+                if str(incoming_val).strip() == str(current_val).strip():
+                    continue
+                conflict_fields.append(col)
+
+            if conflict_fields:
+                summary['conflicts'] += 1
+                summary['skipped'] += 1
+                summary['conflict_rows'].append({
+                    'incoming_name': incoming.get('name') or '',
+                    'match_id': match_id,
+                    'match_basis': match_basis or 'none',
+                    'fields': conflict_fields[:8]
+                })
+                continue
+
+            if updates:
+                set_sql = ', '.join([f"{col} = ?" for col in updates.keys()])
+                params = list(updates.values()) + [match_id]
+                current_cur.execute(f'UPDATE clients SET {set_sql} WHERE id = ?', tuple(params))
+                summary['updated'] += 1
+                for col, value in updates.items():
+                    current_row[col] = value
+            else:
+                summary['unchanged'] += 1
+
+        current_conn.commit()
+        return summary
+    finally:
+        incoming_conn.close()
+        current_conn.close()
+
+
 @app.route('/api/backup/database', methods=['GET'])
 def backup_database():
     try:
@@ -8918,6 +9596,10 @@ def restore_database():
         if file.filename == '':
             return jsonify({'error': 'Arquivo inválido'}), 400
         
+        mode = str(request.form.get('mode', 'replace_all') or 'replace_all').strip().lower()
+        if mode not in {'replace_all', 'merge'}:
+            return jsonify({'error': 'Modo de importação inválido. Use replace_all ou merge.'}), 400
+
         uploaded_name = (file.filename or '').strip().lower()
         is_zip_backup = uploaded_name.endswith('.zip')
         is_db_backup = uploaded_name.endswith('.db')
@@ -8979,6 +9661,18 @@ def restore_database():
             temp_path.unlink()
             return jsonify({'error': 'Arquivo não é um banco de dados SQLite válido'}), 400
         
+        if mode == 'merge':
+            merge_summary = _merge_clients_from_db(temp_path)
+            temp_path.unlink(missing_ok=True)
+            temp_zip_path.unlink(missing_ok=True)
+            return jsonify({
+                'message': 'Fusão concluída! Nenhum dado existente foi apagado.',
+                'mode': 'merge',
+                'backup_location': str(backup_path),
+                'backup_uploads_location': str(backup_uploads_path),
+                'merge_summary': merge_summary
+            }), 200
+
         # Substituir banco atual
         shutil.move(str(temp_path), str(DB_PATH))
         print(f'[Database] Banco de dados restaurado com sucesso')
@@ -9016,6 +9710,7 @@ def restore_database():
         
         return jsonify({
             'message': 'Banco de dados restaurado com sucesso! Recarregue a página.',
+            'mode': 'replace_all',
             'backup_location': str(backup_path),
             'backup_uploads_location': str(backup_uploads_path),
             'restored_upload_files': restored_uploads
@@ -9550,6 +10245,371 @@ def _account_autofill_via_sai(account_name):
 
     logger.info(f'[AccountAutoFill] Nenhum LLM configurado para empresa: {account_name!r}')
     return {'average_revenue_brl': None, 'professionals_count': None, 'global_presence': '', 'source': 'sem_llm'}
+
+
+def _portfolio_extract_pdf_text(file_storage):
+    if not file_storage:
+        return ''
+    if not PDFPLUMBER_AVAILABLE:
+        raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
+
+    file_bytes = file_storage.read()
+    if not file_bytes:
+        return ''
+
+    text_parts = []
+    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+        for page in (pdf.pages or []):
+            try:
+                text_parts.append(page.extract_text() or '')
+            except Exception:
+                continue
+    return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
+
+
+def _portfolio_parse_llm_raw(raw):
+    def _try_parse_json(value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
+            return {'items': value}
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        if stripped.startswith('```'):
+            fenced_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', stripped, flags=re.IGNORECASE)
+            if fenced_match:
+                stripped = fenced_match.group(1).strip()
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, list):
+                return {'items': parsed}
+        except Exception:
+            pass
+        parsed = _extract_json_object_from_text(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+        return None
+
+    parsed = _try_parse_json(raw)
+    if parsed and 'items' not in parsed:
+        for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message', 'answer'):
+            candidate = parsed.get(key)
+            nested = _try_parse_json(candidate)
+            if nested:
+                parsed = nested
+                break
+    if not parsed:
+        return None
+
+    title = (parsed.get('title') or '').strip() if isinstance(parsed, dict) else ''
+    summary = (parsed.get('summary') or '').strip() if isinstance(parsed, dict) else ''
+    raw_items = parsed.get('items') if isinstance(parsed, dict) else []
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    items = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            pain = (item.get('pain') or '').strip()
+            solution = (item.get('solution') or '').strip()
+            if pain or solution:
+                items.append({'pain': pain, 'solution': solution})
+
+    if not title and not summary and not items:
+        return None
+    if not title:
+        title = 'Oferta gerada por IA'
+    if not summary:
+        summary = 'Resumo não informado.'
+    if not items:
+        items = [{'pain': 'Ponto principal não identificado', 'solution': 'Solução principal não identificada'}]
+    return {'title': title, 'summary': summary, 'items': items}
+
+
+def _portfolio_generate_offer_from_llm(raw_input):
+    llm_prompt = (
+        "Você é um especialista em posicionamento comercial B2B. "
+        "Analise o material abaixo e extraia um portfólio comercial em português (Brasil). "
+        "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão: "
+        '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
+        '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}. '
+        "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto; "
+        "use frases curtas e claras; não inclua markdown.\n\n"
+        f"MATERIAL:\n{raw_input[:30000]}"
+    )
+
+    raw = _sai_simple_prompt(llm_prompt)
+    source = 'SAI'
+    if raw is not None and not str(raw).strip():
+        raw = None
+    if raw is not None:
+        parsed = _portfolio_parse_llm_raw(raw)
+        if parsed:
+            return parsed, source
+        logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta. Tentando OpenRouter.')
+
+    if raw is None:
+        or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+        if not or_key:
+            return None, 'sem_llm'
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista comercial. Responda SEMPRE e SOMENTE com JSON válido.'},
+                    {'role': 'user', 'content': llm_prompt}
+                ],
+                'temperature': 0.2
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            source = 'OpenRouter'
+            parsed = _portfolio_parse_llm_raw(raw)
+            if parsed:
+                return parsed, source
+            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta.')
+            return None, 'llm_invalid_response'
+        except Exception as e:
+            logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}')
+            return None, 'sem_llm'
+
+    return None, 'llm_invalid_response'
+
+
+def _portfolio_fetch_offer(c, offer_id):
+    c.execute('SELECT * FROM portfolio_offers WHERE id = ?', (offer_id,))
+    offer = dict_from_row(c.fetchone())
+    if not offer:
+        return None
+    c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer_id,))
+    offer['items'] = [dict_from_row(row) for row in c.fetchall()]
+    return offer
+
+
+@app.route('/api/portfolio/offers', methods=['GET'])
+def list_portfolio_offers():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM portfolio_offers ORDER BY datetime(created_at) DESC, id DESC')
+        offers = [dict_from_row(row) for row in c.fetchall()]
+        for offer in offers:
+            c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer['id'],))
+            offer['items'] = [dict_from_row(item) for item in c.fetchall()]
+        conn.close()
+        return jsonify(offers)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao listar ofertas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers', methods=['POST'])
+def create_portfolio_offer():
+    try:
+        input_text = (request.form.get('raw_input') or '').strip()
+        file_obj = request.files.get('pdf_file')
+        pdf_text = _portfolio_extract_pdf_text(file_obj) if file_obj else ''
+        raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+
+        if not raw_input:
+            return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
+
+        parsed, source = _portfolio_generate_offer_from_llm(raw_input)
+        if not parsed:
+            if source == 'sem_llm':
+                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}), 502
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+            (parsed['title'], parsed['summary'], raw_input)
+        )
+        offer_id = c.lastrowid
+        for idx, item in enumerate(parsed.get('items') or []):
+            c.execute(
+                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
+            )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if offer is None:
+            return jsonify({'error': 'Falha ao carregar oferta criada.'}), 500
+        offer['llm_source'] = source
+        return jsonify(offer), 201
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao criar oferta: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>', methods=['PUT'])
+def update_portfolio_offer(offer_id):
+    try:
+        data = request.get_json() or {}
+        title = (data.get('title') or '').strip()
+        summary = (data.get('summary') or '').strip()
+        if not title:
+            return jsonify({'error': 'Título é obrigatório.'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        c.execute(
+            'UPDATE portfolio_offers SET title = ?, summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            (title, summary, offer_id)
+        )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        return jsonify(offer)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao atualizar oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>', methods=['DELETE'])
+def delete_portfolio_offer(offer_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
+        c.execute('DELETE FROM portfolio_offers WHERE id = ?', (offer_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Oferta removida com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao remover oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>/items/<int:item_id>', methods=['PUT'])
+def update_portfolio_offer_item(offer_id, item_id):
+    try:
+        data = request.get_json() or {}
+        pain = (data.get('pain') or '').strip()
+        solution = (data.get('solution') or '').strip()
+        sort_order = data.get('sort_order')
+        if not pain and not solution:
+            return jsonify({'error': 'Informe dor e/ou solução.'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Item não encontrado.'}), 404
+
+        if sort_order is None:
+            c.execute(
+                '''UPDATE portfolio_offer_items
+                   SET pain = ?, solution = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND offer_id = ?''',
+                (pain, solution, item_id, offer_id)
+            )
+        else:
+            try:
+                sort_order_int = int(sort_order)
+            except Exception:
+                return jsonify({'error': 'sort_order inválido.'}), 400
+            c.execute(
+                '''UPDATE portfolio_offer_items
+                   SET pain = ?, solution = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND offer_id = ?''',
+                (pain, solution, sort_order_int, item_id, offer_id)
+            )
+
+        conn.commit()
+        c.execute('SELECT * FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(item)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao atualizar item {item_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>/items', methods=['POST'])
+def create_portfolio_offer_item(offer_id):
+    try:
+        data = request.get_json() or {}
+        pain = (data.get('pain') or '').strip()
+        solution = (data.get('solution') or '').strip()
+        if not pain and not solution:
+            return jsonify({'error': 'Informe dor e/ou solução.'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        c.execute('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
+        max_sort = (dict_from_row(c.fetchone()) or {}).get('max_sort', -1)
+        next_sort = int(max_sort) + 1
+        c.execute(
+            '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+            (offer_id, pain, solution, next_sort)
+        )
+        item_id = c.lastrowid
+        conn.commit()
+        c.execute('SELECT * FROM portfolio_offer_items WHERE id = ?', (item_id,))
+        item = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(item), 201
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao criar item para oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/<int:offer_id>/items/<int:item_id>', methods=['DELETE'])
+def delete_portfolio_offer_item(offer_id, item_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Item não encontrado.'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Item removido com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao remover item {item_id}: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/accounts/autofill', methods=['POST'])
@@ -10906,6 +11966,13 @@ def serve_autotoca_upload(filename):
 def serve_upload(filename):
     return send_from_directory(str(UPLOAD_DIR), filename)
 
+@app.route('/api/system/config', methods=['GET'])
+def get_system_config():
+    return jsonify({
+        'env': os.environ.get('TOCA_ENV', 'production'),
+        'version': APP_VERSION
+    })
+
 @app.route('/')
 def index():
     return send_from_directory(app.static_folder, 'index.html')
@@ -10926,11 +11993,15 @@ def handle_unexpected_exception(error):
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))
+    fixed_debug_mode = True
+    app.logger.setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(logging.DEBUG)
     print('=' * 50)
     print('  TOCA DO COELHO - Gestao de Clientes')
     print('=' * 50)
     print(f'[Database] Banco de dados inicializado')
     print(f'[Server] Iniciando em http://localhost:{port}')
+    print(f'[Debug] Modo debug fixo no terminal: {"ATIVO" if fixed_debug_mode else "INATIVO"}')
     print(f'[Server] Pressione CTRL+C para parar')
     print()
     
@@ -10944,4 +12015,4 @@ if __name__ == '__main__':
     thread = threading.Thread(target=open_browser, daemon=True)
     thread.start()
     
-    app.run(host='localhost', port=port, debug=False)
+    app.run(host='localhost', port=port, debug=fixed_debug_mode, use_reloader=False)
