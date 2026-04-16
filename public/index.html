@@ -1892,9 +1892,9 @@
                 <i class="fas fa-users"></i>
                 <span>Gestão de Contatos</span>
             </button>
-            <button class="nav-item nav-report" onclick="switchTab(event, 'report')">
-                <i class="fas fa-database"></i>
-                <span>Report & Backup</span>
+            <button class="nav-item nav-reports" onclick="switchTab(event, 'reports')">
+                <i class="fas fa-chart-bar"></i>
+                <span>Reports</span>
             </button>
 
         <div class="sidebar-footer">
@@ -2224,13 +2224,53 @@
             <div id="activitiesList"></div>
         </div>
 
-        <!-- Report Tab -->
-        <div id="report" class="tab-content">
+        <!-- Reports Tab -->
+        <div id="reports" class="tab-content">
             <div class="page-header">
-                <h1>Report & Backup</h1>
-                <p>Exporte dados de clientes, atividades e faça backup do banco de dados</p>
+                <h1>Reports</h1>
+                <p>Relatórios executivos e ferramentas de análise comercial</p>
             </div>
-            <div id="reportContent"></div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+                <button id="reportsBtn_preparar-reuniao" class="btn btn-secondary" onclick="toggleReportsPanel('preparar-reuniao')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
+                <button id="reportsBtn_relationship-report" class="btn btn-secondary" onclick="toggleReportsPanel('relationship-report')"><i class="fas fa-chart-line" style="margin-right:5px;"></i> Relationship Report</button>
+            </div>
+            <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
+                <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
+                <p style="margin-bottom:16px; color:#4b5563; font-size:13px;">Cole o texto do perfil LinkedIn e gere um resumo executivo estruturado para sua reunião.</p>
+                <div style="display:flex; flex-direction:column; gap:14px;">
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">URL do Perfil LinkedIn</label>
+                        <input type="url" id="atLinkedinUrl" placeholder="https://www.linkedin.com/in/nome-da-pessoa"
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+                        <span style="font-size:11px; color:#9ca3af;"><i class="fas fa-info-circle"></i> O LinkedIn bloqueia scraping — se o resumo ficar genérico, cole o texto abaixo.</span>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">Texto do Perfil <span style="font-weight:400; color:#9ca3af;">(cole o conteúdo copiado do LinkedIn)</span></label>
+                        <textarea id="atLinkedinProfileText" rows="7" placeholder="Cole aqui o texto do perfil: nome, cargo, experiências, formação, habilidades..."
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">Contexto da Reunião <span style="font-weight:400; color:#9ca3af;">(opcional)</span></label>
+                        <input type="text" id="atLinkedinMeetingContext" placeholder="Ex: apresentar proposta de consultoria de TI, renovar contrato, primeiro contato..."
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                        <button class="btn btn-auto-mapping" onclick="gerarResumoLinkedIn()" id="atLinkedinSummarizeBtn">
+                            <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
+                        </button>
+                        <button class="btn btn-auto-mapping" onclick="importarPerfilLinkedIn()" id="atLinkedinImportBtn" title="Importa perfil capturado pela extensão do Chrome/Firefox">
+                            <i class="fab fa-linkedin" style="margin-right:5px;"></i> Importar da Extensão
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()" title="Como usar a extensão no LinkedIn">
+                            <i class="fas fa-question-circle"></i> Como usar
+                        </button>
+                    </div>
+                    <div id="atLinkedinResultArea"></div>
+                </div>
+            </div>
+            <div id="reportsPanel_relationship-report" style="display:none;">
+                <div id="reportsRelationshipContent"></div>
+            </div>
         </div>
 
         <div id="agenda" class="tab-content">
@@ -2309,42 +2349,7 @@
             <div id="autotocaExtensionStatus" style="display:none; margin-bottom:16px; background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46; border-radius:12px; padding:12px 16px; font-size:13px;"></div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
-                <button id="autoTocaBtn_resumo-linkedin" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('resumo-linkedin')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
-            </div>
-            <div id="autoTocaResumoLinkedin" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
-                <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
-                <p style="margin-bottom:16px; color:#4b5563; font-size:13px;">Cole o texto do perfil LinkedIn e gere um resumo executivo estruturado para sua reunião.</p>
-                <div style="display:flex; flex-direction:column; gap:14px;">
-                    <div class="form-group" style="margin:0;">
-                        <label style="font-weight:600; font-size:13px;">URL do Perfil LinkedIn</label>
-                        <input type="url" id="atLinkedinUrl" placeholder="https://www.linkedin.com/in/nome-da-pessoa"
-                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
-                        <span style="font-size:11px; color:#9ca3af;"><i class="fas fa-info-circle"></i> O LinkedIn bloqueia scraping — se o resumo ficar genérico, cole o texto abaixo.</span>
-                    </div>
-                    <div class="form-group" style="margin:0;">
-                        <label style="font-weight:600; font-size:13px;">Texto do Perfil <span style="font-weight:400; color:#9ca3af;">(cole o conteúdo copiado do LinkedIn)</span></label>
-                        <textarea id="atLinkedinProfileText" rows="7" placeholder="Cole aqui o texto do perfil: nome, cargo, experiências, formação, habilidades..."
-                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
-                    </div>
-                    <div class="form-group" style="margin:0;">
-                        <label style="font-weight:600; font-size:13px;">Contexto da Reunião <span style="font-weight:400; color:#9ca3af;">(opcional)</span></label>
-                        <input type="text" id="atLinkedinMeetingContext" placeholder="Ex: apresentar proposta de consultoria de TI, renovar contrato, primeiro contato..."
-                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
-                    </div>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                        <button class="btn btn-auto-mapping" onclick="gerarResumoLinkedIn()" id="atLinkedinSummarizeBtn">
-                            <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
-                        </button>
-                        <button class="btn btn-auto-mapping" onclick="importarPerfilLinkedIn()" id="atLinkedinImportBtn" title="Importa perfil capturado pela extensão do Chrome/Firefox">
-                            <i class="fab fa-linkedin" style="margin-right:5px;"></i> Importar da Extensão
-                        </button>
-                        <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()" title="Como usar a extensão no LinkedIn">
-                            <i class="fas fa-question-circle"></i> Como usar
-                        </button>
-                    </div>
-                    <div id="atLinkedinResultArea"></div>
-                </div>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
@@ -2625,6 +2630,38 @@
                         </div>
                     </form>
                 </section>
+
+                <section class="settings-card">
+                    <h3><i class="fas fa-download"></i> Exportar Base de Clientes</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Exporte todos os dados cadastrais dos clientes em CSV.</p>
+                    <button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>
+                </section>
+
+                <section class="settings-card">
+                    <h3><i class="fas fa-download"></i> Exportar Atividades</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Exporte atividades com filtro de período.</p>
+                    <div class="form-group"><label>Data Inicial</label><input type="date" id="startDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
+                    <div class="form-group"><label>Data Final</label><input type="date" id="endDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
+                    <button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>
+                </section>
+
+                <section class="settings-card">
+                    <h3><i class="fas fa-database"></i> Backup do Banco de Dados</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Faça backup completo ou restaure o banco de dados.</p>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+                        <div>
+                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Exportar Banco</h4>
+                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Baixe uma cópia completa do banco de dados (com opção de incluir imagens)</p>
+                            <button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>
+                        </div>
+                        <div>
+                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Importar Banco</h4>
+                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Restaure um backup .db ou pacote .zip (cria backup automático antes)</p>
+                            <input type="file" id="restoreDbInput" accept=".db,.zip" style="display:none;" onchange="restoreDatabase(event)">
+                            <button class="btn btn-secondary" onclick="document.getElementById('restoreDbInput').click()"><i class="fas fa-upload"></i> Importar Banco</button>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
 
@@ -2659,6 +2696,28 @@
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Client Export Modal -->
+    <div id="clientExportModal" class="modal" onclick="if(event.target===this)closeClientExportModal()">
+        <div class="modal-content" style="max-width:720px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Exportar Base de Clientes</h2>
+                <button class="modal-close" onclick="closeClientExportModal()">&#215;</button>
+            </div>
+            <div class="modal-body">
+                <p style="color:#4b5563; margin-bottom:14px;">Selecione os campos do cadastro de contatos que deseja exportar.</p>
+                <div style="display:flex; gap:10px; margin-bottom:12px;">
+                    <button type="button" class="btn btn-secondary" style="padding:8px 12px;" onclick="clientExportSelectAll(true)">Selecionar Todos</button>
+                    <button type="button" class="btn btn-secondary" style="padding:8px 12px;" onclick="clientExportSelectAll(false)">Limpar Seleção</button>
+                </div>
+                <div id="clientExportFields" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; max-height:320px; overflow:auto; border:1px solid #e5e7eb; border-radius:10px; padding:12px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeClientExportModal()">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="clientExportConfirmBtn" onclick="confirmClientExport()"><i class="fas fa-download"></i> Exportar CSV</button>
+            </div>
         </div>
     </div>
 
@@ -3067,7 +3126,7 @@
             atividades: { title: 'Atividades', subtitle: 'Registro e acompanhamento de interações.' },
             agenda: { title: 'Agenda', subtitle: 'Compromissos, eventos e planejamento semanal.' },
             clientes: { title: 'Gestão de Contatos', subtitle: 'Cadastro e manutenção de contatos estratégicos.' },
-            report: { title: 'Report & Backup', subtitle: 'Relatórios e rotinas de segurança da base.' },
+            reports: { title: 'Reports', subtitle: 'Relatórios executivos e análise de relacionamento.' },
             configuracoes: { title: 'Configurações', subtitle: 'Parâmetros do sistema e integrações.' }
         };
 
@@ -3162,7 +3221,7 @@
             }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') loadActivities();
-            else if (tabName === 'report') loadReport();
+            else if (tabName === 'reports') loadReports();
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'kanban') loadKanban();
             else if (tabName === 'gestao-conta') switchGestaoContaSubmodule(requestedGestaoContaSubTab || _gestaoContaCurrentSubTab || 'accounts');
@@ -3696,13 +3755,46 @@
         function toggleAutoTocaAutomation(key) {
             const panels = {
                 'chamado-juridico': 'autoTocaChamadoJuridico',
-                'resumo-linkedin': 'autoTocaResumoLinkedin',
                 'mala-direta': 'autoTocaMalaDireta'
             };
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
-                'resumo-linkedin': 'autoTocaBtn_resumo-linkedin',
                 'mala-direta': 'autoTocaBtn_mala-direta'
+            };
+            const targetId = panels[key];
+            if (!targetId) return;
+            const target = document.getElementById(targetId);
+            if (!target) return;
+            const isOpening = target.style.display === 'none';
+            // Fecha todos os painéis
+            Object.entries(panels).forEach(([panelKey, id]) => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+                const btn = document.getElementById(buttons[panelKey]);
+                if (btn) {
+                    btn.classList.remove('btn-auto-mapping');
+                    btn.classList.add('btn-secondary');
+                }
+            });
+            // Abre o selecionado (toggle)
+            if (isOpening) {
+                target.style.display = 'block';
+                const activeBtn = document.getElementById(buttons[key]);
+                if (activeBtn) {
+                    activeBtn.classList.remove('btn-secondary');
+                    activeBtn.classList.add('btn-auto-mapping');
+                }
+            }
+        }
+
+        function toggleReportsPanel(key) {
+            const panels = {
+                'preparar-reuniao': 'reportsPanel_preparar-reuniao',
+                'relationship-report': 'reportsPanel_relationship-report'
+            };
+            const buttons = {
+                'preparar-reuniao': 'reportsBtn_preparar-reuniao',
+                'relationship-report': 'reportsBtn_relationship-report'
             };
             const targetId = panels[key];
             if (!targetId) return;
@@ -5133,8 +5225,8 @@
             }
         }
 
-        // Load Report
-        async function loadReport() {
+        // Load Reports
+        async function loadReports() {
             try {
                 const accountsResponse = await fetch(`${API_BASE}/accounts`);
                 const accountsData = await accountsResponse.json();
@@ -5142,21 +5234,13 @@
                 const data = await response.json();
                 clients = data;
 
-                let html = '<div style="display:flex; flex-direction:column; gap:20px;">';
-
-                html += '<div style="background: linear-gradient(135deg, rgba(4,120,87,0.96), rgba(6,95,70,0.96)); color: white; padding: 24px; border-radius: 16px; box-shadow: 0 14px 40px rgba(4,120,87,0.16);">';
-                html += '<div style="display:flex; justify-content:space-between; gap:20px; align-items:flex-start; flex-wrap:wrap;">';
+                let html = '<div style="background: linear-gradient(135deg, rgba(4,120,87,0.96), rgba(6,95,70,0.96)); color: white; padding: 24px; border-radius: 16px; box-shadow: 0 14px 40px rgba(4,120,87,0.16);">';
                 html += '<div style="max-width:680px;">';
-                html += '<div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.9; margin-bottom:8px;">Report & Backup</div>';
                 html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relationship Report</h2>';
                 html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Abra um report executivo visual no navegador com identidade da conta, foto do usuário, cards dos contatos, contexto relacional, leitura temática e botão para imprimir ou salvar em PDF.</p>';
-                html += '</div>';
-                html += '</div>';
-                html += '</div>';
+                html += '</div></div>';
 
-                html += '<div style="display:grid; grid-template-columns:minmax(340px, 1.4fr) minmax(320px, 1fr); gap:20px; align-items:start;">';
-
-                html += '<div style="background: rgba(255,255,255,0.92); padding: 22px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.24); box-shadow: 0 12px 34px rgba(15,23,42,0.05);">';
+                html += '<div style="background: rgba(255,255,255,0.92); padding: 22px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.24); box-shadow: 0 12px 34px rgba(15,23,42,0.05); margin-top:20px;">';
                 html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; flex-wrap:wrap;">';
                 html += '<div><h3 style="color:#047857; margin:0 0 6px 0;">Gerar Relationship Report</h3><p style="color:#6b7280; margin:0; font-size:14px;">Selecione a conta e o período para montar o PDF completo.</p></div>';
                 html += '<div style="background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; border-radius:999px; padding:8px 12px; font-size:12px; font-weight:600;">Resumo com IA incluído</div>';
@@ -5194,69 +5278,10 @@
                 html += '<div id="relationReportPreview" style="display:none; margin-top:18px;"></div>';
                 html += '</div>';
 
-                html += '<div style="display:grid; gap:20px;">';
-                html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
-                html += '<h3 style="color: #047857; margin-bottom: 10px;">Exportar Base de Clientes</h3>';
-                html += '<p style="color: #6b7280; margin-bottom: 15px;">Exporte todos os dados cadastrais dos clientes em CSV</p>';
-                html += '<button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>';
-                html += '</div>';
-
-                html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
-                html += '<h3 style="color: #047857; margin-bottom: 10px;">Exportar Atividades</h3>';
-                html += '<p style="color: #6b7280; margin-bottom: 15px;">Exporte atividades com filtro de período</p>';
-                html += '<div class="form-group" style="margin-bottom: 10px;">';
-                html += '<label>Data Inicial</label>';
-                html += '<input type="date" id="startDate" style="border: 2px solid #e5e7eb; padding: 10px; border-radius: 8px; width: 100%;">';
-                html += '</div>';
-                html += '<div class="form-group">';
-                html += '<label>Data Final</label>';
-                html += '<input type="date" id="endDate" style="border: 2px solid #e5e7eb; padding: 10px; border-radius: 8px; width: 100%; margin-bottom: 15px;">';
-                html += '</div>';
-                html += '<button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>';
-                html += '</div>';
-                html += '</div>';
-
-                html += '<div style="background: rgba(255,255,255,0.92); padding: 20px; border-radius: 16px; border: 1px solid rgba(52,211,153,0.2);">';
-                html += '<h3 style="color: #047857; margin-bottom: 10px;"><i class="fas fa-database"></i> Backup do Banco de Dados</h3>';
-                html += '<p style="color: #6b7280; margin-bottom: 15px;">Faça backup completo ou restaure o banco de dados</p>';
-                html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">';
-                html += '<div>';
-                html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Exportar Banco</h4>';
-                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Baixe uma cópia completa do banco de dados (com opção de incluir imagens)</p>';
-                html += '<button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>';
-                html += '</div>';
-                html += '<div>';
-                html += '<h4 style="color: #065f46; margin-bottom: 8px; font-size: 14px;">Importar Banco</h4>';
-                html += '<p style="color: #6b7280; font-size: 13px; margin-bottom: 10px;">Restaure um backup .db ou pacote .zip (cria backup automático antes)</p>';
-                html += '<input type="file" id="restoreDbInput" accept=".db,.zip" style="display: none;" onchange="restoreDatabase(event)">';
-                html += '<button class="btn btn-secondary" onclick="document.getElementById(\'restoreDbInput\').click()"><i class="fas fa-upload"></i> Importar Banco</button>';
-                html += '</div>';
-                html += '</div></div>';
-
-                html += '<div id="clientExportModal" class="modal" onclick="if(event.target===this)closeClientExportModal()">';
-                html += '<div class="modal-content" style="max-width:720px;">';
-                html += '<div class="modal-header">';
-                html += '<h2 class="modal-title">Exportar Base de Clientes</h2>';
-                html += '<button class="modal-close" onclick="closeClientExportModal()">&#215;</button>';
-                html += '</div>';
-                html += '<div class="modal-body">';
-                html += '<p style="color:#4b5563; margin-bottom:14px;">Selecione os campos do cadastro de contatos que deseja exportar.</p>';
-                html += '<div style="display:flex; gap:10px; margin-bottom:12px;">';
-                html += '<button type="button" class="btn btn-secondary" style="padding:8px 12px;" onclick="clientExportSelectAll(true)">Selecionar Todos</button>';
-                html += '<button type="button" class="btn btn-secondary" style="padding:8px 12px;" onclick="clientExportSelectAll(false)">Limpar Seleção</button>';
-                html += '</div>';
-                html += '<div id="clientExportFields" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; max-height:320px; overflow:auto; border:1px solid #e5e7eb; border-radius:10px; padding:12px;"></div>';
-                html += '</div>';
-                html += '<div class="modal-footer">';
-                html += '<button type="button" class="btn btn-secondary" onclick="closeClientExportModal()">Cancelar</button>';
-                html += '<button type="button" class="btn btn-primary" id="clientExportConfirmBtn" onclick="confirmClientExport()"><i class="fas fa-download"></i> Exportar CSV</button>';
-                html += '</div>';
-                html += '</div></div>';
-
-                document.getElementById('reportContent').innerHTML = html;
+                document.getElementById('reportsRelationshipContent').innerHTML = html;
                 toggleRelationReportPeriod();
             } catch (error) {
-                showError('Erro ao carregar report');
+                showError('Erro ao carregar reports');
             }
         }
 
