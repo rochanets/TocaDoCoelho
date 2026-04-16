@@ -2230,43 +2230,45 @@
                 <h1>Reports</h1>
                 <p>Relatórios executivos e ferramentas de análise comercial</p>
             </div>
-            <div style="display:flex; flex-direction:column; gap:20px;">
-                <!-- Preparar Reunião -->
-                <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
-                    <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
-                    <p style="margin-bottom:16px; color:#4b5563; font-size:13px;">Cole o texto do perfil LinkedIn e gere um resumo executivo estruturado para sua reunião.</p>
-                    <div style="display:flex; flex-direction:column; gap:14px;">
-                        <div class="form-group" style="margin:0;">
-                            <label style="font-weight:600; font-size:13px;">URL do Perfil LinkedIn</label>
-                            <input type="url" id="atLinkedinUrl" placeholder="https://www.linkedin.com/in/nome-da-pessoa"
-                                style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
-                            <span style="font-size:11px; color:#9ca3af;"><i class="fas fa-info-circle"></i> O LinkedIn bloqueia scraping — se o resumo ficar genérico, cole o texto abaixo.</span>
-                        </div>
-                        <div class="form-group" style="margin:0;">
-                            <label style="font-weight:600; font-size:13px;">Texto do Perfil <span style="font-weight:400; color:#9ca3af;">(cole o conteúdo copiado do LinkedIn)</span></label>
-                            <textarea id="atLinkedinProfileText" rows="7" placeholder="Cole aqui o texto do perfil: nome, cargo, experiências, formação, habilidades..."
-                                style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
-                        </div>
-                        <div class="form-group" style="margin:0;">
-                            <label style="font-weight:600; font-size:13px;">Contexto da Reunião <span style="font-weight:400; color:#9ca3af;">(opcional)</span></label>
-                            <input type="text" id="atLinkedinMeetingContext" placeholder="Ex: apresentar proposta de consultoria de TI, renovar contrato, primeiro contato..."
-                                style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
-                        </div>
-                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                            <button class="btn btn-auto-mapping" onclick="gerarResumoLinkedIn()" id="atLinkedinSummarizeBtn">
-                                <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
-                            </button>
-                            <button class="btn btn-auto-mapping" onclick="importarPerfilLinkedIn()" id="atLinkedinImportBtn" title="Importa perfil capturado pela extensão do Chrome/Firefox">
-                                <i class="fab fa-linkedin" style="margin-right:5px;"></i> Importar da Extensão
-                            </button>
-                            <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()" title="Como usar a extensão no LinkedIn">
-                                <i class="fas fa-question-circle"></i> Como usar
-                            </button>
-                        </div>
-                        <div id="atLinkedinResultArea"></div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+                <button id="reportsBtn_preparar-reuniao" class="btn btn-secondary" onclick="toggleReportsPanel('preparar-reuniao')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
+                <button id="reportsBtn_relationship-report" class="btn btn-secondary" onclick="toggleReportsPanel('relationship-report')"><i class="fas fa-chart-line" style="margin-right:5px;"></i> Relationship Report</button>
+            </div>
+            <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
+                <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
+                <p style="margin-bottom:16px; color:#4b5563; font-size:13px;">Cole o texto do perfil LinkedIn e gere um resumo executivo estruturado para sua reunião.</p>
+                <div style="display:flex; flex-direction:column; gap:14px;">
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">URL do Perfil LinkedIn</label>
+                        <input type="url" id="atLinkedinUrl" placeholder="https://www.linkedin.com/in/nome-da-pessoa"
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+                        <span style="font-size:11px; color:#9ca3af;"><i class="fas fa-info-circle"></i> O LinkedIn bloqueia scraping — se o resumo ficar genérico, cole o texto abaixo.</span>
                     </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">Texto do Perfil <span style="font-weight:400; color:#9ca3af;">(cole o conteúdo copiado do LinkedIn)</span></label>
+                        <textarea id="atLinkedinProfileText" rows="7" placeholder="Cole aqui o texto do perfil: nome, cargo, experiências, formação, habilidades..."
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">Contexto da Reunião <span style="font-weight:400; color:#9ca3af;">(opcional)</span></label>
+                        <input type="text" id="atLinkedinMeetingContext" placeholder="Ex: apresentar proposta de consultoria de TI, renovar contrato, primeiro contato..."
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                        <button class="btn btn-auto-mapping" onclick="gerarResumoLinkedIn()" id="atLinkedinSummarizeBtn">
+                            <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
+                        </button>
+                        <button class="btn btn-auto-mapping" onclick="importarPerfilLinkedIn()" id="atLinkedinImportBtn" title="Importa perfil capturado pela extensão do Chrome/Firefox">
+                            <i class="fab fa-linkedin" style="margin-right:5px;"></i> Importar da Extensão
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()" title="Como usar a extensão no LinkedIn">
+                            <i class="fas fa-question-circle"></i> Como usar
+                        </button>
+                    </div>
+                    <div id="atLinkedinResultArea"></div>
                 </div>
-                <!-- Relationship Report -->
+            </div>
+            <div id="reportsPanel_relationship-report" style="display:none;">
                 <div id="reportsRelationshipContent"></div>
             </div>
         </div>
@@ -3758,6 +3760,41 @@
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
                 'mala-direta': 'autoTocaBtn_mala-direta'
+            };
+            const targetId = panels[key];
+            if (!targetId) return;
+            const target = document.getElementById(targetId);
+            if (!target) return;
+            const isOpening = target.style.display === 'none';
+            // Fecha todos os painéis
+            Object.entries(panels).forEach(([panelKey, id]) => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+                const btn = document.getElementById(buttons[panelKey]);
+                if (btn) {
+                    btn.classList.remove('btn-auto-mapping');
+                    btn.classList.add('btn-secondary');
+                }
+            });
+            // Abre o selecionado (toggle)
+            if (isOpening) {
+                target.style.display = 'block';
+                const activeBtn = document.getElementById(buttons[key]);
+                if (activeBtn) {
+                    activeBtn.classList.remove('btn-secondary');
+                    activeBtn.classList.add('btn-auto-mapping');
+                }
+            }
+        }
+
+        function toggleReportsPanel(key) {
+            const panels = {
+                'preparar-reuniao': 'reportsPanel_preparar-reuniao',
+                'relationship-report': 'reportsPanel_relationship-report'
+            };
+            const buttons = {
+                'preparar-reuniao': 'reportsBtn_preparar-reuniao',
+                'relationship-report': 'reportsBtn_relationship-report'
             };
             const targetId = panels[key];
             if (!targetId) return;
