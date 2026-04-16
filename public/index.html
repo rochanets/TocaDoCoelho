@@ -10518,28 +10518,46 @@
         function openNewOfferModal() {
             closePortfolioModal('portfolioNewModal');
             const html = `
-                <div class="modal active" id="portfolioNewModal" onclick="if(event.target===this) closePortfolioModal('portfolioNewModal')">
+                <div class="modal active" id="portfolioNewModal" onclick="if(event.target===this&&!document.getElementById('portfolioProgressArea')?.offsetParent) closePortfolioModal('portfolioNewModal')">
                     <div class="modal-content" style="max-width:760px;">
                         <div class="modal-header">
                             <h2 class="modal-title">Nova Oferta</h2>
                             <button class="modal-close" onclick="closePortfolioModal('portfolioNewModal')">&#215;</button>
                         </div>
-                        <div class="form-group">
-                            <label>Cole o texto do material</label>
-                            <textarea id="portfolioRawInput" rows="8" placeholder="Cole aqui o texto base para análise..."></textarea>
+                        <div id="portfolioFormArea">
+                            <div class="form-group">
+                                <label>Cole o texto do material</label>
+                                <textarea id="portfolioRawInput" rows="8" placeholder="Cole aqui o texto base para análise..."></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>OU envie um PDF ou Imagem</label>
+                                <input id="portfolioUploadFile" type="file" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>OU envie um PDF ou Imagem</label>
-                            <input id="portfolioUploadFile" type="file" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif">
+                        <div id="portfolioProgressArea" style="display:none; padding:20px 4px 8px;">
+                            <div style="font-size:13px; color:var(--text-secondary,#888); margin-bottom:10px; text-align:center;" id="portfolioProgressStep">Iniciando análise...</div>
+                            <div style="background:var(--border-color,#e5e7eb); border-radius:99px; height:10px; overflow:hidden;">
+                                <div id="portfolioProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg,#7c3aed,#a855f7); border-radius:99px; transition:width 0.5s ease;"></div>
+                            </div>
+                            <div style="font-size:11px; color:var(--text-secondary,#aaa); text-align:right; margin-top:5px;" id="portfolioProgressPct">0%</div>
                         </div>
-                        <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button class="btn btn-secondary" onclick="closePortfolioModal('portfolioNewModal')">Cancelar</button>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+                            <button id="portfolioCancelBtn" class="btn btn-secondary" onclick="closePortfolioModal('portfolioNewModal')">Cancelar</button>
                             <button id="portfolioSubmitBtn" class="btn btn-auto-mapping btn-small" onclick="submitNewOffer()"><span class="ai-star-icon">✦</span> Analisar com IA</button>
                         </div>
                     </div>
                 </div>
             `;
             document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function _portfolioSetProgress(pct, step) {
+            const bar = document.getElementById('portfolioProgressBar');
+            const stepEl = document.getElementById('portfolioProgressStep');
+            const pctEl = document.getElementById('portfolioProgressPct');
+            if (bar) bar.style.width = pct + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         }
 
         async function submitNewOffer() {
@@ -10549,29 +10567,53 @@
                 showError('Informe um texto ou envie um PDF ou imagem.');
                 return;
             }
+
             const btn = document.getElementById('portfolioSubmitBtn');
-            const original = btn ? btn.innerHTML : '';
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<span class="ai-star-icon">✦</span> Analisando...';
-            }
+            const cancelBtn = document.getElementById('portfolioCancelBtn');
+            const formArea = document.getElementById('portfolioFormArea');
+            const progressArea = document.getElementById('portfolioProgressArea');
+
+            if (btn) { btn.disabled = true; btn.style.display = 'none'; }
+            if (cancelBtn) cancelBtn.style.display = 'none';
+            if (formArea) formArea.style.display = 'none';
+            if (progressArea) progressArea.style.display = 'block';
+            _portfolioSetProgress(10, 'Enviando arquivo...');
+
             try {
                 const fd = new FormData();
                 if (input) fd.append('raw_input', input);
                 if (uploadFile) fd.append('upload_file', uploadFile);
+
                 const response = await fetch(`${API_BASE}/portfolio/offers`, { method: 'POST', body: fd });
                 const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Erro ao criar oferta.');
+                if (!response.ok) throw new Error(payload.error || 'Erro ao iniciar análise.');
+
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
+
+                _portfolioSetProgress(15, 'Aguardando processamento...');
+
+                let offer = null;
+                for (let i = 0; i < 240; i++) {
+                    await new Promise(r => setTimeout(r, 800));
+                    const statusResp = await fetch(`${API_BASE}/portfolio/offers/tasks/${taskId}`);
+                    const status = await statusResp.json().catch(() => ({}));
+                    _portfolioSetProgress(status.progress || 15, status.step || 'Processando...');
+                    if (status.status === 'done') { offer = status.result; break; }
+                    if (status.status === 'error') throw new Error(status.error || 'Erro durante processamento.');
+                }
+                if (!offer) throw new Error('Tempo limite de processamento excedido. Tente novamente.');
+
                 closePortfolioModal('portfolioNewModal');
                 showSuccess('Oferta criada com sucesso.');
                 await loadPortfolio();
+                return;
             } catch (error) {
                 showError(error.message || 'Erro ao analisar material com IA.');
-            } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = original;
-                }
+                if (btn) { btn.disabled = false; btn.style.display = ''; }
+                if (cancelBtn) cancelBtn.style.display = '';
+                if (formArea) formArea.style.display = '';
+                if (progressArea) progressArea.style.display = 'none';
             }
         }
 

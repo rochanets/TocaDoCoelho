@@ -10450,6 +10450,97 @@ def _portfolio_generate_offer_from_llm(raw_input, image_data=None, image_mime=No
     return None, 'llm_invalid_response'
 
 
+_portfolio_tasks = {}
+_portfolio_tasks_lock = threading.Lock()
+
+
+def _portfolio_task_set(task_id, update):
+    with _portfolio_tasks_lock:
+        if task_id not in _portfolio_tasks:
+            _portfolio_tasks[task_id] = {}
+        _portfolio_tasks[task_id].update(update)
+
+
+def _portfolio_task_get(task_id):
+    with _portfolio_tasks_lock:
+        return dict(_portfolio_tasks.get(task_id) or {})
+
+
+def _portfolio_task_cleanup(task_id, delay=300):
+    def _do():
+        time.sleep(delay)
+        with _portfolio_tasks_lock:
+            _portfolio_tasks.pop(task_id, None)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, filename):
+    try:
+        raw_input = input_text
+        image_data, image_mime = None, None
+
+        if file_bytes and filename:
+            fname = filename.lower()
+            mime = (file_mime or '').lower()
+            if 'pdf' in mime or fname.endswith('.pdf'):
+                _portfolio_task_set(task_id, {'step': 'Extraindo texto do PDF...', 'progress': 30})
+                if not PDFPLUMBER_AVAILABLE:
+                    raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
+                text_parts = []
+                with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+                    for page in (pdf.pages or []):
+                        try:
+                            text_parts.append(page.extract_text() or '')
+                        except Exception:
+                            continue
+                pdf_text = '\n'.join(p.strip() for p in text_parts if p and p.strip()).strip()
+                raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+            elif mime.startswith('image/') or fname.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                _portfolio_task_set(task_id, {'step': 'Preparando imagem...', 'progress': 30})
+                image_mime = mime.split(';')[0].strip() or 'image/jpeg'
+                image_data = base64.b64encode(file_bytes).decode('utf-8')
+            else:
+                raise ValueError('Formato de arquivo não suportado. Envie um PDF ou imagem (JPG, PNG, WEBP).')
+
+        if not raw_input and not image_data:
+            raise ValueError('Informe um texto ou envie um PDF/imagem para análise.')
+
+        _portfolio_task_set(task_id, {'step': 'Analisando com IA...', 'progress': 50})
+        parsed, source = _portfolio_generate_offer_from_llm(raw_input, image_data=image_data, image_mime=image_mime)
+
+        if not parsed:
+            if source == 'sem_llm':
+                raise RuntimeError('Nenhum serviço de IA configurado (OpenRouter ou SAI).')
+            raise RuntimeError('A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.')
+
+        _portfolio_task_set(task_id, {'step': 'Salvando oferta...', 'progress': 88})
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+            (parsed['title'], parsed['summary'], raw_input or '')
+        )
+        offer_id = c.lastrowid
+        for idx, item in enumerate(parsed.get('items') or []):
+            c.execute(
+                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
+            )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if offer is None:
+            raise RuntimeError('Falha ao carregar oferta criada.')
+        offer['llm_source'] = source
+        _portfolio_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': offer})
+    except Exception as e:
+        logger.exception(f'[Portfolio][Task:{task_id}] Erro: {e}')
+        _portfolio_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _portfolio_task_cleanup(task_id)
+
+
 def _portfolio_fetch_offer(c, offer_id):
     c.execute('SELECT * FROM portfolio_offers WHERE id = ?', (offer_id,))
     offer = dict_from_row(c.fetchone())
@@ -10482,54 +10573,35 @@ def create_portfolio_offer():
     try:
         input_text = (request.form.get('raw_input') or '').strip()
         file_obj = request.files.get('upload_file')
-        raw_input = input_text
-        image_data, image_mime = None, None
 
+        file_bytes, file_mime, filename = None, None, None
         if file_obj and file_obj.filename:
-            fname = file_obj.filename.lower()
-            mime = (file_obj.mimetype or '').lower()
-            if 'pdf' in mime or fname.endswith('.pdf'):
-                pdf_text = _portfolio_extract_pdf_text(file_obj)
-                raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
-            elif mime.startswith('image/') or fname.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
-                image_data, image_mime = _portfolio_read_image_data(file_obj)
-            else:
-                return jsonify({'error': 'Formato de arquivo não suportado. Envie um PDF ou imagem (JPG, PNG, WEBP).'}), 400
+            file_bytes = file_obj.read()
+            file_mime = file_obj.mimetype or ''
+            filename = file_obj.filename
 
-        if not raw_input and not image_data:
+        if not input_text and not file_bytes:
             return jsonify({'error': 'Informe um texto ou envie um PDF/imagem para análise.'}), 400
 
-        parsed, source = _portfolio_generate_offer_from_llm(raw_input, image_data=image_data, image_mime=image_mime)
-        if not parsed:
-            if source == 'sem_llm':
-                return jsonify({'error': 'Nenhum serviço de IA configurado (OpenRouter ou SAI).'}), 503
-            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}), 502
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-            (parsed['title'], parsed['summary'], raw_input)
-        )
-        offer_id = c.lastrowid
-        for idx, item in enumerate(parsed.get('items') or []):
-            c.execute(
-                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
-                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
-            )
-        conn.commit()
-        offer = _portfolio_fetch_offer(c, offer_id)
-        conn.close()
-        if offer is None:
-            return jsonify({'error': 'Falha ao carregar oferta criada.'}), 500
-        offer['llm_source'] = source
-        return jsonify(offer), 201
-    except RuntimeError as e:
-        return jsonify({'error': str(e)}), 400
+        task_id = uuid.uuid4().hex
+        _portfolio_task_set(task_id, {'status': 'processing', 'step': 'Iniciando análise...', 'progress': 10})
+        threading.Thread(
+            target=_portfolio_process_offer_async,
+            args=(task_id, input_text, file_bytes, file_mime, filename),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao criar oferta: {e}')
+        logger.exception(f'[Portfolio] Erro ao iniciar tarefa: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/tasks/<task_id>', methods=['GET'])
+def get_portfolio_task_status(task_id):
+    task = _portfolio_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
+    return jsonify(task)
 
 
 @app.route('/api/portfolio/offers/<int:offer_id>', methods=['PUT'])
