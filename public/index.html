@@ -10878,35 +10878,46 @@
             }).join('');
         }
 
+        function _iataParticipantNames(ata, record) {
+            const raw = Array.isArray(ata.participants) ? ata.participants : (Array.isArray(record.participants) ? record.participants : []);
+            return raw.map(p => typeof p === 'object' && p !== null ? (p.name || '') : String(p || '')).filter(Boolean);
+        }
+
+        function _iataDeadline(s) {
+            const d = s.deadline;
+            return (!d || d === 'null' || d === 'none') ? null : d;
+        }
+
         function _renderIAtaExpanded(record) {
             const ata = record.ata || {};
             const insights = record.insights || {};
             const insightsList = Array.isArray(insights.insights) ? insights.insights : [];
-            const participants = Array.isArray(record.participants) ? record.participants : [];
             const nextSteps = Array.isArray(ata.next_steps) ? ata.next_steps : [];
             const decisions = Array.isArray(ata.decisions) ? ata.decisions : [];
 
             return `
                 <div style="margin-top:12px; padding-top:12px; border-top:1px solid #e5e7eb;">
                     ${record.topic ? `<p style="margin:0 0 8px; font-size:13px;"><strong style="color:#065f46;">Tema:</strong> ${escapeHtml(record.topic)}</p>` : ''}
-                    ${ata.summary ? `<p style="margin:0 0 8px; font-size:13px;"><strong style="color:#065f46;">Resumo:</strong> ${escapeHtml(ata.summary)}</p>` : ''}
+                    ${ata.summary ? `<p style="margin:0 0 10px; font-size:13px; line-height:1.6; color:#374151;"><strong style="color:#065f46;">Resumo:</strong> ${escapeHtml(ata.summary)}</p>` : ''}
                     ${decisions.length ? `
                         <div style="margin-bottom:8px;">
                             <strong style="color:#065f46; font-size:13px;">Decisões:</strong>
                             <ul style="margin:4px 0 0; padding-left:18px; font-size:12px; color:#374151;">
-                                ${decisions.map(d => `<li>${escapeHtml(d)}</li>`).join('')}
+                                ${decisions.map(d => `<li style="margin-bottom:3px;">${escapeHtml(d)}</li>`).join('')}
                             </ul>
                         </div>` : ''}
                     ${nextSteps.length ? `
                         <div style="margin-bottom:10px;">
                             <strong style="color:#065f46; font-size:13px;">Próximos Passos:</strong>
                             <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
-                                ${nextSteps.map(s => `
+                                ${nextSteps.map(s => {
+                                    const dl = _iataDeadline(s);
+                                    return `
                                     <div style="display:flex; gap:8px; align-items:flex-start; font-size:12px; padding:4px 8px; background:#f0fdf4; border-radius:6px; border-left:3px solid #10b981;">
                                         <div style="flex:1;"><strong>${escapeHtml(s.responsible || 'A definir')}</strong>: ${escapeHtml(s.action || '')}</div>
-                                        ${s.deadline ? `<div style="color:#6b7280; flex-shrink:0;">${escapeHtml(s.deadline)}</div>` : ''}
-                                    </div>
-                                `).join('')}
+                                        ${dl ? `<div style="color:#6b7280; flex-shrink:0;">${escapeHtml(dl)}</div>` : ''}
+                                    </div>`;
+                                }).join('')}
                             </div>
                         </div>` : ''}
                     ${insightsList.length ? `
@@ -10954,7 +10965,8 @@
             const ata = record.ata || {};
             const insights = record.insights || {};
             const insightsList = Array.isArray(insights.insights) ? insights.insights : [];
-            const participants = Array.isArray(ata.participants) ? ata.participants : (Array.isArray(record.participants) ? record.participants : []);
+            const participantNames = _iataParticipantNames(ata, record);
+            const participantObjs = Array.isArray(ata.participants) ? ata.participants : participantNames.map(n => ({name: n, role: ''}));
             const nextSteps = Array.isArray(ata.next_steps) ? ata.next_steps : [];
             const decisions = Array.isArray(ata.decisions) ? ata.decisions : [];
             const keyPoints = Array.isArray(ata.key_points) ? ata.key_points : [];
@@ -10962,13 +10974,14 @@
 
             const html = `
                 <div class="modal active" id="${modalId}" onclick="if(event.target===this) this.remove()">
-                    <div class="modal-content" style="max-width:820px; max-height:90vh; overflow-y:auto;">
+                    <div class="modal-content" style="max-width:840px; max-height:90vh; overflow-y:auto;">
                         <div class="modal-header" style="background:linear-gradient(135deg,#065f46,#10b981); border-radius:12px 12px 0 0; margin:-20px -20px 20px; padding:20px;">
                             <div style="flex:1;">
-                                <h2 class="modal-title" style="color:#fff; margin:0 0 4px;">${escapeHtml(ata.title || record.title || 'Ata de Reunião')}</h2>
-                                <div style="display:flex; gap:16px; font-size:13px; color:rgba(255,255,255,.85);">
+                                <h2 class="modal-title" style="color:#fff; margin:0 0 6px;">${escapeHtml(ata.title || record.title || 'Ata de Reunião')}</h2>
+                                <div style="display:flex; gap:16px; font-size:13px; color:rgba(255,255,255,.85); flex-wrap:wrap;">
                                     ${ata.meeting_date ? `<span><i class="fas fa-calendar"></i> ${escapeHtml(ata.meeting_date)}</span>` : ''}
                                     ${ata.meeting_time ? `<span><i class="fas fa-clock"></i> ${escapeHtml(ata.meeting_time)}</span>` : ''}
+                                    ${ata.location ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(ata.location)}</span>` : ''}
                                 </div>
                             </div>
                             <button class="modal-close" onclick="document.getElementById('${modalId}').remove()" style="color:#fff;">&#215;</button>
@@ -10980,42 +10993,57 @@
                                 <div style="font-weight:600; color:#065f46; font-size:15px;">${escapeHtml(ata.topic)}</div>
                             </div>` : ''}
 
-                        ${participants.length ? `
+                        ${participantObjs.length ? `
                             <div style="margin-bottom:16px;">
                                 <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Participantes</div>
                                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                                    ${participants.map(p => `<span style="padding:3px 10px; background:#e0f2fe; color:#0369a1; border-radius:20px; font-size:12px; font-weight:500;">${escapeHtml(p)}</span>`).join('')}
+                                    ${participantObjs.map(p => {
+                                        const name = typeof p === 'object' ? (p.name || '') : String(p || '');
+                                        const role = typeof p === 'object' ? (p.role || '') : '';
+                                        return `<span style="padding:4px 12px; background:#e0f2fe; color:#0369a1; border-radius:20px; font-size:12px; font-weight:500;" title="${escapeHtml(role)}">${escapeHtml(name)}${role ? ' <span style="opacity:.7;font-weight:400;">· ' + escapeHtml(role) + '</span>' : ''}</span>`;
+                                    }).join('')}
                                 </div>
+                            </div>` : ''}
+
+                        ${ata.objective ? `
+                            <div style="margin-bottom:16px; padding:12px 14px; background:#f0fdf4; border-radius:8px;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:6px; font-weight:600;">Objetivo</div>
+                                <p style="margin:0; color:#374151; line-height:1.6; font-size:14px;">${escapeHtml(ata.objective)}</p>
                             </div>` : ''}
 
                         ${ata.summary ? `
                             <div style="margin-bottom:16px; padding:12px 14px; background:#f8fafc; border-radius:8px;">
                                 <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:6px; font-weight:600;">Resumo Executivo</div>
-                                <p style="margin:0; color:#374151; line-height:1.6;">${escapeHtml(ata.summary)}</p>
+                                <p style="margin:0; color:#374151; line-height:1.7; font-size:14px;">${escapeHtml(ata.summary)}</p>
                             </div>` : ''}
 
                         ${agenda.length ? `
                             <div style="margin-bottom:16px;">
                                 <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Pauta</div>
-                                <ol style="margin:0; padding-left:20px; color:#374151; font-size:14px; line-height:1.8;">
+                                <ol style="margin:0; padding-left:20px; color:#374151; font-size:14px; line-height:2;">
                                     ${agenda.map(a => `<li>${escapeHtml(a)}</li>`).join('')}
                                 </ol>
                             </div>` : ''}
 
                         ${keyPoints.length ? `
                             <div style="margin-bottom:16px;">
-                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Pontos Discutidos</div>
-                                <ul style="margin:0; padding-left:20px; color:#374151; font-size:14px; line-height:1.8;">
-                                    ${keyPoints.map(k => `<li>${escapeHtml(k)}</li>`).join('')}
-                                </ul>
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:10px; font-weight:600;">Desenvolvimento / Pontos Discutidos</div>
+                                <div style="display:flex; flex-direction:column; gap:8px;">
+                                    ${keyPoints.map((k, i) => `
+                                        <div style="padding:10px 14px; background:#f8fafc; border-radius:8px; border-left:3px solid #10b981;">
+                                            <div style="font-size:11px; color:#6b7280; margin-bottom:4px; font-weight:600;">Ponto ${i+1}</div>
+                                            <p style="margin:0; color:#374151; line-height:1.7; font-size:14px;">${escapeHtml(k)}</p>
+                                        </div>
+                                    `).join('')}
+                                </div>
                             </div>` : ''}
 
                         ${decisions.length ? `
                             <div style="margin-bottom:16px;">
                                 <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Decisões Tomadas</div>
                                 ${decisions.map(d => `
-                                    <div style="display:flex; gap:8px; align-items:flex-start; padding:6px 10px; background:#f0fdf4; border-radius:6px; border-left:3px solid #10b981; margin-bottom:4px; font-size:13px; color:#374151;">
-                                        <i class="fas fa-check" style="color:#10b981; margin-top:2px; flex-shrink:0;"></i>
+                                    <div style="display:flex; gap:8px; align-items:flex-start; padding:8px 12px; background:#f0fdf4; border-radius:6px; border-left:3px solid #10b981; margin-bottom:5px; font-size:13px; color:#374151; line-height:1.5;">
+                                        <i class="fas fa-check" style="color:#10b981; margin-top:3px; flex-shrink:0;"></i>
                                         <span>${escapeHtml(d)}</span>
                                     </div>
                                 `).join('')}
@@ -11028,17 +11056,25 @@
                                     <table>
                                         <thead><tr><th>Ação</th><th>Responsável</th><th>Prazo</th><th>Status</th></tr></thead>
                                         <tbody>
-                                            ${nextSteps.map(s => `
+                                            ${nextSteps.map(s => {
+                                                const dl = _iataDeadline(s);
+                                                return `
                                                 <tr>
-                                                    <td>${escapeHtml(s.action || '')}</td>
+                                                    <td style="line-height:1.5;">${escapeHtml(s.action || '')}</td>
                                                     <td><strong>${escapeHtml(s.responsible || 'A definir')}</strong></td>
-                                                    <td>${escapeHtml(s.deadline || '—')}</td>
+                                                    <td>${escapeHtml(dl || '—')}</td>
                                                     <td><span style="padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; background:${s.status === 'concluído' ? '#d1fae5' : '#fef3c7'}; color:${s.status === 'concluído' ? '#065f46' : '#92400e'};">${escapeHtml(s.status || 'pendente')}</span></td>
-                                                </tr>
-                                            `).join('')}
+                                                </tr>`;
+                                            }).join('')}
                                         </tbody>
                                     </table>
                                 </div>
+                            </div>` : ''}
+
+                        ${ata.observations ? `
+                            <div style="margin-bottom:16px; padding:12px 14px; background:#fffbeb; border-radius:8px; border-left:4px solid #f59e0b;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:6px; font-weight:600;">Observações</div>
+                                <p style="margin:0; color:#374151; line-height:1.6; font-size:14px;">${escapeHtml(ata.observations)}</p>
                             </div>` : ''}
 
                         ${insightsList.length ? `
@@ -11071,13 +11107,105 @@
                                     </div>` : ''}
                             </div>` : ''}
 
-                        <div style="display:flex; justify-content:flex-end; margin-top:20px;">
+                        <div style="display:flex; justify-content:space-between; margin-top:20px; gap:8px; flex-wrap:wrap;">
+                            <button id="iataCopyBtn_${record.id}" class="btn btn-secondary btn-small" onclick="_copyIAtaToClipboard(${record.id})">
+                                <i class="fas fa-copy"></i> Copiar Ata
+                            </button>
                             <button class="btn btn-secondary" onclick="document.getElementById('${modalId}').remove()">Fechar</button>
                         </div>
                     </div>
                 </div>
             `;
             document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        async function _copyIAtaToClipboard(rid) {
+            const btn = document.getElementById(`iataCopyBtn_${rid}`);
+            let record = iataRecords.find(r => r.id === rid) || null;
+            if (!record) {
+                try {
+                    const resp = await fetch(`/api/portfolio/iata/${rid}`);
+                    record = await resp.json();
+                } catch(e) { showError('Erro ao copiar ata.'); return; }
+            }
+            const ata = record.ata || {};
+            const lines = [];
+            lines.push(`ATA DE REUNIÃO`);
+            lines.push(`=`.repeat(50));
+            if (ata.title) lines.push(`Título: ${ata.title}`);
+            const parts = [ata.meeting_date, ata.meeting_time, ata.location].filter(Boolean);
+            if (parts.length) lines.push(`Data/Hora/Local: ${parts.join(' | ')}`);
+            if (ata.topic) lines.push(`Assunto: ${ata.topic}`);
+            lines.push('');
+            const participantNames = _iataParticipantNames(ata, record);
+            if (participantNames.length) {
+                lines.push(`PARTICIPANTES`);
+                lines.push(`-`.repeat(30));
+                participantNames.forEach(p => lines.push(`• ${p}`));
+                lines.push('');
+            }
+            if (ata.objective) {
+                lines.push(`OBJETIVO`);
+                lines.push(`-`.repeat(30));
+                lines.push(ata.objective);
+                lines.push('');
+            }
+            if (ata.summary) {
+                lines.push(`RESUMO`);
+                lines.push(`-`.repeat(30));
+                lines.push(ata.summary);
+                lines.push('');
+            }
+            if ((ata.agenda || []).length) {
+                lines.push(`PAUTA`);
+                lines.push(`-`.repeat(30));
+                (ata.agenda || []).forEach((item, i) => lines.push(`${i+1}. ${item}`));
+                lines.push('');
+            }
+            if ((ata.key_points || []).length) {
+                lines.push(`PONTOS DISCUTIDOS`);
+                lines.push(`-`.repeat(30));
+                (ata.key_points || []).forEach((kp, i) => {
+                    const title = typeof kp === 'object' ? (kp.title || '') : '';
+                    const detail = typeof kp === 'object' ? (kp.detail || '') : String(kp);
+                    lines.push(`${i+1}. ${title}`);
+                    if (detail) lines.push(`   ${detail}`);
+                });
+                lines.push('');
+            }
+            if ((ata.decisions || []).length) {
+                lines.push(`DECISÕES`);
+                lines.push(`-`.repeat(30));
+                (ata.decisions || []).forEach((d, i) => lines.push(`${i+1}. ${d}`));
+                lines.push('');
+            }
+            if ((ata.next_steps || []).length) {
+                lines.push(`PRÓXIMOS PASSOS`);
+                lines.push(`-`.repeat(30));
+                (ata.next_steps || []).forEach((ns, i) => {
+                    const action = typeof ns === 'object' ? (ns.action || ns.task || '') : String(ns);
+                    const resp = typeof ns === 'object' ? (ns.responsible || '') : '';
+                    const dl = typeof ns === 'object' ? _iataDeadline(ns.deadline) : null;
+                    let line = `${i+1}. ${action}`;
+                    if (resp) line += ` [${resp}]`;
+                    if (dl) line += ` — Prazo: ${dl}`;
+                    lines.push(line);
+                });
+                lines.push('');
+            }
+            if (ata.observations) {
+                lines.push(`OBSERVAÇÕES`);
+                lines.push(`-`.repeat(30));
+                lines.push(ata.observations);
+                lines.push('');
+            }
+            const text = lines.join('\n');
+            try {
+                await navigator.clipboard.writeText(text);
+                if (btn) { btn.innerHTML = '<i class="fas fa-check"></i> Copiado!'; btn.disabled = true; setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i> Copiar Ata'; btn.disabled = false; }, 2500); }
+            } catch(e) {
+                showError('Não foi possível copiar. Verifique permissões do navegador.');
+            }
         }
 
         function openIAtaModal() {

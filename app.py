@@ -10867,12 +10867,31 @@ def _iata_parse_llm_ata(raw):
     title = (parsed.get('title') or '').strip()
     if not title:
         return None
+
+    def _clean_null(val):
+        v = str(val or '').strip()
+        return None if not v or v.lower() in ('null', 'none', 'n/a', '-') else v
+
+    def _parse_participants(raw_list):
+        result = []
+        for p in (raw_list or []):
+            if isinstance(p, dict):
+                name = str(p.get('name') or p.get('nome') or '').strip()
+                role = str(p.get('role') or p.get('cargo') or p.get('empresa') or '').strip()
+                if name:
+                    result.append({'name': name, 'role': role or ''})
+            elif p and str(p).strip():
+                result.append({'name': str(p).strip(), 'role': ''})
+        return result
+
     return {
         'title': title,
-        'meeting_date': (parsed.get('meeting_date') or '').strip() or None,
-        'meeting_time': (parsed.get('meeting_time') or '').strip() or None,
+        'meeting_date': _clean_null(parsed.get('meeting_date')),
+        'meeting_time': _clean_null(parsed.get('meeting_time')),
+        'location': _clean_null(parsed.get('location')),
         'topic': (parsed.get('topic') or '').strip() or title,
-        'participants': [str(p).strip() for p in (parsed.get('participants') or []) if str(p).strip()],
+        'participants': _parse_participants(parsed.get('participants')),
+        'objective': (parsed.get('objective') or '').strip(),
         'summary': (parsed.get('summary') or '').strip(),
         'agenda': [str(a).strip() for a in (parsed.get('agenda') or []) if str(a).strip()],
         'key_points': [str(k).strip() for k in (parsed.get('key_points') or []) if str(k).strip()],
@@ -10881,11 +10900,12 @@ def _iata_parse_llm_ata(raw):
             {
                 'action': str(s.get('action') or '').strip(),
                 'responsible': str(s.get('responsible') or 'A definir').strip(),
-                'deadline': str(s.get('deadline') or '').strip() or None,
+                'deadline': _clean_null(s.get('deadline')),
                 'status': str(s.get('status') or 'pendente').strip()
             }
             for s in (parsed.get('next_steps') or []) if isinstance(s, dict)
-        ]
+        ],
+        'observations': _clean_null(parsed.get('observations'))
     }
 
 
@@ -10975,17 +10995,31 @@ def _iata_call_llm(system_msg, user_msg, log_tag):
 def _iata_generate_ata(raw_text):
     prompt = (
         "Você é um especialista em documentação corporativa. "
-        "Analise o texto de reunião abaixo e gere uma ata completa em português (Brasil). "
+        "Você é um especialista em documentação corporativa. "
+        "Analise o texto de reunião e gere uma ATA DE REUNIÃO COMPLETA E DETALHADA em português (Brasil). "
+        "A ata deve ser rica em detalhes, capturando o contexto, as discussões e os argumentos apresentados. "
         "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem introdução:\n"
-        '{"title":"Título da reunião","meeting_date":"DD/MM/AAAA ou null","meeting_time":"HH:MM ou null",'
-        '"topic":"Tema principal","participants":["Nome 1","Nome 2"],'
-        '"summary":"Resumo executivo de 2-3 frases",'
-        '"agenda":["Item de pauta 1"],'
-        '"key_points":["Ponto discutido 1"],'
-        '"decisions":["Decisão tomada 1"],'
-        '"next_steps":[{"action":"Ação","responsible":"Nome do responsável","deadline":"DD/MM/AAAA ou null","status":"pendente"}]}\n'
-        "Regras: liste todos os participantes mencionados; next_steps deve incluir TODAS as pendências com responsáveis; "
-        "se não houver responsável claro use 'A definir'; data/hora null se não explícita.\n\n"
+        '{"title":"Título formal da reunião",'
+        '"meeting_date":"DD/MM/AAAA ou null se não mencionada",'
+        '"meeting_time":"HH:MM ou null se não mencionada",'
+        '"location":"Local ou plataforma (ex: Microsoft Teams) ou null",'
+        '"topic":"Tema central da reunião em uma frase",'
+        '"participants":[{"name":"Nome Completo","role":"Cargo ou empresa se mencionado"}],'
+        '"objective":"Objetivo principal da reunião em 2-3 frases completas",'
+        '"summary":"Resumo executivo DETALHADO da reunião com 5-8 frases cobrindo contexto, discussões principais e resultados",'
+        '"agenda":["Item de pauta 1 — descrição breve","Item de pauta 2 — descrição breve"],'
+        '"key_points":["Ponto discutido em detalhe — inclua contexto, argumentos e posições dos participantes. Cada item deve ter 2-4 frases.","Segundo ponto com o mesmo nível de detalhe"],'
+        '"decisions":["Decisão formal tomada com contexto — quem decidiu e por quê quando relevante"],'
+        '"next_steps":[{"action":"Descrição detalhada da ação a ser realizada","responsible":"Nome completo do responsável","deadline":"DD/MM/AAAA ou null","status":"pendente"}],'
+        '"observations":"Observações adicionais relevantes, contexto extra ou informações complementares mencionadas durante a reunião. Use null se não houver."}\n'
+        "REGRAS OBRIGATÓRIAS:\n"
+        "- Liste TODOS os participantes mencionados com nome e cargo/empresa quando disponível;\n"
+        "- key_points: cada item deve ser um parágrafo detalhado (2-4 frases), não apenas uma frase curta;\n"
+        "- next_steps: inclua TODAS as pendências, ações e encaminhamentos com responsáveis identificados;\n"
+        "- Se não houver responsável claro para uma ação, use 'A definir';\n"
+        "- deadline: use formato DD/MM/AAAA quando mencionado, ou null (JSON null, não a string 'null');\n"
+        "- Não invente informações que não estejam no texto original;\n"
+        "- Preserve nomes próprios, empresas e termos técnicos como aparecem no texto.\n\n"
         f"TEXTO DA REUNIÃO:\n{raw_text[:30000]}"
     )
     raw, source = _iata_call_llm(
@@ -11117,7 +11151,7 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input):
                 ata_data.get('meeting_date'),
                 ata_data.get('meeting_time'),
                 ata_data.get('topic'),
-                json.dumps(ata_data.get('participants') or [], ensure_ascii=False),
+                json.dumps([p['name'] if isinstance(p, dict) else str(p) for p in (ata_data.get('participants') or [])], ensure_ascii=False),
                 json.dumps(ata_data, ensure_ascii=False),
                 json.dumps(insights_data, ensure_ascii=False),
                 raw_text[:50000]
