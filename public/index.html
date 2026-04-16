@@ -10529,8 +10529,8 @@
                             <textarea id="portfolioRawInput" rows="8" placeholder="Cole aqui o texto base para análise..."></textarea>
                         </div>
                         <div class="form-group">
-                            <label>OU envie um PDF</label>
-                            <input id="portfolioPdfFile" type="file" accept=".pdf,application/pdf">
+                            <label>OU envie um PDF ou Imagem</label>
+                            <input id="portfolioUploadFile" type="file" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif">
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px;">
                             <button class="btn btn-secondary" onclick="closePortfolioModal('portfolioNewModal')">Cancelar</button>
@@ -10544,9 +10544,9 @@
 
         async function submitNewOffer() {
             const input = (document.getElementById('portfolioRawInput')?.value || '').trim();
-            const pdfFile = document.getElementById('portfolioPdfFile')?.files?.[0] || null;
-            if (!input && !pdfFile) {
-                showError('Informe um texto ou envie um PDF.');
+            const uploadFile = document.getElementById('portfolioUploadFile')?.files?.[0] || null;
+            if (!input && !uploadFile) {
+                showError('Informe um texto ou envie um PDF ou imagem.');
                 return;
             }
             const btn = document.getElementById('portfolioSubmitBtn');
@@ -10558,7 +10558,7 @@
             try {
                 const fd = new FormData();
                 if (input) fd.append('raw_input', input);
-                if (pdfFile) fd.append('pdf_file', pdfFile);
+                if (uploadFile) fd.append('upload_file', uploadFile);
                 const response = await fetch(`${API_BASE}/portfolio/offers`, { method: 'POST', body: fd });
                 const payload = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(payload.error || 'Erro ao criar oferta.');
