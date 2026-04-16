@@ -10317,6 +10317,16 @@ def _portfolio_extract_pdf_text(file_storage):
     return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
 
 
+def _portfolio_read_image_data(file_storage):
+    if not file_storage:
+        return None, None
+    file_bytes = file_storage.read()
+    if not file_bytes:
+        return None, None
+    mime = (file_storage.mimetype or 'image/jpeg').split(';')[0].strip()
+    return base64.b64encode(file_bytes).decode('utf-8'), mime
+
+
 def _portfolio_parse_llm_raw(raw):
     def _try_parse_json(value):
         if not value:
@@ -10381,42 +10391,38 @@ def _portfolio_parse_llm_raw(raw):
     return {'title': title, 'summary': summary, 'items': items}
 
 
-def _portfolio_generate_offer_from_llm(raw_input):
-    llm_prompt = (
+def _portfolio_generate_offer_from_llm(raw_input, image_data=None, image_mime=None):
+    text_prompt = (
         "Você é um especialista em posicionamento comercial B2B. "
         "Analise o material abaixo e extraia um portfólio comercial em português (Brasil). "
         "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão: "
         '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
         '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}. '
         "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto; "
-        "use frases curtas e claras; não inclua markdown.\n\n"
-        f"MATERIAL:\n{raw_input[:30000]}"
+        "use frases curtas e claras; não inclua markdown."
     )
+    if raw_input:
+        text_prompt += f"\n\nMATERIAL:\n{raw_input[:30000]}"
 
-    raw = _sai_simple_prompt(llm_prompt)
-    source = 'SAI'
-    if raw is not None and not str(raw).strip():
-        raw = None
-    if raw is not None:
-        parsed = _portfolio_parse_llm_raw(raw)
-        if parsed:
-            return parsed, source
-        logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta. Tentando OpenRouter.')
-
-    if raw is None:
-        or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-        if not or_key:
-            return None, 'sem_llm'
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
         or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
         model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
         site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
         app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
         try:
+            if image_data and image_mime:
+                user_content = [
+                    {'type': 'text', 'text': text_prompt},
+                    {'type': 'image_url', 'image_url': {'url': f'data:{image_mime};base64,{image_data}'}}
+                ]
+            else:
+                user_content = text_prompt
             or_payload = {
                 'model': model,
                 'messages': [
                     {'role': 'system', 'content': 'Você é um analista comercial. Responda SEMPRE e SOMENTE com JSON válido.'},
-                    {'role': 'user', 'content': llm_prompt}
+                    {'role': 'user', 'content': user_content}
                 ],
                 'temperature': 0.2
             }
@@ -10431,7 +10437,7 @@ def _portfolio_generate_offer_from_llm(raw_input):
                 },
                 method='POST'
             )
-            with urllib.request.urlopen(req, timeout=45) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
             choices = data.get('choices') or []
             raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
@@ -10439,13 +10445,113 @@ def _portfolio_generate_offer_from_llm(raw_input):
             parsed = _portfolio_parse_llm_raw(raw)
             if parsed:
                 return parsed, source
-            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta.')
-            return None, 'llm_invalid_response'
+            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta. Tentando SAI.')
         except Exception as e:
-            logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}')
-            return None, 'sem_llm'
+            logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}. Tentando SAI.')
 
+    if not image_data:
+        raw = _sai_simple_prompt(text_prompt)
+        source = 'SAI'
+        if raw and str(raw).strip():
+            parsed = _portfolio_parse_llm_raw(raw)
+            if parsed:
+                return parsed, source
+            logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta.')
+
+    if not or_key and not _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY'):
+        return None, 'sem_llm'
     return None, 'llm_invalid_response'
+
+
+_portfolio_tasks = {}
+_portfolio_tasks_lock = threading.Lock()
+
+
+def _portfolio_task_set(task_id, update):
+    with _portfolio_tasks_lock:
+        if task_id not in _portfolio_tasks:
+            _portfolio_tasks[task_id] = {}
+        _portfolio_tasks[task_id].update(update)
+
+
+def _portfolio_task_get(task_id):
+    with _portfolio_tasks_lock:
+        return dict(_portfolio_tasks.get(task_id) or {})
+
+
+def _portfolio_task_cleanup(task_id, delay=300):
+    def _do():
+        time.sleep(delay)
+        with _portfolio_tasks_lock:
+            _portfolio_tasks.pop(task_id, None)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, filename):
+    try:
+        raw_input = input_text
+        image_data, image_mime = None, None
+
+        if file_bytes and filename:
+            fname = filename.lower()
+            mime = (file_mime or '').lower()
+            if 'pdf' in mime or fname.endswith('.pdf'):
+                _portfolio_task_set(task_id, {'step': 'Extraindo texto do PDF...', 'progress': 30})
+                if not PDFPLUMBER_AVAILABLE:
+                    raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
+                text_parts = []
+                with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+                    for page in (pdf.pages or []):
+                        try:
+                            text_parts.append(page.extract_text() or '')
+                        except Exception:
+                            continue
+                pdf_text = '\n'.join(p.strip() for p in text_parts if p and p.strip()).strip()
+                raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+            elif mime.startswith('image/') or fname.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                _portfolio_task_set(task_id, {'step': 'Preparando imagem...', 'progress': 30})
+                image_mime = mime.split(';')[0].strip() or 'image/jpeg'
+                image_data = base64.b64encode(file_bytes).decode('utf-8')
+            else:
+                raise ValueError('Formato de arquivo não suportado. Envie um PDF ou imagem (JPG, PNG, WEBP).')
+
+        if not raw_input and not image_data:
+            raise ValueError('Informe um texto ou envie um PDF/imagem para análise.')
+
+        _portfolio_task_set(task_id, {'step': 'Analisando com IA...', 'progress': 50})
+        parsed, source = _portfolio_generate_offer_from_llm(raw_input, image_data=image_data, image_mime=image_mime)
+
+        if not parsed:
+            if source == 'sem_llm':
+                raise RuntimeError('Nenhum serviço de IA configurado (OpenRouter ou SAI).')
+            raise RuntimeError('A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.')
+
+        _portfolio_task_set(task_id, {'step': 'Salvando oferta...', 'progress': 88})
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+            (parsed['title'], parsed['summary'], raw_input or '')
+        )
+        offer_id = c.lastrowid
+        for idx, item in enumerate(parsed.get('items') or []):
+            c.execute(
+                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
+            )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if offer is None:
+            raise RuntimeError('Falha ao carregar oferta criada.')
+        offer['llm_source'] = source
+        _portfolio_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': offer})
+    except Exception as e:
+        logger.exception(f'[Portfolio][Task:{task_id}] Erro: {e}')
+        _portfolio_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _portfolio_task_cleanup(task_id)
 
 
 def _portfolio_fetch_offer(c, offer_id):
@@ -10479,44 +10585,36 @@ def list_portfolio_offers():
 def create_portfolio_offer():
     try:
         input_text = (request.form.get('raw_input') or '').strip()
-        file_obj = request.files.get('pdf_file')
-        pdf_text = _portfolio_extract_pdf_text(file_obj) if file_obj else ''
-        raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+        file_obj = request.files.get('upload_file')
 
-        if not raw_input:
-            return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
+        file_bytes, file_mime, filename = None, None, None
+        if file_obj and file_obj.filename:
+            file_bytes = file_obj.read()
+            file_mime = file_obj.mimetype or ''
+            filename = file_obj.filename
 
-        parsed, source = _portfolio_generate_offer_from_llm(raw_input)
-        if not parsed:
-            if source == 'sem_llm':
-                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
-            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}), 502
+        if not input_text and not file_bytes:
+            return jsonify({'error': 'Informe um texto ou envie um PDF/imagem para análise.'}), 400
 
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-            (parsed['title'], parsed['summary'], raw_input)
-        )
-        offer_id = c.lastrowid
-        for idx, item in enumerate(parsed.get('items') or []):
-            c.execute(
-                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
-                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
-            )
-        conn.commit()
-        offer = _portfolio_fetch_offer(c, offer_id)
-        conn.close()
-        if offer is None:
-            return jsonify({'error': 'Falha ao carregar oferta criada.'}), 500
-        offer['llm_source'] = source
-        return jsonify(offer), 201
-    except RuntimeError as e:
-        return jsonify({'error': str(e)}), 400
+        task_id = uuid.uuid4().hex
+        _portfolio_task_set(task_id, {'status': 'processing', 'step': 'Iniciando análise...', 'progress': 10})
+        threading.Thread(
+            target=_portfolio_process_offer_async,
+            args=(task_id, input_text, file_bytes, file_mime, filename),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao criar oferta: {e}')
+        logger.exception(f'[Portfolio] Erro ao iniciar tarefa: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/tasks/<task_id>', methods=['GET'])
+def get_portfolio_task_status(task_id):
+    task = _portfolio_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
+    return jsonify(task)
 
 
 @app.route('/api/portfolio/offers/<int:offer_id>', methods=['PUT'])
