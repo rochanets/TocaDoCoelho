@@ -11083,27 +11083,55 @@
         function openIAtaModal() {
             const modalId = 'iataNewModal';
             document.getElementById(modalId)?.remove();
+            if (!document.getElementById('iata-bunny-style')) {
+                const style = document.createElement('style');
+                style.id = 'iata-bunny-style';
+                style.textContent = `
+                    @keyframes iata-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
+                    @keyframes iata-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
+                    .iata-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
+                    .iata-paw { display:inline-block; font-size:10px; animation:iata-paw-fade 1s ease-in-out infinite; }
+                    .iata-paw:nth-child(2){animation-delay:.2s} .iata-paw:nth-child(3){animation-delay:.4s}
+                `;
+                document.head.appendChild(style);
+            }
             const html = `
-                <div class="modal active" id="${modalId}" onclick="if(event.target===this) this.remove()">
+                <div class="modal active" id="${modalId}" onclick="if(event.target===this&&!document.getElementById('iataProgressArea').offsetParent) this.remove()">
                     <div class="modal-content" style="max-width:680px;">
                         <div class="modal-header">
                             <h2 class="modal-title"><i class="fas fa-file-alt"></i> Nova Ata — iAta</h2>
-                            <button class="modal-close" onclick="document.getElementById('${modalId}').remove()">&#215;</button>
+                            <button class="modal-close" id="iataModalCloseBtn" onclick="document.getElementById('${modalId}').remove()">&#215;</button>
                         </div>
-                        <p style="margin:0 0 16px; color:#6b7280; font-size:13px;">
-                            Envie um arquivo de reunião ou cole o texto. A IA gera a ata completa e identifica insights de negócio cruzando com as Soluções STF.
-                        </p>
-                        <div class="form-group">
-                            <label>Arquivo da reunião</label>
-                            <input id="iataFileInput" type="file" accept=".pdf,.doc,.docx,.txt,.vtt,.srt,.csv,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-                            <small style="color:#9ca3af; font-size:11px; display:block; margin-top:4px;">Suportado: PDF, DOCX, TXT, VTT (Teams), SRT e outros formatos de texto</small>
+                        <div id="iataFormArea">
+                            <p style="margin:0 0 16px; color:#6b7280; font-size:13px;">
+                                Envie um arquivo de reunião ou cole o texto. A IA gera a ata completa e identifica insights de negócio cruzando com as Soluções STF.
+                            </p>
+                            <div class="form-group">
+                                <label>Arquivo da reunião</label>
+                                <input id="iataFileInput" type="file" accept=".pdf,.doc,.docx,.txt,.vtt,.srt,.csv,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+                                <small style="color:#9ca3af; font-size:11px; display:block; margin-top:4px;">Suportado: PDF, DOCX, TXT, VTT (Teams), SRT e outros formatos de texto</small>
+                            </div>
+                            <div class="form-group">
+                                <label>OU cole o texto da reunião</label>
+                                <textarea id="iataRawTextInput" rows="7" placeholder="Cole aqui a transcrição, notas ou chat da reunião..."></textarea>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>OU cole o texto da reunião</label>
-                            <textarea id="iataRawTextInput" rows="7" placeholder="Cole aqui a transcrição, notas ou chat da reunião..."></textarea>
+                        <div id="iataProgressArea" style="display:none; padding:20px 4px 12px;">
+                            <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="iataProgressStep">Iniciando...</div>
+                            <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                                <div id="iataProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                    <span class="iata-bunny">🐇</span>
+                                </div>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
+                                <div style="font-size:12px; color:#10b981;">
+                                    <span class="iata-paw">🐾</span><span class="iata-paw">🐾</span><span class="iata-paw">🐾</span>
+                                </div>
+                                <div style="font-size:11px; color:#6b7280;" id="iataProgressPct">5%</div>
+                            </div>
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
-                            <button class="btn btn-secondary" onclick="document.getElementById('${modalId}').remove()">Cancelar</button>
+                            <button id="iataCancelBtn" class="btn btn-secondary" onclick="document.getElementById('${modalId}').remove()">Cancelar</button>
                             <button id="iataSubmitBtn" class="btn btn-auto-mapping btn-small" onclick="submitIAta()">
                                 <span class="ai-star-icon">✦</span> Gerar Ata com IA
                             </button>
@@ -11112,6 +11140,15 @@
                 </div>
             `;
             document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function _iataSetProgress(pct, step) {
+            const bar = document.getElementById('iataProgressBar');
+            const stepEl = document.getElementById('iataProgressStep');
+            const pctEl = document.getElementById('iataProgressPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         }
 
         async function submitIAta() {
@@ -11123,26 +11160,52 @@
                 return;
             }
             const btn = document.getElementById('iataSubmitBtn');
-            const originalHtml = btn ? btn.innerHTML : '';
-            if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerando ata...'; }
+            const cancelBtn = document.getElementById('iataCancelBtn');
+            const closeBtn = document.getElementById('iataModalCloseBtn');
+            const formArea = document.getElementById('iataFormArea');
+            const progressArea = document.getElementById('iataProgressArea');
+
+            if (btn) { btn.disabled = true; btn.style.display = 'none'; }
+            if (cancelBtn) cancelBtn.style.display = 'none';
+            if (closeBtn) closeBtn.style.display = 'none';
+            if (formArea) formArea.style.display = 'none';
+            if (progressArea) progressArea.style.display = 'block';
+            _iataSetProgress(5, 'Enviando arquivo...');
+
             try {
                 const fd = new FormData();
                 if (file) fd.append('meeting_file', file);
                 if (rawText) fd.append('raw_text', rawText);
                 const response = await fetch(`${API_BASE}/portfolio/iata`, { method: 'POST', body: fd });
                 const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Erro ao gerar ata.');
+                if (!response.ok) throw new Error(payload.error || 'Erro ao iniciar processamento.');
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
+                _iataSetProgress(10, 'Aguardando processamento...');
+                let record = null;
+                for (let i = 0; i < 300; i++) {
+                    await new Promise(r => setTimeout(r, 800));
+                    const statusResp = await fetch(`${API_BASE}/portfolio/iata/tasks/${taskId}`);
+                    const status = await statusResp.json().catch(() => ({}));
+                    _iataSetProgress(status.progress || 10, status.step || 'Processando...');
+                    if (status.status === 'done') { record = status.result; break; }
+                    if (status.status === 'error') throw new Error(status.error || 'Erro durante processamento.');
+                }
+                if (!record) throw new Error('Tempo limite excedido. Tente novamente.');
                 document.getElementById('iataNewModal')?.remove();
                 showSuccess('Ata gerada com sucesso!');
                 await loadIAta();
-                if (payload.id) {
-                    expandedIAtaRecords.add(Number(payload.id));
+                if (record.id) {
+                    expandedIAtaRecords.add(Number(record.id));
                     renderIAtaHistory(iataRecords);
                 }
             } catch (error) {
                 showError(error.message || 'Erro ao processar reunião com IA.');
-            } finally {
-                if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+                if (btn) { btn.disabled = false; btn.style.display = ''; }
+                if (cancelBtn) cancelBtn.style.display = '';
+                if (closeBtn) closeBtn.style.display = '';
+                if (formArea) formArea.style.display = '';
+                if (progressArea) progressArea.style.display = 'none';
             }
         }
 

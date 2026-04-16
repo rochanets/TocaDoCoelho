@@ -10927,46 +10927,49 @@ def _iata_parse_llm_insights(raw):
 
 
 def _iata_call_llm(system_msg, user_msg, log_tag):
+    """OpenRouter como primário; SAI como fallback."""
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': system_msg},
+                    {'role': 'user', 'content': user_msg}
+                ],
+                'temperature': 0.2
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            if raw and str(raw).strip():
+                return raw, 'OpenRouter'
+            logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
+        except Exception as e:
+            logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
+    # Fallback: SAI
     raw = _sai_simple_prompt(user_msg)
     if raw is not None and not str(raw).strip():
         raw = None
     if raw is not None:
         return raw, 'SAI'
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if not or_key:
-        return None, 'sem_llm'
-    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-    try:
-        payload = {
-            'model': model,
-            'messages': [
-                {'role': 'system', 'content': system_msg},
-                {'role': 'user', 'content': user_msg}
-            ],
-            'temperature': 0.2
-        }
-        req = urllib.request.Request(
-            'https://openrouter.ai/api/v1/chat/completions',
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {or_key}',
-                'HTTP-Referer': site_url,
-                'X-Title': app_name
-            },
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        choices = data.get('choices') or []
-        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-        return raw, 'OpenRouter'
-    except Exception as e:
-        logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}')
-        return None, 'sem_llm'
+    return None, 'sem_llm'
 
 
 def _iata_generate_ata(raw_text):
@@ -11032,6 +11035,107 @@ def _iata_generate_insights(ata_data, portfolio_offers):
     return None, 'llm_invalid_response'
 
 
+_iata_tasks = {}
+_iata_tasks_lock = threading.Lock()
+
+
+def _iata_task_set(task_id, updates):
+    with _iata_tasks_lock:
+        task = _iata_tasks.get(task_id, {})
+        task.update(updates)
+        _iata_tasks[task_id] = task
+
+
+def _iata_task_get(task_id):
+    with _iata_tasks_lock:
+        return dict(_iata_tasks.get(task_id) or {})
+
+
+def _iata_task_cleanup(task_id, delay=300):
+    def _do():
+        time.sleep(delay)
+        with _iata_tasks_lock:
+            _iata_tasks.pop(task_id, None)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _iata_extract_bytes(file_bytes, filename):
+    """Extrai texto de bytes de arquivo (sem file_storage)."""
+    class _BytesFS:
+        def __init__(self, data, name):
+            self.filename = name
+            self._data = data
+        def read(self):
+            return self._data
+    return _iata_extract_file_text(_BytesFS(file_bytes, filename))
+
+
+def _iata_process_async(task_id, file_bytes, filename, raw_text_input):
+    try:
+        raw_text = raw_text_input or ''
+        if file_bytes and filename:
+            _iata_task_set(task_id, {'step': 'Extraindo texto do arquivo...', 'progress': 15})
+            file_text = _iata_extract_bytes(file_bytes, filename)
+            if file_text and raw_text_input:
+                raw_text = file_text + '\n\n' + raw_text_input
+            else:
+                raw_text = file_text or raw_text_input
+
+        if not raw_text:
+            raise ValueError('Não foi possível extrair texto do arquivo enviado.')
+
+        _iata_task_set(task_id, {'step': 'Gerando ata com IA...', 'progress': 30})
+        ata_data, ata_source = _iata_generate_ata(raw_text)
+        if not ata_data:
+            if ata_source == 'sem_llm':
+                raise RuntimeError('Nenhum serviço de IA configurado (OpenRouter ou SAI).')
+            raise RuntimeError('A IA retornou uma resposta inválida. Tente novamente.')
+
+        _iata_task_set(task_id, {'step': 'Buscando soluções STF...', 'progress': 68})
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, title, summary FROM portfolio_offers ORDER BY id DESC')
+        offers = [dict_from_row(row) for row in c.fetchall()]
+        for offer in offers:
+            c.execute('SELECT pain, solution FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC', (offer['id'],))
+            offer['items'] = [dict_from_row(row) for row in c.fetchall()]
+
+        if offers:
+            _iata_task_set(task_id, {'step': 'Gerando insights de negócio...', 'progress': 78})
+            insights_data, _ = _iata_generate_insights(ata_data, offers)
+            if not insights_data:
+                insights_data = {'insights': [], 'has_unmatched': False}
+        else:
+            insights_data = {'insights': [], 'has_unmatched': False}
+
+        _iata_task_set(task_id, {'step': 'Salvando ata...', 'progress': 92})
+        c.execute(
+            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (
+                ata_data['title'],
+                ata_data.get('meeting_date'),
+                ata_data.get('meeting_time'),
+                ata_data.get('topic'),
+                json.dumps(ata_data.get('participants') or [], ensure_ascii=False),
+                json.dumps(ata_data, ensure_ascii=False),
+                json.dumps(insights_data, ensure_ascii=False),
+                raw_text[:50000]
+            )
+        )
+        record_id = c.lastrowid
+        conn.commit()
+        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
+        record = _iata_record_to_dict(c.fetchone())
+        conn.close()
+        _iata_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': record})
+    except Exception as e:
+        logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')
+        _iata_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _iata_task_cleanup(task_id)
+
+
 def _iata_record_to_dict(record):
     r = dict(record)
     for field in ('participants', 'ata_json', 'insights_json'):
@@ -11087,61 +11191,30 @@ def create_iata_record():
         if not file_obj and not raw_text_input:
             return jsonify({'error': 'Envie um arquivo de reunião ou cole o texto.'}), 400
 
-        file_text = _iata_extract_file_text(file_obj) if file_obj else ''
-        if file_text and raw_text_input:
-            raw_text = file_text + '\n\n' + raw_text_input
-        else:
-            raw_text = file_text or raw_text_input
+        file_bytes, filename = None, None
+        if file_obj and file_obj.filename:
+            file_bytes = file_obj.read()
+            filename = file_obj.filename
 
-        if not raw_text:
-            return jsonify({'error': 'Não foi possível extrair texto do arquivo enviado.'}), 400
-
-        ata_data, ata_source = _iata_generate_ata(raw_text)
-        if not ata_data:
-            if ata_source == 'sem_llm':
-                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
-            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente.'}), 502
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id, title, summary FROM portfolio_offers ORDER BY id DESC')
-        offers = [dict_from_row(row) for row in c.fetchall()]
-        for offer in offers:
-            c.execute('SELECT pain, solution FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC', (offer['id'],))
-            offer['items'] = [dict_from_row(row) for row in c.fetchall()]
-
-        if offers:
-            insights_data, _ = _iata_generate_insights(ata_data, offers)
-            if not insights_data:
-                insights_data = {'insights': [], 'has_unmatched': False}
-        else:
-            insights_data = {'insights': [], 'has_unmatched': False}
-
-        c.execute(
-            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-            (
-                ata_data['title'],
-                ata_data.get('meeting_date'),
-                ata_data.get('meeting_time'),
-                ata_data.get('topic'),
-                json.dumps(ata_data.get('participants') or [], ensure_ascii=False),
-                json.dumps(ata_data, ensure_ascii=False),
-                json.dumps(insights_data, ensure_ascii=False),
-                raw_text[:50000]
-            )
-        )
-        record_id = c.lastrowid
-        conn.commit()
-        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
-        record = _iata_record_to_dict(c.fetchone())
-        conn.close()
-        return jsonify(record), 201
-    except RuntimeError as e:
-        return jsonify({'error': str(e)}), 400
+        task_id = uuid.uuid4().hex
+        _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_iata_process_async,
+            args=(task_id, file_bytes, filename, raw_text_input),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        logger.exception(f'[iAta] Erro ao criar registro: {e}')
+        logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/iata/tasks/<task_id>', methods=['GET'])
+def get_iata_task_status(task_id):
+    task = _iata_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
+    return jsonify(task)
 
 
 @app.route('/api/portfolio/iata/<int:record_id>', methods=['DELETE'])
