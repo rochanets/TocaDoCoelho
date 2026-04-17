@@ -1484,6 +1484,61 @@
             100% { transform: rotate(360deg); }
         }
 
+        @keyframes iata-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
+        @keyframes iata-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
+        @keyframes bunny-walk-dash { to { transform: translateX(28px); opacity: 0; } }
+        @keyframes task-done-pulse { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(34,197,94,.55); } 70% { transform: scale(1.08); box-shadow: 0 0 0 12px rgba(34,197,94,0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+
+        .iata-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
+        .iata-paw { display:inline-block; font-size:10px; animation:iata-paw-fade 1s ease-in-out infinite; }
+        .iata-paw:nth-child(2){animation-delay:.2s}
+        .iata-paw:nth-child(3){animation-delay:.4s}
+
+        .background-task-indicator {
+            position: fixed;
+            right: 22px;
+            bottom: 20px;
+            width: 72px;
+            height: 72px;
+            border-radius: 999px;
+            z-index: 1200;
+            background: rgba(5,150,105,.96);
+            color: #fff;
+            border: 2px solid rgba(255,255,255,.6);
+            box-shadow: 0 18px 34px rgba(5,150,105,.35);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .background-task-indicator.running .rabbit {
+            font-size: 24px;
+            transform: translateY(-2px);
+        }
+
+        .background-task-indicator.running .paws {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .background-task-indicator.running .paw {
+            position: absolute;
+            font-size: 14px;
+            opacity: 0;
+            animation: bunny-walk-dash 1.2s linear infinite;
+        }
+
+        .background-task-indicator.running .paw:nth-child(1) { left: 8px; top: 16px; animation-delay: 0s; }
+        .background-task-indicator.running .paw:nth-child(2) { left: 4px; top: 32px; animation-delay: .3s; }
+        .background-task-indicator.running .paw:nth-child(3) { left: 10px; top: 48px; animation-delay: .6s; }
+
+        .background-task-indicator.done {
+            background: #16a34a;
+            animation: task-done-pulse 1.3s ease-in-out infinite;
+        }
+
         /* Status Badge */
         .status-badge {
             display: inline-flex;
@@ -3251,6 +3306,148 @@
         let autoTocaMailingPositions = [];
         let autoTocaMailingAreas = [];
         let autoTocaMailingSelection = [];
+        const backgroundIntegrationTasks = new Map();
+        const backgroundIndicatorState = { lastCompletedTaskId: null };
+
+        function _renderIataLikeProgress(barId, stepId, pctId, pct, step, minPct = 5) {
+            const bar = document.getElementById(barId);
+            const stepEl = document.getElementById(stepId);
+            const pctEl = document.getElementById(pctId);
+            if (bar) bar.style.width = Math.max(minPct, Number(pct || 0)) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(Number(pct || 0)) + '%';
+        }
+
+        function _isTaskForeground(task) {
+            if (!task) return false;
+            if (task.type === 'iata') {
+                return _currentTab === 'portfolio' && _portfolioCurrentSubTab === 'iata' && !!document.getElementById('iataNewModal');
+            }
+            if (task.type === 'portfolio-offer') {
+                return _currentTab === 'portfolio' && _portfolioCurrentSubTab === 'stf' && !!document.getElementById('portfolioNewModal');
+            }
+            return false;
+        }
+
+        function _ensureBackgroundTaskIndicator() {
+            let indicator = document.getElementById('backgroundTaskIndicator');
+            if (indicator) return indicator;
+            indicator = document.createElement('button');
+            indicator.id = 'backgroundTaskIndicator';
+            indicator.className = 'background-task-indicator';
+            indicator.type = 'button';
+            indicator.innerHTML = `
+                <span class="rabbit">🐇</span>
+                <span class="done-icon" style="display:none; font-size:30px;">❗</span>
+                <span class="paws"><span class="paw">🐾</span><span class="paw">🐾</span><span class="paw">🐾</span></span>
+            `;
+            indicator.onclick = _handleBackgroundIndicatorClick;
+            document.body.appendChild(indicator);
+            return indicator;
+        }
+
+        function _syncBackgroundTaskIndicator() {
+            const indicator = _ensureBackgroundTaskIndicator();
+            const processing = [];
+            const done = [];
+            backgroundIntegrationTasks.forEach(task => {
+                if (task.status === 'processing' && !_isTaskForeground(task)) processing.push(task);
+                if (task.status === 'done' && !task.acknowledged) done.push(task);
+            });
+
+            if (processing.length > 0) {
+                indicator.style.display = 'flex';
+                indicator.classList.add('running');
+                indicator.classList.remove('done');
+                indicator.querySelector('.rabbit').style.display = '';
+                indicator.querySelector('.paws').style.display = '';
+                indicator.querySelector('.done-icon').style.display = 'none';
+                indicator.title = `${processing.length} processamento(s) em background`;
+                return;
+            }
+
+            if (done.length > 0) {
+                done.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+                backgroundIndicatorState.lastCompletedTaskId = done[0].id;
+                indicator.style.display = 'flex';
+                indicator.classList.remove('running');
+                indicator.classList.add('done');
+                indicator.querySelector('.rabbit').style.display = 'none';
+                indicator.querySelector('.paws').style.display = 'none';
+                indicator.querySelector('.done-icon').style.display = '';
+                indicator.title = 'Processamento finalizado. Clique para abrir o resultado.';
+                return;
+            }
+
+            indicator.style.display = 'none';
+            indicator.classList.remove('running', 'done');
+            backgroundIndicatorState.lastCompletedTaskId = null;
+        }
+
+        function _navigateToTask(task) {
+            if (!task) return;
+            switchTab(null, task.module || 'portfolio');
+            if (task.module === 'portfolio' && task.submodule) {
+                switchPortfolioSubmodule(task.submodule);
+            }
+        }
+
+        function _handleBackgroundIndicatorClick() {
+            const task = backgroundIntegrationTasks.get(backgroundIndicatorState.lastCompletedTaskId);
+            if (!task) {
+                showInfo('Processamento em andamento no background.');
+                return;
+            }
+            _navigateToTask(task);
+            task.acknowledged = true;
+            if (typeof task.onDone === 'function') task.onDone(task.result, { fromIndicator: true });
+            backgroundIntegrationTasks.delete(task.id);
+            _syncBackgroundTaskIndicator();
+        }
+
+        async function _trackIntegrationTask({
+            type,
+            module,
+            submodule,
+            pollUrl,
+            onProgress,
+            onDone,
+            onError
+        }) {
+            const task = {
+                id: `${type}_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+                type,
+                module,
+                submodule,
+                status: 'processing',
+                acknowledged: false,
+                onDone
+            };
+            backgroundIntegrationTasks.set(task.id, task);
+            _syncBackgroundTaskIndicator();
+            for (let i = 0; i < 360; i++) {
+                await new Promise(r => setTimeout(r, 800));
+                const statusResp = await fetch(pollUrl);
+                const status = await statusResp.json().catch(() => ({}));
+                if (typeof onProgress === 'function') onProgress(status);
+                if (status.status === 'done') {
+                    task.status = 'done';
+                    task.result = status.result;
+                    task.completedAt = Date.now();
+                    if (_isTaskForeground(task)) {
+                        task.acknowledged = true;
+                        backgroundIntegrationTasks.delete(task.id);
+                        if (typeof onDone === 'function') onDone(status.result, { foreground: true });
+                    } else {
+                        showInfo('Processamento concluído em background. Clique no indicador para abrir o resultado.');
+                    }
+                    _syncBackgroundTaskIndicator();
+                    return status.result;
+                }
+                if (status.status === 'error') throw new Error(status.error || 'Erro durante processamento.');
+            }
+            throw new Error('Tempo limite de processamento excedido. Tente novamente.');
+        }
 
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
@@ -3369,6 +3566,7 @@
             else if (tabName === 'wikitoca') loadWikiTocaData();
             else if (tabName === 'autotoca') loadAutoToca();
             else if (tabName === 'configuracoes') loadSettings();
+            _syncBackgroundTaskIndicator();
         }
 
         function switchGestaoContaSubmodule(subTab = 'accounts') {
@@ -10601,12 +10799,19 @@
                                 <input id="portfolioUploadFile" type="file" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif">
                             </div>
                         </div>
-                        <div id="portfolioProgressArea" style="display:none; padding:20px 4px 8px;">
-                            <div style="font-size:13px; color:var(--text-secondary,#888); margin-bottom:10px; text-align:center;" id="portfolioProgressStep">Iniciando análise...</div>
-                            <div style="background:var(--border-color,#e5e7eb); border-radius:99px; height:10px; overflow:hidden;">
-                                <div id="portfolioProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg,#7c3aed,#a855f7); border-radius:99px; transition:width 0.5s ease;"></div>
+                        <div id="portfolioProgressArea" style="display:none; padding:20px 4px 12px;">
+                            <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="portfolioProgressStep">Iniciando...</div>
+                            <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                                <div id="portfolioProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                    <span class="iata-bunny">🐇</span>
+                                </div>
                             </div>
-                            <div style="font-size:11px; color:var(--text-secondary,#aaa); text-align:right; margin-top:5px;" id="portfolioProgressPct">0%</div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
+                                <div style="font-size:12px; color:#10b981;">
+                                    <span class="iata-paw">🐾</span><span class="iata-paw">🐾</span><span class="iata-paw">🐾</span>
+                                </div>
+                                <div style="font-size:11px; color:#6b7280;" id="portfolioProgressPct">5%</div>
+                            </div>
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
                             <button id="portfolioCancelBtn" class="btn btn-secondary" onclick="closePortfolioModal('portfolioNewModal')">Cancelar</button>
@@ -10619,12 +10824,7 @@
         }
 
         function _portfolioSetProgress(pct, step) {
-            const bar = document.getElementById('portfolioProgressBar');
-            const stepEl = document.getElementById('portfolioProgressStep');
-            const pctEl = document.getElementById('portfolioProgressPct');
-            if (bar) bar.style.width = pct + '%';
-            if (stepEl) stepEl.textContent = step || '';
-            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+            _renderIataLikeProgress('portfolioProgressBar', 'portfolioProgressStep', 'portfolioProgressPct', pct, step, 5);
         }
 
         async function submitNewOffer() {
@@ -10657,23 +10857,19 @@
 
                 const taskId = payload.task_id;
                 if (!taskId) throw new Error('Resposta inesperada do servidor.');
-
                 _portfolioSetProgress(15, 'Aguardando processamento...');
-
-                let offer = null;
-                for (let i = 0; i < 240; i++) {
-                    await new Promise(r => setTimeout(r, 800));
-                    const statusResp = await fetch(`${API_BASE}/portfolio/offers/tasks/${taskId}`);
-                    const status = await statusResp.json().catch(() => ({}));
-                    _portfolioSetProgress(status.progress || 15, status.step || 'Processando...');
-                    if (status.status === 'done') { offer = status.result; break; }
-                    if (status.status === 'error') throw new Error(status.error || 'Erro durante processamento.');
-                }
-                if (!offer) throw new Error('Tempo limite de processamento excedido. Tente novamente.');
-
-                closePortfolioModal('portfolioNewModal');
-                showSuccess('Oferta criada com sucesso.');
-                await loadPortfolio();
+                await _trackIntegrationTask({
+                    type: 'portfolio-offer',
+                    module: 'portfolio',
+                    submodule: 'stf',
+                    pollUrl: `${API_BASE}/portfolio/offers/tasks/${taskId}`,
+                    onProgress: (status) => _portfolioSetProgress(status.progress || 15, status.step || 'Processando...'),
+                    onDone: async () => {
+                        closePortfolioModal('portfolioNewModal');
+                        showSuccess('Oferta criada com sucesso.');
+                        await loadPortfolio();
+                    }
+                });
                 return;
             } catch (error) {
                 showError(error.message || 'Erro ao analisar material com IA.');
@@ -11216,18 +11412,6 @@
         function openIAtaModal() {
             const modalId = 'iataNewModal';
             document.getElementById(modalId)?.remove();
-            if (!document.getElementById('iata-bunny-style')) {
-                const style = document.createElement('style');
-                style.id = 'iata-bunny-style';
-                style.textContent = `
-                    @keyframes iata-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
-                    @keyframes iata-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
-                    .iata-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
-                    .iata-paw { display:inline-block; font-size:10px; animation:iata-paw-fade 1s ease-in-out infinite; }
-                    .iata-paw:nth-child(2){animation-delay:.2s} .iata-paw:nth-child(3){animation-delay:.4s}
-                `;
-                document.head.appendChild(style);
-            }
             const html = `
                 <div class="modal active" id="${modalId}" onclick="if(event.target===this&&!document.getElementById('iataProgressArea').offsetParent) this.remove()">
                     <div class="modal-content" style="max-width:680px;">
@@ -11276,12 +11460,7 @@
         }
 
         function _iataSetProgress(pct, step) {
-            const bar = document.getElementById('iataProgressBar');
-            const stepEl = document.getElementById('iataProgressStep');
-            const pctEl = document.getElementById('iataProgressPct');
-            if (bar) bar.style.width = Math.max(5, pct) + '%';
-            if (stepEl) stepEl.textContent = step || '';
-            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+            _renderIataLikeProgress('iataProgressBar', 'iataProgressStep', 'iataProgressPct', pct, step, 5);
         }
 
 
@@ -11317,23 +11496,22 @@
                 const taskId = payload.task_id;
                 if (!taskId) throw new Error('Resposta inesperada do servidor.');
                 _iataSetProgress(10, 'Aguardando processamento...');
-                let record = null;
-                for (let i = 0; i < 300; i++) {
-                    await new Promise(r => setTimeout(r, 800));
-                    const statusResp = await fetch(`${API_BASE}/portfolio/iata/tasks/${taskId}`);
-                    const status = await statusResp.json().catch(() => ({}));
-                    _iataSetProgress(status.progress || 10, status.step || 'Processando...');
-                    if (status.status === 'done') { record = status.result; break; }
-                    if (status.status === 'error') throw new Error(status.error || 'Erro durante processamento.');
-                }
-                if (!record) throw new Error('Tempo limite excedido. Tente novamente.');
-                document.getElementById('iataNewModal')?.remove();
-                showSuccess('Ata gerada com sucesso!');
-                await loadIAta();
-                if (record.id) {
-                    expandedIAtaRecords.add(Number(record.id));
-                    renderIAtaHistory(iataRecords);
-                }
+                await _trackIntegrationTask({
+                    type: 'iata',
+                    module: 'portfolio',
+                    submodule: 'iata',
+                    pollUrl: `${API_BASE}/portfolio/iata/tasks/${taskId}`,
+                    onProgress: (status) => _iataSetProgress(status.progress || 10, status.step || 'Processando...'),
+                    onDone: async (record) => {
+                        document.getElementById('iataNewModal')?.remove();
+                        showSuccess('Ata gerada com sucesso!');
+                        await loadIAta();
+                        if (record?.id) {
+                            expandedIAtaRecords.add(Number(record.id));
+                            renderIAtaHistory(iataRecords);
+                        }
+                    }
+                });
             } catch (error) {
                 showError(error.message || 'Erro ao processar reunião com IA.');
                 if (btn) { btn.disabled = false; btn.style.display = ''; }
