@@ -6915,10 +6915,10 @@
                 const cardsContainer = columnEl.querySelector('.kanban-cards');
                 if (!cardsContainer) return;
                 const columnId = Number(columnEl.getAttribute('data-column-id'));
-                const isLocked = Number(columnEl.getAttribute('data-column-locked')) === 1; // Regra: bloqueada aceita drop mas não origina drag (mão única)
+                // Drag liberado em todas as colunas — is_locked só bloqueia edição/exclusão da coluna
                 const sortable = Sortable.create(cardsContainer, {
-                    group: isLocked ? { name: 'kanban', pull: false, put: true } : { name: 'kanban', pull: true, put: true },
-                    sort: !isLocked,
+                    group: { name: 'kanban', pull: true, put: true },
+                    sort: true,
                     animation: 150,
                     emptyInsertThreshold: 20,
                     ghostClass: 'sortable-ghost',
