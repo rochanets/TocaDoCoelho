@@ -10317,6 +10317,16 @@ def _portfolio_extract_pdf_text(file_storage):
     return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
 
 
+def _portfolio_read_image_data(file_storage):
+    if not file_storage:
+        return None, None
+    file_bytes = file_storage.read()
+    if not file_bytes:
+        return None, None
+    mime = (file_storage.mimetype or 'image/jpeg').split(';')[0].strip()
+    return base64.b64encode(file_bytes).decode('utf-8'), mime
+
+
 def _portfolio_parse_llm_raw(raw):
     def _try_parse_json(value):
         if not value:
@@ -10381,42 +10391,38 @@ def _portfolio_parse_llm_raw(raw):
     return {'title': title, 'summary': summary, 'items': items}
 
 
-def _portfolio_generate_offer_from_llm(raw_input):
-    llm_prompt = (
+def _portfolio_generate_offer_from_llm(raw_input, image_data=None, image_mime=None):
+    text_prompt = (
         "Você é um especialista em posicionamento comercial B2B. "
         "Analise o material abaixo e extraia um portfólio comercial em português (Brasil). "
         "Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato abaixo, sem blocos de código markdown (```json), sem introdução e sem conclusão: "
         '{"title":"Título objetivo da oferta","summary":"Resumo executivo curto das ofertas/cases",'
         '"items":[{"pain":"Dor do cliente","solution":"Solução ofertada"}]}. '
         "Regras: gere entre 3 e 12 itens úteis; não invente informações fora do texto; "
-        "use frases curtas e claras; não inclua markdown.\n\n"
-        f"MATERIAL:\n{raw_input[:30000]}"
+        "use frases curtas e claras; não inclua markdown."
     )
+    if raw_input:
+        text_prompt += f"\n\nMATERIAL:\n{raw_input[:30000]}"
 
-    raw = _sai_simple_prompt(llm_prompt)
-    source = 'SAI'
-    if raw is not None and not str(raw).strip():
-        raw = None
-    if raw is not None:
-        parsed = _portfolio_parse_llm_raw(raw)
-        if parsed:
-            return parsed, source
-        logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta. Tentando OpenRouter.')
-
-    if raw is None:
-        or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-        if not or_key:
-            return None, 'sem_llm'
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
         or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
         model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
         site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
         app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
         try:
+            if image_data and image_mime:
+                user_content = [
+                    {'type': 'text', 'text': text_prompt},
+                    {'type': 'image_url', 'image_url': {'url': f'data:{image_mime};base64,{image_data}'}}
+                ]
+            else:
+                user_content = text_prompt
             or_payload = {
                 'model': model,
                 'messages': [
                     {'role': 'system', 'content': 'Você é um analista comercial. Responda SEMPRE e SOMENTE com JSON válido.'},
-                    {'role': 'user', 'content': llm_prompt}
+                    {'role': 'user', 'content': user_content}
                 ],
                 'temperature': 0.2
             }
@@ -10431,7 +10437,7 @@ def _portfolio_generate_offer_from_llm(raw_input):
                 },
                 method='POST'
             )
-            with urllib.request.urlopen(req, timeout=45) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
             choices = data.get('choices') or []
             raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
@@ -10439,13 +10445,113 @@ def _portfolio_generate_offer_from_llm(raw_input):
             parsed = _portfolio_parse_llm_raw(raw)
             if parsed:
                 return parsed, source
-            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta.')
-            return None, 'llm_invalid_response'
+            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta. Tentando SAI.')
         except Exception as e:
-            logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}')
-            return None, 'sem_llm'
+            logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}. Tentando SAI.')
 
+    if not image_data:
+        raw = _sai_simple_prompt(text_prompt)
+        source = 'SAI'
+        if raw and str(raw).strip():
+            parsed = _portfolio_parse_llm_raw(raw)
+            if parsed:
+                return parsed, source
+            logger.warning('[Portfolio][SAI] Resposta recebida mas inválida para parsing de oferta.')
+
+    if not or_key and not _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY'):
+        return None, 'sem_llm'
     return None, 'llm_invalid_response'
+
+
+_portfolio_tasks = {}
+_portfolio_tasks_lock = threading.Lock()
+
+
+def _portfolio_task_set(task_id, update):
+    with _portfolio_tasks_lock:
+        if task_id not in _portfolio_tasks:
+            _portfolio_tasks[task_id] = {}
+        _portfolio_tasks[task_id].update(update)
+
+
+def _portfolio_task_get(task_id):
+    with _portfolio_tasks_lock:
+        return dict(_portfolio_tasks.get(task_id) or {})
+
+
+def _portfolio_task_cleanup(task_id, delay=300):
+    def _do():
+        time.sleep(delay)
+        with _portfolio_tasks_lock:
+            _portfolio_tasks.pop(task_id, None)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, filename):
+    try:
+        raw_input = input_text
+        image_data, image_mime = None, None
+
+        if file_bytes and filename:
+            fname = filename.lower()
+            mime = (file_mime or '').lower()
+            if 'pdf' in mime or fname.endswith('.pdf'):
+                _portfolio_task_set(task_id, {'step': 'Extraindo texto do PDF...', 'progress': 30})
+                if not PDFPLUMBER_AVAILABLE:
+                    raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
+                text_parts = []
+                with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+                    for page in (pdf.pages or []):
+                        try:
+                            text_parts.append(page.extract_text() or '')
+                        except Exception:
+                            continue
+                pdf_text = '\n'.join(p.strip() for p in text_parts if p and p.strip()).strip()
+                raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+            elif mime.startswith('image/') or fname.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                _portfolio_task_set(task_id, {'step': 'Preparando imagem...', 'progress': 30})
+                image_mime = mime.split(';')[0].strip() or 'image/jpeg'
+                image_data = base64.b64encode(file_bytes).decode('utf-8')
+            else:
+                raise ValueError('Formato de arquivo não suportado. Envie um PDF ou imagem (JPG, PNG, WEBP).')
+
+        if not raw_input and not image_data:
+            raise ValueError('Informe um texto ou envie um PDF/imagem para análise.')
+
+        _portfolio_task_set(task_id, {'step': 'Analisando com IA...', 'progress': 50})
+        parsed, source = _portfolio_generate_offer_from_llm(raw_input, image_data=image_data, image_mime=image_mime)
+
+        if not parsed:
+            if source == 'sem_llm':
+                raise RuntimeError('Nenhum serviço de IA configurado (OpenRouter ou SAI).')
+            raise RuntimeError('A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.')
+
+        _portfolio_task_set(task_id, {'step': 'Salvando oferta...', 'progress': 88})
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+            (parsed['title'], parsed['summary'], raw_input or '')
+        )
+        offer_id = c.lastrowid
+        for idx, item in enumerate(parsed.get('items') or []):
+            c.execute(
+                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
+            )
+        conn.commit()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if offer is None:
+            raise RuntimeError('Falha ao carregar oferta criada.')
+        offer['llm_source'] = source
+        _portfolio_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': offer})
+    except Exception as e:
+        logger.exception(f'[Portfolio][Task:{task_id}] Erro: {e}')
+        _portfolio_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _portfolio_task_cleanup(task_id)
 
 
 def _portfolio_fetch_offer(c, offer_id):
@@ -10479,44 +10585,36 @@ def list_portfolio_offers():
 def create_portfolio_offer():
     try:
         input_text = (request.form.get('raw_input') or '').strip()
-        file_obj = request.files.get('pdf_file')
-        pdf_text = _portfolio_extract_pdf_text(file_obj) if file_obj else ''
-        raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
+        file_obj = request.files.get('upload_file')
 
-        if not raw_input:
-            return jsonify({'error': 'Informe um texto ou envie um PDF para análise.'}), 400
+        file_bytes, file_mime, filename = None, None, None
+        if file_obj and file_obj.filename:
+            file_bytes = file_obj.read()
+            file_mime = file_obj.mimetype or ''
+            filename = file_obj.filename
 
-        parsed, source = _portfolio_generate_offer_from_llm(raw_input)
-        if not parsed:
-            if source == 'sem_llm':
-                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
-            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente com mais contexto no material.'}), 502
+        if not input_text and not file_bytes:
+            return jsonify({'error': 'Informe um texto ou envie um PDF/imagem para análise.'}), 400
 
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-            (parsed['title'], parsed['summary'], raw_input)
-        )
-        offer_id = c.lastrowid
-        for idx, item in enumerate(parsed.get('items') or []):
-            c.execute(
-                '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
-                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                (offer_id, (item.get('pain') or '').strip(), (item.get('solution') or '').strip(), idx)
-            )
-        conn.commit()
-        offer = _portfolio_fetch_offer(c, offer_id)
-        conn.close()
-        if offer is None:
-            return jsonify({'error': 'Falha ao carregar oferta criada.'}), 500
-        offer['llm_source'] = source
-        return jsonify(offer), 201
-    except RuntimeError as e:
-        return jsonify({'error': str(e)}), 400
+        task_id = uuid.uuid4().hex
+        _portfolio_task_set(task_id, {'status': 'processing', 'step': 'Iniciando análise...', 'progress': 10})
+        threading.Thread(
+            target=_portfolio_process_offer_async,
+            args=(task_id, input_text, file_bytes, file_mime, filename),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao criar oferta: {e}')
+        logger.exception(f'[Portfolio] Erro ao iniciar tarefa: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/tasks/<task_id>', methods=['GET'])
+def get_portfolio_task_status(task_id):
+    task = _portfolio_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
+    return jsonify(task)
 
 
 @app.route('/api/portfolio/offers/<int:offer_id>', methods=['PUT'])
@@ -10769,12 +10867,31 @@ def _iata_parse_llm_ata(raw):
     title = (parsed.get('title') or '').strip()
     if not title:
         return None
+
+    def _clean_null(val):
+        v = str(val or '').strip()
+        return None if not v or v.lower() in ('null', 'none', 'n/a', '-') else v
+
+    def _parse_participants(raw_list):
+        result = []
+        for p in (raw_list or []):
+            if isinstance(p, dict):
+                name = str(p.get('name') or p.get('nome') or '').strip()
+                role = str(p.get('role') or p.get('cargo') or p.get('empresa') or '').strip()
+                if name:
+                    result.append({'name': name, 'role': role or ''})
+            elif p and str(p).strip():
+                result.append({'name': str(p).strip(), 'role': ''})
+        return result
+
     return {
         'title': title,
-        'meeting_date': (parsed.get('meeting_date') or '').strip() or None,
-        'meeting_time': (parsed.get('meeting_time') or '').strip() or None,
+        'meeting_date': _clean_null(parsed.get('meeting_date')),
+        'meeting_time': _clean_null(parsed.get('meeting_time')),
+        'location': _clean_null(parsed.get('location')),
         'topic': (parsed.get('topic') or '').strip() or title,
-        'participants': [str(p).strip() for p in (parsed.get('participants') or []) if str(p).strip()],
+        'participants': _parse_participants(parsed.get('participants')),
+        'objective': (parsed.get('objective') or '').strip(),
         'summary': (parsed.get('summary') or '').strip(),
         'agenda': [str(a).strip() for a in (parsed.get('agenda') or []) if str(a).strip()],
         'key_points': [str(k).strip() for k in (parsed.get('key_points') or []) if str(k).strip()],
@@ -10783,11 +10900,12 @@ def _iata_parse_llm_ata(raw):
             {
                 'action': str(s.get('action') or '').strip(),
                 'responsible': str(s.get('responsible') or 'A definir').strip(),
-                'deadline': str(s.get('deadline') or '').strip() or None,
+                'deadline': _clean_null(s.get('deadline')),
                 'status': str(s.get('status') or 'pendente').strip()
             }
             for s in (parsed.get('next_steps') or []) if isinstance(s, dict)
-        ]
+        ],
+        'observations': _clean_null(parsed.get('observations'))
     }
 
 
@@ -10829,62 +10947,78 @@ def _iata_parse_llm_insights(raw):
 
 
 def _iata_call_llm(system_msg, user_msg, log_tag):
+    """OpenRouter como primário; SAI como fallback."""
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': system_msg},
+                    {'role': 'user', 'content': user_msg}
+                ],
+                'temperature': 0.2
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            if raw and str(raw).strip():
+                return raw, 'OpenRouter'
+            logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
+        except Exception as e:
+            logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
+    # Fallback: SAI
     raw = _sai_simple_prompt(user_msg)
     if raw is not None and not str(raw).strip():
         raw = None
     if raw is not None:
         return raw, 'SAI'
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if not or_key:
-        return None, 'sem_llm'
-    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-    try:
-        payload = {
-            'model': model,
-            'messages': [
-                {'role': 'system', 'content': system_msg},
-                {'role': 'user', 'content': user_msg}
-            ],
-            'temperature': 0.2
-        }
-        req = urllib.request.Request(
-            'https://openrouter.ai/api/v1/chat/completions',
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {or_key}',
-                'HTTP-Referer': site_url,
-                'X-Title': app_name
-            },
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        choices = data.get('choices') or []
-        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-        return raw, 'OpenRouter'
-    except Exception as e:
-        logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}')
-        return None, 'sem_llm'
+    return None, 'sem_llm'
 
 
 def _iata_generate_ata(raw_text):
     prompt = (
         "Você é um especialista em documentação corporativa. "
-        "Analise o texto de reunião abaixo e gere uma ata completa em português (Brasil). "
+        "Analise o texto de reunião e gere uma ATA DE REUNIÃO COMPLETA E DETALHADA em português (Brasil). "
+        "A ata deve ser rica em detalhes, capturando o contexto, as discussões e os argumentos apresentados. "
         "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem introdução:\n"
-        '{"title":"Título da reunião","meeting_date":"DD/MM/AAAA ou null","meeting_time":"HH:MM ou null",'
-        '"topic":"Tema principal","participants":["Nome 1","Nome 2"],'
-        '"summary":"Resumo executivo de 2-3 frases",'
-        '"agenda":["Item de pauta 1"],'
-        '"key_points":["Ponto discutido 1"],'
-        '"decisions":["Decisão tomada 1"],'
-        '"next_steps":[{"action":"Ação","responsible":"Nome do responsável","deadline":"DD/MM/AAAA ou null","status":"pendente"}]}\n'
-        "Regras: liste todos os participantes mencionados; next_steps deve incluir TODAS as pendências com responsáveis; "
-        "se não houver responsável claro use 'A definir'; data/hora null se não explícita.\n\n"
+        '{"title":"Título formal da reunião",'
+        '"meeting_date":"DD/MM/AAAA ou null se não mencionada",'
+        '"meeting_time":"HH:MM ou null se não mencionada",'
+        '"location":"Local ou plataforma (ex: Microsoft Teams) ou null",'
+        '"topic":"Tema central da reunião em uma frase",'
+        '"participants":[{"name":"Nome Completo","role":"Cargo ou empresa se mencionado"}],'
+        '"objective":"Objetivo principal da reunião em 2-3 frases completas",'
+        '"summary":"Resumo executivo DETALHADO da reunião com 5-8 frases cobrindo contexto, discussões principais e resultados",'
+        '"agenda":["Item de pauta 1 — descrição breve","Item de pauta 2 — descrição breve"],'
+        '"key_points":["Ponto discutido em detalhe — inclua contexto, argumentos e posições dos participantes. Cada item deve ter 2-4 frases.","Segundo ponto com o mesmo nível de detalhe"],'
+        '"decisions":["Decisão formal tomada com contexto — quem decidiu e por quê quando relevante"],'
+        '"next_steps":[{"action":"Descrição detalhada da ação a ser realizada","responsible":"Nome completo do responsável","deadline":"DD/MM/AAAA ou null","status":"pendente"}],'
+        '"observations":"Observações adicionais relevantes, contexto extra ou informações complementares mencionadas durante a reunião. Use null se não houver."}\n'
+        "REGRAS OBRIGATÓRIAS:\n"
+        "- Liste TODOS os participantes mencionados com nome e cargo/empresa quando disponível;\n"
+        "- key_points: cada item deve ser um parágrafo detalhado (2-4 frases), não apenas uma frase curta;\n"
+        "- next_steps: inclua TODAS as pendências, ações e encaminhamentos com responsáveis identificados;\n"
+        "- Se não houver responsável claro para uma ação, use 'A definir';\n"
+        "- deadline: use formato DD/MM/AAAA quando mencionado, ou null (JSON null, não a string 'null');\n"
+        "- Não invente informações que não estejam no texto original;\n"
+        "- Preserve nomes próprios, empresas e termos técnicos como aparecem no texto.\n\n"
         f"TEXTO DA REUNIÃO:\n{raw_text[:30000]}"
     )
     raw, source = _iata_call_llm(
@@ -10932,6 +11066,107 @@ def _iata_generate_insights(ata_data, portfolio_offers):
         return parsed, source
     logger.warning(f'[iAta] Resposta inválida para parsing de insights (source={source}).')
     return None, 'llm_invalid_response'
+
+
+_iata_tasks = {}
+_iata_tasks_lock = threading.Lock()
+
+
+def _iata_task_set(task_id, updates):
+    with _iata_tasks_lock:
+        task = _iata_tasks.get(task_id, {})
+        task.update(updates)
+        _iata_tasks[task_id] = task
+
+
+def _iata_task_get(task_id):
+    with _iata_tasks_lock:
+        return dict(_iata_tasks.get(task_id) or {})
+
+
+def _iata_task_cleanup(task_id, delay=300):
+    def _do():
+        time.sleep(delay)
+        with _iata_tasks_lock:
+            _iata_tasks.pop(task_id, None)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _iata_extract_bytes(file_bytes, filename):
+    """Extrai texto de bytes de arquivo (sem file_storage)."""
+    class _BytesFS:
+        def __init__(self, data, name):
+            self.filename = name
+            self._data = data
+        def read(self):
+            return self._data
+    return _iata_extract_file_text(_BytesFS(file_bytes, filename))
+
+
+def _iata_process_async(task_id, file_bytes, filename, raw_text_input):
+    try:
+        raw_text = raw_text_input or ''
+        if file_bytes and filename:
+            _iata_task_set(task_id, {'step': 'Extraindo texto do arquivo...', 'progress': 15})
+            file_text = _iata_extract_bytes(file_bytes, filename)
+            if file_text and raw_text_input:
+                raw_text = file_text + '\n\n' + raw_text_input
+            else:
+                raw_text = file_text or raw_text_input
+
+        if not raw_text:
+            raise ValueError('Não foi possível extrair texto do arquivo enviado.')
+
+        _iata_task_set(task_id, {'step': 'Gerando ata com IA...', 'progress': 30})
+        ata_data, ata_source = _iata_generate_ata(raw_text)
+        if not ata_data:
+            if ata_source == 'sem_llm':
+                raise RuntimeError('Nenhum serviço de IA configurado (OpenRouter ou SAI).')
+            raise RuntimeError('A IA retornou uma resposta inválida. Tente novamente.')
+
+        _iata_task_set(task_id, {'step': 'Buscando soluções STF...', 'progress': 68})
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, title, summary FROM portfolio_offers ORDER BY id DESC')
+        offers = [dict_from_row(row) for row in c.fetchall()]
+        for offer in offers:
+            c.execute('SELECT pain, solution FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC', (offer['id'],))
+            offer['items'] = [dict_from_row(row) for row in c.fetchall()]
+
+        if offers:
+            _iata_task_set(task_id, {'step': 'Gerando insights de negócio...', 'progress': 78})
+            insights_data, _ = _iata_generate_insights(ata_data, offers)
+            if not insights_data:
+                insights_data = {'insights': [], 'has_unmatched': False}
+        else:
+            insights_data = {'insights': [], 'has_unmatched': False}
+
+        _iata_task_set(task_id, {'step': 'Salvando ata...', 'progress': 92})
+        c.execute(
+            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (
+                ata_data['title'],
+                ata_data.get('meeting_date'),
+                ata_data.get('meeting_time'),
+                ata_data.get('topic'),
+                json.dumps([p['name'] if isinstance(p, dict) else str(p) for p in (ata_data.get('participants') or [])], ensure_ascii=False),
+                json.dumps(ata_data, ensure_ascii=False),
+                json.dumps(insights_data, ensure_ascii=False),
+                raw_text[:50000]
+            )
+        )
+        record_id = c.lastrowid
+        conn.commit()
+        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
+        record = _iata_record_to_dict(c.fetchone())
+        conn.close()
+        _iata_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': record})
+    except Exception as e:
+        logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')
+        _iata_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _iata_task_cleanup(task_id)
 
 
 def _iata_record_to_dict(record):
@@ -10989,61 +11224,31 @@ def create_iata_record():
         if not file_obj and not raw_text_input:
             return jsonify({'error': 'Envie um arquivo de reunião ou cole o texto.'}), 400
 
-        file_text = _iata_extract_file_text(file_obj) if file_obj else ''
-        if file_text and raw_text_input:
-            raw_text = file_text + '\n\n' + raw_text_input
-        else:
-            raw_text = file_text or raw_text_input
+        file_bytes, filename = None, None
+        if file_obj and file_obj.filename:
+            file_bytes = file_obj.read()
+            filename = file_obj.filename
 
-        if not raw_text:
-            return jsonify({'error': 'Não foi possível extrair texto do arquivo enviado.'}), 400
-
-        ata_data, ata_source = _iata_generate_ata(raw_text)
-        if not ata_data:
-            if ata_source == 'sem_llm':
-                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
-            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente.'}), 502
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id, title, summary FROM portfolio_offers ORDER BY id DESC')
-        offers = [dict_from_row(row) for row in c.fetchall()]
-        for offer in offers:
-            c.execute('SELECT pain, solution FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC', (offer['id'],))
-            offer['items'] = [dict_from_row(row) for row in c.fetchall()]
-
-        if offers:
-            insights_data, _ = _iata_generate_insights(ata_data, offers)
-            if not insights_data:
-                insights_data = {'insights': [], 'has_unmatched': False}
-        else:
-            insights_data = {'insights': [], 'has_unmatched': False}
-
-        c.execute(
-            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-            (
-                ata_data['title'],
-                ata_data.get('meeting_date'),
-                ata_data.get('meeting_time'),
-                ata_data.get('topic'),
-                json.dumps(ata_data.get('participants') or [], ensure_ascii=False),
-                json.dumps(ata_data, ensure_ascii=False),
-                json.dumps(insights_data, ensure_ascii=False),
-                raw_text[:50000]
-            )
-        )
-        record_id = c.lastrowid
-        conn.commit()
-        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
-        record = _iata_record_to_dict(c.fetchone())
-        conn.close()
-        return jsonify(record), 201
-    except RuntimeError as e:
-        return jsonify({'error': str(e)}), 400
+        task_id = uuid.uuid4().hex
+        _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_iata_process_async,
+            args=(task_id, file_bytes, filename, raw_text_input),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        logger.exception(f'[iAta] Erro ao criar registro: {e}')
+        logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/iata/tasks/<task_id>', methods=['GET'])
+def get_iata_task_status(task_id):
+    task = _iata_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
+    return jsonify(task)
+
 
 
 @app.route('/api/portfolio/iata/<int:record_id>', methods=['DELETE'])

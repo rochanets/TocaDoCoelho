@@ -11,9 +11,68 @@
 
 ## LLM / IA — Como usar em novas features
 
+### Ordem de chamada LLM — OpenRouter primeiro, SAI como fallback
+
+Para qualquer feature que use LLM (geração de texto, análise, classificação, etc.), **a ordem padrão é: OpenRouter primeiro, SAI como fallback**. Só use SAI como primário se a feature exigir explicitamente.
+
+```python
+or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+if or_key:
+    # tenta OpenRouter primeiro
+    ...
+# fallback: SAI
+raw = _sai_simple_prompt(prompt)
+```
+
+Veja `_iata_call_llm()` em `app.py` como exemplo completo desse padrão.
+
+---
+
+### Barra de progresso obrigatória para operações longas
+
+**Toda operação que envolva LLM, upload de arquivo ou processamento que possa levar mais de 2 segundos DEVE ter barra de progresso com polling assíncrono.** Não bloquear o request HTTP — usar thread + task store.
+
+**Padrão backend (igual ao portfolio/iAta):**
+```python
+_tasks = {}
+_tasks_lock = threading.Lock()
+
+def _task_set(task_id, updates): ...
+def _task_get(task_id): ...
+def _task_cleanup(task_id, delay=300): ...
+
+def _process_async(task_id, ...):
+    _task_set(task_id, {'step': 'Extraindo...', 'progress': 15})
+    # ... processamento ...
+    _task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': ...})
+
+@app.route('/api/.../process', methods=['POST'])
+def start():
+    task_id = uuid.uuid4().hex
+    _task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+    threading.Thread(target=_process_async, args=(task_id, ...), daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
+
+@app.route('/api/.../tasks/<task_id>', methods=['GET'])
+def poll(task_id):
+    return jsonify(_task_get(task_id))
+```
+
+**Padrão frontend — barra verde com coelhinho 🐇:**
+```javascript
+// Modal deve ter #formArea e #progressArea separados
+// _setProgress(pct, step) atualiza a barra
+// Polling a cada 800ms até status === 'done' ou 'error'
+// Coelhinho animado na ponta da barra (ver openIAtaModal() como exemplo)
+```
+
+A animação do coelhinho usa CSS keyframes injetados em `<head>` via `document.createElement('style')` (id único para não duplicar). Exemplo em `openIAtaModal()` em `index.html`.
+
+---
+
 ### Helper principal: `_sai_simple_prompt(question)`
 
-Sempre que uma feature precisar de uma resposta de LLM (geração de texto, extração de dados, classificação, etc.), **use `_sai_simple_prompt(question)`** como primeira opção. Ele usa o template SAI de prompt simples configurado no app.
+Sempre que uma feature precisar de uma resposta de LLM (geração de texto, extração de dados, classificação, etc.), use `_sai_simple_prompt(question)` como **fallback** após tentar OpenRouter. Ele usa o template SAI de prompt simples configurado no app.
 
 ```python
 raw = _sai_simple_prompt("Pergunta livre aqui. Instrua o formato da resposta no próprio texto.")
@@ -66,6 +125,24 @@ Veja `_account_autofill_via_sai()` em `app.py` como exemplo completo do padrão 
 ---
 
 ## Padrões do projeto
+
+### Diálogos de confirmação — NUNCA usar `confirm()` nativo
+
+**Proibido:** `confirm(...)`, `window.confirm(...)` — abre janela padrão do sistema operacional, fora do tema visual.
+
+**Obrigatório:** usar `await uiConfirm(mensagem, título)` — modal temático já existente no projeto.
+
+```javascript
+// ERRADO
+if (!confirm('Excluir?')) return;
+
+// CERTO — função deve ser async
+if (!await uiConfirm('Deseja realmente excluir este item?', 'Excluir Item')) return;
+```
+
+O mesmo vale para `prompt()` nativo → usar `await uiPrompt(mensagem, valorDefault, título)`.
+
+---
 
 ### Botões AI (AutoToca style)
 ```html
