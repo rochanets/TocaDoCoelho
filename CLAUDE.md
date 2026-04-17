@@ -126,6 +126,24 @@ Veja `_account_autofill_via_sai()` em `app.py` como exemplo completo do padrão 
 
 ## Padrões do projeto
 
+### Diálogos de confirmação — NUNCA usar `confirm()` nativo
+
+**Proibido:** `confirm(...)`, `window.confirm(...)` — abre janela padrão do sistema operacional, fora do tema visual.
+
+**Obrigatório:** usar `await uiConfirm(mensagem, título)` — modal temático já existente no projeto.
+
+```javascript
+// ERRADO
+if (!confirm('Excluir?')) return;
+
+// CERTO — função deve ser async
+if (!await uiConfirm('Deseja realmente excluir este item?', 'Excluir Item')) return;
+```
+
+O mesmo vale para `prompt()` nativo → usar `await uiPrompt(mensagem, valorDefault, título)`.
+
+---
+
 ### Botões AI (AutoToca style)
 ```html
 <button class="btn btn-auto-mapping btn-small" onclick="minhaFuncao()">

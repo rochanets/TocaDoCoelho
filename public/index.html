@@ -6600,8 +6600,8 @@
             }).catch(err => showError(err.message));
         }
 
-        function deleteKanbanColumn(columnId) {
-            if (!confirm('Excluir sessão? Cards serão movidos para o Backlog.')) return;
+        async function deleteKanbanColumn(columnId) {
+            if (!await uiConfirm('Excluir sessão? Cards serão movidos para o Backlog.', 'Excluir Sessão')) return;
             fetch(`${API_BASE}/kanban/columns/${columnId}`, { method: 'DELETE' })
                 .then(async res => {
                     const data = await res.json();
@@ -10215,7 +10215,7 @@
         }
 
         async function deleteAccountActivityItem(accountId, activityId) {
-            if (!confirm('Excluir esta atividade da conta?')) return;
+            if (!await uiConfirm('Excluir esta atividade da conta?', 'Excluir Atividade')) return;
             const r = await fetch(`${API_BASE}/accounts/${accountId}/activities/${activityId}`, { method: 'DELETE' });
             if (!r.ok) return showError('Erro ao excluir atividade');
             const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
@@ -10785,8 +10785,7 @@
         }
 
         async function deleteOffer(offerId) {
-            const confirmed = window.confirm('Deseja realmente excluir esta oferta?');
-            if (!confirmed) return;
+            if (!await uiConfirm('Deseja realmente excluir esta oferta?', 'Excluir Oferta')) return;
             try {
                 const response = await fetch(`${API_BASE}/portfolio/offers/${offerId}`, { method: 'DELETE' });
                 const payload = await response.json().catch(() => ({}));
@@ -10799,8 +10798,7 @@
         }
 
         async function deleteOfferItem(offerId, itemId) {
-            const confirmed = window.confirm('Deseja excluir este item dor/solução?');
-            if (!confirmed) return;
+            if (!await uiConfirm('Deseja excluir este item dor/solução?', 'Excluir Item')) return;
             try {
                 const response = await fetch(`${API_BASE}/portfolio/offers/${offerId}/items/${itemId}`, { method: 'DELETE' });
                 const payload = await response.json().catch(() => ({}));
@@ -11338,7 +11336,7 @@
         }
 
         async function deleteIAtaRecord(rid) {
-            if (!window.confirm('Deseja realmente excluir esta ata?')) return;
+            if (!await uiConfirm('Deseja realmente excluir esta ata?', 'Excluir Ata')) return;
             try {
                 const response = await fetch(`${API_BASE}/portfolio/iata/${rid}`, { method: 'DELETE' });
                 const payload = await response.json().catch(() => ({}));
