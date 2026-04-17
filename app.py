@@ -10995,7 +10995,6 @@ def _iata_call_llm(system_msg, user_msg, log_tag):
 def _iata_generate_ata(raw_text):
     prompt = (
         "Você é um especialista em documentação corporativa. "
-        "Você é um especialista em documentação corporativa. "
         "Analise o texto de reunião e gere uma ATA DE REUNIÃO COMPLETA E DETALHADA em português (Brasil). "
         "A ata deve ser rica em detalhes, capturando o contexto, as discussões e os argumentos apresentados. "
         "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem introdução:\n"
@@ -11249,6 +11248,7 @@ def get_iata_task_status(task_id):
     if not task:
         return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
     return jsonify(task)
+
 
 
 @app.route('/api/portfolio/iata/<int:record_id>', methods=['DELETE'])

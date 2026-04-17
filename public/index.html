@@ -10886,6 +10886,7 @@
             return (!d || d === 'null' || d === 'none') ? null : d;
         }
 
+
         function _renderIAtaExpanded(record) {
             const ata = record.ata || {};
             const insights = record.insights || {};
@@ -11074,6 +11075,7 @@
                                 <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:6px; font-weight:600;">Observações</div>
                                 <p style="margin:0; color:#374151; line-height:1.6; font-size:14px;">${escapeHtml(ata.observations)}</p>
                             </div>` : ''}
+
 
                         ${insightsList.length ? `
                             <div style="padding:14px; background:#fffbeb; border:1px solid #fcd34d; border-radius:10px;">
@@ -11277,6 +11279,7 @@
             if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         }
 
+
         async function submitIAta() {
             const fileInput = document.getElementById('iataFileInput');
             const file = fileInput?.files?.[0] || null;
@@ -11297,6 +11300,7 @@
             if (formArea) formArea.style.display = 'none';
             if (progressArea) progressArea.style.display = 'block';
             _iataSetProgress(5, 'Enviando arquivo...');
+
 
             try {
                 const fd = new FormData();
