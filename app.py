@@ -637,6 +637,19 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(offer_id) REFERENCES portfolio_offers(id) ON DELETE CASCADE
     )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS iata_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        meeting_date TEXT,
+        meeting_time TEXT,
+        topic TEXT,
+        participants TEXT,
+        ata_json TEXT,
+        insights_json TEXT,
+        raw_text TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     
     # Tabela de compromissos (agenda)
     c.execute('''CREATE TABLE IF NOT EXISTS commitments (
@@ -10646,6 +10659,407 @@ def delete_portfolio_offer_item(offer_id, item_id):
         return jsonify({'message': 'Item removido com sucesso.'})
     except Exception as e:
         logger.exception(f'[Portfolio] Erro ao remover item {item_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _parse_vtt_text(file_bytes):
+    try:
+        text = file_bytes.decode('utf-8', errors='replace')
+    except Exception:
+        return ''
+    lines = text.split('\n')
+    dialogue_lines = []
+    timestamp_pat = re.compile(r'^\d{2}:\d{2}[\d:.,]* *--> *\d{2}:\d{2}')
+    for line in lines:
+        line = line.strip()
+        if not line or line == 'WEBVTT' or line.startswith('NOTE') or line.isdigit():
+            continue
+        if timestamp_pat.match(line):
+            continue
+        dialogue_lines.append(line)
+    return '\n'.join(dialogue_lines)
+
+
+def _parse_srt_text(file_bytes):
+    try:
+        text = file_bytes.decode('utf-8', errors='replace')
+    except Exception:
+        return ''
+    lines = text.split('\n')
+    dialogue_lines = []
+    timestamp_pat = re.compile(r'^\d{2}:\d{2}:\d{2},\d{3} *--> *\d{2}:\d{2}')
+    for line in lines:
+        line = line.strip()
+        if not line or line.isdigit() or timestamp_pat.match(line):
+            continue
+        dialogue_lines.append(line)
+    return '\n'.join(dialogue_lines)
+
+
+def _iata_extract_file_text(file_storage):
+    if not file_storage:
+        return ''
+    filename = (file_storage.filename or '').lower()
+    file_bytes = file_storage.read()
+    if not file_bytes:
+        return ''
+
+    if filename.endswith('.pdf'):
+        if not PDFPLUMBER_AVAILABLE:
+            raise RuntimeError('Leitura de PDF indisponível (pdfplumber não instalado).')
+        text_parts = []
+        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+            for page in (pdf.pages or []):
+                try:
+                    text_parts.append(page.extract_text() or '')
+                except Exception:
+                    continue
+        return '\n'.join(p.strip() for p in text_parts if p and p.strip()).strip()
+
+    if filename.endswith('.docx'):
+        if not PYTHON_DOCX_AVAILABLE:
+            raise RuntimeError('Leitura de DOCX indisponível (python-docx não instalado).')
+        doc = python_docx.Document(BytesIO(file_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return '\n'.join(paragraphs).strip()
+
+    if filename.endswith('.vtt'):
+        return _parse_vtt_text(file_bytes)
+
+    if filename.endswith('.srt'):
+        return _parse_srt_text(file_bytes)
+
+    # Plain text / fallback
+    try:
+        if CHARDET_AVAILABLE:
+            detected = chardet.detect(file_bytes)
+            encoding = (detected.get('encoding') or 'utf-8')
+        else:
+            encoding = 'utf-8'
+        return file_bytes.decode(encoding, errors='replace').strip()
+    except Exception:
+        return file_bytes.decode('utf-8', errors='replace').strip()
+
+
+def _iata_parse_llm_ata(raw):
+    if not raw:
+        return None
+    stripped = str(raw).strip()
+    if stripped.startswith('```'):
+        m = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', stripped, flags=re.IGNORECASE)
+        if m:
+            stripped = m.group(1).strip()
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        parsed = _extract_json_object_from_text(stripped)
+    if not isinstance(parsed, dict):
+        return None
+    if 'title' not in parsed:
+        for key in ('output', 'result', 'text', 'content', 'response', 'data'):
+            candidate = parsed.get(key)
+            if isinstance(candidate, str):
+                try:
+                    nested = json.loads(candidate)
+                    if isinstance(nested, dict) and 'title' in nested:
+                        parsed = nested
+                        break
+                except Exception:
+                    pass
+    title = (parsed.get('title') or '').strip()
+    if not title:
+        return None
+    return {
+        'title': title,
+        'meeting_date': (parsed.get('meeting_date') or '').strip() or None,
+        'meeting_time': (parsed.get('meeting_time') or '').strip() or None,
+        'topic': (parsed.get('topic') or '').strip() or title,
+        'participants': [str(p).strip() for p in (parsed.get('participants') or []) if str(p).strip()],
+        'summary': (parsed.get('summary') or '').strip(),
+        'agenda': [str(a).strip() for a in (parsed.get('agenda') or []) if str(a).strip()],
+        'key_points': [str(k).strip() for k in (parsed.get('key_points') or []) if str(k).strip()],
+        'decisions': [str(d).strip() for d in (parsed.get('decisions') or []) if str(d).strip()],
+        'next_steps': [
+            {
+                'action': str(s.get('action') or '').strip(),
+                'responsible': str(s.get('responsible') or 'A definir').strip(),
+                'deadline': str(s.get('deadline') or '').strip() or None,
+                'status': str(s.get('status') or 'pendente').strip()
+            }
+            for s in (parsed.get('next_steps') or []) if isinstance(s, dict)
+        ]
+    }
+
+
+def _iata_parse_llm_insights(raw):
+    if not raw:
+        return None
+    stripped = str(raw).strip()
+    if stripped.startswith('```'):
+        m = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', stripped, flags=re.IGNORECASE)
+        if m:
+            stripped = m.group(1).strip()
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        parsed = _extract_json_object_from_text(stripped)
+    if not isinstance(parsed, dict):
+        return None
+    insights_raw = parsed.get('insights') or []
+    if not isinstance(insights_raw, list):
+        return None
+    insights = []
+    for item in insights_raw:
+        if not isinstance(item, dict):
+            continue
+        pain = (item.get('pain') or '').strip()
+        if not pain:
+            continue
+        insights.append({
+            'pain': pain,
+            'matched_offer': item.get('matched_offer') or None,
+            'matched_solution': item.get('matched_solution') or None,
+            'confidence': str(item.get('confidence') or 'baixa').strip(),
+            'observation': str(item.get('observation') or '').strip()
+        })
+    return {
+        'insights': insights,
+        'has_unmatched': bool(parsed.get('has_unmatched', False))
+    }
+
+
+def _iata_call_llm(system_msg, user_msg, log_tag):
+    raw = _sai_simple_prompt(user_msg)
+    if raw is not None and not str(raw).strip():
+        raw = None
+    if raw is not None:
+        return raw, 'SAI'
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if not or_key:
+        return None, 'sem_llm'
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    try:
+        payload = {
+            'model': model,
+            'messages': [
+                {'role': 'system', 'content': system_msg},
+                {'role': 'user', 'content': user_msg}
+            ],
+            'temperature': 0.2
+        }
+        req = urllib.request.Request(
+            'https://openrouter.ai/api/v1/chat/completions',
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        return raw, 'OpenRouter'
+    except Exception as e:
+        logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}')
+        return None, 'sem_llm'
+
+
+def _iata_generate_ata(raw_text):
+    prompt = (
+        "Você é um especialista em documentação corporativa. "
+        "Analise o texto de reunião abaixo e gere uma ata completa em português (Brasil). "
+        "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem introdução:\n"
+        '{"title":"Título da reunião","meeting_date":"DD/MM/AAAA ou null","meeting_time":"HH:MM ou null",'
+        '"topic":"Tema principal","participants":["Nome 1","Nome 2"],'
+        '"summary":"Resumo executivo de 2-3 frases",'
+        '"agenda":["Item de pauta 1"],'
+        '"key_points":["Ponto discutido 1"],'
+        '"decisions":["Decisão tomada 1"],'
+        '"next_steps":[{"action":"Ação","responsible":"Nome do responsável","deadline":"DD/MM/AAAA ou null","status":"pendente"}]}\n'
+        "Regras: liste todos os participantes mencionados; next_steps deve incluir TODAS as pendências com responsáveis; "
+        "se não houver responsável claro use 'A definir'; data/hora null se não explícita.\n\n"
+        f"TEXTO DA REUNIÃO:\n{raw_text[:30000]}"
+    )
+    raw, source = _iata_call_llm(
+        'Você é um especialista em documentação corporativa. Responda SEMPRE e SOMENTE com JSON válido.',
+        prompt,
+        'Ata'
+    )
+    if raw is None:
+        return None, source
+    parsed = _iata_parse_llm_ata(raw)
+    if parsed:
+        return parsed, source
+    logger.warning(f'[iAta] Resposta inválida para parsing de ata (source={source}).')
+    return None, 'llm_invalid_response'
+
+
+def _iata_generate_insights(ata_data, portfolio_offers):
+    ata_text = json.dumps(ata_data, ensure_ascii=False)
+    offers_text = json.dumps(portfolio_offers, ensure_ascii=False)
+    prompt = (
+        "Você é um consultor de negócios especialista em soluções tecnológicas. "
+        "Analise a ata de reunião e identifique dores/desafios de negócio mencionados. "
+        "Cruze cada dor com as soluções disponíveis no portfólio STF. "
+        "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown:\n"
+        '{"insights":[{"pain":"Dor identificada","matched_offer":"Título da oferta ou null",'
+        '"matched_solution":"Solução específica ou null","confidence":"alta/média/baixa",'
+        '"observation":"Observação breve"}],"has_unmatched":true}\n'
+        "Regras:\n"
+        "- Identifique TODAS as dores, desafios e oportunidades mencionados;\n"
+        "- matched_offer = null e observation explicando para buscar soluções na Stefanini se não houver match;\n"
+        "- confidence: 'alta' se endereça diretamente, 'média' se parcialmente, 'baixa' se tangencialmente;\n"
+        "- has_unmatched: true se houver pelo menos uma dor sem match.\n\n"
+        f"ATA:\n{ata_text[:15000]}\n\n"
+        f"SOLUÇÕES STF:\n{offers_text[:15000]}"
+    )
+    raw, source = _iata_call_llm(
+        'Você é um consultor de negócios. Responda SEMPRE e SOMENTE com JSON válido.',
+        prompt,
+        'Insights'
+    )
+    if raw is None:
+        return None, source
+    parsed = _iata_parse_llm_insights(raw)
+    if parsed:
+        return parsed, source
+    logger.warning(f'[iAta] Resposta inválida para parsing de insights (source={source}).')
+    return None, 'llm_invalid_response'
+
+
+def _iata_record_to_dict(record):
+    r = dict(record)
+    for field in ('participants', 'ata_json', 'insights_json'):
+        val = r.get(field)
+        if val:
+            try:
+                r[field] = json.loads(val)
+            except Exception:
+                r[field] = [] if field == 'participants' else {}
+        else:
+            r[field] = [] if field == 'participants' else {}
+    r['ata'] = r.pop('ata_json', {})
+    r['insights'] = r.pop('insights_json', {})
+    return r
+
+
+@app.route('/api/portfolio/iata', methods=['GET'])
+def list_iata_records():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM iata_records ORDER BY datetime(created_at) DESC, id DESC')
+        records = [_iata_record_to_dict(row) for row in c.fetchall()]
+        conn.close()
+        return jsonify(records)
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao listar registros: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/iata/<int:record_id>', methods=['GET'])
+def get_iata_record(record_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({'error': 'Registro não encontrado.'}), 404
+        return jsonify(_iata_record_to_dict(row))
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao buscar registro {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/iata', methods=['POST'])
+def create_iata_record():
+    try:
+        file_obj = request.files.get('meeting_file')
+        raw_text_input = (request.form.get('raw_text') or '').strip()
+
+        if not file_obj and not raw_text_input:
+            return jsonify({'error': 'Envie um arquivo de reunião ou cole o texto.'}), 400
+
+        file_text = _iata_extract_file_text(file_obj) if file_obj else ''
+        if file_text and raw_text_input:
+            raw_text = file_text + '\n\n' + raw_text_input
+        else:
+            raw_text = file_text or raw_text_input
+
+        if not raw_text:
+            return jsonify({'error': 'Não foi possível extrair texto do arquivo enviado.'}), 400
+
+        ata_data, ata_source = _iata_generate_ata(raw_text)
+        if not ata_data:
+            if ata_source == 'sem_llm':
+                return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+            return jsonify({'error': 'A IA retornou uma resposta inválida. Tente novamente.'}), 502
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, title, summary FROM portfolio_offers ORDER BY id DESC')
+        offers = [dict_from_row(row) for row in c.fetchall()]
+        for offer in offers:
+            c.execute('SELECT pain, solution FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC', (offer['id'],))
+            offer['items'] = [dict_from_row(row) for row in c.fetchall()]
+
+        if offers:
+            insights_data, _ = _iata_generate_insights(ata_data, offers)
+            if not insights_data:
+                insights_data = {'insights': [], 'has_unmatched': False}
+        else:
+            insights_data = {'insights': [], 'has_unmatched': False}
+
+        c.execute(
+            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (
+                ata_data['title'],
+                ata_data.get('meeting_date'),
+                ata_data.get('meeting_time'),
+                ata_data.get('topic'),
+                json.dumps(ata_data.get('participants') or [], ensure_ascii=False),
+                json.dumps(ata_data, ensure_ascii=False),
+                json.dumps(insights_data, ensure_ascii=False),
+                raw_text[:50000]
+            )
+        )
+        record_id = c.lastrowid
+        conn.commit()
+        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
+        record = _iata_record_to_dict(c.fetchone())
+        conn.close()
+        return jsonify(record), 201
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao criar registro: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/iata/<int:record_id>', methods=['DELETE'])
+def delete_iata_record(record_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM iata_records WHERE id = ?', (record_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Registro não encontrado.'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Registro removido com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao remover registro {record_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 

@@ -1805,17 +1805,18 @@
         .kanban-board::-webkit-scrollbar-track { background: rgba(16, 185, 129, 0.12); border-radius: 999px; }
         .kanban-board::-webkit-scrollbar-thumb { background: #065f46; border-radius: 999px; }
         .kanban-board::-webkit-scrollbar-thumb:hover { background: #064e3b; }
-        .kanban-column { min-width:280px; max-width:280px; background:rgba(255,255,255,0.9); border:1px solid rgba(52,211,153,0.25); border-radius:14px; padding:10px; display:flex; flex-direction:column; }
+        .kanban-column { min-width:280px; max-width:280px; background:rgba(255,255,255,0.9); border:1px solid rgba(52,211,153,0.25); border-radius:14px; padding:10px; display:flex; flex-direction:column; transition: border-color .18s ease, background-color .18s ease, transform .18s ease, box-shadow .18s ease; }
         .kanban-column-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; }
         .kanban-column-title { font-size:14px; font-weight:700; color:#047857; }
-        .kanban-cards { display:flex; flex-direction:column; gap:10px; min-height:60px; transition: background-color .18s ease, box-shadow .18s ease; }
-        .kanban-cards.sortable-over { background:rgba(16,185,129,.08); box-shadow: inset 0 0 0 1px rgba(16,185,129,.35); border-radius:10px; }
+        .kanban-cards { display:flex; flex-direction:column; gap:10px; min-height:100px; padding:4px 2px; transition: background-color .18s ease, box-shadow .18s ease; border-radius:10px; }
+        .kanban-cards.sortable-over { background:rgba(16,185,129,.11); box-shadow: inset 0 0 0 2px rgba(16,185,129,.5); }
+        .kanban-column:has(.kanban-cards.sortable-over) { border-color:rgba(16,185,129,.65); background:rgba(236,253,245,.6); transform:translateY(-2px); box-shadow:0 8px 24px rgba(16,185,129,.14); }
         .kanban-card { position:relative; border:1px solid rgba(16,185,129,0.22); border-radius:10px; background:#fff; padding:12px; min-height:125px; cursor:grab; transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease; }
         .kanban-card.kanban-card-discarded { background:#e5e7eb; border-color:#d1d5db; }
         .kanban-card.kanban-card-done { background:#dcfce7; border-color:#86efac; }
-        .sortable-ghost { opacity:.35; border:1px dashed rgba(5,150,105,.6); }
-        .sortable-drag { transform: rotate(1deg); box-shadow:0 10px 26px rgba(15,23,42,.18); cursor:grabbing; }
-        .sortable-chosen { box-shadow:0 8px 18px rgba(16,185,129,.28); }
+        .sortable-ghost { opacity:.3; border:2px dashed rgba(5,150,105,.7); background:rgba(16,185,129,.05) !important; border-radius:10px; }
+        .sortable-drag { transform: rotate(1.5deg) scale(1.02); box-shadow:0 14px 32px rgba(15,23,42,.22); cursor:grabbing; }
+        .sortable-chosen { box-shadow:0 8px 18px rgba(16,185,129,.28); transform: scale(1.01); }
         .kanban-card h4 { font-size:14px; color:#065f46; margin-bottom:6px; }
         .kanban-meta { font-size:12px; color:#4b5563; display:flex; align-items:center; gap:6px; margin-bottom:4px; }
         .kanban-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
@@ -2190,12 +2191,30 @@
         <div id="portfolio" class="tab-content">
             <div class="page-header">
                 <h1>Portifólio</h1>
-                <p>Organize ofertas comerciais com pares de dor do cliente e solução.</p>
+                <p>Gerencie soluções comerciais e transforme reuniões em atas inteligentes.</p>
             </div>
-            <div style="margin-bottom:12px;">
-                <button class="btn btn-auto-mapping btn-small" onclick="openNewOfferModal()"><span class="ai-star-icon">✦</span> + Nova Oferta</button>
+            <div style="margin-bottom:16px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button id="portfolioSubBtn_stf" class="btn btn-auto-mapping" onclick="switchPortfolioSubmodule('stf')">
+                    <i class="fas fa-briefcase"></i> Soluções STF
+                </button>
+                <button id="portfolioSubBtn_iata" class="btn btn-secondary" onclick="switchPortfolioSubmodule('iata')">
+                    <i class="fas fa-file-alt"></i> iAta
+                </button>
             </div>
-            <div id="portfolioContent"></div>
+
+            <div id="portfolioSubPanel_stf">
+                <div style="margin-bottom:12px;">
+                    <button class="btn btn-auto-mapping btn-small" onclick="openNewOfferModal()"><span class="ai-star-icon">✦</span> + Nova Oferta</button>
+                </div>
+                <div id="portfolioContent"></div>
+            </div>
+
+            <div id="portfolioSubPanel_iata" style="display:none;">
+                <div style="margin-bottom:12px;">
+                    <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
+                </div>
+                <div id="iataContent"></div>
+            </div>
         </div>
 
         <div id="atividades" class="tab-content">
@@ -6775,11 +6794,12 @@
                 const cardsContainer = columnEl.querySelector('.kanban-cards');
                 if (!cardsContainer) return;
                 const columnId = Number(columnEl.getAttribute('data-column-id'));
-                const isLocked = Number(columnEl.getAttribute('data-column-locked')) === 1; // Regra de produto: bloqueada não origina nem recebe drag (Opção A)
+                // Drag liberado em todas as colunas — is_locked só bloqueia edição/exclusão da coluna
                 const sortable = Sortable.create(cardsContainer, {
-                    group: isLocked ? { name: 'kanban', pull: false, put: false } : { name: 'kanban', pull: true, put: (to) => Number(to.el?.closest('.kanban-column')?.getAttribute('data-column-locked')) !== 1 },
-                    sort: !isLocked,
+                    group: { name: 'kanban', pull: true, put: true },
+                    sort: true,
                     animation: 150,
+                    emptyInsertThreshold: 20,
                     ghostClass: 'sortable-ghost',
                     dragClass: 'sortable-drag',
                     chosenClass: 'sortable-chosen',
@@ -6788,16 +6808,19 @@
                     onStart: (evt) => {
                         kanbanDragState.sorting = true;
                         kanbanDragState.movedAt = Date.now();
-                        evt.from?.classList.add('sortable-over');
+                        document.querySelector('.kanban-board')?.classList.add('kanban-dragging');
                         logKanbanDrag('drag_start', { cardId: Number(evt.item?.getAttribute('data-card-id')), fromColumnId: columnId });
                     },
                     onMove: (evt) => {
-                        evt.from?.classList.add('sortable-over');
-                        evt.to?.classList.add('sortable-over');
+                        document.querySelectorAll('.kanban-cards.sortable-over')
+                            .forEach(el => el.classList.remove('sortable-over'));
+                        if (evt.to && evt.to !== evt.from) evt.to.classList.add('sortable-over');
                         return true;
                     },
                     onEnd: async (evt) => {
-                        document.querySelectorAll('.kanban-cards.sortable-over').forEach(el => el.classList.remove('sortable-over'));
+                        document.querySelectorAll('.kanban-cards.sortable-over')
+                            .forEach(el => el.classList.remove('sortable-over'));
+                        document.querySelector('.kanban-board')?.classList.remove('kanban-dragging');
                         kanbanDragState.sorting = false;
                         kanbanDragState.movedAt = Date.now();
                         const cardId = Number(evt.item?.getAttribute('data-card-id'));
@@ -10342,8 +10365,27 @@
 
         let portfolioOffers = [];
         const expandedPortfolioOffers = new Set();
+        let _portfolioCurrentSubTab = 'stf';
 
-        async function loadPortfolio() {
+        function loadPortfolio() {
+            switchPortfolioSubmodule(_portfolioCurrentSubTab || 'stf');
+        }
+
+        function switchPortfolioSubmodule(subTab) {
+            const tabs = ['stf', 'iata'];
+            tabs.forEach(tab => {
+                const panel = document.getElementById(`portfolioSubPanel_${tab}`);
+                const btn = document.getElementById(`portfolioSubBtn_${tab}`);
+                const isActive = tab === subTab;
+                if (panel) panel.style.display = isActive ? '' : 'none';
+                if (btn) btn.className = isActive ? 'btn btn-auto-mapping' : 'btn btn-secondary';
+            });
+            _portfolioCurrentSubTab = subTab;
+            if (subTab === 'stf') _loadSTFSolutions();
+            else if (subTab === 'iata') loadIAta();
+        }
+
+        async function _loadSTFSolutions() {
             const container = document.getElementById('portfolioContent');
             if (!container) return;
             container.innerHTML = '<p style="color:#6b7280;">Carregando ofertas...</p>';
@@ -10616,6 +10658,349 @@
             }
         }
 
+        // ─── iAta ──────────────────────────────────────────────────────────────
+        let iataRecords = [];
+        const expandedIAtaRecords = new Set();
+
+        async function loadIAta() {
+            const container = document.getElementById('iataContent');
+            if (!container) return;
+            container.innerHTML = '<p style="color:#6b7280;">Carregando histórico de atas...</p>';
+            try {
+                const response = await fetch(`${API_BASE}/portfolio/iata`);
+                const payload = await response.json().catch(() => []);
+                if (!response.ok) throw new Error(payload.error || 'Erro ao carregar atas.');
+                iataRecords = Array.isArray(payload) ? payload : [];
+                renderIAtaHistory(iataRecords);
+            } catch (error) {
+                container.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(error.message || 'Erro ao carregar histórico de atas.')}</div>`;
+            }
+        }
+
+        function renderIAtaHistory(records = []) {
+            const container = document.getElementById('iataContent');
+            if (!container) return;
+            if (!records.length) {
+                container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><h3 style="color:#e2dfd5;">Nenhuma ata gerada</h3><p style="color:#e2dfd5;">Clique em "+ Nova Ata" para gerar a ata de uma reunião com IA.</p></div>`;
+                return;
+            }
+            container.innerHTML = records.map(record => {
+                const rid = Number(record.id);
+                const isExpanded = expandedIAtaRecords.has(rid);
+                const participants = Array.isArray(record.participants) ? record.participants : [];
+                const insights = record.insights || {};
+                const insightsList = Array.isArray(insights.insights) ? insights.insights : [];
+                const hasUnmatched = insights.has_unmatched;
+                const dateStr = record.meeting_date ? ` · ${escapeHtml(record.meeting_date)}` : '';
+                const timeStr = record.meeting_time ? ` ${escapeHtml(record.meeting_time)}` : '';
+                return `
+                    <div class="history-item" style="border:1px solid rgba(16,185,129,.25); border-radius:12px; margin-bottom:10px; background:#fff;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                            <div style="flex:1; min-width:0; cursor:pointer;" onclick="toggleIAtaExpand(${rid})">
+                                <div style="display:flex; align-items:center; gap:8px; color:#065f46; flex-wrap:wrap;">
+                                    <i class="fas fa-file-alt"></i>
+                                    <h3 style="margin:0; font-size:15px;">${escapeHtml(record.title || 'Ata sem título')}</h3>
+                                    <span style="font-size:12px; color:#6b7280; font-weight:400;">${dateStr}${timeStr}</span>
+                                </div>
+                                ${participants.length ? `<p style="margin:4px 0 0; color:#6b7280; font-size:12px;">Participantes: ${escapeHtml(participants.join(', '))}</p>` : ''}
+                                ${insightsList.length ? `<p style="margin:3px 0 0; font-size:12px; color:${hasUnmatched ? '#b45309' : '#065f46'};">
+                                    <i class="fas fa-${hasUnmatched ? 'exclamation-circle' : 'check-circle'}"></i>
+                                    ${insightsList.length} insight${insightsList.length > 1 ? 's' : ''} de negócio${hasUnmatched ? ' · Oportunidades sem solução mapeada' : ''}
+                                </p>` : ''}
+                            </div>
+                            <div style="display:flex; gap:6px; flex-shrink:0;">
+                                <button class="btn btn-secondary btn-small" onclick="toggleIAtaExpand(${rid})" title="Expandir/Colapsar">${isExpanded ? '▲' : '▼'}</button>
+                                <button class="btn btn-secondary btn-small" onclick="viewIAtaFull(${rid})" title="Ver ata completa"><i class="fas fa-eye"></i></button>
+                                <button class="btn btn-danger btn-small" onclick="deleteIAtaRecord(${rid})" title="Excluir"><i class="fas fa-trash"></i></button>
+                            </div>
+                        </div>
+                        ${isExpanded ? _renderIAtaExpanded(record) : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function _renderIAtaExpanded(record) {
+            const ata = record.ata || {};
+            const insights = record.insights || {};
+            const insightsList = Array.isArray(insights.insights) ? insights.insights : [];
+            const participants = Array.isArray(record.participants) ? record.participants : [];
+            const nextSteps = Array.isArray(ata.next_steps) ? ata.next_steps : [];
+            const decisions = Array.isArray(ata.decisions) ? ata.decisions : [];
+
+            return `
+                <div style="margin-top:12px; padding-top:12px; border-top:1px solid #e5e7eb;">
+                    ${record.topic ? `<p style="margin:0 0 8px; font-size:13px;"><strong style="color:#065f46;">Tema:</strong> ${escapeHtml(record.topic)}</p>` : ''}
+                    ${ata.summary ? `<p style="margin:0 0 8px; font-size:13px;"><strong style="color:#065f46;">Resumo:</strong> ${escapeHtml(ata.summary)}</p>` : ''}
+                    ${decisions.length ? `
+                        <div style="margin-bottom:8px;">
+                            <strong style="color:#065f46; font-size:13px;">Decisões:</strong>
+                            <ul style="margin:4px 0 0; padding-left:18px; font-size:12px; color:#374151;">
+                                ${decisions.map(d => `<li>${escapeHtml(d)}</li>`).join('')}
+                            </ul>
+                        </div>` : ''}
+                    ${nextSteps.length ? `
+                        <div style="margin-bottom:10px;">
+                            <strong style="color:#065f46; font-size:13px;">Próximos Passos:</strong>
+                            <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
+                                ${nextSteps.map(s => `
+                                    <div style="display:flex; gap:8px; align-items:flex-start; font-size:12px; padding:4px 8px; background:#f0fdf4; border-radius:6px; border-left:3px solid #10b981;">
+                                        <div style="flex:1;"><strong>${escapeHtml(s.responsible || 'A definir')}</strong>: ${escapeHtml(s.action || '')}</div>
+                                        ${s.deadline ? `<div style="color:#6b7280; flex-shrink:0;">${escapeHtml(s.deadline)}</div>` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>` : ''}
+                    ${insightsList.length ? `
+                        <div style="padding:10px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px;">
+                            <div style="font-weight:600; color:#92400e; margin-bottom:8px; font-size:13px;"><i class="fas fa-lightbulb"></i> Insights de Negócios</div>
+                            ${insightsList.map(ins => `
+                                <div style="margin-bottom:5px; padding:6px 8px; background:${ins.matched_offer ? '#f0fdf4' : '#fff7ed'}; border-radius:6px; border-left:3px solid ${ins.matched_offer ? '#10b981' : '#f97316'}; font-size:12px;">
+                                    <div style="font-weight:600; color:#1f2937; margin-bottom:2px;">${escapeHtml(ins.pain || '')}</div>
+                                    ${ins.matched_offer
+                                        ? `<div style="color:#065f46;"><i class="fas fa-check-circle"></i> <strong>${escapeHtml(ins.matched_offer)}</strong>${ins.matched_solution ? ': ' + escapeHtml(ins.matched_solution) : ''}</div>`
+                                        : `<div style="color:#c2410c;"><i class="fas fa-info-circle"></i> ${escapeHtml(ins.observation || 'Busque outras soluções na Stefanini para esta demanda.')}</div>`
+                                    }
+                                </div>
+                            `).join('')}
+                            ${insights.has_unmatched ? `
+                                <div style="margin-top:6px; padding:6px 8px; background:#fff7ed; border-radius:6px; font-size:12px; color:#c2410c; font-weight:500;">
+                                    <i class="fas fa-exclamation-circle"></i> Há oportunidades sem solução mapeada no portfólio. Entre em contato com a Stefanini para explorar outras alternativas.
+                                </div>` : ''}
+                        </div>` : ''}
+                </div>
+            `;
+        }
+
+        function toggleIAtaExpand(rid) {
+            const key = Number(rid);
+            if (expandedIAtaRecords.has(key)) expandedIAtaRecords.delete(key);
+            else expandedIAtaRecords.add(key);
+            renderIAtaHistory(iataRecords);
+        }
+
+        async function viewIAtaFull(rid) {
+            try {
+                const response = await fetch(`${API_BASE}/portfolio/iata/${rid}`);
+                const record = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(record.error || 'Erro ao carregar ata.');
+                _openIAtaViewModal(record);
+            } catch (error) {
+                showError(error.message || 'Erro ao abrir ata.');
+            }
+        }
+
+        function _openIAtaViewModal(record) {
+            const modalId = 'iataViewModal';
+            document.getElementById(modalId)?.remove();
+            const ata = record.ata || {};
+            const insights = record.insights || {};
+            const insightsList = Array.isArray(insights.insights) ? insights.insights : [];
+            const participants = Array.isArray(ata.participants) ? ata.participants : (Array.isArray(record.participants) ? record.participants : []);
+            const nextSteps = Array.isArray(ata.next_steps) ? ata.next_steps : [];
+            const decisions = Array.isArray(ata.decisions) ? ata.decisions : [];
+            const keyPoints = Array.isArray(ata.key_points) ? ata.key_points : [];
+            const agenda = Array.isArray(ata.agenda) ? ata.agenda : [];
+
+            const html = `
+                <div class="modal active" id="${modalId}" onclick="if(event.target===this) this.remove()">
+                    <div class="modal-content" style="max-width:820px; max-height:90vh; overflow-y:auto;">
+                        <div class="modal-header" style="background:linear-gradient(135deg,#065f46,#10b981); border-radius:12px 12px 0 0; margin:-20px -20px 20px; padding:20px;">
+                            <div style="flex:1;">
+                                <h2 class="modal-title" style="color:#fff; margin:0 0 4px;">${escapeHtml(ata.title || record.title || 'Ata de Reunião')}</h2>
+                                <div style="display:flex; gap:16px; font-size:13px; color:rgba(255,255,255,.85);">
+                                    ${ata.meeting_date ? `<span><i class="fas fa-calendar"></i> ${escapeHtml(ata.meeting_date)}</span>` : ''}
+                                    ${ata.meeting_time ? `<span><i class="fas fa-clock"></i> ${escapeHtml(ata.meeting_time)}</span>` : ''}
+                                </div>
+                            </div>
+                            <button class="modal-close" onclick="document.getElementById('${modalId}').remove()" style="color:#fff;">&#215;</button>
+                        </div>
+
+                        ${ata.topic ? `
+                            <div style="margin-bottom:16px; padding:10px 14px; background:#f0fdf4; border-radius:8px; border-left:4px solid #10b981;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:4px;">Tema da Reunião</div>
+                                <div style="font-weight:600; color:#065f46; font-size:15px;">${escapeHtml(ata.topic)}</div>
+                            </div>` : ''}
+
+                        ${participants.length ? `
+                            <div style="margin-bottom:16px;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Participantes</div>
+                                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                    ${participants.map(p => `<span style="padding:3px 10px; background:#e0f2fe; color:#0369a1; border-radius:20px; font-size:12px; font-weight:500;">${escapeHtml(p)}</span>`).join('')}
+                                </div>
+                            </div>` : ''}
+
+                        ${ata.summary ? `
+                            <div style="margin-bottom:16px; padding:12px 14px; background:#f8fafc; border-radius:8px;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:6px; font-weight:600;">Resumo Executivo</div>
+                                <p style="margin:0; color:#374151; line-height:1.6;">${escapeHtml(ata.summary)}</p>
+                            </div>` : ''}
+
+                        ${agenda.length ? `
+                            <div style="margin-bottom:16px;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Pauta</div>
+                                <ol style="margin:0; padding-left:20px; color:#374151; font-size:14px; line-height:1.8;">
+                                    ${agenda.map(a => `<li>${escapeHtml(a)}</li>`).join('')}
+                                </ol>
+                            </div>` : ''}
+
+                        ${keyPoints.length ? `
+                            <div style="margin-bottom:16px;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Pontos Discutidos</div>
+                                <ul style="margin:0; padding-left:20px; color:#374151; font-size:14px; line-height:1.8;">
+                                    ${keyPoints.map(k => `<li>${escapeHtml(k)}</li>`).join('')}
+                                </ul>
+                            </div>` : ''}
+
+                        ${decisions.length ? `
+                            <div style="margin-bottom:16px;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Decisões Tomadas</div>
+                                ${decisions.map(d => `
+                                    <div style="display:flex; gap:8px; align-items:flex-start; padding:6px 10px; background:#f0fdf4; border-radius:6px; border-left:3px solid #10b981; margin-bottom:4px; font-size:13px; color:#374151;">
+                                        <i class="fas fa-check" style="color:#10b981; margin-top:2px; flex-shrink:0;"></i>
+                                        <span>${escapeHtml(d)}</span>
+                                    </div>
+                                `).join('')}
+                            </div>` : ''}
+
+                        ${nextSteps.length ? `
+                            <div style="margin-bottom:16px;">
+                                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; margin-bottom:8px; font-weight:600;">Próximos Passos &amp; Pendências</div>
+                                <div class="table-container">
+                                    <table>
+                                        <thead><tr><th>Ação</th><th>Responsável</th><th>Prazo</th><th>Status</th></tr></thead>
+                                        <tbody>
+                                            ${nextSteps.map(s => `
+                                                <tr>
+                                                    <td>${escapeHtml(s.action || '')}</td>
+                                                    <td><strong>${escapeHtml(s.responsible || 'A definir')}</strong></td>
+                                                    <td>${escapeHtml(s.deadline || '—')}</td>
+                                                    <td><span style="padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; background:${s.status === 'concluído' ? '#d1fae5' : '#fef3c7'}; color:${s.status === 'concluído' ? '#065f46' : '#92400e'};">${escapeHtml(s.status || 'pendente')}</span></td>
+                                                </tr>
+                                            `).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>` : ''}
+
+                        ${insightsList.length ? `
+                            <div style="padding:14px; background:#fffbeb; border:1px solid #fcd34d; border-radius:10px;">
+                                <div style="font-weight:700; color:#92400e; margin-bottom:12px; font-size:14px;">
+                                    <i class="fas fa-lightbulb"></i> Insights de Negócios
+                                </div>
+                                ${insightsList.map(ins => `
+                                    <div style="margin-bottom:8px; padding:10px 12px; background:${ins.matched_offer ? '#f0fdf4' : '#fff7ed'}; border-radius:8px; border-left:4px solid ${ins.matched_offer ? '#10b981' : '#f97316'};">
+                                        <div style="font-weight:600; color:#1f2937; margin-bottom:4px; font-size:13px;">${escapeHtml(ins.pain || '')}</div>
+                                        ${ins.matched_offer
+                                            ? `<div style="font-size:12px; color:#065f46; display:flex; align-items:flex-start; gap:6px;">
+                                                <i class="fas fa-check-circle" style="margin-top:2px; flex-shrink:0;"></i>
+                                                <div><strong>${escapeHtml(ins.matched_offer)}</strong>${ins.matched_solution ? ' — ' + escapeHtml(ins.matched_solution) : ''}</div>
+                                               </div>`
+                                            : `<div style="font-size:12px; color:#c2410c; display:flex; align-items:flex-start; gap:6px;">
+                                                <i class="fas fa-info-circle" style="margin-top:2px; flex-shrink:0;"></i>
+                                                <div>${escapeHtml(ins.observation || 'Busque outras soluções na Stefanini para esta demanda.')}</div>
+                                               </div>`
+                                        }
+                                        ${ins.confidence ? `<div style="font-size:11px; color:#9ca3af; margin-top:3px;">Relevância: ${escapeHtml(ins.confidence)}</div>` : ''}
+                                    </div>
+                                `).join('')}
+                                ${insights.has_unmatched ? `
+                                    <div style="margin-top:8px; padding:10px 12px; background:#fff7ed; border-radius:8px; border-left:4px solid #f97316; font-size:13px;">
+                                        <div style="display:flex; gap:8px; align-items:flex-start; color:#c2410c; font-weight:500;">
+                                            <i class="fas fa-exclamation-circle" style="margin-top:2px;"></i>
+                                            <div>Há oportunidades identificadas que não possuem solução mapeada no portfólio atual. Entre em contato com a equipe da <strong>Stefanini</strong> para explorar outras alternativas.</div>
+                                        </div>
+                                    </div>` : ''}
+                            </div>` : ''}
+
+                        <div style="display:flex; justify-content:flex-end; margin-top:20px;">
+                            <button class="btn btn-secondary" onclick="document.getElementById('${modalId}').remove()">Fechar</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function openIAtaModal() {
+            const modalId = 'iataNewModal';
+            document.getElementById(modalId)?.remove();
+            const html = `
+                <div class="modal active" id="${modalId}" onclick="if(event.target===this) this.remove()">
+                    <div class="modal-content" style="max-width:680px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title"><i class="fas fa-file-alt"></i> Nova Ata — iAta</h2>
+                            <button class="modal-close" onclick="document.getElementById('${modalId}').remove()">&#215;</button>
+                        </div>
+                        <p style="margin:0 0 16px; color:#6b7280; font-size:13px;">
+                            Envie um arquivo de reunião ou cole o texto. A IA gera a ata completa e identifica insights de negócio cruzando com as Soluções STF.
+                        </p>
+                        <div class="form-group">
+                            <label>Arquivo da reunião</label>
+                            <input id="iataFileInput" type="file" accept=".pdf,.doc,.docx,.txt,.vtt,.srt,.csv,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+                            <small style="color:#9ca3af; font-size:11px; display:block; margin-top:4px;">Suportado: PDF, DOCX, TXT, VTT (Teams), SRT e outros formatos de texto</small>
+                        </div>
+                        <div class="form-group">
+                            <label>OU cole o texto da reunião</label>
+                            <textarea id="iataRawTextInput" rows="7" placeholder="Cole aqui a transcrição, notas ou chat da reunião..."></textarea>
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                            <button class="btn btn-secondary" onclick="document.getElementById('${modalId}').remove()">Cancelar</button>
+                            <button id="iataSubmitBtn" class="btn btn-auto-mapping btn-small" onclick="submitIAta()">
+                                <span class="ai-star-icon">✦</span> Gerar Ata com IA
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        async function submitIAta() {
+            const fileInput = document.getElementById('iataFileInput');
+            const file = fileInput?.files?.[0] || null;
+            const rawText = (document.getElementById('iataRawTextInput')?.value || '').trim();
+            if (!file && !rawText) {
+                showError('Envie um arquivo ou cole o texto da reunião.');
+                return;
+            }
+            const btn = document.getElementById('iataSubmitBtn');
+            const originalHtml = btn ? btn.innerHTML : '';
+            if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerando ata...'; }
+            try {
+                const fd = new FormData();
+                if (file) fd.append('meeting_file', file);
+                if (rawText) fd.append('raw_text', rawText);
+                const response = await fetch(`${API_BASE}/portfolio/iata`, { method: 'POST', body: fd });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Erro ao gerar ata.');
+                document.getElementById('iataNewModal')?.remove();
+                showSuccess('Ata gerada com sucesso!');
+                await loadIAta();
+                if (payload.id) {
+                    expandedIAtaRecords.add(Number(payload.id));
+                    renderIAtaHistory(iataRecords);
+                }
+            } catch (error) {
+                showError(error.message || 'Erro ao processar reunião com IA.');
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+            }
+        }
+
+        async function deleteIAtaRecord(rid) {
+            if (!window.confirm('Deseja realmente excluir esta ata?')) return;
+            try {
+                const response = await fetch(`${API_BASE}/portfolio/iata/${rid}`, { method: 'DELETE' });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Erro ao excluir ata.');
+                showSuccess('Ata excluída com sucesso.');
+                expandedIAtaRecords.delete(Number(rid));
+                await loadIAta();
+            } catch (error) {
+                showError(error.message || 'Erro ao excluir ata.');
+            }
+        }
 
         async function loadWikiTocaData() {
             const query = (document.getElementById('wikiSearchInput')?.value || '').trim();
