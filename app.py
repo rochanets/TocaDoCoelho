@@ -6975,78 +6975,44 @@ def itoca_base_status():
         return jsonify({'error': f'Erro ao consultar status da base iToca: {e}'}), 500
 
 
+def _itoca_base_update_async(task_id, incremental):
+    try:
+        def progress_cb(pct, msg):
+            _bg_task_set(task_id, {'step': msg, 'progress': pct})
+
+        _bg_task_set(task_id, {'step': 'Iniciando indexação...', 'progress': 5})
+        result = _itoca_update_cached_base(progress_cb=progress_cb, incremental=incremental)
+
+        changed = result.get('changed', True)
+        msg = 'Base iToca atualizada com sucesso.' if changed else 'Base já estava atualizada. Nenhuma alteração detectada.'
+        _bg_task_set(task_id, {
+            'step': 'Concluído!', 'progress': 100, 'status': 'done',
+            'result': {
+                'message': msg,
+                'items_count': len(result.get('items', [])),
+                'updated_at': result.get('updated_at', ''),
+                'incremental': result.get('incremental', False),
+                'changed': changed
+            }
+        })
+    except Exception as e:
+        logger.exception(f'[iToca][BaseUpdate][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
 @app.route('/api/itoca/base-update', methods=['POST'])
 def itoca_base_update():
-    """Inicia a atualização da base iToca e retorna progresso via SSE.
+    """Inicia a atualização da base iToca de forma assíncrona (polling via /api/tasks/<task_id>).
     Aceita parâmetro JSON: { "incremental": true } para indexação incremental (só o que mudou).
-    Sem parâmetro ou incremental=false: indexação completa.
     """
     req_data = request.get_json(silent=True) or {}
     incremental = bool(req_data.get('incremental', False))
-
-    def generate():
-        try:
-            import queue
-            q = queue.Queue()
-
-            def progress_cb(pct, msg):
-                q.put({'type': 'progress', 'percent': pct, 'message': msg})
-
-            result_holder = {}
-            error_holder = {}
-
-            def run_update():
-                try:
-                    result = _itoca_update_cached_base(progress_cb=progress_cb, incremental=incremental)
-                    result_holder['result'] = result
-                except Exception as ex:
-                    error_holder['error'] = str(ex)
-                finally:
-                    q.put({'type': 'done'})
-
-            t = threading.Thread(target=run_update, daemon=True)
-            t.start()
-
-            while True:
-                try:
-                    evt = q.get(timeout=180)
-                except Exception:
-                    yield f'data: {json.dumps({"type":"error","message":"Timeout aguardando indexação."}, ensure_ascii=False)}\n\n'
-                    break
-                if evt['type'] == 'progress':
-                    payload = json.dumps({'percent': evt['percent'], 'message': evt['message']}, ensure_ascii=False)
-                    yield f'data: {payload}\n\n'
-                elif evt['type'] == 'done':
-                    if error_holder:
-                        payload = json.dumps({'type': 'error', 'message': error_holder['error']}, ensure_ascii=False)
-                    else:
-                        r = result_holder.get('result', {})
-                        changed = r.get('changed', True)
-                        msg = 'Base iToca atualizada com sucesso.' if changed else 'Base já estava atualizada. Nenhuma alteração detectada.'
-                        payload = json.dumps({
-                            'type': 'done',
-                            'message': msg,
-                            'items_count': len(r.get('items', [])),
-                            'updated_at': r.get('updated_at', ''),
-                            'incremental': r.get('incremental', False),
-                            'changed': changed
-                        }, ensure_ascii=False)
-                    yield f'data: {payload}\n\n'
-                    break
-        except GeneratorExit:
-            pass
-        except Exception as ex:
-            yield f'data: {json.dumps({"type":"error","message":str(ex)}, ensure_ascii=False)}\n\n'
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive',
-        }
-    )
+    task_id = uuid.uuid4().hex
+    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+    threading.Thread(target=_itoca_base_update_async, args=(task_id, incremental), daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
 
 
 @app.route('/api/itoca/ask', methods=['POST'])
@@ -10463,6 +10429,36 @@ def _portfolio_generate_offer_from_llm(raw_input, image_data=None, image_mime=No
     return None, 'llm_invalid_response'
 
 
+# ---------------------------------------------------------------------------
+# Unified Background Task Store (used by autofill, linkedin, automapping, iToca)
+# ---------------------------------------------------------------------------
+_bg_tasks: dict = {}
+_bg_tasks_lock = threading.Lock()
+
+
+def _bg_task_set(task_id, updates):
+    with _bg_tasks_lock:
+        task = _bg_tasks.get(task_id, {})
+        task.update(updates)
+        _bg_tasks[task_id] = task
+
+
+def _bg_task_get(task_id):
+    with _bg_tasks_lock:
+        return dict(_bg_tasks.get(task_id) or {})
+
+
+def _bg_task_cleanup(task_id, delay=300):
+    def _do():
+        import time as _time
+        _time.sleep(delay)
+        with _bg_tasks_lock:
+            _bg_tasks.pop(task_id, None)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+
 _portfolio_tasks = {}
 _portfolio_tasks_lock = threading.Lock()
 
@@ -11250,6 +11246,14 @@ def get_iata_task_status(task_id):
     return jsonify(task)
 
 
+@app.route('/api/tasks/<task_id>', methods=['GET'])
+def get_bg_task_status(task_id):
+    """Generic task status poll for background tasks (autofill, linkedin, automapping, iToca)."""
+    task = _bg_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    return jsonify(task)
+
 
 @app.route('/api/portfolio/iata/<int:record_id>', methods=['DELETE'])
 def delete_iata_record(record_id):
@@ -11268,15 +11272,9 @@ def delete_iata_record(record_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/accounts/autofill', methods=['POST'])
-def account_autofill():
-    """Preenche automaticamente campos de uma conta com dados da empresa via SAI LLM e busca de imagem."""
+def _autofill_process_async(task_id, account_name):
     try:
-        data = request.get_json() or {}
-        account_name = (data.get('account_name') or '').strip()
-        if not account_name:
-            return jsonify({'error': 'Nome da conta não informado.'}), 400
-
+        _bg_task_set(task_id, {'step': 'Consultando IA sobre a empresa...', 'progress': 20})
         company_data = _account_autofill_via_sai(account_name)
 
         average_revenue_formatted = ''
@@ -11288,6 +11286,7 @@ def account_autofill():
             except Exception:
                 pass
 
+        _bg_task_set(task_id, {'step': 'Buscando logo da empresa...', 'progress': 70})
         logo_url = None
         try:
             candidates = _find_image_candidates_on_web(f'{account_name} logo empresa', limit=4)
@@ -11296,13 +11295,33 @@ def account_autofill():
         except Exception as e:
             logger.warning(f'[AccountAutoFill] Falha ao buscar logo: {e}')
 
-        return jsonify({
+        result = {
             'average_revenue': average_revenue_formatted,
             'professionals_count': company_data.get('professionals_count', ''),
             'global_presence': company_data.get('global_presence', ''),
             'logo_url': logo_url,
             'source': company_data.get('source', 'SAI')
-        })
+        }
+        _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': result})
+    except Exception as e:
+        logger.exception(f'[AccountAutoFill][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/accounts/autofill', methods=['POST'])
+def account_autofill():
+    """Preenche automaticamente campos de uma conta com dados da empresa via SAI LLM e busca de imagem."""
+    try:
+        data = request.get_json() or {}
+        account_name = (data.get('account_name') or '').strip()
+        if not account_name:
+            return jsonify({'error': 'Nome da conta não informado.'}), 400
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(target=_autofill_process_async, args=(task_id, account_name), daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
         logger.exception(f'[AccountAutoFill] Erro: {e}')
         return jsonify({'error': str(e)}), 500
@@ -11441,43 +11460,27 @@ def _linkedin_parse_summary(raw):
     return None
 
 
-@app.route('/api/linkedin/summarize', methods=['POST'])
-def linkedin_summarize():
-    """Gera resumo executivo de um perfil LinkedIn para preparação de reunião."""
+def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url):
     try:
-        data = request.get_json() or {}
-        linkedin_url = (data.get('linkedin_url') or '').strip()
-        profile_text = (data.get('profile_text') or '').strip()
-        meeting_context = (data.get('meeting_context') or '').strip()
-        extension_photo_url = (data.get('extension_photo_url') or '').strip()
-
-        if not linkedin_url and not profile_text:
-            return jsonify({'error': 'Informe a URL do LinkedIn ou cole o texto do perfil.'}), 400
-
-        # Tenta buscar perfil público se URL fornecida e texto não informado
+        _bg_task_set(task_id, {'step': 'Buscando perfil público...', 'progress': 15})
         fetched_text = None
         if linkedin_url and not profile_text:
             fetched_text = _linkedin_try_fetch_public(linkedin_url)
 
-        # Determina qualidade dos dados: texto colado pelo usuário = rico; URL = limitado
         data_is_rich = bool(profile_text) or (fetched_text and len(fetched_text) > 2000)
-        limited_data = not data_is_rich
-
         profile_content = profile_text or fetched_text or ''
         if not profile_content and linkedin_url:
             profile_content = f'URL do perfil LinkedIn: {linkedin_url}'
 
+        _bg_task_set(task_id, {'step': 'Gerando resumo executivo com IA...', 'progress': 35})
         raw, source = _linkedin_generate_summary_via_llm(profile_content, meeting_context, data_is_rich=data_is_rich)
         if not raw:
-            return jsonify({'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'}), 503
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'})
+            return
 
         parsed = _linkedin_parse_summary(raw)
 
-        # Tenta buscar foto e baixar localmente (evita CORS no html2canvas)
-        # Prioridade:
-        # 1) foto capturada pela extensão;
-        # 2) og:image da URL pública;
-        # 3) busca web por nome+cargo (fallback).
+        _bg_task_set(task_id, {'step': 'Buscando foto do perfil...', 'progress': 75})
         photo_url = None
         photo_source = None
         if extension_photo_url:
@@ -11508,15 +11511,44 @@ def linkedin_summarize():
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao buscar/baixar foto: {e}')
 
-        return jsonify({
+        result = {
             'summary': parsed,
             'raw': raw if not parsed else None,
             'source': source,
             'fetched_from_url': fetched_text is not None,
-            'limited_data': limited_data,
+            'limited_data': not data_is_rich,
             'photo_url': photo_url,
             'photo_source': photo_source
-        })
+        }
+        _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': result})
+    except Exception as e:
+        logger.exception(f'[LinkedIn][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/linkedin/summarize', methods=['POST'])
+def linkedin_summarize():
+    """Gera resumo executivo de um perfil LinkedIn para preparação de reunião."""
+    try:
+        data = request.get_json() or {}
+        linkedin_url = (data.get('linkedin_url') or '').strip()
+        profile_text = (data.get('profile_text') or '').strip()
+        meeting_context = (data.get('meeting_context') or '').strip()
+        extension_photo_url = (data.get('extension_photo_url') or '').strip()
+
+        if not linkedin_url and not profile_text:
+            return jsonify({'error': 'Informe a URL do LinkedIn ou cole o texto do perfil.'}), 400
+
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_linkedin_process_async,
+            args=(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
         logger.exception(f'[LinkedIn] Erro: {e}')
         return jsonify({'error': str(e)}), 500
@@ -11754,6 +11786,100 @@ def cancel_automapping():
         return jsonify({'error': str(e)}), 500
 
 
+def _automapping_process_async(task_id, company, country, industry, force, request_id):
+    try:
+        _bg_task_set(task_id, {'step': 'Verificando cache...', 'progress': 10})
+        query_key = _normalize_automapping_key(company, country, industry)
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT id, result_json, created_at FROM automapping_runs
+                     WHERE query_key = ?
+                       AND datetime(created_at) >= datetime('now', '-20 days')
+                     ORDER BY datetime(created_at) DESC
+                     LIMIT 1''', (query_key,))
+        cached = c.fetchone()
+
+        if cached and not force:
+            conn.close()
+            result = json.loads(cached['result_json'])
+            _bg_task_set(task_id, {
+                'step': 'Concluído!', 'progress': 100, 'status': 'done',
+                'result': result, 'already_exists': True,
+                'run_id': cached['id'], 'created_at': cached['created_at']
+            })
+            return
+
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            _bg_task_set(task_id, {'status': 'cancelled', 'error': 'AutoMapping cancelado pelo usuário.'})
+            return
+
+        _bg_task_set(task_id, {'step': 'Buscando evidências de mercado...', 'progress': 30})
+        try:
+            evidence_results, section_errors, execution_meta = _run_tavily_search(company, country, industry)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+            conn.close()
+            _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao consultar Tavily: {detail[:400]}'})
+            return
+        except Exception as e:
+            conn.close()
+            _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao consultar Tavily: {str(e)}'})
+            return
+
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            _bg_task_set(task_id, {'status': 'cancelled', 'error': 'AutoMapping cancelado pelo usuário.'})
+            return
+
+        _bg_task_set(task_id, {'step': 'Construindo análise de ambiente...', 'progress': 55})
+        result_payload = _build_automapping_payload(company, country, industry, evidence_results, section_errors, execution_meta)
+        c.execute('SELECT 1 FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1', (company,))
+        result_payload['client_exists'] = bool(c.fetchone())
+
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            _bg_task_set(task_id, {'status': 'cancelled', 'error': 'AutoMapping cancelado pelo usuário.'})
+            return
+
+        _bg_task_set(task_id, {'step': 'Gerando síntese executiva com IA...', 'progress': 75})
+        try:
+            llm_summary, llm_meta = _run_openrouter_synthesis(result_payload)
+            result_payload['llm_summary'] = llm_summary
+            result_payload['llm_meta'] = llm_meta
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
+            conn.close()
+            _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao consultar OpenRouter: {detail[:400]}'})
+            return
+        except Exception as e:
+            conn.close()
+            _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao consultar OpenRouter: {str(e)}'})
+            return
+
+        if _is_automapping_cancelled(request_id, consume=True):
+            conn.close()
+            _bg_task_set(task_id, {'status': 'cancelled', 'error': 'AutoMapping cancelado pelo usuário.'})
+            return
+
+        _bg_task_set(task_id, {'step': 'Salvando resultado...', 'progress': 90})
+        c.execute('INSERT INTO automapping_runs (company, country, industry, query_key, result_json) VALUES (?, ?, ?, ?, ?)',
+                  (company, country, industry, query_key, json.dumps(result_payload, ensure_ascii=False)))
+        run_id = c.lastrowid
+        conn.commit()
+        conn.close()
+
+        _bg_task_set(task_id, {
+            'step': 'Concluído!', 'progress': 100, 'status': 'done',
+            'result': result_payload, 'already_exists': False, 'run_id': run_id
+        })
+    except Exception as e:
+        logger.exception(f'[AutoMapping][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
 @app.route('/api/automapping', methods=['POST'])
 def run_automapping():
     try:
@@ -11770,81 +11896,14 @@ def run_automapping():
         if _is_automapping_cancelled(request_id, consume=True):
             return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
 
-        query_key = _normalize_automapping_key(company, country, industry)
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''SELECT id, result_json, created_at FROM automapping_runs
-                     WHERE query_key = ?
-                       AND datetime(created_at) >= datetime('now', '-20 days')
-                     ORDER BY datetime(created_at) DESC
-                     LIMIT 1''', (query_key,))
-        cached = c.fetchone()
-
-        if cached and not force:
-            conn.close()
-            return jsonify({
-                'already_exists': True,
-                'message': 'Já existe um AutoMapping para os mesmos dados nos últimos 20 dias.',
-                'run_id': cached['id'],
-                'created_at': cached['created_at'],
-                'result': json.loads(cached['result_json'])
-            }), 200
-
-        if _is_automapping_cancelled(request_id, consume=True):
-            conn.close()
-            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
-
-        try:
-            evidence_results, section_errors, execution_meta = _run_tavily_search(company, country, industry)
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
-            conn.close()
-            return jsonify({'error': f'Falha ao consultar Tavily: {detail[:400]}'}), 502
-        except Exception as e:
-            conn.close()
-            return jsonify({'error': f'Falha ao consultar Tavily: {str(e)}'}), 502
-
-        if _is_automapping_cancelled(request_id, consume=True):
-            conn.close()
-            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
-
-        result_payload = _build_automapping_payload(company, country, industry, evidence_results, section_errors, execution_meta)
-
-        c.execute('SELECT 1 FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1', (company,))
-        result_payload['client_exists'] = bool(c.fetchone())
-
-        if _is_automapping_cancelled(request_id, consume=True):
-            conn.close()
-            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
-
-        try:
-            llm_summary, llm_meta = _run_openrouter_synthesis(result_payload)
-            result_payload['llm_summary'] = llm_summary
-            result_payload['llm_meta'] = llm_meta
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
-            conn.close()
-            return jsonify({'error': f'Falha ao consultar OpenRouter: {detail[:400]}'}), 502
-        except Exception as e:
-            conn.close()
-            return jsonify({'error': f'Falha ao consultar OpenRouter: {str(e)}'}), 502
-
-        if _is_automapping_cancelled(request_id, consume=True):
-            conn.close()
-            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
-
-        c.execute('INSERT INTO automapping_runs (company, country, industry, query_key, result_json) VALUES (?, ?, ?, ?, ?)',
-                  (company, country, industry, query_key, json.dumps(result_payload, ensure_ascii=False)))
-        run_id = c.lastrowid
-        conn.commit()
-        conn.close()
-
-        return jsonify({
-            'already_exists': False,
-            'run_id': run_id,
-            'result': result_payload
-        }), 200
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_automapping_process_async,
+            args=(task_id, company, country, industry, force, request_id),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
 
     except Exception as e:
         print(f'[ERROR] POST /api/automapping: {e}')
