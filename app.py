@@ -7294,6 +7294,249 @@ def outlook_apply_suggestions():
         return jsonify({'error': str(e)}), 500
 
 
+# ── Outlook Add-in (task pane EWS) ──────────────────────────────────────────
+
+_addin_pending_data = None
+_addin_pending_lock = threading.Lock()
+_addin_pending_expires = 0.0
+
+
+def _addin_set_pending(data):
+    global _addin_pending_data, _addin_pending_expires
+    with _addin_pending_lock:
+        _addin_pending_data = data
+        _addin_pending_expires = time.time() + 600  # 10 min TTL
+
+
+def _addin_get_pending():
+    global _addin_pending_data, _addin_pending_expires
+    with _addin_pending_lock:
+        if _addin_pending_data is None or time.time() > _addin_pending_expires:
+            _addin_pending_data = None
+            return None
+        return dict(_addin_pending_data)
+
+
+def _addin_clear_pending():
+    global _addin_pending_data
+    with _addin_pending_lock:
+        _addin_pending_data = None
+
+
+def _outlook_match_emails(emails_data, conn):
+    """Faz matching de uma lista de emails contra clientes cadastrados.
+    Retorna (activities, unmatched, all_clients_for_select).
+    """
+    c = conn.cursor()
+    c.execute('SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+    clients_map = {}
+    domain_map = {}
+    for row in c.fetchall():
+        norm = (row['email'] or '').strip().lower()
+        if not norm:
+            continue
+        entry = {'id': row['id'], 'name': row['name'], 'photo_url': row['photo_url'] or ''}
+        clients_map[norm] = entry
+        domain = norm.split('@', 1)[-1] if '@' in norm else ''
+        if domain and '.' in domain:
+            domain_map.setdefault(domain, []).append(entry)
+
+    c.execute('SELECT id, name, company FROM clients ORDER BY name COLLATE NOCASE')
+    all_clients = [{'id': r['id'], 'name': r['name'], 'company': r['company'] or ''} for r in c.fetchall()]
+
+    activities = []
+    unmatched = []
+    seen_keys = set()
+
+    for email_data in emails_data:
+        subject = (email_data.get('subject') or '').strip()
+        email_date = (email_data.get('date') or '').strip()
+        direction = email_data.get('direction', 'received')
+        sender = email_data.get('sender') or {}
+        recipients = email_data.get('recipients') or []
+        body_preview = (email_data.get('body_preview') or '').strip()
+        if not email_date:
+            continue
+
+        if direction == 'received':
+            candidates = [sender] if sender.get('email') else []
+            label = 'De'
+        else:
+            candidates = [r for r in recipients if r.get('email')]
+            label = 'Para'
+
+        matched = False
+        for candidate in candidates:
+            cand_email = (candidate.get('email') or '').strip().lower()
+            if not cand_email:
+                continue
+            client = clients_map.get(cand_email)
+            if not client:
+                domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
+                domain_clients = domain_map.get(domain, [])
+                if len(domain_clients) == 1:
+                    client = domain_clients[0]
+            if not client:
+                continue
+
+            dedup_key = (client['id'], email_date[:16], subject[:100])
+            if dedup_key in seen_keys:
+                matched = True
+                continue
+            c.execute(
+                '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
+                   AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
+                   AND information LIKE ? LIMIT 1''',
+                (client['id'], email_date[:16], f'{subject[:100]}%')
+            )
+            if c.fetchone():
+                matched = True
+                continue
+            seen_keys.add(dedup_key)
+            matched = True
+            activities.append({
+                'client_id': client['id'],
+                'client_name': client['name'],
+                'client_photo_url': client['photo_url'],
+                'subject': subject,
+                'date': email_date,
+                'direction': direction,
+                'counterpart_label': label,
+                'counterpart_name': (candidate.get('name') or cand_email).strip(),
+                'counterpart_email': cand_email,
+                'body_preview': body_preview
+            })
+            break
+
+        if not matched and candidates:
+            first = candidates[0]
+            unmatched.append({
+                'subject': subject,
+                'date': email_date,
+                'direction': direction,
+                'counterpart_label': label,
+                'counterpart_name': (first.get('name') or first.get('email') or '').strip(),
+                'counterpart_email': (first.get('email') or '').strip().lower(),
+                'body_preview': body_preview[:180]
+            })
+
+    return activities, unmatched, all_clients
+
+
+@app.route('/api/outlook/addon-preview', methods=['POST'])
+def outlook_addon_preview():
+    """Conta matched/unmatched sem armazenar — usado pela task pane para mostrar estatísticas."""
+    try:
+        data = request.get_json() or {}
+        emails = data.get('emails') or []
+        if not emails:
+            return jsonify({'matched': 0, 'unmatched': 0})
+        conn = get_db()
+        activities, unmatched, _ = _outlook_match_emails(emails, conn)
+        conn.close()
+        return jsonify({'matched': len(activities), 'unmatched': len(unmatched)})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/addon-preview: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/ingest-from-addon', methods=['POST'])
+def outlook_ingest_from_addon():
+    """Recebe emails da task pane do Outlook Add-in, faz matching e armazena como pendente."""
+    try:
+        data = request.get_json() or {}
+        emails = data.get('emails') or []
+        if not emails:
+            return jsonify({'message': 'Nenhum email recebido.', 'matched': 0, 'unmatched': 0})
+
+        conn = get_db()
+        activities, unmatched, all_clients = _outlook_match_emails(emails, conn)
+        conn.close()
+
+        payload = {
+            'total_read': len(emails),
+            'activities': activities,
+            'unmatched': unmatched,
+            'all_clients': all_clients,
+            'message': f'{len(activities)} email(s) com cliente · {len(unmatched)} sem correspondência · {len(emails)} lidos'
+        }
+        _addin_set_pending(payload)
+
+        return jsonify({
+            'message': f'{len(activities)} email(s) prontos para revisão no Toca.',
+            'matched': len(activities),
+            'unmatched': len(unmatched),
+            'total': len(emails)
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/ingest-from-addon: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/addon-pending', methods=['GET'])
+def outlook_addon_pending():
+    """Retorna dados pendentes do add-in (se existirem e não expirarem)."""
+    pending = _addin_get_pending()
+    if pending is None:
+        return jsonify({'has_data': False})
+    return jsonify(dict(has_data=True, **pending))
+
+
+@app.route('/api/outlook/addon-pending', methods=['DELETE'])
+def outlook_addon_pending_clear():
+    """Limpa dados pendentes do add-in."""
+    _addin_clear_pending()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/outlook/manifest.xml')
+def outlook_addin_manifest():
+    """Serve o manifest do Outlook Add-in com a URL base correta para o host atual."""
+    base_url = f"{request.scheme}://{request.host}"
+    addin_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+           xsi:type="MailApp">
+  <Id>{addin_id}</Id>
+  <Version>1.1.0.0</Version>
+  <ProviderName>TocaDoCoelho</ProviderName>
+  <DefaultLocale>pt-BR</DefaultLocale>
+  <DisplayName DefaultValue="Toca do Coelho"/>
+  <Description DefaultValue="Exporta emails do Outlook para atividades no Toca"/>
+  <IconUrl DefaultValue="{base_url}/favicon.png"/>
+  <HighResolutionIconUrl DefaultValue="{base_url}/favicon.png"/>
+  <SupportUrl DefaultValue="{base_url}"/>
+  <AppDomains>
+    <AppDomain>{base_url}</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Mailbox"/>
+  </Hosts>
+  <Requirements>
+    <Sets>
+      <Set Name="MailBox" MinVersion="1.1"/>
+    </Sets>
+  </Requirements>
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="{base_url}/outlook-addin/taskpane.html"/>
+        <RequestedHeight>220</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+  <Permissions>ReadWriteMailbox</Permissions>
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+  </Rule>
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+</OfficeApp>"""
+    return Response(xml, mimetype='application/xml')
+
+
 @app.route('/api/outlook/import', methods=['POST'])
 def import_outlook_emails():
     """Importação via arquivo JSON (fallback / uso avançado)."""
