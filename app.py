@@ -7537,6 +7537,52 @@ def outlook_addin_manifest():
     return Response(xml, mimetype='application/xml')
 
 
+@app.route('/api/outlook/install-addin.bat')
+def outlook_install_addin_bat():
+    """Gera instalador .bat do suplemento Outlook com a URL base correta."""
+    base_url = f"{request.scheme}://{request.host}"
+    manifest_url = f"{base_url}/api/outlook/manifest.xml"
+    catalog_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+    bat = (
+        "@echo off\r\n"
+        "setlocal enabledelayedexpansion\r\n"
+        "chcp 65001 >nul 2>&1\r\n"
+        "echo ======================================\r\n"
+        "echo  Instalador do Suplemento Toca do Coelho\r\n"
+        "echo ======================================\r\n"
+        "echo.\r\n"
+        "set ADDIN_DIR=%USERPROFILE%\\TocaAddin\r\n"
+        "if not exist \"%ADDIN_DIR%\" mkdir \"%ADDIN_DIR%\"\r\n"
+        "echo Baixando manifest do suplemento...\r\n"
+        f"powershell -Command \"Invoke-WebRequest -Uri '{manifest_url}' -OutFile '%ADDIN_DIR%\\manifest.xml' -UseBasicParsing\"\r\n"
+        "if not exist \"%ADDIN_DIR%\\manifest.xml\" (\r\n"
+        "    echo ERRO: Nao foi possivel baixar o manifest.\r\n"
+        f"    echo Verifique que o Toca esta rodando em {base_url}\r\n"
+        "    pause\r\n"
+        "    exit /b 1\r\n"
+        ")\r\n"
+        "echo Configurando catalogo confiavel do Outlook...\r\n"
+        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v Url /t REG_SZ /d \"%ADDIN_DIR%\\\" /f >nul\r\n"
+        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v Flags /t REG_DWORD /d 1 /f >nul\r\n"
+        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v DisplayName /t REG_SZ /d \"Toca do Coelho\" /f >nul\r\n"
+        "echo.\r\n"
+        "echo Suplemento instalado com sucesso!\r\n"
+        "echo.\r\n"
+        "echo PROXIMOS PASSOS:\r\n"
+        "echo 1. Feche e reabra o Outlook\r\n"
+        "echo 2. No Outlook: Pagina Inicial ^> Obter Suplementos\r\n"
+        "echo 3. Clique em \"Pasta Compartilhada\" e ative \"Toca do Coelho\"\r\n"
+        "echo 4. Ao abrir qualquer email, o painel Toca aparece na ribbon\r\n"
+        "echo 5. Carregue os emails e clique em \"Enviar para Toca\"\r\n"
+        "echo.\r\n"
+        "pause\r\n"
+    )
+    resp = Response(bat, mimetype='application/octet-stream')
+    resp.headers['Content-Disposition'] = 'attachment; filename="instalar-suplemento-toca.bat"'
+    return resp
+
+
 @app.route('/api/outlook/import', methods=['POST'])
 def import_outlook_emails():
     """Importação via arquivo JSON (fallback / uso avançado)."""

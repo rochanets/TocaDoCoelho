@@ -2348,23 +2348,8 @@
                     <button class="btn btn-primary" onclick="openActivityModal()">
                         <i class="fas fa-plus"></i> Nova Atividade
                     </button>
-                    <select id="outlookSyncDays" title="Período de sincronização do Outlook" style="padding:4px 8px; border-radius:6px; border:1px solid #d1fae5; font-size:13px; background:#f0fdf4; color:#065f46;">
-                        <option value="7">7 dias</option>
-                        <option value="15">15 dias</option>
-                        <option value="30" selected>30 dias</option>
-                        <option value="60">60 dias</option>
-                        <option value="90">90 dias</option>
-                    </select>
-                    <button class="btn btn-auto-mapping btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
-                        <span class="ai-star-icon">✦</span> Sync Outlook
-                    </button>
-                    <button class="btn btn-auto-mapping btn-small" id="outlookAddinCaptureBtn" onclick="captureOutlookAddin()" style="display:none;position:relative;">
-                        <span class="ai-star-icon">✦</span> Capturar do Add-in
-                        <span id="outlookAddinBadge" style="position:absolute;top:-5px;right:-5px;background:#ef4444;color:white;border-radius:99px;font-size:10px;width:16px;height:16px;display:flex;align-items:center;justify-content:center;font-weight:700;">!</span>
-                    </button>
                 </div>
             </div>
-            <div id="outlookImportStatus" style="margin-bottom:8px; font-size:13px;"></div>
             <div id="activitiesList"></div>
         </div>
 
@@ -2494,6 +2479,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
+                <button id="autoTocaBtn_sync-outlook" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('sync-outlook')"><span class="ai-star-icon">✦</span> Sync Outlook</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
@@ -2575,6 +2561,64 @@
                     <button class="btn btn-auto-mapping" type="button" onclick="openAutoTocaMailingPreview()">
                         <span class="ai-star-icon">✦</span> Selecionar Contatos
                     </button>
+                </div>
+            </div>
+
+            <div id="autoTocaSyncOutlook" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
+                <h3 style="margin-bottom:8px; color:#065f46;">Sync Outlook</h3>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">
+                    Importe emails do Outlook como atividades, detecte compromissos, atualize o status do cliente e mova cards do Kanban automaticamente.
+                </p>
+
+                <!-- Instalação do suplemento -->
+                <div style="background:#f0fdf4; border:1px solid #d1fae5; border-radius:10px; padding:14px; margin-bottom:16px;">
+                    <h4 style="margin-bottom:8px; color:#065f46; font-size:14px;"><i class="fas fa-puzzle-piece"></i> Suplemento do Outlook (instalação única)</h4>
+                    <p style="margin-bottom:10px; color:#4b5563; font-size:13px;">
+                        Instale o suplemento uma vez e sincronize com 2 cliques — sem timeouts, sem popups extras. Funciona com Exchange e Microsoft 365.
+                    </p>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+                        <a id="outlookAddinInstallLink" href="#" class="btn btn-auto-mapping btn-small" onclick="downloadOutlookAddinInstaller(event)">
+                            <span class="ai-star-icon">✦</span> Baixar Instalador (.bat)
+                        </a>
+                    </div>
+                    <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin-bottom:12px; line-height:1.9;">
+                        <li>Execute o <code>.bat</code> baixado (mantendo o Toca em execução)</li>
+                        <li>Feche e reabra o Outlook</li>
+                        <li>No Outlook: <strong>Página Inicial → Obter Suplementos → Pasta Compartilhada</strong></li>
+                        <li>Ative <strong>"Toca do Coelho"</strong> e clique em Adicionar</li>
+                        <li>Ao abrir qualquer email, carregue os emails e clique em <strong>"Enviar para Toca"</strong></li>
+                        <li>Volte ao Toca e clique em <strong>"Capturar do Add-in"</strong> abaixo</li>
+                    </ol>
+                    <details style="font-size:12px; color:#6b7280;">
+                        <summary style="cursor:pointer; color:#065f46; margin-bottom:6px;">Instalação manual via URL (alternativa)</summary>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
+                            <code id="outlookAddinManifestUrlAT" style="background:#fff; border:1px solid #d1fae5; padding:4px 8px; border-radius:6px; font-size:11px; color:#065f46; flex:1; min-width:180px; word-break:break-all;"></code>
+                            <button class="btn btn-secondary btn-small" onclick="copyOutlookManifestUrlAT()"><i class="fas fa-copy"></i> Copiar</button>
+                        </div>
+                        <p style="margin-top:4px; line-height:1.5;">No Outlook: Obter Suplementos → Meus suplementos → Suplemento Personalizado → Adicionar da URL → cole a URL acima.</p>
+                    </details>
+                </div>
+
+                <!-- Sincronização -->
+                <div>
+                    <h4 style="margin-bottom:10px; color:#065f46; font-size:14px;"><i class="fas fa-sync-alt"></i> Sincronizar Emails</h4>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                        <select id="outlookSyncDays" title="Período de sincronização" style="padding:4px 8px; border-radius:6px; border:1px solid #d1fae5; font-size:13px; background:#f0fdf4; color:#065f46;">
+                            <option value="7">7 dias</option>
+                            <option value="15">15 dias</option>
+                            <option value="30" selected>30 dias</option>
+                            <option value="60">60 dias</option>
+                            <option value="90">90 dias</option>
+                        </select>
+                        <button class="btn btn-auto-mapping btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
+                            <span class="ai-star-icon">✦</span> Sync via PowerShell
+                        </button>
+                        <button class="btn btn-auto-mapping btn-small" id="outlookAddinCaptureBtn" onclick="captureOutlookAddin()" style="display:none; position:relative;">
+                            <span class="ai-star-icon">✦</span> Capturar do Add-in
+                            <span id="outlookAddinBadge" style="position:absolute;top:-5px;right:-5px;background:#ef4444;color:white;border-radius:99px;font-size:10px;width:16px;height:16px;display:flex;align-items:center;justify-content:center;font-weight:700;">!</span>
+                        </button>
+                    </div>
+                    <div id="outlookImportStatus" style="font-size:13px;"></div>
                 </div>
             </div>
         </div>
@@ -3432,7 +3476,7 @@
                 _itocaSaveSessionAndClear();
             }
 
-            if (previousTab === 'atividades' && tabName !== 'atividades') {
+            if (previousTab === 'autotoca' && tabName !== 'autotoca') {
                 _addinStopPolling();
             }
 
@@ -3443,7 +3487,8 @@
                 loadITocaBaseStatus();
             }
             else if (tabName === 'clientes') loadClients();
-            else if (tabName === 'atividades') { loadActivities(); _addinStartPolling(); }
+            else if (tabName === 'atividades') { loadActivities(); }
+            else if (tabName === 'autotoca') { loadAutoToca(); _addinStartPolling(); _initOutlookAddinManifestUrl(); }
 
             else if (tabName === 'reports') loadReports();
             else if (tabName === 'agenda') loadAgenda();
@@ -3451,7 +3496,6 @@
             else if (tabName === 'gestao-conta') switchGestaoContaSubmodule(requestedGestaoContaSubTab || _gestaoContaCurrentSubTab || 'accounts');
             else if (tabName === 'portfolio') loadPortfolio();
             else if (tabName === 'wikitoca') loadWikiTocaData();
-            else if (tabName === 'autotoca') loadAutoToca();
             else if (tabName === 'configuracoes') loadSettings();
         }
 
@@ -3493,8 +3537,13 @@
         }
 
         function _initOutlookAddinManifestUrl() {
+            const manifestUrl = `${window.location.origin}/api/outlook/manifest.xml`;
             const el = document.getElementById('outlookAddinManifestUrl');
-            if (el) el.textContent = `${window.location.origin}/api/outlook/manifest.xml`;
+            if (el) el.textContent = manifestUrl;
+            const elAT = document.getElementById('outlookAddinManifestUrlAT');
+            if (elAT) elAT.textContent = manifestUrl;
+            const installLink = document.getElementById('outlookAddinInstallLink');
+            if (installLink) installLink.href = `${window.location.origin}/api/outlook/install-addin.bat`;
         }
 
         function copyOutlookManifestUrl() {
@@ -3505,6 +3554,21 @@
             }).catch(() => {
                 prompt('Copie a URL do manifest:', url);
             });
+        }
+
+        function copyOutlookManifestUrlAT() {
+            const url = `${window.location.origin}/api/outlook/manifest.xml`;
+            navigator.clipboard.writeText(url).then(() => {
+                const btn = event.target.closest('button');
+                if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<i class="fas fa-check"></i> Copiado!'; setTimeout(() => btn.innerHTML = orig, 2000); }
+            }).catch(() => {
+                prompt('Copie a URL do manifest:', url);
+            });
+        }
+
+        function downloadOutlookAddinInstaller(e) {
+            e.preventDefault();
+            window.location.href = `${window.location.origin}/api/outlook/install-addin.bat`;
         }
 
         async function loadStartupConfig() {
@@ -4250,6 +4314,7 @@
         }
 
         async function loadAutoToca() {
+            _initOutlookAddinManifestUrl();
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
             if (response.ok && select) {
@@ -4272,11 +4337,13 @@
         function toggleAutoTocaAutomation(key) {
             const panels = {
                 'chamado-juridico': 'autoTocaChamadoJuridico',
-                'mala-direta': 'autoTocaMalaDireta'
+                'mala-direta': 'autoTocaMalaDireta',
+                'sync-outlook': 'autoTocaSyncOutlook'
             };
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
-                'mala-direta': 'autoTocaBtn_mala-direta'
+                'mala-direta': 'autoTocaBtn_mala-direta',
+                'sync-outlook': 'autoTocaBtn_sync-outlook'
             };
             const targetId = panels[key];
             if (!targetId) return;
