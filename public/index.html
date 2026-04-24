@@ -2348,19 +2348,8 @@
                     <button class="btn btn-primary" onclick="openActivityModal()">
                         <i class="fas fa-plus"></i> Nova Atividade
                     </button>
-                    <select id="outlookSyncDays" title="Período de sincronização do Outlook" style="padding:4px 8px; border-radius:6px; border:1px solid #d1fae5; font-size:13px; background:#f0fdf4; color:#065f46;">
-                        <option value="30">30 dias</option>
-                        <option value="60" selected>60 dias</option>
-                        <option value="90">90 dias</option>
-                        <option value="180">180 dias</option>
-                        <option value="365">1 ano</option>
-                    </select>
-                    <button class="btn btn-auto-mapping btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
-                        <span class="ai-star-icon">✦</span> Sync Outlook
-                    </button>
                 </div>
             </div>
-            <div id="outlookImportStatus" style="margin-bottom:8px; font-size:13px;"></div>
             <div id="activitiesList"></div>
         </div>
 
@@ -2490,6 +2479,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
+                <button id="autoTocaBtn_sync-outlook" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('sync-outlook')"><span class="ai-star-icon">✦</span> Sync Outlook</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
@@ -2571,6 +2561,74 @@
                     <button class="btn btn-auto-mapping" type="button" onclick="openAutoTocaMailingPreview()">
                         <span class="ai-star-icon">✦</span> Selecionar Contatos
                     </button>
+                </div>
+            </div>
+
+            <div id="autoTocaSyncOutlook" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
+                <h3 style="margin-bottom:8px; color:#065f46;">Sync Outlook</h3>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">
+                    Importe emails do Outlook como atividades, detecte compromissos, atualize o status do cliente e mova cards do Kanban automaticamente.
+                </p>
+
+                <!-- Instalação do suplemento -->
+                <div style="background:#f0fdf4; border:1px solid #d1fae5; border-radius:10px; padding:14px; margin-bottom:16px;">
+                    <h4 style="margin-bottom:8px; color:#065f46; font-size:14px;"><i class="fas fa-puzzle-piece"></i> Suplemento do Outlook (instalação única)</h4>
+                    <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
+                        Instale o suplemento uma vez e sincronize com 2 cliques — sem timeouts, sem popups extras. Funciona com Exchange e Microsoft 365.
+                    </p>
+
+                    <!-- Método 1: URL (principal) -->
+                    <div style="margin-bottom:12px;">
+                        <p style="font-size:13px; font-weight:600; color:#065f46; margin-bottom:6px;">Método recomendado — adicionar pela URL (sem download)</p>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                            <code id="outlookAddinManifestUrlAT" style="background:#fff; border:1px solid #d1fae5; padding:6px 10px; border-radius:6px; font-size:12px; color:#065f46; flex:1; min-width:200px; word-break:break-all;"></code>
+                            <button class="btn btn-auto-mapping btn-small" onclick="copyOutlookManifestUrlAT()"><i class="fas fa-copy"></i> Copiar URL</button>
+                        </div>
+                        <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin:0; line-height:1.9;">
+                            <li>No Outlook: <strong>Página Inicial → Obter Suplementos</strong></li>
+                            <li>Clique em <strong>Meus suplementos → Suplemento Personalizado → Adicionar da URL</strong></li>
+                            <li>Cole a URL acima e clique em OK</li>
+                            <li>Ao abrir qualquer email, use o painel <strong>"Toca do Coelho"</strong> na ribbon para carregar e enviar emails</li>
+                        </ol>
+                    </div>
+
+                    <!-- Método 2: XML (alternativa) -->
+                    <details style="border-top:1px solid #d1fae5; padding-top:10px; margin-top:4px;">
+                        <summary style="cursor:pointer; font-size:13px; font-weight:600; color:#065f46; margin-bottom:8px;">Alternativa — baixar arquivo manifest.xml</summary>
+                        <p style="color:#4b5563; font-size:12px; margin-bottom:8px; line-height:1.6;">Se o Outlook não aceitar URL direta, baixe o manifest e adicione pelo arquivo.</p>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                            <a id="outlookAddinManifestDownloadLink" href="#" class="btn btn-secondary btn-small" onclick="downloadOutlookManifestXml(event)">
+                                <i class="fas fa-download"></i> Baixar manifest.xml
+                            </a>
+                        </div>
+                        <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin:0; line-height:1.9;">
+                            <li>Clique em "Baixar manifest.xml" acima</li>
+                            <li>No Outlook: <strong>Obter Suplementos → Meus suplementos → Suplemento Personalizado → Adicionar do arquivo</strong></li>
+                            <li>Selecione o arquivo baixado</li>
+                        </ol>
+                    </details>
+                </div>
+
+                <!-- Sincronização -->
+                <div>
+                    <h4 style="margin-bottom:10px; color:#065f46; font-size:14px;"><i class="fas fa-sync-alt"></i> Sincronizar Emails</h4>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                        <select id="outlookSyncDays" title="Período de sincronização" style="padding:4px 8px; border-radius:6px; border:1px solid #d1fae5; font-size:13px; background:#f0fdf4; color:#065f46;">
+                            <option value="7">7 dias</option>
+                            <option value="15">15 dias</option>
+                            <option value="30" selected>30 dias</option>
+                            <option value="60">60 dias</option>
+                            <option value="90">90 dias</option>
+                        </select>
+                        <button class="btn btn-auto-mapping btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
+                            <span class="ai-star-icon">✦</span> Sync via PowerShell
+                        </button>
+                        <button class="btn btn-auto-mapping btn-small" id="outlookAddinCaptureBtn" onclick="captureOutlookAddin()" style="display:none; position:relative;">
+                            <span class="ai-star-icon">✦</span> Capturar do Add-in
+                            <span id="outlookAddinBadge" style="position:absolute;top:-5px;right:-5px;background:#ef4444;color:white;border-radius:99px;font-size:10px;width:16px;height:16px;display:flex;align-items:center;justify-content:center;font-weight:700;">!</span>
+                        </button>
+                    </div>
+                    <div id="outlookImportStatus" style="font-size:13px;"></div>
                 </div>
             </div>
         </div>
@@ -2673,6 +2731,31 @@
                         </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar Integrações</button>
                     </form>
+                </section>
+
+                <section class="settings-card">
+                    <h3>Outlook Add-in (recomendado)</h3>
+                    <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
+                        Instale o add-in no Outlook para exportar emails diretamente para o Toca — sem timeout, sem janelas extras.
+                        Funciona com qualquer conta Exchange ou Microsoft 365.
+                    </p>
+                    <ol style="color:#4b5563; font-size:13px; padding-left:18px; margin-bottom:16px; line-height:1.8;">
+                        <li>Abra o Outlook → <strong>Página Inicial → Obter Suplementos</strong></li>
+                        <li>Vá em <strong>Meus suplementos → Suplemento Personalizado → Adicionar da URL</strong></li>
+                        <li>Cole a URL abaixo e clique em OK</li>
+                        <li>Ao ler qualquer email, clique em <strong>"Toca do Coelho"</strong> na ribbon</li>
+                        <li>Selecione o período, clique <strong>"Carregar emails"</strong> e depois <strong>"Enviar para Toca"</strong></li>
+                        <li>No Toca, clique em <strong>"Capturar do Add-in"</strong> (aparece automaticamente)</li>
+                    </ol>
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <code id="outlookAddinManifestUrl" style="background:#f0fdf4; border:1px solid #d1fae5; padding:6px 10px; border-radius:6px; font-size:12px; color:#065f46; flex:1; min-width:200px; word-break:break-all;"></code>
+                        <button class="btn btn-secondary btn-small" onclick="copyOutlookManifestUrl()" title="Copiar URL">
+                            <i class="fas fa-copy"></i> Copiar
+                        </button>
+                    </div>
+                    <small style="color:#9ca3af; display:block; margin-top:8px;">
+                        A URL muda conforme a porta (3000 produção / 3001 testes). Instale uma vez por máquina.
+                    </small>
                 </section>
 
                 <section class="settings-card">
@@ -3030,19 +3113,35 @@
 
     <!-- Outlook Sync — Modal de Revisão -->
     <div id="outlookReviewModal" class="modal" style="display:none;" onclick="if(event.target===this)closeOutlookReview()">
-        <div class="modal-content" style="max-width:640px;">
+        <div class="modal-content" style="max-width:660px;">
             <div class="modal-header">
                 <h2><i class="fas fa-envelope-open-text" style="margin-right:8px;color:#10b981;"></i>Revisar Atividades do Outlook</h2>
                 <button class="modal-close" onclick="closeOutlookReview()">×</button>
             </div>
             <div style="padding:20px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-                    <p id="outlookReviewSummary" style="margin:0;font-size:13px;color:#4b5563;"></p>
-                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#374151;cursor:pointer;">
-                        <input type="checkbox" id="outlookSelectAll" checked onchange="toggleAllOutlookItems(this.checked)"> Selecionar todos
-                    </label>
+                <!-- tabs -->
+                <div style="display:flex;gap:4px;margin-bottom:14px;border-bottom:2px solid #d1fae5;">
+                    <button id="outlookTabMatchedBtn" onclick="_outlookTab('matched')" style="padding:6px 14px;border:none;background:none;font-size:13px;font-weight:600;color:#10b981;border-bottom:2px solid #10b981;margin-bottom:-2px;cursor:pointer;">✓ Encontrados <span id="outlookTabMatchedCount">(0)</span></button>
+                    <button id="outlookTabUnmatchedBtn" onclick="_outlookTab('unmatched')" style="padding:6px 14px;border:none;background:none;font-size:13px;font-weight:500;color:#9ca3af;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;">⚠ Sem cliente <span id="outlookTabUnmatchedCount">(0)</span></button>
                 </div>
-                <div id="outlookReviewList" style="max-height:380px;overflow-y:auto;border:1px solid #d1fae5;border-radius:8px;padding:8px 12px;"></div>
+
+                <!-- tab: matched -->
+                <div id="outlookTabMatched">
+                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+                        <p id="outlookReviewSummary" style="margin:0;font-size:13px;color:#4b5563;"></p>
+                        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#374151;cursor:pointer;">
+                            <input type="checkbox" id="outlookSelectAll" checked onchange="toggleAllOutlookItems(this.checked)"> Selecionar todos
+                        </label>
+                    </div>
+                    <div id="outlookReviewList" style="max-height:340px;overflow-y:auto;border:1px solid #d1fae5;border-radius:8px;padding:8px 12px;"></div>
+                </div>
+
+                <!-- tab: unmatched -->
+                <div id="outlookTabUnmatched" style="display:none;">
+                    <p style="font-size:13px;color:#6b7280;margin:0 0 10px;">Emails sem cliente correspondente. Atribua um cliente para importar como atividade.</p>
+                    <div id="outlookUnmatchedList" style="max-height:340px;overflow-y:auto;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;"></div>
+                </div>
+
                 <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
                     <button class="btn btn-secondary" onclick="closeOutlookReview()">Cancelar</button>
                     <button class="btn btn-auto-mapping" id="outlookConfirmBtn" onclick="confirmOutlookImport()">
@@ -3050,6 +3149,40 @@
                     </button>
                 </div>
                 <div id="outlookConfirmStatus" style="margin-top:10px;font-size:13px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Outlook — Modal de Progresso do Import -->
+    <div id="outlookImportProgressModal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width:460px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-brain" style="margin-right:8px;color:#10b981;"></i>Importando e analisando...</h2>
+            </div>
+            <div id="outlookImportProgressArea" style="padding:20px;">
+                <div class="outlook-progress-track"><div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;"></div></div>
+                <p id="outlookImportStep" style="font-size:13px;color:#374151;margin:8px 0 0;">Iniciando...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Outlook — Modal de Sugestões IA -->
+    <div id="outlookSuggestionsModal" class="modal" style="display:none;" onclick="if(event.target===this)closeOutlookSuggestions()">
+        <div class="modal-content" style="max-width:600px;">
+            <div class="modal-header">
+                <h2><span class="ai-star-icon">✦</span> Sugestões da IA</h2>
+                <button class="modal-close" onclick="closeOutlookSuggestions()">×</button>
+            </div>
+            <div style="padding:20px;">
+                <p id="outlookSuggestImportMsg" style="font-size:13px;color:#065f46;background:#d1fae5;padding:8px 12px;border-radius:6px;margin:0 0 16px;"></p>
+                <div id="outlookSuggestionsBody"></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+                    <button class="btn btn-secondary" onclick="closeOutlookSuggestions()">Ignorar sugestões</button>
+                    <button class="btn btn-auto-mapping" id="outlookApplySuggestBtn" onclick="applyOutlookSuggestions()">
+                        <span class="ai-star-icon">✦</span> Aplicar selecionadas
+                    </button>
+                </div>
+                <div id="outlookApplySuggestStatus" style="margin-top:10px;font-size:13px;"></div>
             </div>
         </div>
     </div>
@@ -3353,6 +3486,10 @@
                 _itocaSaveSessionAndClear();
             }
 
+            if (previousTab === 'autotoca' && tabName !== 'autotoca') {
+                _addinStopPolling();
+            }
+
             if (tabName === 'dashboard') loadDashboard();
             else if (tabName === 'iata') {
                 clearITocaChat();
@@ -3360,14 +3497,15 @@
                 loadITocaBaseStatus();
             }
             else if (tabName === 'clientes') loadClients();
-            else if (tabName === 'atividades') loadActivities();
+            else if (tabName === 'atividades') { loadActivities(); }
+            else if (tabName === 'autotoca') { loadAutoToca(); _addinStartPolling(); _initOutlookAddinManifestUrl(); }
+
             else if (tabName === 'reports') loadReports();
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'kanban') loadKanban();
             else if (tabName === 'gestao-conta') switchGestaoContaSubmodule(requestedGestaoContaSubTab || _gestaoContaCurrentSubTab || 'accounts');
             else if (tabName === 'portfolio') loadPortfolio();
             else if (tabName === 'wikitoca') loadWikiTocaData();
-            else if (tabName === 'autotoca') loadAutoToca();
             else if (tabName === 'configuracoes') loadSettings();
         }
 
@@ -3402,9 +3540,36 @@
 
         async function loadSettings() {
             setupSettingsCards();
+            _initOutlookAddinManifestUrl();
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig(), loadStartupConfig()]);
             loadDebugLogsConfig();
             renderSettings();
+        }
+
+        function _initOutlookAddinManifestUrl() {
+            const manifestUrl = `${window.location.origin}/api/outlook/manifest.xml`;
+            const el = document.getElementById('outlookAddinManifestUrl');
+            if (el) el.textContent = manifestUrl;
+            const elAT = document.getElementById('outlookAddinManifestUrlAT');
+            if (elAT) elAT.textContent = manifestUrl;
+            const dlLink = document.getElementById('outlookAddinManifestDownloadLink');
+            if (dlLink) dlLink.href = `${manifestUrl}?download=1`;
+        }
+
+        function _copyManifestUrl() {
+            const url = `${window.location.origin}/api/outlook/manifest.xml`;
+            const btn = event.target.closest('button');
+            navigator.clipboard.writeText(url).then(() => {
+                if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<i class="fas fa-check"></i> Copiado!'; setTimeout(() => btn.innerHTML = orig, 2000); }
+            }).catch(() => { prompt('Copie a URL do manifest:', url); });
+        }
+
+        function copyOutlookManifestUrl() { _copyManifestUrl(); }
+        function copyOutlookManifestUrlAT() { _copyManifestUrl(); }
+
+        function downloadOutlookManifestXml(e) {
+            e.preventDefault();
+            window.location.href = `${window.location.origin}/api/outlook/manifest.xml?download=1`;
         }
 
         async function loadStartupConfig() {
@@ -3548,16 +3713,35 @@
         let _outlookEventSource = null;
         let _outlookPendingActivities = [];
 
-        function syncOutlookEmails() {
+        let _outlookAllClients = [];
+
+        async function syncOutlookEmails() {
             const btn = document.getElementById('outlookSyncBtn');
-            const days = parseInt(document.getElementById('outlookSyncDays')?.value || '60');
+            const days = parseInt(document.getElementById('outlookSyncDays')?.value || '30');
+            const statusEl = document.getElementById('outlookImportStatus');
+
+            if (btn) btn.disabled = true;
+            if (statusEl) statusEl.innerHTML = '';
+
+            // Diagnóstico rápido antes de iniciar
+            try {
+                const diag = await fetch('/api/outlook/diagnose').then(r => r.json());
+                if (!diag.can_sync) {
+                    const problems = (diag.checks || []).filter(c => !c.ok).map(c => c.detail).join(' | ');
+                    if (statusEl) statusEl.innerHTML = `<span style="color:#f59e0b;">⚠ ${escapeHtml(problems || 'Outlook não configurado.')}</span>`;
+                    if (btn) btn.disabled = false;
+                    return;
+                }
+                _outlookAllClients = diag.all_clients || [];
+                if (diag.clients_with_email === 0 && statusEl) {
+                    statusEl.innerHTML = `<span style="color:#f59e0b;">⚠ Nenhum cliente tem email cadastrado — o match pode retornar zero resultados. Cadastre emails nos clientes primeiro.</span>`;
+                }
+            } catch (_) {}
 
             // Abrir modal de progresso
             const modal = document.getElementById('outlookProgressModal');
             if (modal) modal.style.display = 'flex';
             _setOutlookProgress('Conectando ao Outlook...', '');
-
-            if (btn) { btn.disabled = true; }
 
             // Fechar stream anterior se existir
             if (_outlookEventSource) { _outlookEventSource.close(); _outlookEventSource = null; }
@@ -3576,14 +3760,14 @@
                     } else if (data.phase === 'done') {
                         _outlookEventSource.close(); _outlookEventSource = null;
                         _closeOutlookProgressModal();
-                        if (btn) { btn.disabled = false; }
+                        if (btn) btn.disabled = false;
+                        if (data.all_clients) _outlookAllClients = data.all_clients;
                         _openOutlookReviewModal(data);
                     } else if (data.phase === 'error') {
                         _outlookEventSource.close(); _outlookEventSource = null;
                         _closeOutlookProgressModal();
-                        if (btn) { btn.disabled = false; }
-                        const status = document.getElementById('outlookImportStatus');
-                        if (status) status.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(data.message)}</span>`;
+                        if (btn) btn.disabled = false;
+                        if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(data.message)}</span>`;
                     }
                 } catch (_) {}
             };
@@ -3591,9 +3775,8 @@
             _outlookEventSource.onerror = () => {
                 if (_outlookEventSource) { _outlookEventSource.close(); _outlookEventSource = null; }
                 _closeOutlookProgressModal();
-                if (btn) { btn.disabled = false; }
-                const status = document.getElementById('outlookImportStatus');
-                if (status) status.innerHTML = '<span style="color:#ef4444;">Erro na conexão com o servidor. Tente novamente.</span>';
+                if (btn) btn.disabled = false;
+                if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444;">Erro na conexão com o servidor. Tente novamente.</span>';
             };
         }
 
@@ -3616,61 +3799,128 @@
             if (btn) btn.disabled = false;
         }
 
+        let _outlookUnmatchedItems = [];
+        let _outlookCurrentTab = 'matched';
+
+        function _outlookTab(tab) {
+            _outlookCurrentTab = tab;
+            const m = document.getElementById('outlookTabMatched');
+            const u = document.getElementById('outlookTabUnmatched');
+            const mb = document.getElementById('outlookTabMatchedBtn');
+            const ub = document.getElementById('outlookTabUnmatchedBtn');
+            const activeStyle = 'color:#10b981;border-bottom:2px solid #10b981;font-weight:600;';
+            const inactiveStyle = 'color:#9ca3af;border-bottom:2px solid transparent;font-weight:500;';
+            if (tab === 'matched') {
+                if (m) m.style.display = '';
+                if (u) u.style.display = 'none';
+                if (mb) mb.style.cssText = mb.style.cssText.replace(/color:[^;]+;/, '').replace(/border-bottom:[^;]+;/, '').replace(/font-weight:[^;]+;/, '') + activeStyle;
+                if (ub) ub.style.cssText = ub.style.cssText.replace(/color:[^;]+;/, '').replace(/border-bottom:[^;]+;/, '').replace(/font-weight:[^;]+;/, '') + inactiveStyle;
+            } else {
+                if (m) m.style.display = 'none';
+                if (u) u.style.display = '';
+                if (mb) mb.style.cssText = mb.style.cssText.replace(/color:[^;]+;/, '').replace(/border-bottom:[^;]+;/, '').replace(/font-weight:[^;]+;/, '') + inactiveStyle;
+                if (ub) ub.style.cssText = ub.style.cssText.replace(/color:[^;]+;/, '').replace(/border-bottom:[^;]+;/, '').replace(/font-weight:[^;]+;/, '') + activeStyle;
+            }
+        }
+
+        function _outlookRenderItem(act, i) {
+            const dt = new Date(act.date);
+            const dateStr = isNaN(dt) ? act.date : dt.toLocaleDateString('pt-BR');
+            const dirIcon = act.direction === 'received' ? '←' : '→';
+            const preview = (act.body_preview || '').slice(0, 180);
+            const initial = (act.client_name || '?')[0].toUpperCase();
+            const avatar = act.client_photo_url
+                ? `<img src="${escapeHtml(act.client_photo_url)}" class="outlook-review-avatar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="outlook-review-avatar-placeholder" style="display:none;">${escapeHtml(initial)}</span>`
+                : `<span class="outlook-review-avatar-placeholder">${escapeHtml(initial)}</span>`;
+            return `<div class="outlook-review-item">
+                <input type="checkbox" class="outlook-item-check" data-index="${i}" checked onchange="_updateOutlookConfirmBtn()" style="margin-top:10px;cursor:pointer;accent-color:#10b981;">
+                ${avatar}
+                <div class="outlook-review-body">
+                    <div class="outlook-review-header">
+                        <span class="outlook-review-name">${escapeHtml(act.client_name)}</span>
+                        <span class="outlook-review-date">${escapeHtml(dateStr)}</span>
+                        <span class="outlook-review-dir">${dirIcon} ${escapeHtml(act.counterpart_label)}: ${escapeHtml(act.counterpart_name)}</span>
+                    </div>
+                    <div class="outlook-review-subject">${escapeHtml(act.subject || '(sem assunto)')}</div>
+                    ${preview ? `<div class="outlook-review-preview">${escapeHtml(preview)}</div>` : ''}
+                </div>
+            </div>`;
+        }
+
+        function _outlookRenderUnmatched(item, i) {
+            const dt = new Date(item.date);
+            const dateStr = isNaN(dt) ? item.date : dt.toLocaleDateString('pt-BR');
+            const dirIcon = item.direction === 'received' ? '←' : '→';
+            const preview = (item.body_preview || '').slice(0, 140);
+            const clientOptions = (_outlookAllClients || []).map(c =>
+                `<option value="${c.id}">${escapeHtml(c.name)}${c.company ? ' — ' + escapeHtml(c.company) : ''}</option>`
+            ).join('');
+            return `<div class="outlook-review-item" style="border-left:3px solid #fbbf24;padding-left:8px;">
+                <input type="checkbox" class="outlook-unmatched-check" data-uindex="${i}" onchange="_updateOutlookConfirmBtn()" style="margin-top:10px;cursor:pointer;accent-color:#f59e0b;">
+                <div class="outlook-review-body" style="flex:1;">
+                    <div class="outlook-review-header">
+                        <span style="font-size:12px;color:#92400e;background:#fef3c7;padding:2px 6px;border-radius:4px;">⚠ Sem cliente</span>
+                        <span class="outlook-review-date">${escapeHtml(dateStr)}</span>
+                        <span class="outlook-review-dir">${dirIcon} ${escapeHtml(item.counterpart_label)}: ${escapeHtml(item.counterpart_name)} &lt;${escapeHtml(item.counterpart_email)}&gt;</span>
+                    </div>
+                    <div class="outlook-review-subject">${escapeHtml(item.subject || '(sem assunto)')}</div>
+                    ${preview ? `<div class="outlook-review-preview">${escapeHtml(preview)}</div>` : ''}
+                    <div style="margin-top:6px;">
+                        <select class="outlook-unmatched-client" data-uindex="${i}" style="font-size:12px;padding:3px 6px;border-radius:5px;border:1px solid #d1fae5;width:100%;max-width:340px;">
+                            <option value="">— Selecionar cliente para importar —</option>
+                            ${clientOptions}
+                        </select>
+                    </div>
+                </div>
+            </div>`;
+        }
+
         function _openOutlookReviewModal(data) {
             _outlookPendingActivities = data.activities || [];
+            _outlookUnmatchedItems = data.unmatched || [];
             const modal = document.getElementById('outlookReviewModal');
             const summary = document.getElementById('outlookReviewSummary');
             const list = document.getElementById('outlookReviewList');
-            const confirmLabel = document.getElementById('outlookConfirmLabel');
+            const unmatchedList = document.getElementById('outlookUnmatchedList');
             const selectAll = document.getElementById('outlookSelectAll');
-            const status = document.getElementById('outlookImportStatus');
+            const statusEl = document.getElementById('outlookImportStatus');
 
-            if (status) status.innerHTML = '';
+            if (statusEl) statusEl.innerHTML = '';
             if (selectAll) selectAll.checked = true;
 
-            if (!_outlookPendingActivities.length) {
-                if (status) status.innerHTML = `<span style="color:#6b7280;">${escapeHtml(data.message)}</span>`;
+            if (!_outlookPendingActivities.length && !_outlookUnmatchedItems.length) {
+                if (statusEl) statusEl.innerHTML = `<span style="color:#6b7280;">${escapeHtml(data.message || 'Nenhum email encontrado.')}</span>`;
                 return;
             }
 
-            if (summary) summary.textContent = `${data.total_read} email(s) lidos · ${_outlookPendingActivities.length} nova(s) atividade(s) encontrada(s)`;
+            if (summary) summary.textContent = `${data.total_read || 0} email(s) lidos · ${_outlookPendingActivities.length} com cliente encontrado`;
 
-            // Renderizar itens
-            list.innerHTML = _outlookPendingActivities.map((act, i) => {
-                const dt = new Date(act.date);
-                const dateStr = isNaN(dt) ? act.date : dt.toLocaleDateString('pt-BR');
-                const dirIcon = act.direction === 'received' ? '←' : '→';
-                const preview = (act.body_preview || '').slice(0, 180);
-                const initial = (act.client_name || '?')[0].toUpperCase();
-                const avatar = act.client_photo_url
-                    ? `<img src="${escapeHtml(act.client_photo_url)}" class="outlook-review-avatar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="outlook-review-avatar-placeholder" style="display:none;">${escapeHtml(initial)}</span>`
-                    : `<span class="outlook-review-avatar-placeholder">${escapeHtml(initial)}</span>`;
-                return `<div class="outlook-review-item">
-                    <input type="checkbox" class="outlook-item-check" data-index="${i}" checked onchange="_updateOutlookConfirmBtn()" style="margin-top:10px;cursor:pointer;accent-color:#10b981;">
-                    ${avatar}
-                    <div class="outlook-review-body">
-                        <div class="outlook-review-header">
-                            <span class="outlook-review-name">${escapeHtml(act.client_name)}</span>
-                            <span class="outlook-review-date">${escapeHtml(dateStr)}</span>
-                            <span class="outlook-review-dir">${dirIcon} ${escapeHtml(act.counterpart_label)}: ${escapeHtml(act.counterpart_name)}</span>
-                        </div>
-                        <div class="outlook-review-subject">${escapeHtml(act.subject || '(sem assunto)')}</div>
-                        ${preview ? `<div class="outlook-review-preview">${escapeHtml(preview)}</div>` : ''}
-                    </div>
-                </div>`;
-            }).join('');
+            const matchedCount = document.getElementById('outlookTabMatchedCount');
+            const unmatchedCount = document.getElementById('outlookTabUnmatchedCount');
+            if (matchedCount) matchedCount.textContent = `(${_outlookPendingActivities.length})`;
+            if (unmatchedCount) unmatchedCount.textContent = `(${_outlookUnmatchedItems.length})`;
 
+            if (list) list.innerHTML = _outlookPendingActivities.map((act, i) => _outlookRenderItem(act, i)).join('') || '<p style="color:#9ca3af;font-size:13px;padding:8px;">Nenhum email com cliente correspondente.</p>';
+            if (unmatchedList) unmatchedList.innerHTML = _outlookUnmatchedItems.map((item, i) => _outlookRenderUnmatched(item, i)).join('') || '<p style="color:#9ca3af;font-size:13px;padding:8px;">Nenhum email sem correspondência.</p>';
+
+            _outlookTab('matched');
             _updateOutlookConfirmBtn();
             if (modal) modal.style.display = 'flex';
         }
 
         function _updateOutlookConfirmBtn() {
-            const checks = document.querySelectorAll('.outlook-item-check');
-            const selected = Array.from(checks).filter(c => c.checked).length;
+            const matched = Array.from(document.querySelectorAll('.outlook-item-check')).filter(c => c.checked).length;
+            const unmatchedWithClient = Array.from(document.querySelectorAll('.outlook-unmatched-check')).filter(chk => {
+                if (!chk.checked) return false;
+                const idx = chk.dataset.uindex;
+                const sel = document.querySelector(`.outlook-unmatched-client[data-uindex="${idx}"]`);
+                return sel && sel.value;
+            }).length;
+            const total = matched + unmatchedWithClient;
             const label = document.getElementById('outlookConfirmLabel');
             const btn = document.getElementById('outlookConfirmBtn');
-            if (label) label.textContent = `Importar ${selected} atividade${selected !== 1 ? 's' : ''}`;
-            if (btn) btn.disabled = selected === 0;
+            if (label) label.textContent = `Importar ${total} atividade${total !== 1 ? 's' : ''}`;
+            if (btn) btn.disabled = total === 0;
         }
 
         function toggleAllOutlookItems(checked) {
@@ -3682,38 +3932,230 @@
             const modal = document.getElementById('outlookReviewModal');
             if (modal) modal.style.display = 'none';
             _outlookPendingActivities = [];
+            _outlookUnmatchedItems = [];
+        }
+
+        function closeOutlookSuggestions() {
+            const modal = document.getElementById('outlookSuggestionsModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        let _outlookPendingSuggestions = null;
+
+        function _openSuggestionsModal(result) {
+            const modal = document.getElementById('outlookSuggestionsModal');
+            const body = document.getElementById('outlookSuggestionsBody');
+            const msg = document.getElementById('outlookSuggestImportMsg');
+            if (!modal || !body) return;
+
+            const statusSugs = result.status_suggestions || [];
+            const kanbanSugs = result.kanban_suggestions || [];
+            if (!statusSugs.length && !kanbanSugs.length) return;
+
+            _outlookPendingSuggestions = result;
+            if (msg) msg.textContent = result.message || '';
+
+            let html = '';
+            if (statusSugs.length) {
+                html += `<div style="margin-bottom:16px;"><h4 style="font-size:13px;font-weight:600;color:#374151;margin:0 0 8px;">Atualização de relacionamento</h4>`;
+                statusSugs.forEach((s, i) => {
+                    const cur = s.current_stage ? s.current_stage : '(não definido)';
+                    html += `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:#f9fafb;border-radius:6px;margin-bottom:6px;">
+                        <input type="checkbox" class="outlook-stage-check" data-idx="${i}" checked style="margin-top:2px;accent-color:#10b981;">
+                        <div style="font-size:13px;">
+                            <strong>${escapeHtml(s.client_name)}</strong>:
+                            <span style="color:#6b7280;">${escapeHtml(cur)}</span>
+                            → <span style="color:#065f46;font-weight:600;">${escapeHtml(s.suggested_label)}</span>
+                            <div style="color:#9ca3af;font-size:12px;margin-top:2px;">${escapeHtml(s.reason)}</div>
+                        </div>
+                    </div>`;
+                });
+                html += '</div>';
+            }
+            if (kanbanSugs.length) {
+                html += `<div><h4 style="font-size:13px;font-weight:600;color:#374151;margin:0 0 8px;">Mover cards no Kanban</h4>`;
+                kanbanSugs.forEach((k, i) => {
+                    html += `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:#f9fafb;border-radius:6px;margin-bottom:6px;">
+                        <input type="checkbox" class="outlook-kanban-check" data-idx="${i}" checked style="margin-top:2px;accent-color:#10b981;">
+                        <div style="font-size:13px;">
+                            <strong>${escapeHtml(k.card_title)}</strong>:
+                            <span style="color:#6b7280;">${escapeHtml(k.current_column)}</span>
+                            → <span style="color:#065f46;font-weight:600;">${escapeHtml(k.suggested_column)}</span>
+                            <div style="color:#9ca3af;font-size:12px;margin-top:2px;">${escapeHtml(k.reason)}</div>
+                        </div>
+                    </div>`;
+                });
+                html += '</div>';
+            }
+            body.innerHTML = html;
+            modal.style.display = 'flex';
+        }
+
+        async function applyOutlookSuggestions() {
+            if (!_outlookPendingSuggestions) return;
+            const statusSugs = _outlookPendingSuggestions.status_suggestions || [];
+            const kanbanSugs = _outlookPendingSuggestions.kanban_suggestions || [];
+
+            const statusUpdates = Array.from(document.querySelectorAll('.outlook-stage-check'))
+                .filter(c => c.checked)
+                .map(c => {
+                    const s = statusSugs[parseInt(c.dataset.idx)];
+                    return s ? {client_id: s.client_id, stage: s.suggested_stage} : null;
+                }).filter(Boolean);
+
+            const kanbanMoves = Array.from(document.querySelectorAll('.outlook-kanban-check'))
+                .filter(c => c.checked)
+                .map(c => {
+                    const k = kanbanSugs[parseInt(c.dataset.idx)];
+                    return k ? {card_id: k.card_id, column_id: k.suggested_column_id} : null;
+                }).filter(Boolean);
+
+            const btn = document.getElementById('outlookApplySuggestBtn');
+            const applyStatus = document.getElementById('outlookApplySuggestStatus');
+            if (btn) btn.disabled = true;
+            try {
+                const res = await fetch('/api/outlook/apply-suggestions', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({status_updates: statusUpdates, kanban_moves: kanbanMoves})
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Erro');
+                if (applyStatus) applyStatus.innerHTML = `<span style="color:#10b981;">✓ ${escapeHtml(data.message)}</span>`;
+                setTimeout(closeOutlookSuggestions, 1500);
+            } catch (e) {
+                if (applyStatus) applyStatus.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(e.message)}</span>`;
+                if (btn) btn.disabled = false;
+            }
         }
 
         async function confirmOutlookImport() {
-            const checks = document.querySelectorAll('.outlook-item-check');
-            const selected = Array.from(checks)
+            const matchedChecks = Array.from(document.querySelectorAll('.outlook-item-check'));
+            const selectedMatched = matchedChecks
                 .filter(c => c.checked)
-                .map(c => _outlookPendingActivities[parseInt(c.dataset.index)]);
+                .map(c => _outlookPendingActivities[parseInt(c.dataset.index)])
+                .filter(Boolean);
 
-            if (!selected.length) return;
+            const unmatchedChecks = Array.from(document.querySelectorAll('.outlook-unmatched-check'));
+            const selectedUnmatched = unmatchedChecks
+                .filter(chk => chk.checked)
+                .map(chk => {
+                    const idx = chk.dataset.uindex;
+                    const sel = document.querySelector(`.outlook-unmatched-client[data-uindex="${idx}"]`);
+                    const clientId = sel ? parseInt(sel.value) : 0;
+                    if (!clientId) return null;
+                    const item = _outlookUnmatchedItems[parseInt(idx)];
+                    if (!item) return null;
+                    return Object.assign({}, item, {client_id: clientId});
+                }).filter(Boolean);
 
-            const btn = document.getElementById('outlookConfirmBtn');
-            const confStatus = document.getElementById('outlookConfirmStatus');
-            if (btn) btn.disabled = true;
-            if (confStatus) confStatus.innerHTML = '<span style="color:#6b7280;"><i class="fas fa-spinner fa-spin"></i> Registrando atividades...</span>';
+            const allSelected = [...selectedMatched, ...selectedUnmatched];
+            if (!allSelected.length) return;
+
+            closeOutlookReview();
+
+            // Mostrar modal de progresso de import
+            const importModal = document.getElementById('outlookImportProgressModal');
+            const importFill = document.getElementById('outlookImportFill');
+            const importStep = document.getElementById('outlookImportStep');
+            if (importModal) importModal.style.display = 'flex';
+            if (importFill) importFill.style.width = '5%';
+            if (importStep) importStep.textContent = 'Iniciando...';
 
             try {
                 const res = await fetch('/api/outlook/confirm-import', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({activities: selected})
+                    body: JSON.stringify({activities: allSelected})
                 });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || 'Erro desconhecido');
+                const startData = await res.json();
+                if (!res.ok) throw new Error(startData.error || 'Erro ao iniciar');
 
-                closeOutlookReview();
-                const status = document.getElementById('outlookImportStatus');
-                if (status) status.innerHTML = `<span style="color:#10b981;">✓ ${escapeHtml(data.message)}</span>`;
-                loadActivities();
+                const taskId = startData.task_id;
+
+                // Polling
+                await new Promise((resolve, reject) => {
+                    const poll = setInterval(async () => {
+                        try {
+                            const statusRes = await fetch(`/api/outlook/confirm-tasks/${taskId}`);
+                            const taskData = await statusRes.json();
+                            if (importFill) importFill.style.width = `${taskData.progress || 5}%`;
+                            if (importStep) importStep.textContent = taskData.step || '';
+                            if (taskData.status === 'done') {
+                                clearInterval(poll);
+                                resolve(taskData.result);
+                            } else if (taskData.status === 'error') {
+                                clearInterval(poll);
+                                reject(new Error(taskData.step || 'Erro desconhecido'));
+                            }
+                        } catch (pollErr) {
+                            clearInterval(poll);
+                            reject(pollErr);
+                        }
+                    }, 800);
+                }).then(result => {
+                    if (importModal) importModal.style.display = 'none';
+                    const statusEl = document.getElementById('outlookImportStatus');
+                    if (statusEl) statusEl.innerHTML = `<span style="color:#10b981;">✓ ${escapeHtml(result.message || '')}</span>`;
+                    loadActivities();
+                    if ((result.status_suggestions || []).length || (result.kanban_suggestions || []).length) {
+                        _openSuggestionsModal(result);
+                    }
+                }).catch(err => {
+                    if (importModal) importModal.style.display = 'none';
+                    const statusEl = document.getElementById('outlookImportStatus');
+                    if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(err.message)}</span>`;
+                });
             } catch (e) {
-                if (confStatus) confStatus.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(e.message)}</span>`;
-                if (btn) btn.disabled = false;
+                if (importModal) importModal.style.display = 'none';
+                const statusEl = document.getElementById('outlookImportStatus');
+                if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(e.message)}</span>`;
             }
+        }
+
+        // ── Outlook Add-in (task pane) ─────────────────────────────────────
+
+        let _addinPollTimer = null;
+
+        function _addinSetCaptureVisible(visible) {
+            const btn = document.getElementById('outlookAddinCaptureBtn');
+            if (btn) btn.style.display = visible ? '' : 'none';
+        }
+
+        async function _addinCheckPending(silent = true) {
+            try {
+                const res = await fetch('/api/outlook/addon-pending');
+                const data = await res.json();
+                _addinSetCaptureVisible(data.has_data);
+                return data;
+            } catch (_) {
+                return { has_data: false };
+            }
+        }
+
+        async function captureOutlookAddin() {
+            const data = await _addinCheckPending(false);
+            if (!data.has_data) {
+                _addinSetCaptureVisible(false);
+                const statusEl = document.getElementById('outlookImportStatus');
+                if (statusEl) statusEl.innerHTML = '<span style="color:#9ca3af;">Nenhum dado pendente do add-in. Exporte emails pelo Outlook primeiro.</span>';
+                return;
+            }
+            // Clear the pending flag on server so next check returns nothing
+            fetch('/api/outlook/addon-pending', { method: 'DELETE' }).catch(() => {});
+            _addinSetCaptureVisible(false);
+            _openOutlookReviewModal(data);
+        }
+
+        // Poll for pending add-in data every 20s while the activities tab is active
+        function _addinStartPolling() {
+            _addinStopPolling();
+            _addinCheckPending();
+            _addinPollTimer = setInterval(() => _addinCheckPending(), 20000);
+        }
+
+        function _addinStopPolling() {
+            if (_addinPollTimer) { clearInterval(_addinPollTimer); _addinPollTimer = null; }
         }
 
         function setupSettingsCards() {
@@ -3873,6 +4315,7 @@
         }
 
         async function loadAutoToca() {
+            _initOutlookAddinManifestUrl();
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
             if (response.ok && select) {
@@ -3895,11 +4338,13 @@
         function toggleAutoTocaAutomation(key) {
             const panels = {
                 'chamado-juridico': 'autoTocaChamadoJuridico',
-                'mala-direta': 'autoTocaMalaDireta'
+                'mala-direta': 'autoTocaMalaDireta',
+                'sync-outlook': 'autoTocaSyncOutlook'
             };
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
-                'mala-direta': 'autoTocaBtn_mala-direta'
+                'mala-direta': 'autoTocaBtn_mala-direta',
+                'sync-outlook': 'autoTocaBtn_sync-outlook'
             };
             const targetId = panels[key];
             if (!targetId) return;

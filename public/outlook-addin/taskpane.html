@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toca do Coelho — Sync</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f0fdf4;
+    color: #111827;
+    font-size: 13px;
+    padding: 0;
+    min-height: 100vh;
+  }
+  .header {
+    background: #065f46;
+    color: white;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .header .title { font-size: 14px; font-weight: 600; }
+  .header .sub { font-size: 11px; opacity: .75; }
+  .body { padding: 14px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; }
+  .field select, .field input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #d1fae5;
+    border-radius: 6px;
+    font-size: 13px;
+    background: white;
+    color: #111827;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    justify-content: center;
+    transition: opacity .15s;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: #059669; color: white; }
+  .btn-primary:not(:disabled):hover { background: #047857; }
+  .btn-send { background: #0f766e; color: white; margin-top: 8px; }
+  .btn-send:not(:disabled):hover { background: #0d6460; }
+  .progress-wrap { margin: 10px 0; }
+  .progress-track {
+    height: 8px;
+    background: #d1fae5;
+    border-radius: 99px;
+    overflow: hidden;
+    position: relative;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #10b981, #34d399);
+    border-radius: 99px;
+    transition: width .3s;
+    position: relative;
+  }
+  .progress-fill::after {
+    content: '🐇';
+    position: absolute;
+    right: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
+    animation: hop .6s ease-in-out infinite alternate;
+  }
+  @keyframes hop { from { transform: translateY(-50%) } to { transform: translateY(-70%) } }
+  .progress-step { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .stats {
+    background: white;
+    border: 1px solid #d1fae5;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 10px 0;
+  }
+  .stat-row { display: flex; justify-content: space-between; padding: 3px 0; }
+  .stat-label { color: #6b7280; }
+  .stat-value { font-weight: 600; }
+  .stat-value.green { color: #059669; }
+  .stat-value.yellow { color: #d97706; }
+  .alert {
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    margin-top: 8px;
+  }
+  .alert-ok { background: #d1fae5; color: #065f46; }
+  .alert-err { background: #fee2e2; color: #991b1b; }
+  .alert-warn { background: #fef3c7; color: #92400e; }
+  .hidden { display: none; }
+  .section-title { font-size: 11px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span style="font-size:20px;">🐇</span>
+  <div>
+    <div class="title">Toca do Coelho</div>
+    <div class="sub">Exportar emails para atividades</div>
+  </div>
+</div>
+
+<div class="body">
+  <!-- Configuração -->
+  <div id="configSection">
+    <div class="field">
+      <label>Período</label>
+      <select id="daysSelect">
+        <option value="7">Últimos 7 dias</option>
+        <option value="15">Últimos 15 dias</option>
+        <option value="30" selected>Últimos 30 dias</option>
+        <option value="60">Últimos 60 dias</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="loadBtn" onclick="loadEmails()">
+      <span>✦</span> Carregar emails
+    </button>
+  </div>
+
+  <!-- Progresso de leitura -->
+  <div id="progressSection" class="hidden">
+    <div class="progress-wrap">
+      <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:5%"></div></div>
+      <div class="progress-step" id="progressStep">Iniciando...</div>
+    </div>
+  </div>
+
+  <!-- Estatísticas -->
+  <div id="statsSection" class="hidden">
+    <div class="stats">
+      <div class="stat-row">
+        <span class="stat-label">Emails lidos</span>
+        <span class="stat-value" id="statTotal">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Com cliente cadastrado</span>
+        <span class="stat-value green" id="statMatched">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Sem correspondência</span>
+        <span class="stat-value yellow" id="statUnmatched">0</span>
+      </div>
+    </div>
+    <button class="btn btn-send" id="sendBtn" onclick="sendToToca()">
+      <span>📤</span> Enviar para Toca
+    </button>
+    <button class="btn btn-primary" style="margin-top:6px;background:#f0fdf4;color:#059669;border:1px solid #d1fae5;" onclick="resetAddin()">
+      ↺ Novo período
+    </button>
+  </div>
+
+  <!-- Resultado do envio -->
+  <div id="resultSection" class="hidden"></div>
+
+</div>
+
+<script>
+  var _emails = [];
+  var _tocaBase = window.location.origin;
+
+  Office.onReady(function(info) {
+    if (info.host !== Office.HostType.Outlook) {
+      showAlert('Este add-in funciona somente no Outlook.', 'err');
+    }
+  });
+
+  function setProgress(pct, step) {
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressStep').textContent = step || '';
+  }
+
+  function showAlert(msg, type) {
+    var el = document.getElementById('resultSection');
+    el.innerHTML = '<div class="alert alert-' + (type === 'err' ? 'err' : type === 'warn' ? 'warn' : 'ok') + '">' + escHtml(msg) + '</div>';
+    el.classList.remove('hidden');
+  }
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function resetAddin() {
+    _emails = [];
+    document.getElementById('configSection').classList.remove('hidden');
+    document.getElementById('progressSection').classList.add('hidden');
+    document.getElementById('statsSection').classList.add('hidden');
+    document.getElementById('resultSection').classList.add('hidden');
+    document.getElementById('loadBtn').disabled = false;
+  }
+
+  /* ── EWS helpers ─────────────────────────────────────────── */
+
+  function makeEwsRequest(xml) {
+    return new Promise(function(resolve, reject) {
+      Office.context.mailbox.makeEWSRequestAsync(xml, function(result) {
+        if (result.status === Office.AsyncResultStatus.Failed) {
+          reject(new Error(result.error ? result.error.message : 'EWS falhou'));
+        } else {
+          resolve(result.value);
+        }
+      });
+    });
+  }
+
+  function ewsFindItemXml(folderId, cutoffIso, maxItems, useSentField) {
+    var dateField = useSentField ? 'item:DateTimeSent' : 'item:DateTimeReceived';
+    return '<?xml version="1.0" encoding="utf-8"?>' +
+      '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"' +
+      ' xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"' +
+      ' xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">' +
+      '<soap:Header><t:RequestServerVersion Version="Exchange2013"/></soap:Header>' +
+      '<soap:Body><m:FindItem Traversal="Shallow">' +
+      '<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape>' +
+      '<t:AdditionalProperties>' +
+      '<t:FieldURI FieldURI="item:Subject"/>' +
+      '<t:FieldURI FieldURI="message:Sender"/>' +
+      '<t:FieldURI FieldURI="message:ToRecipients"/>' +
+      '<t:FieldURI FieldURI="item:DateTimeReceived"/>' +
+      '<t:FieldURI FieldURI="item:DateTimeSent"/>' +
+      '</t:AdditionalProperties></m:ItemShape>' +
+      '<m:IndexedPageItemView MaxEntriesReturned="' + maxItems + '" Offset="0" BasePoint="Beginning"/>' +
+      '<m:Restriction><t:IsGreaterThanOrEqualTo>' +
+      '<t:FieldURI FieldURI="' + dateField + '"/>' +
+      '<t:FieldURIOrConstant><t:Constant Value="' + cutoffIso + '"/></t:FieldURIOrConstant>' +
+      '</t:IsGreaterThanOrEqualTo></m:Restriction>' +
+      '<m:SortOrder><t:FieldOrder Order="Descending"><t:FieldURI FieldURI="' + dateField + '"/></t:FieldOrder></m:SortOrder>' +
+      '<m:ParentFolderIds><t:DistinguishedFolderId Id="' + folderId + '"/></m:ParentFolderIds>' +
+      '</m:FindItem></soap:Body></soap:Envelope>';
+  }
+
+  function ewsGetItemXml(ids) {
+    var idTags = ids.map(function(id) { return '<t:ItemId Id="' + escHtml(id) + '"/>'; }).join('');
+    return '<?xml version="1.0" encoding="utf-8"?>' +
+      '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"' +
+      ' xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"' +
+      ' xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">' +
+      '<soap:Header><t:RequestServerVersion Version="Exchange2013"/></soap:Header>' +
+      '<soap:Body><m:GetItem>' +
+      '<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape>' +
+      '<t:BodyType>Text</t:BodyType>' +
+      '<t:MaximumBodySize>1200</t:MaximumBodySize>' +
+      '<t:AdditionalProperties><t:FieldURI FieldURI="item:Body"/></t:AdditionalProperties>' +
+      '</m:ItemShape>' +
+      '<m:ItemIds>' + idTags + '</m:ItemIds>' +
+      '</m:GetItem></soap:Body></soap:Envelope>';
+  }
+
+  function parseMailboxEntry(el) {
+    var name = (el.querySelector('Name') || {}).textContent || '';
+    var addr = (el.querySelector('EmailAddress') || {}).textContent || '';
+    return { name: name.trim(), email: addr.trim().toLowerCase() };
+  }
+
+  function parseFindItemResponse(xml, direction) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(xml, 'text/xml');
+    var messages = doc.querySelectorAll('Message');
+    var items = [];
+    messages.forEach(function(msg) {
+      var idEl = msg.querySelector('ItemId');
+      if (!idEl) return;
+      var id = idEl.getAttribute('Id') || '';
+      var subject = (msg.querySelector('Subject') || {}).textContent || '';
+      var received = (msg.querySelector('DateTimeReceived') || {}).textContent || '';
+      var sent = (msg.querySelector('DateTimeSent') || {}).textContent || '';
+      var date = (direction === 'sent' ? sent : received) || received || sent;
+
+      var senderEl = msg.querySelector('Sender > Mailbox');
+      var sender = senderEl ? parseMailboxEntry(senderEl) : { name: '', email: '' };
+
+      var recipients = [];
+      var toEls = msg.querySelectorAll('ToRecipients > Mailbox');
+      toEls.forEach(function(el) { recipients.push(parseMailboxEntry(el)); });
+
+      items.push({ id: id, subject: subject.trim(), date: date, direction: direction, sender: sender, recipients: recipients });
+    });
+    return items;
+  }
+
+  function parseGetItemBodies(xml) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(xml, 'text/xml');
+    var map = {};
+    doc.querySelectorAll('GetItemResponseMessage').forEach(function(resp) {
+      var msg = resp.querySelector('Message');
+      if (!msg) return;
+      var idEl = msg.querySelector('ItemId');
+      if (!idEl) return;
+      var id = idEl.getAttribute('Id') || '';
+      var body = (msg.querySelector('Body') || {}).textContent || '';
+      map[id] = body.replace(/[\r\n\t]+/g, ' ').trim();
+    });
+    return map;
+  }
+
+  /* ── Main flow ─────────────────────────────────────────────── */
+
+  async function loadEmails() {
+    var days = parseInt(document.getElementById('daysSelect').value);
+    document.getElementById('loadBtn').disabled = true;
+    document.getElementById('progressSection').classList.remove('hidden');
+    document.getElementById('statsSection').classList.add('hidden');
+    document.getElementById('resultSection').classList.add('hidden');
+    _emails = [];
+
+    try {
+      var cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      var cutoffIso = cutoff.toISOString().replace(/\.\d+Z$/, 'Z');
+
+      setProgress(10, 'Lendo caixa de entrada...');
+      var inboxXml = await makeEwsRequest(ewsFindItemXml('inbox', cutoffIso, 150, false));
+      var inboxItems = parseFindItemResponse(inboxXml, 'received');
+
+      setProgress(25, 'Lendo itens enviados...');
+      var sentXml = await makeEwsRequest(ewsFindItemXml('sentitems', cutoffIso, 100, true));
+      var sentItems = parseFindItemResponse(sentXml, 'sent');
+
+      var allItems = inboxItems.concat(sentItems);
+      setProgress(35, 'Carregando corpo dos emails (' + allItems.length + ')...');
+
+      var batchSize = 20;
+      var bodiesMap = {};
+      for (var i = 0; i < allItems.length; i += batchSize) {
+        var batch = allItems.slice(i, i + batchSize);
+        var pct = 35 + Math.round(((i + batch.length) / allItems.length) * 55);
+        setProgress(pct, 'Corpo dos emails: ' + Math.min(i + batchSize, allItems.length) + '/' + allItems.length);
+        try {
+          var getXml = await makeEwsRequest(ewsGetItemXml(batch.map(function(x) { return x.id; })));
+          var batchBodies = parseGetItemBodies(getXml);
+          Object.assign(bodiesMap, batchBodies);
+        } catch (batchErr) {
+          // ignore batch failure, continue without body for that batch
+        }
+      }
+
+      _emails = allItems.map(function(item) {
+        return {
+          subject: item.subject,
+          date: item.date,
+          direction: item.direction,
+          sender: item.sender,
+          recipients: item.recipients,
+          body_preview: (bodiesMap[item.id] || '').substring(0, 1200)
+        };
+      });
+
+      setProgress(95, 'Identificando clientes...');
+
+      // Pre-check via Toca API how many will match
+      var preRes = await fetch(_tocaBase + '/api/outlook/addon-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails: _emails })
+      });
+      var preData = preRes.ok ? await preRes.json() : { matched: 0, unmatched: 0 };
+
+      setProgress(100, 'Pronto!');
+      document.getElementById('statTotal').textContent = _emails.length;
+      document.getElementById('statMatched').textContent = preData.matched || 0;
+      document.getElementById('statUnmatched').textContent = preData.unmatched || 0;
+
+      document.getElementById('progressSection').classList.add('hidden');
+      document.getElementById('statsSection').classList.remove('hidden');
+      document.getElementById('sendBtn').disabled = _emails.length === 0;
+
+    } catch (err) {
+      document.getElementById('progressSection').classList.add('hidden');
+      document.getElementById('loadBtn').disabled = false;
+      showAlert('Erro ao ler emails: ' + (err.message || err), 'err');
+    }
+  }
+
+  async function sendToToca() {
+    if (!_emails.length) return;
+    var btn = document.getElementById('sendBtn');
+    btn.disabled = true;
+    btn.textContent = 'Enviando...';
+
+    try {
+      var res = await fetch(_tocaBase + '/api/outlook/ingest-from-addon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails: _emails })
+      });
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro');
+
+      document.getElementById('statsSection').classList.add('hidden');
+      showAlert(
+        '✓ ' + data.message + '\n\nNo Toca, clique em "Capturar do Add-in" para revisar e importar.',
+        'ok'
+      );
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '📤 Enviar para Toca';
+      showAlert('Erro ao enviar: ' + (err.message || err), 'err');
+    }
+  }
+</script>
+</body>
+</html>
