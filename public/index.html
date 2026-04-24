@@ -2573,29 +2573,39 @@
                 <!-- Instalação do suplemento -->
                 <div style="background:#f0fdf4; border:1px solid #d1fae5; border-radius:10px; padding:14px; margin-bottom:16px;">
                     <h4 style="margin-bottom:8px; color:#065f46; font-size:14px;"><i class="fas fa-puzzle-piece"></i> Suplemento do Outlook (instalação única)</h4>
-                    <p style="margin-bottom:10px; color:#4b5563; font-size:13px;">
+                    <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
                         Instale o suplemento uma vez e sincronize com 2 cliques — sem timeouts, sem popups extras. Funciona com Exchange e Microsoft 365.
                     </p>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
-                        <a id="outlookAddinInstallLink" href="#" class="btn btn-auto-mapping btn-small" onclick="downloadOutlookAddinInstaller(event)">
-                            <span class="ai-star-icon">✦</span> Baixar Instalador (.bat)
-                        </a>
-                    </div>
-                    <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin-bottom:12px; line-height:1.9;">
-                        <li>Execute o <code>.bat</code> baixado (mantendo o Toca em execução)</li>
-                        <li>Feche e reabra o Outlook</li>
-                        <li>No Outlook: <strong>Página Inicial → Obter Suplementos → Pasta Compartilhada</strong></li>
-                        <li>Ative <strong>"Toca do Coelho"</strong> e clique em Adicionar</li>
-                        <li>Ao abrir qualquer email, carregue os emails e clique em <strong>"Enviar para Toca"</strong></li>
-                        <li>Volte ao Toca e clique em <strong>"Capturar do Add-in"</strong> abaixo</li>
-                    </ol>
-                    <details style="font-size:12px; color:#6b7280;">
-                        <summary style="cursor:pointer; color:#065f46; margin-bottom:6px;">Instalação manual via URL (alternativa)</summary>
-                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
-                            <code id="outlookAddinManifestUrlAT" style="background:#fff; border:1px solid #d1fae5; padding:4px 8px; border-radius:6px; font-size:11px; color:#065f46; flex:1; min-width:180px; word-break:break-all;"></code>
-                            <button class="btn btn-secondary btn-small" onclick="copyOutlookManifestUrlAT()"><i class="fas fa-copy"></i> Copiar</button>
+
+                    <!-- Método 1: URL (principal) -->
+                    <div style="margin-bottom:12px;">
+                        <p style="font-size:13px; font-weight:600; color:#065f46; margin-bottom:6px;">Método recomendado — adicionar pela URL (sem download)</p>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                            <code id="outlookAddinManifestUrlAT" style="background:#fff; border:1px solid #d1fae5; padding:6px 10px; border-radius:6px; font-size:12px; color:#065f46; flex:1; min-width:200px; word-break:break-all;"></code>
+                            <button class="btn btn-auto-mapping btn-small" onclick="copyOutlookManifestUrlAT()"><i class="fas fa-copy"></i> Copiar URL</button>
                         </div>
-                        <p style="margin-top:4px; line-height:1.5;">No Outlook: Obter Suplementos → Meus suplementos → Suplemento Personalizado → Adicionar da URL → cole a URL acima.</p>
+                        <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin:0; line-height:1.9;">
+                            <li>No Outlook: <strong>Página Inicial → Obter Suplementos</strong></li>
+                            <li>Clique em <strong>Meus suplementos → Suplemento Personalizado → Adicionar da URL</strong></li>
+                            <li>Cole a URL acima e clique em OK</li>
+                            <li>Ao abrir qualquer email, use o painel <strong>"Toca do Coelho"</strong> na ribbon para carregar e enviar emails</li>
+                        </ol>
+                    </div>
+
+                    <!-- Método 2: XML (alternativa) -->
+                    <details style="border-top:1px solid #d1fae5; padding-top:10px; margin-top:4px;">
+                        <summary style="cursor:pointer; font-size:13px; font-weight:600; color:#065f46; margin-bottom:8px;">Alternativa — baixar arquivo manifest.xml</summary>
+                        <p style="color:#4b5563; font-size:12px; margin-bottom:8px; line-height:1.6;">Se o Outlook não aceitar URL direta, baixe o manifest e adicione pelo arquivo.</p>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                            <a id="outlookAddinManifestDownloadLink" href="#" class="btn btn-secondary btn-small" onclick="downloadOutlookManifestXml(event)">
+                                <i class="fas fa-download"></i> Baixar manifest.xml
+                            </a>
+                        </div>
+                        <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin:0; line-height:1.9;">
+                            <li>Clique em "Baixar manifest.xml" acima</li>
+                            <li>No Outlook: <strong>Obter Suplementos → Meus suplementos → Suplemento Personalizado → Adicionar do arquivo</strong></li>
+                            <li>Selecione o arquivo baixado</li>
+                        </ol>
                     </details>
                 </div>
 
@@ -3542,33 +3552,24 @@
             if (el) el.textContent = manifestUrl;
             const elAT = document.getElementById('outlookAddinManifestUrlAT');
             if (elAT) elAT.textContent = manifestUrl;
-            const installLink = document.getElementById('outlookAddinInstallLink');
-            if (installLink) installLink.href = `${window.location.origin}/api/outlook/install-addin.bat`;
+            const dlLink = document.getElementById('outlookAddinManifestDownloadLink');
+            if (dlLink) dlLink.href = `${manifestUrl}?download=1`;
         }
 
-        function copyOutlookManifestUrl() {
+        function _copyManifestUrl() {
             const url = `${window.location.origin}/api/outlook/manifest.xml`;
+            const btn = event.target.closest('button');
             navigator.clipboard.writeText(url).then(() => {
-                const btn = event.target.closest('button');
                 if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<i class="fas fa-check"></i> Copiado!'; setTimeout(() => btn.innerHTML = orig, 2000); }
-            }).catch(() => {
-                prompt('Copie a URL do manifest:', url);
-            });
+            }).catch(() => { prompt('Copie a URL do manifest:', url); });
         }
 
-        function copyOutlookManifestUrlAT() {
-            const url = `${window.location.origin}/api/outlook/manifest.xml`;
-            navigator.clipboard.writeText(url).then(() => {
-                const btn = event.target.closest('button');
-                if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<i class="fas fa-check"></i> Copiado!'; setTimeout(() => btn.innerHTML = orig, 2000); }
-            }).catch(() => {
-                prompt('Copie a URL do manifest:', url);
-            });
-        }
+        function copyOutlookManifestUrl() { _copyManifestUrl(); }
+        function copyOutlookManifestUrlAT() { _copyManifestUrl(); }
 
-        function downloadOutlookAddinInstaller(e) {
+        function downloadOutlookManifestXml(e) {
             e.preventDefault();
-            window.location.href = `${window.location.origin}/api/outlook/install-addin.bat`;
+            window.location.href = `${window.location.origin}/api/outlook/manifest.xml?download=1`;
         }
 
         async function loadStartupConfig() {

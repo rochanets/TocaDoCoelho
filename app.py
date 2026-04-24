@@ -7534,7 +7534,10 @@ def outlook_addin_manifest():
   </Rule>
   <DisableEntityHighlighting>false</DisableEntityHighlighting>
 </OfficeApp>"""
-    return Response(xml, mimetype='application/xml')
+    resp = Response(xml, mimetype='application/xml')
+    if request.args.get('download'):
+        resp.headers['Content-Disposition'] = 'attachment; filename="toca-manifest.xml"'
+    return resp
 
 
 @app.route('/api/outlook/install-addin.bat')
