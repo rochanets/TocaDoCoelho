@@ -3291,6 +3291,8 @@
                 return Object.values(_tasks).filter(t => !t._done);
             }
 
+            let _renderedState = null; // 'active' | 'done' | null
+
             function _render() {
                 const ind = _indicator();
                 if (!ind) return;
@@ -3299,24 +3301,49 @@
 
                 if (activeCount > 0) {
                     const first = _activeTasks()[0];
-                    ind.className = 'bg-active';
-                    ind.innerHTML = `
-                        <div class="bgi-label">${_esc(first.step || first.title)}</div>
-                        <div class="bgi-video-wrap" title="Processando em background...">
-                            <video autoplay loop muted playsinline>
-                                <source src="/videos/Loading_Bunny.mp4" type="video/mp4">
-                            </video>
-                        </div>`;
+                    const label = _esc(first.step || first.title);
+                    if (_renderedState !== 'active') {
+                        // Build DOM once; subsequent calls only update the label
+                        ind.className = 'bg-active';
+                        ind.innerHTML = `
+                            <div class="bgi-label">${label}</div>
+                            <div class="bgi-video-wrap" title="Processando em background...">
+                                <video autoplay loop muted playsinline>
+                                    <source src="/videos/Loading_Bunny.mp4" type="video/mp4">
+                                </video>
+                            </div>`;
+                        _renderedState = 'active';
+                    } else {
+                        // Only update the label text — do NOT touch the video element
+                        const lbl = ind.querySelector('.bgi-label');
+                        if (lbl && lbl.textContent !== label) lbl.textContent = label;
+                    }
                 } else if (doneCount > 0) {
-                    ind.className = 'bg-done';
-                    ind.innerHTML = `
-                        <div class="bgi-done-btn" title="Clique para ver resultados">
-                            <span>✓</span>
-                            ${doneCount > 1 ? `<div class="bgi-done-badge">${doneCount}</div>` : ''}
-                        </div>`;
+                    if (_renderedState !== 'done') {
+                        ind.className = 'bg-done';
+                        ind.innerHTML = `
+                            <div class="bgi-done-btn" title="Clique para ver resultados">
+                                <span>✓</span>
+                                ${doneCount > 1 ? `<div class="bgi-done-badge">${doneCount}</div>` : ''}
+                            </div>`;
+                        _renderedState = 'done';
+                    } else {
+                        // Update badge count without replacing the animated button
+                        const btn = ind.querySelector('.bgi-done-btn');
+                        if (btn) {
+                            let badge = btn.querySelector('.bgi-done-badge');
+                            if (doneCount > 1) {
+                                if (!badge) { badge = document.createElement('div'); badge.className = 'bgi-done-badge'; btn.appendChild(badge); }
+                                badge.textContent = doneCount;
+                            } else if (badge) {
+                                badge.remove();
+                            }
+                        }
+                    }
                 } else {
                     ind.className = '';
                     ind.style.display = 'none';
+                    _renderedState = null;
                     _closeDoneList();
                     return;
                 }
