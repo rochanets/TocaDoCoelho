@@ -1998,6 +1998,160 @@
             }
         }
 
+        /* ---- Background Task Indicator (rabbit paws / green !) ---- */
+        #bgTaskIndicator {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 9999;
+            display: none;
+            cursor: pointer;
+            user-select: none;
+        }
+        #bgTaskIndicator.bg-active { display: flex; align-items: center; gap: 6px; }
+        #bgTaskIndicator.bg-done   { display: flex; align-items: center; }
+
+        .bgi-video-wrap {
+            background: rgba(255,255,255,0.95);
+            border: 1.5px solid rgba(16,185,129,0.4);
+            border-radius: 50%;
+            width: 52px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .bgi-video-wrap video {
+            width: 52px;
+            height: 52px;
+            object-fit: cover;
+            border-radius: 50%;
+            display: block;
+        }
+        .bgi-label {
+            background: rgba(255,255,255,0.95);
+            border: 1.5px solid rgba(16,185,129,0.3);
+            border-radius: 8px;
+            padding: 4px 10px;
+            font-size: 11px;
+            color: #065f46;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            max-width: 180px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .bgi-done-btn {
+            background: linear-gradient(135deg, #059669, #10b981);
+            border: none;
+            border-radius: 50%;
+            width: 52px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: #fff;
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(16,185,129,0.45);
+            animation: heartbeatPulse 1.4s ease-in-out infinite;
+            position: relative;
+        }
+        .bgi-done-btn::after {
+            content: '';
+            position: absolute;
+            inset: -5px;
+            border-radius: 50%;
+            border: 2.5px solid rgba(16,185,129,0.55);
+            animation: heartbeatRing 1.4s ease-in-out infinite;
+        }
+        .bgi-done-btn::before {
+            content: '';
+            position: absolute;
+            inset: -10px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(16,185,129,0.25);
+            animation: heartbeatRing 1.4s ease-in-out infinite 0.08s;
+        }
+        .bgi-done-badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            background: #ef4444;
+            color: #fff;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            font-size: 10px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        @keyframes heartbeatPulse {
+            0%    { transform: scale(1);    box-shadow: 0 4px 20px rgba(16,185,129,0.45); }
+            10%   { transform: scale(1.14); box-shadow: 0 8px 32px rgba(16,185,129,0.82); }
+            20%   { transform: scale(1);    box-shadow: 0 4px 20px rgba(16,185,129,0.45); }
+            32%   { transform: scale(1.09); box-shadow: 0 6px 26px rgba(16,185,129,0.65); }
+            44%   { transform: scale(1);    box-shadow: 0 4px 20px rgba(16,185,129,0.45); }
+            100%  { transform: scale(1);    box-shadow: 0 4px 20px rgba(16,185,129,0.45); }
+        }
+        @keyframes heartbeatRing {
+            0%    { transform: scale(1);    opacity: 0.55; }
+            10%   { transform: scale(1.32); opacity: 0; }
+            20%   { transform: scale(1);    opacity: 0.45; }
+            32%   { transform: scale(1.22); opacity: 0; }
+            44%   { transform: scale(1);    opacity: 0.3; }
+            100%  { transform: scale(1);    opacity: 0; }
+        }
+
+        /* Botões Cancelar / Minimizar no topo das barras de progresso */
+        .bg-task-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(16,185,129,0.18);
+        }
+
+        /* BgTaskManager completed-tasks dropdown */
+        #bgTaskDoneList {
+            position: fixed;
+            bottom: 88px;
+            right: 24px;
+            z-index: 9998;
+            background: #fff;
+            border: 1.5px solid #d1fae5;
+            border-radius: 14px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+            min-width: 240px;
+            max-width: 320px;
+            padding: 10px 0;
+            display: none;
+        }
+        #bgTaskDoneList.open { display: block; }
+        .bgtdl-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #065f46;
+            transition: background 0.15s;
+        }
+        .bgtdl-item:hover { background: #f0fdf4; }
+        .bgtdl-item-icon { font-size: 18px; flex-shrink: 0; }
+        .bgtdl-item-title { font-weight: 600; }
+        .bgtdl-item-sub { font-size: 11px; color: #6b7280; }
+        .bgtdl-header { padding: 6px 16px 4px; font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; }
+
     </style>
 </head>
 <body>
@@ -3153,6 +3307,239 @@
     <script>
         const API_BASE = '/api';
         let systemConfig = { env: 'production' };
+
+        // =====================================================
+        // BgTaskManager — gerenciador global de tarefas em background
+        // Mantém polling de tasks mesmo após o usuário mudar de aba.
+        // Exibe patinhas de coelho enquanto processa; exclamação verde quando conclui.
+        // =====================================================
+        const BgTaskManager = (() => {
+            const _tasks = {};          // taskId -> taskInfo
+            const _done  = [];          // tarefas concluídas enquanto usuário estava em outra aba
+            let _pollTimer = null;
+
+            function _indicator()   { return document.getElementById('bgTaskIndicator'); }
+            function _doneList()    { return document.getElementById('bgTaskDoneList'); }
+
+            function _activeTasks() {
+                return Object.values(_tasks).filter(t => !t._done);
+            }
+
+            let _renderedState = null; // 'active' | 'done' | null
+
+            function _render() {
+                const ind = _indicator();
+                if (!ind) return;
+                const activeCount = _activeTasks().length;
+                const doneCount   = _done.length;
+
+                if (activeCount > 0) {
+                    const first = _activeTasks()[0];
+                    const label = _esc(first.step || first.title);
+                    if (_renderedState !== 'active') {
+                        // Build DOM once; subsequent calls only update the label
+                        ind.className = 'bg-active';
+                        ind.innerHTML = `
+                            <div class="bgi-label">${label}</div>
+                            <div class="bgi-video-wrap" title="Processando em background...">
+                                <video autoplay loop muted playsinline>
+                                    <source src="/videos/Loading_Bunny.mp4" type="video/mp4">
+                                </video>
+                            </div>`;
+                        _renderedState = 'active';
+                    } else {
+                        // Only update the label text — do NOT touch the video element
+                        const lbl = ind.querySelector('.bgi-label');
+                        if (lbl && lbl.textContent !== label) lbl.textContent = label;
+                    }
+                } else if (doneCount > 0) {
+                    if (_renderedState !== 'done') {
+                        ind.className = 'bg-done';
+                        ind.innerHTML = `
+                            <div class="bgi-done-btn" title="Clique para ver resultados">
+                                <span>✓</span>
+                                ${doneCount > 1 ? `<div class="bgi-done-badge">${doneCount}</div>` : ''}
+                            </div>`;
+                        _renderedState = 'done';
+                    } else {
+                        // Update badge count without replacing the animated button
+                        const btn = ind.querySelector('.bgi-done-btn');
+                        if (btn) {
+                            let badge = btn.querySelector('.bgi-done-badge');
+                            if (doneCount > 1) {
+                                if (!badge) { badge = document.createElement('div'); badge.className = 'bgi-done-badge'; btn.appendChild(badge); }
+                                badge.textContent = doneCount;
+                            } else if (badge) {
+                                badge.remove();
+                            }
+                        }
+                    }
+                } else {
+                    ind.className = '';
+                    ind.style.display = 'none';
+                    _renderedState = null;
+                    _closeDoneList();
+                    return;
+                }
+                ind.style.display = 'flex';
+            }
+
+            function _esc(s) {
+                return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            }
+
+            function _closeDoneList() {
+                const dl = _doneList();
+                if (dl) { dl.className = ''; dl.innerHTML = ''; }
+            }
+
+            function _openDoneList() {
+                const dl = _doneList();
+                if (!dl) return;
+                if (!_done.length) { _closeDoneList(); return; }
+                let html = `<div class="bgtdl-header">Tarefas concluídas</div>`;
+                _done.forEach((t, idx) => {
+                    html += `<div class="bgtdl-item" onclick="BgTaskManager.claimTask(${idx})">
+                        <div class="bgtdl-item-icon">✅</div>
+                        <div>
+                            <div class="bgtdl-item-title">${_esc(t.title)}</div>
+                            <div class="bgtdl-item-sub">Clique para ver o resultado</div>
+                        </div>
+                    </div>`;
+                });
+                dl.innerHTML = html;
+                dl.className = 'open';
+            }
+
+            async function _poll() {
+                const active = _activeTasks();
+                if (!active.length) return;
+
+                for (const task of active) {
+                    try {
+                        const resp = await fetch(task.pollUrl);
+                        if (!resp.ok) continue;
+                        const status = await resp.json().catch(() => ({}));
+
+                        // Atualiza step/progress na task
+                        if (status.step)     task.step     = status.step;
+                        if (status.progress) task.progress = status.progress;
+
+                        // Repassa progresso para o inline progress (se o DOM ainda existir)
+                        if (task.progressFn) {
+                            try { task.progressFn(status.progress || 0, status.step || ''); } catch(e) {}
+                        }
+
+                        if (status.status === 'done') {
+                            task._done = true;
+                            const onSourceTab = (typeof _currentTab !== 'undefined') && _currentTab === task.sourceTab;
+                            if (onSourceTab && task.onComplete) {
+                                try { task.onComplete(status.result !== undefined ? status.result : status); } catch(e) {}
+                                delete _tasks[task.taskId];
+                            } else {
+                                _done.push({ ...task, _result: status.result !== undefined ? status.result : status });
+                                delete _tasks[task.taskId];
+                            }
+                            _render();
+                        } else if (status.status === 'error' || status.status === 'cancelled') {
+                            task._done = true;
+                            if (task.onError) {
+                                try { task.onError(status.error || 'Erro desconhecido.'); } catch(e) {}
+                            }
+                            delete _tasks[task.taskId];
+                            _render();
+                        }
+                    } catch(e) { /* network hiccup, retry next tick */ }
+                }
+                _render();
+            }
+
+            function _startPoll() {
+                if (_pollTimer) return;
+                _pollTimer = setInterval(_poll, 800);
+            }
+
+            function _stopPollIfIdle() {
+                if (_activeTasks().length === 0 && !_done.length) {
+                    clearInterval(_pollTimer);
+                    _pollTimer = null;
+                }
+            }
+
+            // Public API
+            function register(taskId, pollUrl, title, sourceTab, onComplete, onError, progressFn) {
+                _tasks[taskId] = { taskId, pollUrl, title, sourceTab, onComplete, onError, progressFn, step: 'Iniciando...', progress: 5, _done: false };
+                _startPoll();
+                _render();
+            }
+
+            function onIndicatorClick() {
+                const dl = _doneList();
+                if (!dl) return;
+                if (_done.length === 0) return;
+                if (dl.className === 'open') { _closeDoneList(); return; }
+                _openDoneList();
+            }
+
+            function claimTask(idx) {
+                const task = _done[idx];
+                if (!task) return;
+                _done.splice(idx, 1);
+                _closeDoneList();
+                _render();
+                // Navega de volta para a aba de origem
+                if (task.sourceTab && typeof switchTab === 'function') {
+                    switchTab(null, task.sourceTab);
+                }
+                // Chama o callback de conclusão com o resultado armazenado
+                if (task.onComplete) {
+                    setTimeout(() => {
+                        try { task.onComplete(task._result); } catch(e) {}
+                    }, 350);
+                }
+                _stopPollIfIdle();
+            }
+
+            // Permite que funções inline atualizem o progressFn de uma task em andamento
+            function setProgressFn(taskId, fn) {
+                if (_tasks[taskId]) _tasks[taskId].progressFn = fn;
+            }
+
+            // Minimiza: task continua rodando no background, apenas a UI inline é escondida
+            function minimize(taskId) {
+                if (_tasks[taskId]) _tasks[taskId].progressFn = null;
+                _render();
+            }
+
+            // Cancela: remove do polling (backend continua, mas ninguém ouve)
+            function cancel(taskId) {
+                delete _tasks[taskId];
+                _render();
+                _stopPollIfIdle();
+            }
+
+            return { register, onIndicatorClick, claimTask, setProgressFn, minimize, cancel };
+        })();
+
+        // Helper: injeta botões Minimizar / Cancelar no topo de uma área de progresso
+        function _attachBgTaskControls(progressEl, taskId, onMinimize, onCancel) {
+            if (!progressEl) return;
+            const existing = progressEl.querySelector('.bg-task-actions');
+            if (existing) existing.remove();
+            const div = document.createElement('div');
+            div.className = 'bg-task-actions';
+            const btnMin = document.createElement('button');
+            btnMin.className = 'btn btn-secondary btn-small';
+            btnMin.innerHTML = '<i class="fas fa-compress-alt" style="margin-right:4px;"></i>Minimizar';
+            btnMin.onclick = () => { BgTaskManager.minimize(taskId); if (onMinimize) onMinimize(); };
+            const btnCnl = document.createElement('button');
+            btnCnl.className = 'btn btn-danger btn-small';
+            btnCnl.innerHTML = '<i class="fas fa-times" style="margin-right:4px;"></i>Cancelar';
+            btnCnl.onclick = () => { BgTaskManager.cancel(taskId); if (onCancel) onCancel(); };
+            div.appendChild(btnMin);
+            div.appendChild(btnCnl);
+            progressEl.insertAdjacentElement('afterbegin', div);
+        }
 
         // =====================================================
         // Logs de Depuração — buffer do cliente + sincronização opcional
@@ -7934,12 +8321,8 @@
             if (submitBtn) submitBtn.disabled = true;
 
             try {
-                updateAutoMappingProgress('Buscando evidências...', 25);
-
-                const controller = new AbortController();
-                autoMappingState.abortController = controller;
                 autoMappingState.requestId = `am-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-                const timeout = setTimeout(() => controller.abort(), 60000);
+                updateAutoMappingProgress('Iniciando AutoMapping...', 10);
 
                 const response = await fetch(`${API_BASE}/automapping`, {
                     method: 'POST',
@@ -7950,48 +8333,61 @@
                         industry: businessArea,
                         request_id: autoMappingState.requestId,
                         force: forceRun
-                    }),
-                    signal: controller.signal
+                    })
                 });
 
-                clearTimeout(timeout);
-                updateAutoMappingProgress('Analisando com IA...', 75);
-
-                const payload = await response.json();
+                const payload = await response.json().catch(() => ({}));
                 if (!response.ok) {
-                    if (payload.cancelled) {
-                        setAutoMappingError('AutoMapping cancelado pelo usuário.');
-                        return;
-                    }
-                    throw new Error(payload.error || 'Falha no AutoMapping');
+                    if (payload.cancelled) { setAutoMappingError('AutoMapping cancelado pelo usuário.'); return; }
+                    throw new Error(payload.error || 'Falha ao iniciar AutoMapping');
                 }
 
-                if (payload.already_exists && !forceRun) {
-                    setAutoMappingError('Já existe um AutoMapping para esses dados. Uma nova busca não foi executada.');
-                    autoMappingState.result = payload.result;
-                    autoMappingState.runId = payload.run_id;
-                    renderAutoMappingResultSection();
-                    openAutoMappingResultModal();
-                    closeAutoMappingModal();
-                    return;
-                }
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
 
-                updateAutoMappingProgress('Concluído', 100);
-                autoMappingState.result = payload.result;
-                autoMappingState.runId = payload.run_id;
-                renderAutoMappingResultSection();
-                await loadAutoMappingQueriesHistory();
-                openAutoMappingResultModal();
+                updateAutoMappingProgress('Aguardando processamento...', 15);
+
+                // Botões Cancelar / Minimizar no topo da barra de progresso
+                const _amProgressEl = document.getElementById('autoMappingProgressWrapper');
+                _attachBgTaskControls(
+                    _amProgressEl, taskId,
+                    () => closeAutoMappingModal(),
+                    () => { closeAutoMappingModal(); if (submitBtn) submitBtn.disabled = false; }
+                );
+
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'gestao-conta';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/tasks/${taskId}`,
+                    `AutoMapping — ${clientName}`,
+                    sourceTab,
+                    (result) => {
+                        if (result && result.already_exists && !forceRun) {
+                            setAutoMappingError('Já existe um AutoMapping para esses dados.');
+                            autoMappingState.result = result.result;
+                            autoMappingState.runId = result.run_id;
+                        } else {
+                            updateAutoMappingProgress('Concluído', 100);
+                            autoMappingState.result = result.result || result;
+                            autoMappingState.runId = result.run_id;
+                        }
+                        renderAutoMappingResultSection();
+                        loadAutoMappingQueriesHistory();
+                        openAutoMappingResultModal();
+                        if (submitBtn) submitBtn.disabled = false;
+                    },
+                    (errMsg) => {
+                        setAutoMappingError(errMsg || 'Falha no AutoMapping.');
+                        if (submitBtn) submitBtn.disabled = false;
+                    },
+                    (pct, step) => updateAutoMappingProgress(step || 'Processando...', pct || 15)
+                );
             } catch (error) {
-                if (error.name === 'AbortError') {
-                    setAutoMappingError('AutoMapping cancelado. Nenhuma integração adicional foi executada.');
-                } else {
-                    setAutoMappingError(`Não foi possível concluir o AutoMapping: ${error.message}`);
-                }
+                setAutoMappingError(`Não foi possível iniciar o AutoMapping: ${error.message}`);
+                if (submitBtn) submitBtn.disabled = false;
             } finally {
                 autoMappingState.abortController = null;
                 autoMappingState.requestId = null;
-                if (submitBtn) submitBtn.disabled = false;
             }
         }
 
@@ -8857,69 +9253,73 @@
             const progressMsg = document.getElementById('itocaProgressMsg');
             const progressPct = document.getElementById('itocaProgressPct');
 
-            // Desabilitar botão durante a indexação
             if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
             if (label) label.textContent = 'Verificando alterações...';
             if (progressContainer) progressContainer.style.display = 'block';
-            if (progressBar) progressBar.style.width = '0%';
+            if (progressBar) progressBar.style.width = '5%';
             if (progressMsg) progressMsg.textContent = 'Iniciando indexação...';
-            if (progressPct) progressPct.textContent = '0%';
+            if (progressPct) progressPct.textContent = '5%';
 
             function setProgress(pct, msg) {
-                if (progressBar) progressBar.style.width = pct + '%';
-                if (progressPct) progressPct.textContent = pct + '%';
-                if (progressMsg) progressMsg.textContent = msg || '';
+                const pb = document.getElementById('itocaProgressBar');
+                const pc = document.getElementById('itocaProgressPct');
+                const pm = document.getElementById('itocaProgressMsg');
+                if (pb) pb.style.width = pct + '%';
+                if (pc) pc.textContent = pct + '%';
+                if (pm) pm.textContent = msg || '';
             }
 
             try {
                 const response = await fetch(`${API_BASE}/itoca/base-update`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ incremental: !!incremental })
                 });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Falha ao iniciar indexação.');
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
 
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.error || 'Falha ao iniciar indexação.');
-                }
+                // Botões Cancelar / Minimizar no topo da barra de progresso
+                const _itocaProgressEl = document.getElementById('itocaProgressContainer');
+                _attachBgTaskControls(
+                    _itocaProgressEl, taskId,
+                    () => { if (_itocaProgressEl) _itocaProgressEl.style.display = 'none'; if (btn) { btn.disabled = false; btn.style.opacity = '1'; } },
+                    () => { if (_itocaProgressEl) _itocaProgressEl.style.display = 'none'; if (btn) { btn.disabled = false; btn.style.opacity = '1'; } if (label) label.textContent = 'Indexação cancelada.'; }
+                );
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-                    for (const line of lines) {
-                        if (!line.startsWith('data:')) continue;
-                        try {
-                            const evt = JSON.parse(line.slice(5).trim());
-                            if (evt.type === 'done') {
-                                setProgress(100, evt.message || 'Concluído!');
-                                showSuccess(evt.message || 'Base iToca atualizada.');
-                                const modeLabel = evt.incremental ? ' (incremental)' : '';
-                                if (label) label.textContent = `Último update: ${formatDateBr(evt.updated_at)} — ${evt.items_count} registros${modeLabel}`;
-                                setTimeout(() => {
-                                    if (progressContainer) progressContainer.style.display = 'none';
-                                }, 3000);
-                            } else if (evt.type === 'error') {
-                                throw new Error(evt.message || 'Erro na indexação.');
-                            } else if (evt.percent !== undefined) {
-                                setProgress(evt.percent, evt.message);
-                            }
-                        } catch (parseErr) {
-                            // linha malformada, ignorar
-                        }
-                    }
-                }
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'iata';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/tasks/${taskId}`,
+                    'Atualizando Base iToca',
+                    sourceTab,
+                    (result) => {
+                        const lbl = document.getElementById('itocaBaseUpdatedAt');
+                        const pc  = document.getElementById('itocaProgressContainer');
+                        const b   = document.getElementById('itocaBaseUpdateBtn');
+                        setProgress(100, 'Concluído!');
+                        showSuccess(result.message || 'Base iToca atualizada.');
+                        const modeLabel = result.incremental ? ' (incremental)' : '';
+                        if (lbl) lbl.textContent = `Último update: ${formatDateBr(result.updated_at)} — ${result.items_count} registros${modeLabel}`;
+                        if (b) { b.disabled = false; b.style.opacity = '1'; }
+                        setTimeout(() => { if (pc) pc.style.display = 'none'; }, 3000);
+                    },
+                    (errMsg) => {
+                        const lbl = document.getElementById('itocaBaseUpdatedAt');
+                        const pc  = document.getElementById('itocaProgressContainer');
+                        const b   = document.getElementById('itocaBaseUpdateBtn');
+                        showError(errMsg || 'Falha no update da base iToca.');
+                        if (lbl) lbl.textContent = 'Base não atualizada.';
+                        if (pc)  pc.style.display = 'none';
+                        if (b) { b.disabled = false; b.style.opacity = '1'; }
+                    },
+                    (pct, step) => setProgress(pct || 5, step)
+                );
             } catch (error) {
                 showError(error.message || 'Falha no update da base iToca.');
                 if (label) label.textContent = 'Base não atualizada.';
                 if (progressContainer) progressContainer.style.display = 'none';
-            } finally {
                 if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
             }
         }
@@ -10454,6 +10854,42 @@
             if (input) input.value = '';
         }
 
+        function _applyAutoFillResult(payload) {
+            const form = document.getElementById('accountForm');
+            if (!form) return;
+            let filled = [];
+            const revenueInput = form.querySelector('[name="average_revenue"]');
+            if (revenueInput && payload.average_revenue) { revenueInput.value = payload.average_revenue; filled.push('Faturamento Médio Anual'); }
+            const profInput = form.querySelector('[name="professionals_count"]');
+            if (profInput && payload.professionals_count !== '' && payload.professionals_count !== null && payload.professionals_count !== undefined) { profInput.value = payload.professionals_count; filled.push('Quantidade de Profissionais'); }
+            const presenceSelect = form.querySelector('[name="global_presence"]');
+            if (presenceSelect && payload.global_presence) {
+                const opt = Array.from(presenceSelect.options).find(o => o.value === payload.global_presence);
+                if (opt) { presenceSelect.value = payload.global_presence; filled.push('Presença Global'); }
+            }
+            if (payload.logo_url) {
+                const logoPreview = document.getElementById('accountLogoPreview');
+                const logoUrlHidden = document.getElementById('accountAutoFillLogoUrl');
+                const removeFlag = document.getElementById('removeAccountLogoFlag');
+                if (logoPreview) logoPreview.src = payload.logo_url;
+                if (logoUrlHidden) logoUrlHidden.value = payload.logo_url;
+                if (removeFlag) removeFlag.value = '0';
+                filled.push('Logo');
+            }
+            if (filled.length === 0) {
+                showError('AutoFill não encontrou dados para esta empresa. Verifique se o SAI está configurado em Configurações > Integrações.');
+            } else {
+                showSuccess(`AutoFill preencheu: ${filled.join(', ')}.`);
+            }
+        }
+
+        function _setAutoFillProgress(pct, step) {
+            const bar = document.getElementById('autoFillProgressBar');
+            const stepEl = document.getElementById('autoFillProgressStep');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+        }
+
         async function autoFillAccount() {
             const form = document.getElementById('accountForm');
             if (!form) return;
@@ -10465,11 +10901,25 @@
             }
 
             const btn = document.getElementById('accountAutoFillBtn');
-            const originalHtml = btn ? btn.innerHTML : '';
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<span class="ai-star-icon">✦</span> Buscando...';
+            if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ai-star-icon">✦</span> Processando...'; }
+
+            // Mostra barra de progresso inline
+            let progressWrap = document.getElementById('autoFillProgressWrap');
+            if (!progressWrap) {
+                progressWrap = document.createElement('div');
+                progressWrap.id = 'autoFillProgressWrap';
+                progressWrap.style.cssText = 'margin-top:8px;';
+                progressWrap.innerHTML = `
+                    <div style="font-size:11px; color:#6b7280; margin-bottom:4px; text-align:center;" id="autoFillProgressStep">Iniciando...</div>
+                    <div style="position:relative; background:#d1fae5; border-radius:99px; height:8px; overflow:visible; margin:0 2px;">
+                        <div id="autoFillProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                            <span style="position:absolute; right:-10px; top:50%; transform:translateY(-50%); font-size:13px; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none;">🐇</span>
+                        </div>
+                    </div>`;
+                btn?.parentNode?.insertAdjacentElement('afterend', progressWrap);
             }
+            progressWrap.style.display = 'block';
+            _setAutoFillProgress(5, 'Iniciando...');
 
             try {
                 const response = await fetch(`${API_BASE}/accounts/autofill`, {
@@ -10478,53 +10928,39 @@
                     body: JSON.stringify({ account_name: accountName })
                 });
                 const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Não foi possível buscar dados da empresa.');
+                if (!response.ok) throw new Error(payload.error || 'Não foi possível iniciar AutoFill.');
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
 
-                let filled = [];
+                // Botões Cancelar / Minimizar no topo da barra de progresso inline
+                _attachBgTaskControls(
+                    progressWrap, taskId,
+                    () => { if (progressWrap) progressWrap.style.display = 'none'; if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> AutoFill'; } },
+                    () => { if (progressWrap) progressWrap.style.display = 'none'; if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> AutoFill'; } showError('AutoFill cancelado.'); }
+                );
 
-                const revenueInput = form.querySelector('[name="average_revenue"]');
-                if (revenueInput && payload.average_revenue) {
-                    revenueInput.value = payload.average_revenue;
-                    filled.push('Faturamento Médio Anual');
-                }
-
-                const profInput = form.querySelector('[name="professionals_count"]');
-                if (profInput && payload.professionals_count !== '' && payload.professionals_count !== null && payload.professionals_count !== undefined) {
-                    profInput.value = payload.professionals_count;
-                    filled.push('Quantidade de Profissionais');
-                }
-
-                const presenceSelect = form.querySelector('[name="global_presence"]');
-                if (presenceSelect && payload.global_presence) {
-                    const opt = Array.from(presenceSelect.options).find(o => o.value === payload.global_presence);
-                    if (opt) {
-                        presenceSelect.value = payload.global_presence;
-                        filled.push('Presença Global');
-                    }
-                }
-
-                if (payload.logo_url) {
-                    const logoPreview = document.getElementById('accountLogoPreview');
-                    const logoUrlHidden = document.getElementById('accountAutoFillLogoUrl');
-                    const removeFlag = document.getElementById('removeAccountLogoFlag');
-                    if (logoPreview) logoPreview.src = payload.logo_url;
-                    if (logoUrlHidden) logoUrlHidden.value = payload.logo_url;
-                    if (removeFlag) removeFlag.value = '0';
-                    filled.push('Logo');
-                }
-
-                if (filled.length === 0) {
-                    showError('AutoFill não encontrou dados para esta empresa. Verifique se o SAI está configurado em Configurações > Integrações.');
-                } else {
-                    showSuccess(`AutoFill preencheu: ${filled.join(', ')}.`);
-                }
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'gestao-conta';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/tasks/${taskId}`,
+                    `AutoFill — ${accountName}`,
+                    sourceTab,
+                    (result) => {
+                        if (progressWrap) progressWrap.style.display = 'none';
+                        if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> AutoFill'; }
+                        _applyAutoFillResult(result);
+                    },
+                    (errMsg) => {
+                        if (progressWrap) progressWrap.style.display = 'none';
+                        if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> AutoFill'; }
+                        showError(errMsg || 'Falha ao executar o AutoFill.');
+                    },
+                    (pct, step) => _setAutoFillProgress(pct, step)
+                );
             } catch (error) {
+                if (progressWrap) progressWrap.style.display = 'none';
+                if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> AutoFill'; }
                 showError(error.message || 'Falha ao executar o AutoFill.');
-            } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = originalHtml;
-                }
             }
         }
 
@@ -10778,21 +11214,38 @@
 
                 _portfolioSetProgress(15, 'Aguardando processamento...');
 
-                let offer = null;
-                for (let i = 0; i < 240; i++) {
-                    await new Promise(r => setTimeout(r, 800));
-                    const statusResp = await fetch(`${API_BASE}/portfolio/offers/tasks/${taskId}`);
-                    const status = await statusResp.json().catch(() => ({}));
-                    _portfolioSetProgress(status.progress || 15, status.step || 'Processando...');
-                    if (status.status === 'done') { offer = status.result; break; }
-                    if (status.status === 'error') throw new Error(status.error || 'Erro durante processamento.');
-                }
-                if (!offer) throw new Error('Tempo limite de processamento excedido. Tente novamente.');
+                // Expõe botão fechar para continuar em background
+                const closePortfolioBtn = document.querySelector('#portfolioNewModal .modal-close');
+                if (closePortfolioBtn) closePortfolioBtn.style.display = '';
 
-                closePortfolioModal('portfolioNewModal');
-                showSuccess('Oferta criada com sucesso.');
-                await loadPortfolio();
-                return;
+                // Botões Cancelar / Minimizar no topo da barra de progresso
+                const _portProgressEl = document.getElementById('portfolioProgressArea');
+                _attachBgTaskControls(
+                    _portProgressEl, taskId,
+                    () => closePortfolioModal('portfolioNewModal'),
+                    () => { closePortfolioModal('portfolioNewModal'); showError('Tarefa cancelada.'); }
+                );
+
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'portfolio';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/portfolio/offers/tasks/${taskId}`,
+                    'Analisando Oferta com IA',
+                    sourceTab,
+                    (_offer) => {
+                        closePortfolioModal('portfolioNewModal');
+                        showSuccess('Oferta criada com sucesso.');
+                        loadPortfolio();
+                    },
+                    (errMsg) => {
+                        showError(errMsg || 'Erro ao analisar material com IA.');
+                        if (btn) { btn.disabled = false; btn.style.display = ''; }
+                        if (cancelBtn) cancelBtn.style.display = '';
+                        if (formArea) formArea.style.display = '';
+                        if (progressArea) progressArea.style.display = 'none';
+                    },
+                    (pct, step) => _portfolioSetProgress(pct, step)
+                );
             } catch (error) {
                 showError(error.message || 'Erro ao analisar material com IA.');
                 if (btn) { btn.disabled = false; btn.style.display = ''; }
@@ -11424,7 +11877,6 @@
             if (progressArea) progressArea.style.display = 'block';
             _iataSetProgress(5, 'Enviando arquivo...');
 
-
             try {
                 const fd = new FormData();
                 if (file) fd.append('meeting_file', file);
@@ -11435,23 +11887,47 @@
                 const taskId = payload.task_id;
                 if (!taskId) throw new Error('Resposta inesperada do servidor.');
                 _iataSetProgress(10, 'Aguardando processamento...');
-                let record = null;
-                for (let i = 0; i < 300; i++) {
-                    await new Promise(r => setTimeout(r, 800));
-                    const statusResp = await fetch(`${API_BASE}/portfolio/iata/tasks/${taskId}`);
-                    const status = await statusResp.json().catch(() => ({}));
-                    _iataSetProgress(status.progress || 10, status.step || 'Processando...');
-                    if (status.status === 'done') { record = status.result; break; }
-                    if (status.status === 'error') throw new Error(status.error || 'Erro durante processamento.');
-                }
-                if (!record) throw new Error('Tempo limite excedido. Tente novamente.');
-                document.getElementById('iataNewModal')?.remove();
-                showSuccess('Ata gerada com sucesso!');
-                await loadIAta();
-                if (record.id) {
-                    expandedIAtaRecords.add(Number(record.id));
-                    renderIAtaHistory(iataRecords);
-                }
+
+                // Permite fechar o modal e continuar em background
+                if (closeBtn) { closeBtn.style.display = ''; }
+                document.getElementById('iataModalCloseBtn')?.removeAttribute('onclick');
+                document.getElementById('iataModalCloseBtn')?.addEventListener('click', () => {
+                    document.getElementById('iataNewModal')?.remove();
+                }, { once: true });
+
+                // Botões Cancelar / Minimizar no topo da barra de progresso
+                const _iataProgressEl = document.getElementById('iataProgressArea');
+                _attachBgTaskControls(
+                    _iataProgressEl, taskId,
+                    () => document.getElementById('iataNewModal')?.remove(),
+                    () => { document.getElementById('iataNewModal')?.remove(); showError('Tarefa cancelada.'); }
+                );
+
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'iata';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/portfolio/iata/tasks/${taskId}`,
+                    'Gerando Ata com IA',
+                    sourceTab,
+                    (record) => {
+                        document.getElementById('iataNewModal')?.remove();
+                        showSuccess('Ata gerada com sucesso!');
+                        loadIAta().then(() => {
+                            if (record && record.id) {
+                                expandedIAtaRecords.add(Number(record.id));
+                                renderIAtaHistory(iataRecords);
+                            }
+                        });
+                    },
+                    (errMsg) => {
+                        showError(errMsg || 'Erro ao processar reunião com IA.');
+                        if (btn) { btn.disabled = false; btn.style.display = ''; }
+                        if (cancelBtn) cancelBtn.style.display = '';
+                        if (formArea) formArea.style.display = '';
+                        if (progressArea) progressArea.style.display = 'none';
+                    },
+                    (pct, step) => _iataSetProgress(pct, step)
+                );
             } catch (error) {
                 showError(error.message || 'Erro ao processar reunião com IA.');
                 if (btn) { btn.disabled = false; btn.style.display = ''; }
@@ -11846,6 +12322,41 @@
         let atLinkedinImportedAt = null;
         let atLinkedinLastImportedProfileUrl = '';
 
+        function _renderLinkedInResult(data, resultArea) {
+            if (!resultArea) return;
+            const s = data.summary;
+            const limitedDataWarning = data.limited_data
+                ? `<div style="margin-bottom:12px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 14px; font-size:12px; color:#92400e;">
+                       <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
+                       <strong>Dados limitados:</strong> O LinkedIn bloqueou o acesso completo ao perfil. Para um resumo mais detalhado, <strong>cole o texto do perfil</strong> no campo acima.
+                   </div>`
+                : '';
+            if (s) {
+                resultArea.innerHTML = limitedDataWarning + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source);
+            } else if (data.raw) {
+                resultArea.innerHTML = limitedDataWarning + `
+                    <div class="settings-card">
+                        <h3 style="color:#065f46; margin-bottom:12px;"><i class="fab fa-linkedin" style="margin-right:8px;"></i>Resumo Executivo</h3>
+                        <pre style="white-space: pre-wrap; font-family: inherit; font-size: 13px; color: #374151;">${_escHtml(data.raw)}</pre>
+                        <p style="margin-top:12px; font-size:11px; color:#9ca3af;">Fonte: ${data.source}</p>
+                    </div>`;
+            } else {
+                resultArea.innerHTML = `<div style="padding:16px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; color:#92400e;">
+                    <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
+                    <strong>Perfil não acessível:</strong> O LinkedIn bloqueou o acesso a este perfil. Cole o texto do perfil manualmente para gerar o resumo.
+                </div>`;
+            }
+        }
+
+        function _setLinkedInProgress(pct, step) {
+            const bar = document.getElementById('linkedinProgressBar');
+            const stepEl = document.getElementById('linkedinProgressStep');
+            const pctEl = document.getElementById('linkedinProgressPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
         async function gerarResumoLinkedIn() {
             const url = (document.getElementById('atLinkedinUrl')?.value || '').trim();
             const profileText = (document.getElementById('atLinkedinProfileText')?.value || '').trim();
@@ -11854,13 +12365,34 @@
             const btn = document.getElementById('atLinkedinSummarizeBtn');
 
             if (!url && !profileText) {
-                resultArea.innerHTML = '<p style="color:#dc2626; padding: 12px; background: #fee2e2; border-radius: 8px;"><i class="fas fa-exclamation-triangle"></i> Informe a URL do LinkedIn ou cole o texto do perfil.</p>';
+                if (resultArea) resultArea.innerHTML = '<p style="color:#dc2626; padding: 12px; background: #fee2e2; border-radius: 8px;"><i class="fas fa-exclamation-triangle"></i> Informe a URL do LinkedIn ou cole o texto do perfil.</p>';
                 return;
             }
 
             btn.disabled = true;
-            btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerando resumo...';
-            resultArea.innerHTML = '<div class="loading"><div class="spinner"></div>Analisando perfil e gerando resumo executivo...</div>';
+            btn.innerHTML = '<span class="ai-star-icon">✦</span> Processando...';
+
+            // Substitui área de resultado pela barra de progresso iAta-style
+            if (resultArea) {
+                resultArea.innerHTML = `
+                    <div style="padding:20px 4px 12px;">
+                        <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="linkedinProgressStep">Iniciando...</div>
+                        <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                            <div id="linkedinProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                <span style="position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none;">🐇</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
+                            <div style="font-size:12px; color:#10b981;">
+                                <span style="display:inline-block; animation:iata-paw-fade 1s ease-in-out infinite;">🐾</span>
+                                <span style="display:inline-block; animation:iata-paw-fade 1s ease-in-out infinite .2s;">🐾</span>
+                                <span style="display:inline-block; animation:iata-paw-fade 1s ease-in-out infinite .4s;">🐾</span>
+                            </div>
+                            <div style="font-size:11px; color:#6b7280;" id="linkedinProgressPct">5%</div>
+                        </div>
+                    </div>`;
+            }
+            _setLinkedInProgress(5, 'Iniciando...');
 
             try {
                 const shouldUseImportedPhoto = !!atLinkedinLastImportedPhotoUrl && (
@@ -11876,42 +12408,48 @@
                         extension_photo_url: shouldUseImportedPhoto ? atLinkedinLastImportedPhotoUrl : ''
                     })
                 });
-                const data = await resp.json();
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Erro ao iniciar processamento.');
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
+                _setLinkedInProgress(10, 'Aguardando processamento...');
 
-                if (!resp.ok) {
-                    resultArea.innerHTML = `<p style="color:#dc2626; padding: 12px; background: #fee2e2; border-radius: 8px;"><i class="fas fa-exclamation-triangle"></i> ${data.error || 'Erro ao gerar resumo.'}</p>`;
-                    return;
-                }
+                // Botões Cancelar / Minimizar no topo da barra de progresso
+                const _liProgressEl = document.getElementById('atLinkedinResultArea');
+                _attachBgTaskControls(
+                    _liProgressEl, taskId,
+                    () => { /* minimizou – UI fica como está, BgTaskManager cuida */ },
+                    () => {
+                        btn.disabled = false;
+                        btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerar Resumo Executivo';
+                        if (_liProgressEl) _liProgressEl.innerHTML = '<p style="color:#6b7280; padding:12px;">Cancelado.</p>';
+                    }
+                );
 
-                const s = data.summary;
-                const limitedDataWarning = data.limited_data
-                    ? `<div style="margin-bottom:12px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 14px; font-size:12px; color:#92400e;">
-                           <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
-                           <strong>Dados limitados:</strong> O LinkedIn bloqueou o acesso completo ao perfil. Para um resumo mais detalhado, <strong>cole o texto do perfil</strong> no campo acima (abra o LinkedIn, selecione tudo e copie).
-                       </div>`
-                    : '';
-
-                if (s) {
-                    resultArea.innerHTML = limitedDataWarning + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source);
-                } else if (data.raw) {
-                    // Exibe resposta bruta se não conseguiu parsear JSON
-                    resultArea.innerHTML = limitedDataWarning + `
-                        <div class="settings-card">
-                            <h3 style="color:#065f46; margin-bottom:12px;"><i class="fab fa-linkedin" style="margin-right:8px;"></i>Resumo Executivo</h3>
-                            <pre style="white-space: pre-wrap; font-family: inherit; font-size: 13px; color: #374151;">${_escHtml(data.raw)}</pre>
-                            <p style="margin-top:12px; font-size:11px; color:#9ca3af;">Fonte: ${data.source}</p>
-                        </div>`;
-                } else {
-                    resultArea.innerHTML = `<div style="padding:16px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; color:#92400e;">
-                        <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
-                        <strong>Perfil não acessível:</strong> O LinkedIn bloqueou o acesso a este perfil. Cole o texto do perfil manualmente no campo acima para gerar o resumo.
-                    </div>`;
-                }
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'gestao-conta';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/tasks/${taskId}`,
+                    'Resumo LinkedIn com IA',
+                    sourceTab,
+                    (data) => {
+                        btn.disabled = false;
+                        btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerar Resumo Executivo';
+                        const ra = document.getElementById('atLinkedinResultArea');
+                        _renderLinkedInResult(data, ra);
+                    },
+                    (errMsg) => {
+                        btn.disabled = false;
+                        btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerar Resumo Executivo';
+                        const ra = document.getElementById('atLinkedinResultArea');
+                        if (ra) ra.innerHTML = `<p style="color:#dc2626; padding: 12px; background: #fee2e2; border-radius: 8px;"><i class="fas fa-exclamation-triangle"></i> ${errMsg || 'Erro ao gerar resumo.'}</p>`;
+                    },
+                    (pct, step) => _setLinkedInProgress(pct, step)
+                );
             } catch (e) {
-                resultArea.innerHTML = `<p style="color:#dc2626; padding: 12px; background: #fee2e2; border-radius: 8px;"><i class="fas fa-exclamation-triangle"></i> Erro de conexão: ${e.message}</p>`;
-            } finally {
                 btn.disabled = false;
                 btn.innerHTML = '<span class="ai-star-icon">✦</span> Gerar Resumo Executivo';
+                if (resultArea) resultArea.innerHTML = `<p style="color:#dc2626; padding: 12px; background: #fee2e2; border-radius: 8px;"><i class="fas fa-exclamation-triangle"></i> Erro de conexão: ${e.message}</p>`;
             }
         }
 
@@ -12294,5 +12832,10 @@
         </div>
       </div>
     </div>
+
+    <!-- Background Task Indicator -->
+    <div id="bgTaskDoneList"></div>
+    <div id="bgTaskIndicator" onclick="BgTaskManager.onIndicatorClick()" title="Tarefas em andamento"></div>
+
 </body>
 </html>
