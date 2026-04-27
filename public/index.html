@@ -1016,6 +1016,40 @@
             text-decoration: underline;
         }
 
+        tr.archived-contact-row {
+            background: #f3f4f6 !important;
+            color: #6b7280;
+        }
+
+        tr.archived-contact-row .table-link-btn {
+            color: #6b7280;
+        }
+
+        tr.archived-contact-row .table-link-btn:hover {
+            color: #4b5563;
+        }
+
+        .dashboard-archived-header {
+            background: #eef2f7;
+            cursor: pointer;
+            color: #374151;
+            font-weight: 700;
+        }
+
+        .btn-archive-glass {
+            background: rgba(17, 24, 39, 0.78);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.24);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 8px 20px rgba(17, 24, 39, 0.25);
+        }
+
+        .btn-archive-glass:hover {
+            background: rgba(17, 24, 39, 0.9);
+            color: #fff;
+        }
+
         .details-modal-content {
             max-width: 960px;
             width: 95%;
@@ -5048,12 +5082,17 @@
         let clientsCompanyFilter = '';
         let clientsPositionFilter = '';
         let clientsNameSearch = '';
+        let dashboardArchivedExpanded = false;
         let agendaCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
 
 
         function uniqueValues(items, key) {
             return [...new Set(items.map(i => (i[key] || '').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+        }
+
+        function isArchivedClient(client) {
+            return Number(client?.is_archived) === 1 || !String(client?.company || '').trim();
         }
 
         function renderFilters(prefix, allClients, currentCompany, currentPosition) {
@@ -5219,6 +5258,8 @@
                     });
 
                     const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
+                    const activeClients = sortedClients.filter(client => !isArchivedClient(client));
+                    const archivedClients = sortedClients.filter(client => isArchivedClient(client));
 
                     html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
                     html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
@@ -5233,21 +5274,24 @@
                     html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
                     html += '</tr></thead><tbody>';
 
-                    sortedClients.forEach(client => {
+                    const renderDashboardContactRow = (client, { isArchived = false } = {}) => {
                         const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
                         const statusClass = `status-${status}`;
                         const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
                         const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
                         const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
-                        html += `<tr>
+                        const companyCell = isArchived
+                            ? '<span style="color:#9ca3af;">(Arquivado)</span>'
+                            : `<button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button>`;
+                        html += `<tr class="${isArchived ? 'archived-contact-row' : ''}">
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td style="min-width:142px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td style="min-width:142px;">${companyCell}</td>
                             <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
                             <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
                             <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
-                            <td style="white-space: nowrap;"><span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span></td>
+                            <td style="white-space: nowrap;">${isArchived ? '<span style="color:#9ca3af;">Arquivado</span>' : `<span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span>`}</td>
                             <td style="text-align: center;">
                                 <div class="action-buttons">
                                     <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
@@ -5256,7 +5300,12 @@
                                 </div>
                             </td>
                         </tr>`;
-                    });
+                    };
+                    activeClients.forEach(client => renderDashboardContactRow(client));
+                    html += `<tr class="dashboard-archived-header" onclick="toggleDashboardArchivedSection()"><td colspan="9"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Contatos Arquivados (${archivedClients.length})</span><span>${dashboardArchivedExpanded ? '▾' : '▸'}</span></div></td></tr>`;
+                    if (dashboardArchivedExpanded) {
+                        archivedClients.forEach(client => renderDashboardContactRow(client, { isArchived: true }));
+                    }
                     html += '</tbody></table></div></div>';
                 }
 
@@ -5301,12 +5350,13 @@
                     html += '</tr></thead><tbody>';
 
                     sortedClients.forEach(client => {
+                        const archived = isArchivedClient(client);
                         const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
                         const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
-                        html += `<tr>
+                        html += `<tr class="${archived ? 'archived-contact-row' : ''}">
                             <td>${avatar}</td>
                             <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td style="min-width:200px;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button></td>
+                            <td style="min-width:200px;">${archived ? '<span style="color:#9ca3af;">(Arquivado)</span>' : `<button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button>`}</td>
                             <td><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
                             <td class="clients-email-col">${client.email || '-'}</td>
                             <td class="small-col-text">${client.area_of_activity || '-'}</td>
@@ -6201,6 +6251,33 @@
                 } catch (error) {
                     showError('Erro ao excluir contato');
                 }
+            }
+        }
+
+        async function archiveClient(id, options = {}) {
+            const client = clients.find(c => Number(c.id) === Number(id)) || {};
+            const choice = await openArchiveContactDialog(client);
+            if (!choice || !choice.confirmed) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/clientes/${id}/arquivar`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ remove_company: !!choice.removeCompany })
+                });
+
+                if (response.ok) {
+                    if (options && options.closeProfileOnSuccess) {
+                        closeProfileModal();
+                    }
+                    showSuccess(choice.removeCompany ? 'Contato arquivado e empresa removida com sucesso!' : 'Contato arquivado com sucesso!');
+                    loadClients();
+                    loadDashboard();
+                } else {
+                    showError('Erro ao arquivar contato');
+                }
+            } catch (error) {
+                showError('Erro ao arquivar contato');
             }
         }
 
@@ -8141,6 +8218,10 @@
         // Sort function
         function sortClients(clientsArray, field, order) {
             const sorted = [...clientsArray].sort((a, b) => {
+                const aArchived = isArchivedClient(a) ? 1 : 0;
+                const bArchived = isArchivedClient(b) ? 1 : 0;
+                if (aArchived !== bArchived) return aArchived - bArchived;
+
                 if (field === 'status') {
                     const statusRank = { green: 1, yellow: 2, red: 3 };
                     const aStatusName = getStatus(a.last_activity_date, a.position, a.is_target, a.is_cold_contact);
@@ -8179,6 +8260,11 @@
                 dashboardSortField = field;
                 dashboardSortOrder = 'asc';
             }
+            loadDashboard();
+        }
+
+        function toggleDashboardArchivedSection() {
+            dashboardArchivedExpanded = !dashboardArchivedExpanded;
             loadDashboard();
         }
 
@@ -8244,7 +8330,8 @@
                     .sort((a, b) => new Date(b.activity_date || b.created_at) - new Date(a.activity_date || a.created_at));
 
                 const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
-                const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
+                const archivedContact = isArchivedClient(client);
+                const statusText = archivedContact ? 'Arquivado' : (status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado');
 
                 let historyHtml = '';
                 if (clientActivities.length === 0) {
@@ -8265,6 +8352,7 @@
 
                 const modalBody = `
                     <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                        ${archivedContact ? '' : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
                         <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
@@ -8273,7 +8361,7 @@
                         <div>
                             <div class="profile-info-grid">
                                 <div class="profile-field"><div class="profile-field-label">Nome</div><div class="profile-field-value">${escapeHtml(client.name)}</div></div>
-                                <div class="profile-field"><div class="profile-field-label">Empresa</div><div class="profile-field-value">${escapeHtml(client.company)}</div></div>
+                                <div class="profile-field"><div class="profile-field-label">Empresa</div><div class="profile-field-value">${escapeHtml(client.company || '-')}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Cargo</div><div class="profile-field-value">${escapeHtml(client.position)}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Status</div><div class="profile-field-value">${statusText}</div></div>
                                 <div class="profile-field"><div class="profile-field-label">Email</div><div class="profile-field-value">${escapeHtml(client.email || '-')}</div></div>
@@ -8482,6 +8570,36 @@
 
         async function uiPrompt(message, defaultValue = '', title = 'Preenchimento') {
             return await openSystemDialog({ title, message, showCancel: true, inputDefault: defaultValue });
+        }
+
+        async function openArchiveContactDialog(client) {
+            return await new Promise((resolve) => {
+                const clientName = escapeHtml(client?.name || 'contato');
+                const companyName = escapeHtml(client?.company || '-');
+                const html = `
+                    <div class="modal active" id="archiveContactDialog" onclick="if(event.target===this){ this.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:false, removeCompany:false }); window.__archiveDialogResolve = null; }">
+                        <div class="modal-content" style="max-width:520px;">
+                            <div class="modal-header">
+                                <h2 style="color:#111827;">Arquivar Contato</h2>
+                                <button class="modal-close" onclick="document.getElementById('archiveContactDialog')?.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:false, removeCompany:false }); window.__archiveDialogResolve = null;">×</button>
+                            </div>
+                            <div style="padding:8px 0 4px 0; color:#374151;">
+                                <p style="margin-bottom:12px;">Deseja arquivar <strong>${clientName}</strong>?</p>
+                                <label style="display:flex; align-items:flex-start; gap:10px; background:rgba(17,24,39,0.04); border:1px solid rgba(17,24,39,0.12); border-radius:10px; padding:10px;">
+                                    <input type="checkbox" id="archiveRemoveCompanyCheck" style="margin-top:2px;">
+                                    <span>Remover também o nome da empresa atual (<strong>${companyName}</strong>).</span>
+                                </label>
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn btn-secondary" onclick="document.getElementById('archiveContactDialog')?.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:false, removeCompany:false }); window.__archiveDialogResolve = null;">Cancelar</button>
+                                <button class="btn btn-primary" onclick="const removeCompany = !!document.getElementById('archiveRemoveCompanyCheck')?.checked; document.getElementById('archiveContactDialog')?.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:true, removeCompany }); window.__archiveDialogResolve = null;">Arquivar</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                window.__archiveDialogResolve = resolve;
+                document.body.insertAdjacentHTML('beforeend', html);
+            });
         }
 
 
