@@ -1036,6 +1036,20 @@
             font-weight: 700;
         }
 
+        .btn-archive-glass {
+            background: rgba(17, 24, 39, 0.78);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.24);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 8px 20px rgba(17, 24, 39, 0.25);
+        }
+
+        .btn-archive-glass:hover {
+            background: rgba(17, 24, 39, 0.9);
+            color: #fff;
+        }
+
         .details-modal-content {
             max-width: 960px;
             width: 95%;
@@ -5078,7 +5092,7 @@
         }
 
         function isArchivedClient(client) {
-            return !String(client?.company || '').trim();
+            return Number(client?.is_archived) === 1 || !String(client?.company || '').trim();
         }
 
         function renderFilters(prefix, allClients, currentCompany, currentPosition) {
@@ -6241,25 +6255,29 @@
         }
 
         async function archiveClient(id, options = {}) {
-            if (await uiConfirm('Ao arquivar este contato, o campo Empresa será removido. Deseja continuar?', 'Arquivar Contato')) {
-                try {
-                    const response = await fetch(`${API_BASE}/clientes/${id}/arquivar`, {
-                        method: 'POST'
-                    });
+            const client = clients.find(c => Number(c.id) === Number(id)) || {};
+            const choice = await openArchiveContactDialog(client);
+            if (!choice || !choice.confirmed) return;
 
-                    if (response.ok) {
-                        if (options && options.closeProfileOnSuccess) {
-                            closeProfileModal();
-                        }
-                        showSuccess('Contato arquivado com sucesso!');
-                        loadClients();
-                        loadDashboard();
-                    } else {
-                        showError('Erro ao arquivar contato');
+            try {
+                const response = await fetch(`${API_BASE}/clientes/${id}/arquivar`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ remove_company: !!choice.removeCompany })
+                });
+
+                if (response.ok) {
+                    if (options && options.closeProfileOnSuccess) {
+                        closeProfileModal();
                     }
-                } catch (error) {
+                    showSuccess(choice.removeCompany ? 'Contato arquivado e empresa removida com sucesso!' : 'Contato arquivado com sucesso!');
+                    loadClients();
+                    loadDashboard();
+                } else {
                     showError('Erro ao arquivar contato');
                 }
+            } catch (error) {
+                showError('Erro ao arquivar contato');
             }
         }
 
@@ -8334,7 +8352,7 @@
 
                 const modalBody = `
                     <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
-                        ${archivedContact ? '' : `<button class="btn btn-secondary btn-small" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
+                        ${archivedContact ? '' : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
                         <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
@@ -8552,6 +8570,36 @@
 
         async function uiPrompt(message, defaultValue = '', title = 'Preenchimento') {
             return await openSystemDialog({ title, message, showCancel: true, inputDefault: defaultValue });
+        }
+
+        async function openArchiveContactDialog(client) {
+            return await new Promise((resolve) => {
+                const clientName = escapeHtml(client?.name || 'contato');
+                const companyName = escapeHtml(client?.company || '-');
+                const html = `
+                    <div class="modal active" id="archiveContactDialog" onclick="if(event.target===this){ this.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:false, removeCompany:false }); window.__archiveDialogResolve = null; }">
+                        <div class="modal-content" style="max-width:520px;">
+                            <div class="modal-header">
+                                <h2 style="color:#111827;">Arquivar Contato</h2>
+                                <button class="modal-close" onclick="document.getElementById('archiveContactDialog')?.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:false, removeCompany:false }); window.__archiveDialogResolve = null;">×</button>
+                            </div>
+                            <div style="padding:8px 0 4px 0; color:#374151;">
+                                <p style="margin-bottom:12px;">Deseja arquivar <strong>${clientName}</strong>?</p>
+                                <label style="display:flex; align-items:flex-start; gap:10px; background:rgba(17,24,39,0.04); border:1px solid rgba(17,24,39,0.12); border-radius:10px; padding:10px;">
+                                    <input type="checkbox" id="archiveRemoveCompanyCheck" style="margin-top:2px;">
+                                    <span>Remover também o nome da empresa atual (<strong>${companyName}</strong>).</span>
+                                </label>
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn btn-secondary" onclick="document.getElementById('archiveContactDialog')?.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:false, removeCompany:false }); window.__archiveDialogResolve = null;">Cancelar</button>
+                                <button class="btn btn-primary" onclick="const removeCompany = !!document.getElementById('archiveRemoveCompanyCheck')?.checked; document.getElementById('archiveContactDialog')?.remove(); window.__archiveDialogResolve && window.__archiveDialogResolve({ confirmed:true, removeCompany }); window.__archiveDialogResolve = null;">Arquivar</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                window.__archiveDialogResolve = resolve;
+                document.body.insertAdjacentHTML('beforeend', html);
+            });
         }
 
 

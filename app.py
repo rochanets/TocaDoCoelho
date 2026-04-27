@@ -471,6 +471,7 @@ def init_db():
         photo_url TEXT,
         is_target INTEGER DEFAULT 0,
         is_cold_contact INTEGER DEFAULT 0,
+        is_archived INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
@@ -826,6 +827,8 @@ def init_db():
         c.execute('ALTER TABLE clients ADD COLUMN is_cold_contact INTEGER DEFAULT 0')
     if 'linkedin' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN linkedin TEXT')
+    if 'is_archived' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN is_archived INTEGER DEFAULT 0')
 
     c.execute("PRAGMA table_info(commitments)")
     commitment_columns = [col[1] for col in c.fetchall()]
@@ -8031,8 +8034,8 @@ def create_client():
         
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
                   (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact))
         client_id = c.lastrowid
         ensure_account_for_company(c, company)
@@ -8090,9 +8093,9 @@ def update_client(client_id):
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
         
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, updated_at = CURRENT_TIMESTAMP
+        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, is_archived = CASE WHEN TRIM(?) != '' THEN 0 ELSE is_archived END, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, client_id))
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, company, client_id))
         ensure_account_for_company(c, company)
         conn.commit()
         conn.close()
@@ -8129,17 +8132,36 @@ def archive_cliente(client_id):
 @app.route('/api/clients/<int:client_id>/archive', methods=['POST'])
 def archive_client(client_id):
     try:
+        payload = request.get_json(silent=True) or {}
+        remove_company = bool(payload.get('remove_company'))
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
-        existing = c.fetchone()
+        c.execute('SELECT id, company FROM clients WHERE id = ?', (client_id,))
+        existing = dict_from_row(c.fetchone())
         if not existing:
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
 
-        c.execute('''UPDATE clients
-                     SET company = '', updated_at = CURRENT_TIMESTAMP
-                     WHERE id = ?''', (client_id,))
+        old_company = (existing.get('company') or '').strip()
+        if remove_company:
+            c.execute('''UPDATE clients
+                         SET company = '', is_archived = 1, updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?''', (client_id,))
+
+            c.execute(
+                '''INSERT INTO activities (client_id, contact_type, information, description)
+                   VALUES (?, ?, ?, ?)''',
+                (
+                    client_id,
+                    'Sistema',
+                    f'Usuario arquivado. Empresa removida: {old_company or "-"}',
+                    'Registro automático de arquivamento'
+                )
+            )
+        else:
+            c.execute('''UPDATE clients
+                         SET is_archived = 1, updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?''', (client_id,))
         conn.commit()
         conn.close()
         return jsonify({'message': 'Contato arquivado'})
