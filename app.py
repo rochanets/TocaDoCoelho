@@ -8122,6 +8122,31 @@ def delete_client(client_id):
         print(f'[ERROR] DELETE /api/clients/{client_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/clientes/<int:client_id>/arquivar', methods=['POST'])
+def archive_cliente(client_id):
+    return archive_client(client_id)
+
+@app.route('/api/clients/<int:client_id>/archive', methods=['POST'])
+def archive_client(client_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
+        existing = c.fetchone()
+        if not existing:
+            conn.close()
+            return jsonify({'error': 'Cliente nao encontrado'}), 404
+
+        c.execute('''UPDATE clients
+                     SET company = '', updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?''', (client_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Contato arquivado'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/clients/{client_id}/archive: {e}')
+        return jsonify({'error': str(e)}), 500
+
 # API - Atividades (rotas alternativas para compatibilidade)
 @app.route('/api/atividades', methods=['GET'])
 def get_atividades():
