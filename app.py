@@ -9448,10 +9448,10 @@ def _environment_extract_suggestions(company, industry, cards, card_results):
         data = card_results.get(card_id, {})
         snippets = []
         sources = []
-        for r in (data.get('results') or [])[:4]:
+        for r in (data.get('results') or [])[:5]:
             text = (r.get('snippet') or r.get('content') or '').strip()
             if text:
-                snippets.append(text[:250])
+                snippets.append(text[:400])
             if r.get('url'):
                 sources.append(r['url'])
         cards_context.append({
@@ -9475,12 +9475,16 @@ def _environment_extract_suggestions(company, industry, cards, card_results):
             context_text += '\nNenhum resultado encontrado na web para este card.'
 
     prompt_system = (
-        'Você é um analista de inteligência de mercado. '
+        'Você é um analista de inteligência de mercado extremamente rigoroso. '
         'Responda APENAS em JSON válido, sem texto extra. '
-        'Para cada card, extraia uma resposta objetiva em português baseada nos trechos da web. '
-        'Se não houver informação suficiente, use null. '
-        'Máximo 800 caracteres por resposta. '
-        'Formato obrigatório: {"answers": {"<card_id>": "<resposta ou null>", ...}}'
+        'REGRA ABSOLUTA: só retorne uma resposta se os trechos confirmarem EXPLICITAMENTE qual produto/informação '
+        'a empresa NOMEADA usa ou possui. Exemplos de respostas PROIBIDAS: '
+        '"pode usar SAP ou Oracle", "utiliza sistemas como...", "entre outros", listas de possibilidades. '
+        'Se o trecho apenas cita a empresa em contexto genérico, ou lista opções sem confirmar qual ela usa, '
+        'retorne null. Prefira null a qualquer resposta vaga ou especulativa. '
+        'Quando a resposta for encontrada, seja direto: cite o nome específico confirmado pelos trechos. '
+        'Máximo 500 caracteres por resposta. '
+        'Formato obrigatório: {"answers": {"<card_id>": "<resposta específica confirmada ou null>", ...}}'
     )
     prompt_user = (
         f'Empresa: {company}\nSetor: {industry}\n\n'
@@ -9594,13 +9598,12 @@ def _environment_autofill_process_async(task_id, account_id):
                 'step': f'Pesquisando: {card["title"]}... ({i + 1}/{total})',
                 'progress': progress,
             })
-            query = f'"{company}" {card["title"]}'
-            if industry:
-                query += f' {industry}'
+            # Busca direcionada a evidências concretas de uso, não artigos genéricos
+            query = f'"{company}" {card["title"]} implementação adotou contratou utiliza'
             if card.get('description'):
-                query += f' {card["description"][:80]}'
+                query += f' {card["description"][:60]}'
             try:
-                results = _run_tavily_request(api_key, query, max_results=4)
+                results = _run_tavily_request(api_key, query, max_results=5)
                 card_results[card['id']] = {'card': card, 'results': results}
             except Exception as e:
                 logger.warning(f'[EnvAutoFill] Tavily error for card {card["id"]}: {e}')

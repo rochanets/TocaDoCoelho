@@ -7564,7 +7564,7 @@
         }
 
         async function deleteAutoMappingRun(runId, triggerEl) {
-            const confirmed = await openConfirmDialog('Excluir Log', 'Deseja realmente excluir este log do AutoMapping?');
+            const confirmed = await uiConfirm('Deseja realmente excluir este log do AutoMapping?', 'Excluir Log');
             if (!confirmed) return;
             try {
                 const response = await fetch(`${API_BASE}/automapping/runs/${runId}`, { method: 'DELETE' });
