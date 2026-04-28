@@ -4952,10 +4952,28 @@ def _calculate_evidence_quality(evidence):
     return quality
 
 
-def _build_section_result(section_key, section_cfg, evidence, error_message=None):
+def _company_mentioned_in_evidence(evidence, company):
+    """Verifica se o nome da empresa aparece em pelo menos um snippet da evidência."""
+    if not company:
+        return False
+    company_lower = company.lower().strip()
+    for ev in (evidence or []):
+        snippet = (ev.get('snippet') or '').lower()
+        if company_lower in snippet:
+            return True
+    return False
+
+
+def _build_section_result(section_key, section_cfg, evidence, error_message=None, company=''):
     matched_keywords = _detect_keywords_in_evidence(evidence, section_cfg['keywords'])
-    confidence = _calculate_section_confidence(evidence, matched_keywords)
-    status = 'identified' if matched_keywords else ('investigate' if evidence else 'unknown')
+    # Só marca como 'identified' se a empresa for mencionada nos snippets + keyword encontrado
+    company_in_evidence = _company_mentioned_in_evidence(evidence, company)
+    if matched_keywords and company_in_evidence:
+        status = 'identified'
+    elif evidence:
+        status = 'investigate'
+    else:
+        status = 'unknown'
 
     if error_message:
         status = 'error'
@@ -4990,8 +5008,8 @@ def _build_automapping_sections(company, country, industry, search_results_by_se
     section_errors = section_errors or {}
     for section_key, section_cfg in plan.items():
         raw_results = search_results_by_section.get(section_key, [])
-        evidence = _extract_tavily_evidence(raw_results, max_items=4)
-        sections[section_key] = _build_section_result(section_key, section_cfg, evidence, section_errors.get(section_key))
+        evidence = _extract_tavily_evidence(raw_results, max_items=5)
+        sections[section_key] = _build_section_result(section_key, section_cfg, evidence, section_errors.get(section_key), company)
     return sections
 
 
@@ -5232,32 +5250,38 @@ def _run_openrouter_synthesis(result_payload):
     app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
     sections = result_payload.get('sections') or {}
 
+    company = result_payload.get('company') or ''
     compact_sections = {}
     for section_key, section_data in sections.items():
         evidence = section_data.get('evidence') or []
+        company_lower = company.lower()
         compact_sections[section_key] = {
-            'status': section_data.get('status'),
-            'confidence': section_data.get('confidence'),
             'matched_keywords': section_data.get('matched_keywords') or [],
-            'query_used': section_data.get('query_used'),
             'evidence': [
-                {'url': ev.get('url'), 'snippet': (ev.get('snippet') or '')[:280]}
-                for ev in evidence[:2]
+                {
+                    'url': ev.get('url'),
+                    'snippet': (ev.get('snippet') or '')[:500],
+                    'mentions_company': company_lower in (ev.get('snippet') or '').lower()
+                }
+                for ev in evidence[:4]
             ]
         }
 
     user_payload = {
-        'company': result_payload.get('company'),
+        'company': company,
         'country': result_payload.get('country'),
         'industry': result_payload.get('industry'),
         'sections': compact_sections
     }
 
     system_prompt = (
-        'Você é um analista técnico corporativo extremamente conservador com alucinações. '
-        'Responda APENAS em JSON válido. Para cada seção, gere UMA resposta final amigável em português. '
-        'Se não houver evidência forte e específica da empresa, responda com incerteza ao invés de inventar. '
-        'confidence_percent deve ser inteiro de 0 a 100. '
+        'Você é um analista de inteligência de mercado. Responda APENAS em JSON válido. '
+        'REGRA ABSOLUTA: só gere um final_answer específico se pelo menos um trecho '
+        '(campo "snippet") mencionar EXPLICITAMENTE o nome da empresa junto com a solução confirmada. '
+        'Indícios proibidos: "parece utilizar", "pode estar usando", "provavelmente usa", listas de opções. '
+        'Se nenhum trecho com mentions_company=true confirmar a solução, use '
+        'final_answer:"Não foi possível identificar com as evidências disponíveis" e confidence_percent:0. '
+        'confidence_percent deve refletir a qualidade da evidência: 0 se genérica, >70 só se confirmada. '
         'Formato obrigatório: '
         '{"sections":{"cloud":{"final_answer":"...","confidence_percent":0,"certainty":"confirmed|uncertain","reasoning":"..."}, ...}}'
     )
