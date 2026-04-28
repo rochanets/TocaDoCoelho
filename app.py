@@ -4966,6 +4966,7 @@ def _company_mentioned_in_evidence(evidence, company):
 
 def _build_section_result(section_key, section_cfg, evidence, error_message=None, company=''):
     matched_keywords = _detect_keywords_in_evidence(evidence, section_cfg['keywords'])
+    confidence = _calculate_section_confidence(evidence, matched_keywords)
     # Só marca como 'identified' se a empresa for mencionada nos snippets + keyword encontrado
     company_in_evidence = _company_mentioned_in_evidence(evidence, company)
     if matched_keywords and company_in_evidence:
