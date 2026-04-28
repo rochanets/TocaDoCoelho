@@ -4952,10 +4952,29 @@ def _calculate_evidence_quality(evidence):
     return quality
 
 
-def _build_section_result(section_key, section_cfg, evidence, error_message=None):
+def _company_mentioned_in_evidence(evidence, company):
+    """Verifica se o nome da empresa aparece em pelo menos um snippet da evidência."""
+    if not company:
+        return False
+    company_lower = company.lower().strip()
+    for ev in (evidence or []):
+        snippet = (ev.get('snippet') or '').lower()
+        if company_lower in snippet:
+            return True
+    return False
+
+
+def _build_section_result(section_key, section_cfg, evidence, error_message=None, company=''):
     matched_keywords = _detect_keywords_in_evidence(evidence, section_cfg['keywords'])
     confidence = _calculate_section_confidence(evidence, matched_keywords)
-    status = 'identified' if matched_keywords else ('investigate' if evidence else 'unknown')
+    # Só marca como 'identified' se a empresa for mencionada nos snippets + keyword encontrado
+    company_in_evidence = _company_mentioned_in_evidence(evidence, company)
+    if matched_keywords and company_in_evidence:
+        status = 'identified'
+    elif evidence:
+        status = 'investigate'
+    else:
+        status = 'unknown'
 
     if error_message:
         status = 'error'
@@ -4990,8 +5009,8 @@ def _build_automapping_sections(company, country, industry, search_results_by_se
     section_errors = section_errors or {}
     for section_key, section_cfg in plan.items():
         raw_results = search_results_by_section.get(section_key, [])
-        evidence = _extract_tavily_evidence(raw_results, max_items=4)
-        sections[section_key] = _build_section_result(section_key, section_cfg, evidence, section_errors.get(section_key))
+        evidence = _extract_tavily_evidence(raw_results, max_items=5)
+        sections[section_key] = _build_section_result(section_key, section_cfg, evidence, section_errors.get(section_key), company)
     return sections
 
 
@@ -5232,32 +5251,38 @@ def _run_openrouter_synthesis(result_payload):
     app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
     sections = result_payload.get('sections') or {}
 
+    company = result_payload.get('company') or ''
     compact_sections = {}
     for section_key, section_data in sections.items():
         evidence = section_data.get('evidence') or []
+        company_lower = company.lower()
         compact_sections[section_key] = {
-            'status': section_data.get('status'),
-            'confidence': section_data.get('confidence'),
             'matched_keywords': section_data.get('matched_keywords') or [],
-            'query_used': section_data.get('query_used'),
             'evidence': [
-                {'url': ev.get('url'), 'snippet': (ev.get('snippet') or '')[:280]}
-                for ev in evidence[:2]
+                {
+                    'url': ev.get('url'),
+                    'snippet': (ev.get('snippet') or '')[:500],
+                    'mentions_company': company_lower in (ev.get('snippet') or '').lower()
+                }
+                for ev in evidence[:4]
             ]
         }
 
     user_payload = {
-        'company': result_payload.get('company'),
+        'company': company,
         'country': result_payload.get('country'),
         'industry': result_payload.get('industry'),
         'sections': compact_sections
     }
 
     system_prompt = (
-        'Você é um analista técnico corporativo extremamente conservador com alucinações. '
-        'Responda APENAS em JSON válido. Para cada seção, gere UMA resposta final amigável em português. '
-        'Se não houver evidência forte e específica da empresa, responda com incerteza ao invés de inventar. '
-        'confidence_percent deve ser inteiro de 0 a 100. '
+        'Você é um analista de inteligência de mercado. Responda APENAS em JSON válido. '
+        'REGRA ABSOLUTA: só gere um final_answer específico se pelo menos um trecho '
+        '(campo "snippet") mencionar EXPLICITAMENTE o nome da empresa junto com a solução confirmada. '
+        'Indícios proibidos: "parece utilizar", "pode estar usando", "provavelmente usa", listas de opções. '
+        'Se nenhum trecho com mentions_company=true confirmar a solução, use '
+        'final_answer:"Não foi possível identificar com as evidências disponíveis" e confidence_percent:0. '
+        'confidence_percent deve refletir a qualidade da evidência: 0 se genérica, >70 só se confirmada. '
         'Formato obrigatório: '
         '{"sections":{"cloud":{"final_answer":"...","confidence_percent":0,"certainty":"confirmed|uncertain","reasoning":"..."}, ...}}'
     )
@@ -9377,9 +9402,9 @@ def save_environment_response():
         if not card_id or not client_id:
             return jsonify({'error': 'Card e cliente são obrigatórios'}), 400
         
-        # Limitar a 400 caracteres
-        if len(response_text) > 400:
-            return jsonify({'error': 'Resposta deve ter no máximo 400 caracteres'}), 400
+        # Limitar a 1000 caracteres
+        if len(response_text) > 1000:
+            return jsonify({'error': 'Resposta deve ter no máximo 1000 caracteres'}), 400
         
         conn = get_db()
         c = conn.cursor()
@@ -9439,6 +9464,217 @@ def get_card_all_responses(card_id):
     except Exception as e:
         print(f'[ERROR] GET /api/environment/card/{card_id}/all-responses: {e}')
         return jsonify({'error': str(e)}), 500
+
+def _environment_extract_suggestions(company, industry, cards, card_results):
+    """Usa LLM para extrair respostas para cada card a partir dos resultados Tavily."""
+    cards_context = []
+    for card in cards:
+        card_id = card['id']
+        data = card_results.get(card_id, {})
+        snippets = []
+        sources = []
+        for r in (data.get('results') or [])[:5]:
+            text = (r.get('snippet') or r.get('content') or '').strip()
+            if text:
+                snippets.append(text[:400])
+            if r.get('url'):
+                sources.append(r['url'])
+        cards_context.append({
+            'card_id': card_id,
+            'title': card['title'],
+            'description': card.get('description') or '',
+            'snippets': snippets,
+            'sources': sources,
+        })
+
+    context_text = ''
+    for cc in cards_context:
+        context_text += f'\n### Card {cc["card_id"]}: {cc["title"]}'
+        if cc['description']:
+            context_text += f'\nContexto: {cc["description"]}'
+        if cc['snippets']:
+            context_text += '\nTrechos encontrados na web:'
+            for s in cc['snippets']:
+                context_text += f'\n- {s}'
+        else:
+            context_text += '\nNenhum resultado encontrado na web para este card.'
+
+    prompt_system = (
+        'Você é um analista de inteligência de mercado extremamente rigoroso. '
+        'Responda APENAS em JSON válido, sem texto extra. '
+        'REGRA ABSOLUTA: só retorne uma resposta se os trechos confirmarem EXPLICITAMENTE qual produto/informação '
+        'a empresa NOMEADA usa ou possui. Exemplos de respostas PROIBIDAS: '
+        '"pode usar SAP ou Oracle", "utiliza sistemas como...", "entre outros", listas de possibilidades. '
+        'Se o trecho apenas cita a empresa em contexto genérico, ou lista opções sem confirmar qual ela usa, '
+        'retorne null. Prefira null a qualquer resposta vaga ou especulativa. '
+        'Quando a resposta for encontrada, seja direto: cite o nome específico confirmado pelos trechos. '
+        'Máximo 500 caracteres por resposta. '
+        'Formato obrigatório: {"answers": {"<card_id>": "<resposta específica confirmada ou null>", ...}}'
+    )
+    prompt_user = (
+        f'Empresa: {company}\nSetor: {industry}\n\n'
+        f'Para cada card abaixo, extraia uma resposta baseada nos trechos encontrados na web:\n'
+        f'{context_text}'
+    )
+
+    answer_map = {}
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        try:
+            or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+            model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip()
+            site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip()
+            app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip()
+            req_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': prompt_system},
+                    {'role': 'user', 'content': prompt_user},
+                ],
+                'temperature': 0.1,
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(req_payload).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name,
+                },
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            if choices:
+                content = ((choices[0] or {}).get('message') or {}).get('content') or ''
+                if isinstance(content, list):
+                    content = ''.join([p.get('text', '') for p in content if isinstance(p, dict)])
+                parsed = _extract_json_object_from_text(content.strip())
+                if isinstance(parsed, dict):
+                    answer_map = parsed.get('answers') or {}
+        except Exception as e:
+            logger.warning(f'[EnvAutoFill] OpenRouter error: {e}')
+
+    if not answer_map:
+        raw = _sai_simple_prompt(
+            prompt_system + '\n\n' + prompt_user +
+            '\nRetorne APENAS JSON no formato: {"answers": {"<card_id>": "<resposta ou null>", ...}}'
+        )
+        if raw:
+            parsed = _extract_json_object_from_text(raw)
+            if isinstance(parsed, dict):
+                answer_map = parsed.get('answers') or {}
+
+    suggestions = []
+    for cc in cards_context:
+        raw_answer = answer_map.get(str(cc['card_id'])) or answer_map.get(cc['card_id'])
+        if raw_answer and str(raw_answer).strip().lower() not in ('null', 'none', 'não encontrado', ''):
+            answer = str(raw_answer).strip()[:1000]
+            found = True
+        else:
+            answer = None
+            found = False
+        suggestions.append({
+            'card_id': cc['card_id'],
+            'card_title': cc['title'],
+            'suggestion': answer,
+            'sources': cc['sources'][:3],
+            'found': found,
+        })
+    return suggestions
+
+
+def _environment_autofill_process_async(task_id, account_id):
+    try:
+        _bg_task_set(task_id, {'step': 'Buscando dados da conta...', 'progress': 5})
+        conn = get_db()
+        c = conn.cursor()
+
+        c.execute('SELECT name, sector FROM accounts WHERE id = ?', (account_id,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Conta não encontrada'})
+            return
+        account = dict_from_row(row)
+        company = account['name']
+        industry = (account.get('sector') or '').strip()
+
+        c.execute('SELECT id, title, description FROM environment_cards ORDER BY display_order, id')
+        cards = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+
+        if not cards:
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhum card de mapeamento cadastrado. Crie cards antes de usar o Auto-preencher.'})
+            return
+
+        api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+        if not api_key:
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Chave Tavily não configurada. Configure em Configurações > Integrações.'})
+            return
+
+        card_results = {}
+        total = len(cards)
+        for i, card in enumerate(cards):
+            progress = 15 + int((i / total) * 50)
+            _bg_task_set(task_id, {
+                'step': f'Pesquisando: {card["title"]}... ({i + 1}/{total})',
+                'progress': progress,
+            })
+            # Busca direcionada a evidências concretas de uso, não artigos genéricos
+            query = f'"{company}" {card["title"]} implementação adotou contratou utiliza'
+            if card.get('description'):
+                query += f' {card["description"][:60]}'
+            try:
+                results = _run_tavily_request(api_key, query, max_results=5)
+                card_results[card['id']] = {'card': card, 'results': results}
+            except Exception as e:
+                logger.warning(f'[EnvAutoFill] Tavily error for card {card["id"]}: {e}')
+                card_results[card['id']] = {'card': card, 'results': [], 'error': str(e)}
+
+        _bg_task_set(task_id, {'step': 'Gerando sugestões com IA...', 'progress': 70})
+        suggestions = _environment_extract_suggestions(company, industry or 'tecnologia', cards, card_results)
+
+        found_count = sum(1 for s in suggestions if s['found'])
+        _bg_task_set(task_id, {
+            'step': 'Concluído!',
+            'progress': 100,
+            'status': 'done',
+            'result': {
+                'company': company,
+                'total_cards': total,
+                'found_count': found_count,
+                'suggestions': suggestions,
+            },
+        })
+    except Exception as e:
+        logger.exception(f'[EnvAutoFill][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/environment/auto-fill', methods=['POST'])
+def environment_auto_fill():
+    try:
+        data = request.get_json() or {}
+        account_id = data.get('account_id')
+        if not account_id:
+            return jsonify({'error': 'account_id é obrigatório'}), 400
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_environment_autofill_process_async,
+            args=(task_id, int(account_id)),
+            daemon=True,
+        ).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        print(f'[ERROR] POST /api/environment/auto-fill: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 # Rotas de backup e restore do banco de dados
 def _normalize_merge_text(value):

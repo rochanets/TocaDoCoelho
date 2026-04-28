@@ -2458,6 +2458,7 @@
                     <div style="display:flex; gap:10px; flex-wrap:wrap;">
                         <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
                         <button class="btn btn-auto-mapping" onclick="openAutoMappingModal()"><span class="ai-star-icon">✦</span> AutoMapping</button>
+                        <button id="envAutoFillBtn" class="btn btn-auto-mapping btn-small" style="display:none;" onclick="openEnvAutoFillModal()"><span class="ai-star-icon">✦</span> Auto-preencher via Web</button>
                     </div>
                 </div>
                 <div style="margin-bottom: 20px;">
@@ -7511,6 +7512,10 @@
                     ? parseInt(accountClientMap.get(selectedCompany), 10)
                     : null;
 
+                // Exibir botão Auto-preencher somente quando há conta selecionada
+                const _autoFillBtn = document.getElementById('envAutoFillBtn');
+                if (_autoFillBtn) _autoFillBtn.style.display = selectedAccountId ? '' : 'none';
+
                 // Renderizar cards
                 await renderMappingCards();
                 await loadAutoMappingQueriesHistory();
@@ -7559,7 +7564,7 @@
         }
 
         async function deleteAutoMappingRun(runId, triggerEl) {
-            const confirmed = await openConfirmDialog('Excluir Log', 'Deseja realmente excluir este log do AutoMapping?');
+            const confirmed = await uiConfirm('Deseja realmente excluir este log do AutoMapping?', 'Excluir Log');
             if (!confirmed) return;
             try {
                 const response = await fetch(`${API_BASE}/automapping/runs/${runId}`, { method: 'DELETE' });
@@ -7695,8 +7700,8 @@
                         html += `<div style="border: 1px solid rgba(52, 211, 153, 0.2); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: ${bgColor};">`;
                         html += `<div style="font-weight: 600; color: #047857; margin-bottom: 6px;">${escapeHtml(r.company)}</div>`;
                         html += '<div style="position: relative;">';
-                        html += `<textarea id="${textareaId}" class="mapping-response-input" data-card-id="${card.id}" data-client-id="${r.id}" maxlength="400" oninput="updateCharCounter('${textareaId}', '${counterId}')" style="width: 100%; min-height: 60px; padding: 8px; padding-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 6px; resize: vertical;">${escapeHtml(r.response || '')}</textarea>`;
-                        html += `<div id="${counterId}" style="position: absolute; bottom: 6px; right: 10px; font-size: 11px; color: #9ca3af;">${currentLength}/400</div>`;
+                        html += `<textarea id="${textareaId}" class="mapping-response-input" data-card-id="${card.id}" data-client-id="${r.id}" maxlength="1000" oninput="updateCharCounter('${textareaId}', '${counterId}')" style="width: 100%; min-height: 60px; padding: 8px; padding-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 6px; resize: vertical;">${escapeHtml(r.response || '')}</textarea>`;
+                        html += `<div id="${counterId}" style="position: absolute; bottom: 6px; right: 10px; font-size: 11px; color: #9ca3af;">${currentLength}/1000</div>`;
                         html += '</div>';
                         html += `<div style="text-align: right; margin-top: 6px;"><button class="btn btn-small btn-primary" onclick="saveMappingResponse(${card.id}, ${r.id})">Salvar</button></div>`;
                         html += '</div>';
@@ -7717,7 +7722,7 @@
             const textarea = document.getElementById(textareaId);
             const counter = document.getElementById(counterId);
             if (textarea && counter) {
-                counter.textContent = `${textarea.value.length}/400`;
+                counter.textContent = `${textarea.value.length}/1000`;
             }
         }
 
@@ -7766,6 +7771,249 @@
                 showError('Erro ao salvar resposta');
             }
         }
+
+        // ── Auto-preencher via Web ──────────────────────────────────────────────
+
+        function openEnvAutoFillModal() {
+            const filterSelect = document.getElementById('mappingClientFilter');
+            const selectedAccountId = parseInt(filterSelect?.value || '', 10);
+            if (!selectedAccountId) { showError('Selecione uma conta antes de usar o Auto-preencher.'); return; }
+
+            if (!document.getElementById('env-autofill-bunny-style')) {
+                const style = document.createElement('style');
+                style.id = 'env-autofill-bunny-style';
+                style.textContent = `
+                    @keyframes eaf-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
+                    @keyframes eaf-paw { 0%,100%{opacity:.25} 50%{opacity:.7} }
+                    .eaf-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:eaf-hop .5s ease-in-out infinite; pointer-events:none; }
+                    .eaf-paw { display:inline-block; font-size:10px; animation:eaf-paw 1s ease-in-out infinite; }
+                    .eaf-paw:nth-child(2){animation-delay:.2s} .eaf-paw:nth-child(3){animation-delay:.4s}
+                `;
+                document.head.appendChild(style);
+            }
+
+            const accountName = (mappingAccounts || []).find(a => Number(a.id) === selectedAccountId)?.name || '';
+            const html = `
+                <div class="modal active" id="envAutoFillModal" onclick="if(event.target===this) closeEnvAutoFillModal()">
+                    <div class="modal-content" style="max-width:680px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title"><span class="ai-star-icon">✦</span> Auto-preencher via Web</h2>
+                            <button class="modal-close" onclick="closeEnvAutoFillModal()">&#215;</button>
+                        </div>
+                        <div id="eafFormArea">
+                            <p style="margin:0 0 16px; color:#6b7280; font-size:13px;">
+                                Pesquisa a web sobre <strong>${escapeHtml(accountName)}</strong> e sugere respostas para cada card de mapeamento. Você revisa antes de salvar.
+                            </p>
+                            <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:10px 14px; margin-bottom:16px; font-size:13px; color:#166534;">
+                                <strong>Conta:</strong> ${escapeHtml(accountName)}
+                            </div>
+                            <div id="eafError" style="display:none; background:#fef2f2; border:1px solid #fca5a5; color:#b91c1c; border-radius:8px; padding:10px; margin-bottom:12px; font-size:13px;"></div>
+                        </div>
+                        <div id="eafProgressArea" style="display:none; padding:20px 4px 12px;">
+                            <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="eafProgressStep">Iniciando...</div>
+                            <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                                <div id="eafProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                    <span class="eaf-bunny">🐇</span>
+                                </div>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
+                                <div style="font-size:12px; color:#10b981;"><span class="eaf-paw">🐾</span><span class="eaf-paw">🐾</span><span class="eaf-paw">🐾</span></div>
+                                <div style="font-size:11px; color:#6b7280;" id="eafProgressPct">5%</div>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                            <button id="eafCancelBtn" class="btn btn-secondary" onclick="closeEnvAutoFillModal()">Cancelar</button>
+                            <button id="eafSubmitBtn" class="btn btn-auto-mapping btn-small" onclick="submitEnvAutoFill(${selectedAccountId})">
+                                <span class="ai-star-icon">✦</span> Pesquisar e Sugerir
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+            document.getElementById('envAutoFillModal')?.remove();
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeEnvAutoFillModal() {
+            document.getElementById('envAutoFillModal')?.remove();
+        }
+
+        function _eafSetProgress(pct, step) {
+            const bar = document.getElementById('eafProgressBar');
+            const stepEl = document.getElementById('eafProgressStep');
+            const pctEl = document.getElementById('eafProgressPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        function _eafSetError(msg) {
+            const el = document.getElementById('eafError');
+            if (!el) return;
+            if (msg) { el.textContent = msg; el.style.display = ''; }
+            else { el.style.display = 'none'; el.textContent = ''; }
+        }
+
+        async function submitEnvAutoFill(accountId) {
+            const submitBtn = document.getElementById('eafSubmitBtn');
+            const formArea = document.getElementById('eafFormArea');
+            const progressArea = document.getElementById('eafProgressArea');
+            _eafSetError('');
+            if (submitBtn) submitBtn.disabled = true;
+
+            try {
+                const res = await fetch(`${API_BASE}/environment/auto-fill`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_id: accountId })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Falha ao iniciar pesquisa');
+
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
+
+                if (formArea) formArea.style.display = 'none';
+                if (progressArea) progressArea.style.display = '';
+                _eafSetProgress(5, 'Iniciando pesquisa...');
+
+                const poll = setInterval(async () => {
+                    try {
+                        const tr = await fetch(`${API_BASE}/tasks/${taskId}`);
+                        const task = await tr.json();
+                        if (task.progress) _eafSetProgress(task.progress, task.step || '');
+                        if (task.status === 'done') {
+                            clearInterval(poll);
+                            closeEnvAutoFillModal();
+                            openEnvAutoFillResultModal(task.result);
+                        } else if (task.status === 'error') {
+                            clearInterval(poll);
+                            if (formArea) formArea.style.display = '';
+                            if (progressArea) progressArea.style.display = 'none';
+                            _eafSetError(task.error || 'Erro ao processar pesquisa.');
+                            if (submitBtn) submitBtn.disabled = false;
+                        }
+                    } catch (e) {
+                        clearInterval(poll);
+                        _eafSetError('Erro ao verificar status da pesquisa.');
+                        if (submitBtn) submitBtn.disabled = false;
+                    }
+                }, 900);
+            } catch (err) {
+                _eafSetError(err.message || 'Erro ao iniciar pesquisa.');
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        }
+
+        function openEnvAutoFillResultModal(result) {
+            const suggestions = result?.suggestions || [];
+            const found = suggestions.filter(s => s.found);
+            const notFound = suggestions.filter(s => !s.found);
+
+            let html = `<div class="modal active" id="envAutoFillResultModal" onclick="if(event.target===this) closeEnvAutoFillResultModal()">`;
+            html += '<div class="modal-content" style="max-width:860px;">';
+            html += `<div class="modal-header"><h2 class="modal-title"><span class="ai-star-icon">✦</span> Sugestões de Preenchimento — ${escapeHtml(result?.company || '')}</h2><button class="modal-close" onclick="closeEnvAutoFillResultModal()">&#215;</button></div>`;
+
+            if (!mappingSelectedClient) {
+                html += '<div style="background:#fff7ed; border:1px solid #fdba74; color:#9a3412; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13px;"><strong>Atenção:</strong> Nenhum contato vinculado a esta conta. Vincule um contato para salvar as respostas.</div>';
+            }
+
+            html += `<p style="color:#6b7280; font-size:13px; margin-bottom:16px;">${found.length} de ${suggestions.length} cards com sugestão encontrada.</p>`;
+
+            if (found.length > 0 && mappingSelectedClient) {
+                html += `<div style="text-align:right; margin-bottom:12px;"><button class="btn btn-auto-mapping btn-small" onclick="applyAllEnvSuggestions()"><span class="ai-star-icon">✦</span> Aplicar todos (${found.length})</button></div>`;
+            }
+
+            html += '<div style="max-height:62vh; overflow-y:auto; padding-right:4px;">';
+
+            suggestions.forEach((s, idx) => {
+                const bgColor = s.found ? 'rgba(209,250,229,0.5)' : 'rgba(243,244,246,0.8)';
+                const borderColor = s.found ? 'rgba(52,211,153,0.35)' : '#e5e7eb';
+                html += `<div id="eafSuggCard_${idx}" style="border:1px solid ${borderColor}; border-radius:10px; padding:14px; margin-bottom:10px; background:${bgColor};">`;
+                html += `<div style="font-weight:600; color:#047857; margin-bottom:8px;">${escapeHtml(s.card_title)}</div>`;
+
+                if (s.found) {
+                    const taId = `eafTa_${idx}`;
+                    html += `<textarea id="${taId}" maxlength="1000" style="width:100%; min-height:70px; padding:8px; border:1px solid #d1d5db; border-radius:6px; resize:vertical; font-size:13px;">${escapeHtml(s.suggestion)}</textarea>`;
+                    if (s.sources?.length) {
+                        html += '<div style="margin-top:6px;">';
+                        s.sources.slice(0, 2).forEach(src => {
+                            html += `<div style="font-size:11px; color:#6b7280; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">🔗 <a href="${escapeHtml(src)}" target="_blank" rel="noopener" style="color:#6b7280;">${escapeHtml(src)}</a></div>`;
+                        });
+                        html += '</div>';
+                    }
+                    if (mappingSelectedClient) {
+                        html += `<div style="text-align:right; margin-top:8px;">`;
+                        html += `<button class="btn btn-small btn-primary" onclick="applyEnvSuggestion(${s.card_id}, '${taId}', ${idx})">Aplicar</button>`;
+                        html += `</div>`;
+                    }
+                } else {
+                    html += '<div style="font-size:13px; color:#9ca3af;">Não encontrado na web.</div>';
+                }
+                html += '</div>';
+            });
+
+            html += '</div>';
+            html += '<div style="margin-top:16px; text-align:right;"><button class="btn btn-secondary" onclick="closeEnvAutoFillResultModal()">Fechar</button></div>';
+            html += '</div></div>';
+
+            document.getElementById('envAutoFillResultModal')?.remove();
+            document.body.insertAdjacentHTML('beforeend', html);
+
+            // Guarda sugestões para o "Aplicar todos"
+            window._eafCurrentSuggestions = suggestions;
+        }
+
+        function closeEnvAutoFillResultModal() {
+            document.getElementById('envAutoFillResultModal')?.remove();
+        }
+
+        async function applyEnvSuggestion(cardId, textareaId, suggIdx) {
+            if (!mappingSelectedClient) { showError('Nenhum contato vinculado a esta conta.'); return; }
+            const ta = document.getElementById(textareaId);
+            const text = ta ? ta.value.trim() : '';
+            if (!text) { showError('Sugestão está vazia.'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/environment/responses`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ card_id: cardId, client_id: mappingSelectedClient, response: text })
+                });
+                if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Falha ao salvar'); }
+                const card = document.getElementById(`eafSuggCard_${suggIdx}`);
+                if (card) { card.style.opacity = '0.45'; card.style.pointerEvents = 'none'; }
+                showSuccess('Sugestão aplicada!');
+                await loadMapeamento();
+            } catch (err) {
+                showError(err.message || 'Erro ao aplicar sugestão.');
+            }
+        }
+
+        async function applyAllEnvSuggestions() {
+            if (!mappingSelectedClient) { showError('Nenhum contato vinculado a esta conta.'); return; }
+            const suggestions = (window._eafCurrentSuggestions || []).filter(s => s.found);
+            if (!suggestions.length) return;
+            let saved = 0;
+            for (let i = 0; i < suggestions.length; i++) {
+                const s = suggestions[i];
+                const taId = `eafTa_${(window._eafCurrentSuggestions || []).indexOf(s)}`;
+                const ta = document.getElementById(taId);
+                const text = (ta ? ta.value : s.suggestion || '').trim();
+                if (!text) continue;
+                try {
+                    const res = await fetch(`${API_BASE}/environment/responses`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ card_id: s.card_id, client_id: mappingSelectedClient, response: text })
+                    });
+                    if (res.ok) saved++;
+                } catch (_) {}
+            }
+            showSuccess(`${saved} sugestão(ões) aplicada(s)!`);
+            closeEnvAutoFillResultModal();
+            await loadMapeamento();
+        }
+
+        // ── fim Auto-preencher via Web ──────────────────────────────────────────
 
         async function saveCardEdit(cardId) {
             const titleInput = document.getElementById('cardTitleEdit');
