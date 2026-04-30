@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Analytics — TocaDoCoelho (Proposta)</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green-50:  #f0fdf4;
+    --green-100: #dcfce7;
+    --green-200: #bbf7d0;
+    --green-300: #86efac;
+    --green-400: #4ade80;
+    --green-500: #22c55e;
+    --green-600: #16a34a;
+    --emerald-400: #34d399;
+    --emerald-500: #10b981;
+    --emerald-600: #059669;
+    --emerald-700: #047857;
+    --emerald-900: #064e3b;
+    --yellow: #fbbf24;
+    --red:    #f87171;
+    --blue:   #60a5fa;
+    --purple: #a78bfa;
+    --cyan:   #22d3ee;
+    --orange: #fb923c;
+    --bg-dark: #0a1f17;
+    --bg-card: rgba(255,255,255,0.06);
+    --border:  rgba(52, 211, 153, 0.15);
+    --text-primary: #e2dfd5;
+    --text-muted: rgba(226,223,213,0.55);
+  }
+
+  body {
+    font-family: 'Geist', -apple-system, sans-serif;
+    background: radial-gradient(ellipse at 20% 0%, #0d2e1e 0%, #071510 40%, #030d09 100%);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .header-logo {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--emerald-400), var(--green-500));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    box-shadow: 0 0 20px rgba(52,211,153,0.4);
+  }
+  .header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    background: linear-gradient(90deg, #e2dfd5, #34d399);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .header p {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .header-date {
+    margin-left: auto;
+    text-align: right;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .badge-proposta {
+    display: inline-block;
+    background: rgba(251,191,36,0.15);
+    border: 1px solid rgba(251,191,36,0.3);
+    color: #fbbf24;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 20px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-left: 8px;
+  }
+
+  /* ── Grid layout ── */
+  .grid { display: grid; gap: 16px; }
+  .grid-kpi      { grid-template-columns: repeat(4, 1fr); }
+  .grid-row2     { grid-template-columns: 1.3fr 1fr 1fr; }
+  .grid-row3     { grid-template-columns: 1fr 1fr 1.4fr; }
+  .grid-row4     { grid-template-columns: 1fr 1fr; }
+
+  /* ── Card ── */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    backdrop-filter: blur(16px);
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(52,211,153,0.3), transparent);
+  }
+  .card-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .card-title span.dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--emerald-400);
+    box-shadow: 0 0 6px rgba(52,211,153,0.6);
+  }
+  canvas { max-height: 220px; }
+
+  /* ── KPI Cards ── */
+  .kpi-value {
+    font-size: 32px;
+    font-weight: 800;
+    line-height: 1;
+    margin: 6px 0 4px;
+  }
+  .kpi-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+  .kpi-delta {
+    font-size: 11px;
+    font-weight: 600;
+    margin-top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 20px;
+  }
+  .kpi-delta.up   { background: rgba(52,211,153,0.12); color: #34d399; }
+  .kpi-delta.down { background: rgba(248,113,113,0.12); color: #f87171; }
+  .kpi-delta.warn { background: rgba(251,191,36,0.12);  color: #fbbf24; }
+  .kpi-icon {
+    position: absolute;
+    top: 16px; right: 16px;
+    font-size: 28px;
+    opacity: 0.12;
+  }
+  .kpi-green  { --kpi-color: #34d399; }
+  .kpi-yellow { --kpi-color: #fbbf24; }
+  .kpi-red    { --kpi-color: #f87171; }
+  .kpi-blue   { --kpi-color: #60a5fa; }
+  .kpi-value  { color: var(--kpi-color, #e2dfd5); }
+
+  /* ── Section label ── */
+  .section-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: rgba(52,211,153,0.5);
+    margin: 8px 0 4px;
+    padding-left: 2px;
+  }
+
+  /* ── Pipeline Funnel ── */
+  .funnel-wrap { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+  .funnel-row  { display: flex; align-items: center; gap: 10px; }
+  .funnel-label { font-size: 12px; color: var(--text-muted); width: 110px; flex-shrink: 0; }
+  .funnel-bar-wrap { flex: 1; height: 28px; background: rgba(255,255,255,0.05); border-radius: 6px; overflow: hidden; }
+  .funnel-bar {
+    height: 100%;
+    border-radius: 6px;
+    display: flex; align-items: center;
+    padding-left: 10px;
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.9);
+    transition: width 1s ease;
+  }
+  .funnel-count { font-size: 12px; font-weight: 700; width: 28px; text-align: right; }
+
+  /* ── Status pills row ── */
+  .status-pills { display: flex; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+  .status-pill {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 14px 10px;
+    border-radius: 12px;
+    border: 1px solid;
+    min-width: 60px;
+  }
+  .status-pill .count { font-size: 26px; font-weight: 800; line-height: 1; }
+  .status-pill .name  { font-size: 10px; font-weight: 600; margin-top: 4px; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.5px; }
+  .pill-green  { background: rgba(34,197,94,0.1);  border-color: rgba(34,197,94,0.3);  color: #4ade80; }
+  .pill-yellow { background: rgba(251,191,36,0.1);  border-color: rgba(251,191,36,0.3);  color: #fbbf24; }
+  .pill-red    { background: rgba(248,113,113,0.1); border-color: rgba(248,113,113,0.3); color: #f87171; }
+
+  /* ── Environment radar labels ── */
+  .env-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .env-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .env-bar-wrap { flex: 1; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+  .env-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #059669, #34d399); }
+  .env-pct { font-size: 11px; font-weight: 600; color: var(--emerald-400); width: 30px; text-align: right; }
+  .env-name { width: 160px; color: var(--text-muted); }
+
+  /* ── Footer ── */
+  .footer {
+    margin-top: 20px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .footer strong { color: var(--emerald-400); }
+
+  /* ── Glow rings on KPI cards ── */
+  .kpi-glow {
+    position: absolute;
+    bottom: -30px; right: -30px;
+    width: 90px; height: 90px;
+    border-radius: 50%;
+    filter: blur(30px);
+    opacity: 0.15;
+  }
+  .glow-green  { background: #34d399; }
+  .glow-yellow { background: #fbbf24; }
+  .glow-red    { background: #f87171; }
+  .glow-blue   { background: #60a5fa; }
+
+  @media (max-width: 900px) {
+    .grid-kpi  { grid-template-columns: repeat(2, 1fr); }
+    .grid-row2, .grid-row3, .grid-row4 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-logo">🐇</div>
+  <div>
+    <h1>Analytics Dashboard <span class="badge-proposta">Proposta</span></h1>
+    <p>Visão geral de relacionamento, pipeline e receita</p>
+  </div>
+  <div class="header-date">
+    <div style="font-weight:600;color:#e2dfd5">30 de abril de 2026</div>
+    <div>Dados de demonstração</div>
+  </div>
+</div>
+
+<!-- ROW 1 — KPIs -->
+<div class="section-label">Indicadores-chave</div>
+<div class="grid grid-kpi" style="margin-bottom:16px">
+
+  <div class="card kpi-green">
+    <div class="kpi-icon">👥</div>
+    <div class="kpi-glow glow-green"></div>
+    <div class="card-title"><span class="dot"></span>Contatos Ativos</div>
+    <div class="kpi-value">142</div>
+    <div class="kpi-label">pessoas mapeadas</div>
+    <div class="kpi-delta up">▲ +12 este mês</div>
+  </div>
+
+  <div class="card kpi-blue">
+    <div class="kpi-icon">🏢</div>
+    <div class="kpi-glow glow-blue"></div>
+    <div class="card-title"><span class="dot" style="background:#60a5fa;box-shadow:0 0 6px rgba(96,165,250,.6)"></span>Contas B2B</div>
+    <div class="kpi-value">34</div>
+    <div class="kpi-label">empresas ativas</div>
+    <div class="kpi-delta up">▲ +3 este mês</div>
+  </div>
+
+  <div class="card kpi-yellow">
+    <div class="kpi-icon">💰</div>
+    <div class="kpi-glow glow-yellow"></div>
+    <div class="card-title"><span class="dot" style="background:#fbbf24;box-shadow:0 0 6px rgba(251,191,36,.6)"></span>Receita Mapeada</div>
+    <div class="kpi-value" style="font-size:26px">R$ 4,7M</div>
+    <div class="kpi-label">receita total em carteira</div>
+    <div class="kpi-delta up">▲ +R$ 320K</div>
+  </div>
+
+  <div class="card kpi-red">
+    <div class="kpi-icon">⚠️</div>
+    <div class="kpi-glow glow-red"></div>
+    <div class="card-title"><span class="dot" style="background:#f87171;box-shadow:0 0 6px rgba(248,113,113,.6)"></span>Atenção Necessária</div>
+    <div class="kpi-value">23</div>
+    <div class="kpi-label">contatos sem retorno</div>
+    <div class="kpi-delta down">▼ vencidos há 30d+</div>
+  </div>
+
+</div>
+
+<!-- ROW 2 — Atividades + Status + Kanban -->
+<div class="section-label">Relacionamento & Pipeline</div>
+<div class="grid grid-row2" style="margin-bottom:16px">
+
+  <!-- Atividades por mês — Line chart -->
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>Atividades por Mês</div>
+    <canvas id="chartAtividades"></canvas>
+  </div>
+
+  <!-- Status de Contatos — Donut -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:#fbbf24;box-shadow:0 0 6px rgba(251,191,36,.6)"></span>Status dos Contatos</div>
+    <canvas id="chartStatus"></canvas>
+    <div class="status-pills" style="margin-top:14px">
+      <div class="status-pill pill-green"><div class="count">79</div><div class="name">Verde</div></div>
+      <div class="status-pill pill-yellow"><div class="count">40</div><div class="name">Atenção</div></div>
+      <div class="status-pill pill-red"><div class="count">23</div><div class="name">Crítico</div></div>
+    </div>
+  </div>
+
+  <!-- Pipeline Kanban — Funil -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:#a78bfa;box-shadow:0 0 6px rgba(167,139,250,.6)"></span>Pipeline Kanban</div>
+    <div class="funnel-wrap" style="margin-top:4px">
+      <div class="funnel-row">
+        <div class="funnel-label">Backlog</div>
+        <div class="funnel-bar-wrap">
+          <div class="funnel-bar" style="width:90%;background:linear-gradient(90deg,#4f46e5,#7c3aed)">18</div>
+        </div>
+        <div class="funnel-count" style="color:#a78bfa">18</div>
+      </div>
+      <div class="funnel-row">
+        <div class="funnel-label">Em Andamento</div>
+        <div class="funnel-bar-wrap">
+          <div class="funnel-bar" style="width:55%;background:linear-gradient(90deg,#0369a1,#0ea5e9)">11</div>
+        </div>
+        <div class="funnel-count" style="color:#60a5fa">11</div>
+      </div>
+      <div class="funnel-row">
+        <div class="funnel-label">Hold</div>
+        <div class="funnel-bar-wrap">
+          <div class="funnel-bar" style="width:35%;background:linear-gradient(90deg,#92400e,#f59e0b)">7</div>
+        </div>
+        <div class="funnel-count" style="color:#fbbf24">7</div>
+      </div>
+      <div class="funnel-row">
+        <div class="funnel-label">Done</div>
+        <div class="funnel-bar-wrap">
+          <div class="funnel-bar" style="width:65%;background:linear-gradient(90deg,#047857,#34d399)">13</div>
+        </div>
+        <div class="funnel-count" style="color:#34d399">13</div>
+      </div>
+      <div class="funnel-row">
+        <div class="funnel-label">Descartado</div>
+        <div class="funnel-bar-wrap">
+          <div class="funnel-bar" style="width:20%;background:linear-gradient(90deg,#374151,#6b7280)">4</div>
+        </div>
+        <div class="funnel-count" style="color:#9ca3af">4</div>
+      </div>
+    </div>
+
+    <!-- Urgência -->
+    <div class="card-title" style="margin-top:20px"><span class="dot" style="background:#f87171;box-shadow:0 0 6px rgba(248,113,113,.6)"></span>Urgência dos Cards</div>
+    <canvas id="chartUrgencia" style="max-height:100px"></canvas>
+  </div>
+
+</div>
+
+<!-- ROW 3 — Contas por Setor + Receita + Tipos de Contato -->
+<div class="section-label">Contas & Receita</div>
+<div class="grid grid-row3" style="margin-bottom:16px">
+
+  <!-- Setores — Doughnut Polar -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:#22d3ee;box-shadow:0 0 6px rgba(34,211,238,.6)"></span>Contas por Setor</div>
+    <canvas id="chartSetores"></canvas>
+  </div>
+
+  <!-- Tipo de Contato — Radar -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:#fb923c;box-shadow:0 0 6px rgba(251,146,60,.6)"></span>Tipos de Atividade</div>
+    <canvas id="chartTipos"></canvas>
+  </div>
+
+  <!-- Top 5 Contas por Receita — Horizontal Bar -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:#fbbf24;box-shadow:0 0 6px rgba(251,191,36,.6)"></span>Top 5 Contas por Receita</div>
+    <canvas id="chartReceita"></canvas>
+  </div>
+
+</div>
+
+<!-- ROW 4 — Mapeamento de Ambiente + Metas Mensais -->
+<div class="section-label">Ambiente Tecnológico & Metas</div>
+<div class="grid grid-row4" style="margin-bottom:16px">
+
+  <!-- Mapeamento de Ambiente — barras horizontais customizadas -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:#a78bfa;box-shadow:0 0 6px rgba(167,139,250,.6)"></span>Cobertura de Mapeamento de Ambiente</div>
+    <div class="env-list">
+      <div class="env-item">
+        <div class="env-name">☁️ Cloud</div>
+        <div class="env-bar-wrap"><div class="env-bar" style="width:82%"></div></div>
+        <div class="env-pct">82%</div>
+      </div>
+      <div class="env-item">
+        <div class="env-name">🏗️ ERP</div>
+        <div class="env-bar-wrap"><div class="env-bar" style="width:74%"></div></div>
+        <div class="env-pct">74%</div>
+      </div>
+      <div class="env-item">
+        <div class="env-name">🛡️ Cyber/Observability</div>
+        <div class="env-bar-wrap"><div class="env-bar" style="width:58%;background:linear-gradient(90deg,#4f46e5,#818cf8)"></div></div>
+        <div class="env-pct">58%</div>
+      </div>
+      <div class="env-item">
+        <div class="env-name">💻 DWS</div>
+        <div class="env-bar-wrap"><div class="env-bar" style="width:51%;background:linear-gradient(90deg,#0369a1,#38bdf8)"></div></div>
+        <div class="env-pct">51%</div>
+      </div>
+      <div class="env-item">
+        <div class="env-name">🏆 Concorrentes</div>
+        <div class="env-bar-wrap"><div class="env-bar" style="width:44%;background:linear-gradient(90deg,#b45309,#fbbf24)"></div></div>
+        <div class="env-pct">44%</div>
+      </div>
+      <div class="env-item">
+        <div class="env-name">🖥️ Gestão de Ativos/HAAS</div>
+        <div class="env-bar-wrap"><div class="env-bar" style="width:37%;background:linear-gradient(90deg,#7c3aed,#c4b5fd)"></div></div>
+        <div class="env-pct">37%</div>
+      </div>
+    </div>
+
+    <div style="margin-top:20px">
+      <div class="card-title"><span class="dot" style="background:#22d3ee"></span>Contas Alvo vs. Geral</div>
+      <canvas id="chartAlvo" style="max-height:100px"></canvas>
+    </div>
+  </div>
+
+  <!-- Metas e Comprometimentos mensais -->
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>Atividades Semanais — Últimas 8 Semanas</div>
+    <canvas id="chartSemanal"></canvas>
+
+    <div style="margin-top:20px">
+      <div class="card-title"><span class="dot" style="background:#fb923c"></span>Comprometimentos por Tipo</div>
+      <canvas id="chartComprometimentos" style="max-height:110px"></canvas>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  🐇 <strong>TocaDoCoelho</strong> — Dashboard Analytics &nbsp;·&nbsp; Proposta visual gerada em 30/04/2026 &nbsp;·&nbsp; Dados fictícios para validação de layout
+</div>
+
+<script>
+Chart.register(ChartDataLabels);
+
+const COLORS = {
+  green:  '#34d399',
+  emerald:'#10b981',
+  darkGreen:'#059669',
+  yellow: '#fbbf24',
+  red:    '#f87171',
+  blue:   '#60a5fa',
+  purple: '#a78bfa',
+  cyan:   '#22d3ee',
+  orange: '#fb923c',
+  indigo: '#818cf8',
+  gray:   '#6b7280',
+};
+
+const gridColor = 'rgba(255,255,255,0.06)';
+const tickColor = 'rgba(226,223,213,0.4)';
+
+const baseFont = { family: 'Geist, sans-serif', size: 11 };
+
+// ── 1. Atividades por Mês — Line ──
+new Chart(document.getElementById('chartAtividades'), {
+  type: 'line',
+  data: {
+    labels: ['Nov', 'Dez', 'Jan', 'Fev', 'Mar', 'Abr'],
+    datasets: [
+      {
+        label: 'Ligações',
+        data: [18, 22, 15, 28, 31, 24],
+        borderColor: COLORS.green,
+        backgroundColor: 'rgba(52,211,153,0.08)',
+        fill: true, tension: 0.4, pointRadius: 4,
+        pointBackgroundColor: COLORS.green,
+      },
+      {
+        label: 'E-mails',
+        data: [35, 29, 38, 42, 36, 44],
+        borderColor: COLORS.blue,
+        backgroundColor: 'rgba(96,165,250,0.08)',
+        fill: true, tension: 0.4, pointRadius: 4,
+        pointBackgroundColor: COLORS.blue,
+      },
+      {
+        label: 'Reuniões',
+        data: [8, 11, 6, 14, 17, 13],
+        borderColor: COLORS.purple,
+        backgroundColor: 'rgba(167,139,250,0.08)',
+        fill: true, tension: 0.4, pointRadius: 4,
+        pointBackgroundColor: COLORS.purple,
+      },
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { labels: { color: tickColor, font: baseFont, boxWidth: 10, padding: 12 } }, datalabels: { display: false } },
+    scales: {
+      x: { grid: { color: gridColor }, ticks: { color: tickColor, font: baseFont } },
+      y: { grid: { color: gridColor }, ticks: { color: tickColor, font: baseFont } },
+    }
+  }
+});
+
+// ── 2. Status dos Contatos — Donut ──
+new Chart(document.getElementById('chartStatus'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Verde (OK)', 'Atenção', 'Crítico'],
+    datasets: [{
+      data: [79, 40, 23],
+      backgroundColor: ['rgba(52,211,153,0.8)', 'rgba(251,191,36,0.8)', 'rgba(248,113,113,0.8)'],
+      borderColor: ['#34d399','#fbbf24','#f87171'],
+      borderWidth: 2,
+      hoverOffset: 8,
+    }]
+  },
+  options: {
+    responsive: true,
+    cutout: '68%',
+    plugins: {
+      legend: { display: false },
+      datalabels: {
+        color: '#fff',
+        font: { ...baseFont, weight: '700' },
+        formatter: (v) => v,
+      }
+    }
+  }
+});
+
+// ── 3. Urgência dos Cards — Horizontal Bar mini ──
+new Chart(document.getElementById('chartUrgencia'), {
+  type: 'bar',
+  data: {
+    labels: ['Alta', 'Média', 'Baixa'],
+    datasets: [{
+      data: [9, 18, 6],
+      backgroundColor: ['rgba(248,113,113,0.8)','rgba(251,191,36,0.8)','rgba(52,211,153,0.8)'],
+      borderRadius: 6,
+      borderSkipped: false,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false }, datalabels: { color: '#fff', font: { ...baseFont, weight:'700' }, anchor:'end', align:'end', offset:2 } },
+    scales: {
+      x: { grid: { color: gridColor }, ticks: { color: tickColor, font: baseFont } },
+      y: { grid: { display: false }, ticks: { color: tickColor, font: baseFont } },
+    }
+  }
+});
+
+// ── 4. Contas por Setor — PolarArea ──
+new Chart(document.getElementById('chartSetores'), {
+  type: 'polarArea',
+  data: {
+    labels: ['Indústria', 'Financeiro', 'Varejo', 'Saúde', 'TI/Tech', 'Governo', 'Outros'],
+    datasets: [{
+      data: [7, 6, 5, 4, 5, 3, 4],
+      backgroundColor: [
+        'rgba(34,211,238,0.6)', 'rgba(96,165,250,0.6)', 'rgba(52,211,153,0.6)',
+        'rgba(167,139,250,0.6)', 'rgba(251,191,36,0.6)', 'rgba(251,146,60,0.6)',
+        'rgba(107,114,128,0.6)'
+      ],
+      borderColor: [COLORS.cyan, COLORS.blue, COLORS.green, COLORS.purple, COLORS.yellow, COLORS.orange, COLORS.gray],
+      borderWidth: 1.5,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { position: 'bottom', labels: { color: tickColor, font: baseFont, boxWidth: 10, padding: 8 } },
+      datalabels: { display: false },
+    },
+    scales: { r: { grid: { color: gridColor }, ticks: { display: false } } }
+  }
+});
+
+// ── 5. Tipos de Atividade — Radar ──
+new Chart(document.getElementById('chartTipos'), {
+  type: 'radar',
+  data: {
+    labels: ['Ligação', 'E-mail', 'Reunião', 'WhatsApp', 'LinkedIn', 'Presencial'],
+    datasets: [{
+      label: 'Este mês',
+      data: [24, 44, 13, 19, 11, 6],
+      backgroundColor: 'rgba(251,146,60,0.15)',
+      borderColor: COLORS.orange,
+      pointBackgroundColor: COLORS.orange,
+      pointRadius: 4,
+    },
+    {
+      label: 'Mês anterior',
+      data: [31, 36, 17, 14, 8, 9],
+      backgroundColor: 'rgba(52,211,153,0.10)',
+      borderColor: COLORS.green,
+      pointBackgroundColor: COLORS.green,
+      pointRadius: 4,
+      borderDash: [4,4],
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: tickColor, font: baseFont, boxWidth: 10 } },
+      datalabels: { display: false }
+    },
+    scales: {
+      r: {
+        grid: { color: gridColor },
+        ticks: { display: false, stepSize: 10 },
+        pointLabels: { color: tickColor, font: baseFont }
+      }
+    }
+  }
+});
+
+// ── 6. Top 5 Contas por Receita — Bar horizontal ──
+new Chart(document.getElementById('chartReceita'), {
+  type: 'bar',
+  data: {
+    labels: ['Grupo Renascença', 'TechVision SA', 'Meridian Corp', 'Alpha Seguros', 'BrasilTec'],
+    datasets: [{
+      label: 'Receita (R$ mil)',
+      data: [920, 750, 640, 510, 420],
+      backgroundColor: [
+        'rgba(52,211,153,0.8)',
+        'rgba(96,165,250,0.8)',
+        'rgba(167,139,250,0.8)',
+        'rgba(251,191,36,0.8)',
+        'rgba(251,146,60,0.8)',
+      ],
+      borderRadius: 8,
+      borderSkipped: false,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+      datalabels: {
+        color: '#fff',
+        font: { ...baseFont, weight:'600' },
+        anchor:'end', align:'end', offset: 4,
+        formatter: v => `R$ ${v}K`
+      }
+    },
+    scales: {
+      x: { grid: { color: gridColor }, ticks: { color: tickColor, font: baseFont, callback: v => `${v}K` } },
+      y: { grid: { display: false }, ticks: { color: tickColor, font: baseFont } },
+    }
+  }
+});
+
+// ── 7. Contas Alvo vs Geral — Doughnut mini ──
+new Chart(document.getElementById('chartAlvo'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Contas Alvo', 'Demais'],
+    datasets: [{
+      data: [14, 20],
+      backgroundColor: ['rgba(52,211,153,0.8)','rgba(255,255,255,0.08)'],
+      borderColor: ['#34d399','rgba(255,255,255,0.1)'],
+      borderWidth: 2,
+    }]
+  },
+  options: {
+    responsive: true,
+    cutout: '60%',
+    plugins: {
+      legend: { position:'right', labels: { color: tickColor, font: baseFont, boxWidth: 10, padding: 10 } },
+      datalabels: { color:'#fff', font: {...baseFont, weight:'700'}, formatter: v => v }
+    }
+  }
+});
+
+// ── 8. Atividades Semanais — Bar stacked ──
+new Chart(document.getElementById('chartSemanal'), {
+  type: 'bar',
+  data: {
+    labels: ['S1','S2','S3','S4','S5','S6','S7','S8'],
+    datasets: [
+      {
+        label: 'Ligações',
+        data: [5,7,4,9,6,8,5,7],
+        backgroundColor: 'rgba(52,211,153,0.7)',
+        borderRadius: { topLeft:4, topRight:4 },
+        stack: 'a',
+      },
+      {
+        label: 'E-mails',
+        data: [9,11,8,13,10,12,9,14],
+        backgroundColor: 'rgba(96,165,250,0.7)',
+        stack: 'a',
+      },
+      {
+        label: 'Reuniões',
+        data: [2,3,2,4,3,4,2,3],
+        backgroundColor: 'rgba(167,139,250,0.7)',
+        borderRadius: { topLeft:4, topRight:4 },
+        stack: 'a',
+      },
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: tickColor, font: baseFont, boxWidth: 10, padding: 10 } },
+      datalabels: { display: false }
+    },
+    scales: {
+      x: { stacked: true, grid: { display: false }, ticks: { color: tickColor, font: baseFont } },
+      y: { stacked: true, grid: { color: gridColor }, ticks: { color: tickColor, font: baseFont } },
+    }
+  }
+});
+
+// ── 9. Comprometimentos por tipo — Doughnut mini ──
+new Chart(document.getElementById('chartComprometimentos'), {
+  type: 'bar',
+  data: {
+    labels: ['Reunião', 'Ligação', 'Follow-up', 'Demo', 'Proposta'],
+    datasets: [{
+      data: [12, 8, 15, 5, 6],
+      backgroundColor: [
+        'rgba(52,211,153,0.75)','rgba(96,165,250,0.75)','rgba(251,146,60,0.75)',
+        'rgba(167,139,250,0.75)','rgba(251,191,36,0.75)'
+      ],
+      borderRadius: 6,
+      borderSkipped: false,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false }, datalabels: { display: false } },
+    scales: {
+      x: { grid: { display:false }, ticks: { color: tickColor, font: baseFont } },
+      y: { grid: { color: gridColor }, ticks: { color: tickColor, font: baseFont } },
+    }
+  }
+});
+</script>
+</body>
+</html>
