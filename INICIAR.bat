@@ -23,10 +23,9 @@ if errorlevel 1 (
 
 echo [OK] Python encontrado
 
-set PORT=3001
-set TOCA_ENV=beta
+set PORT=3000
 
-echo [INFO] Iniciando servidor em modo BETA (porta %PORT%)...
+echo [INFO] Iniciando servidor (porta %PORT%)...
 echo.
 
 python app.py
