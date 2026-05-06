@@ -12988,6 +12988,110 @@ def serve_autotoca_upload(filename):
 def serve_upload(filename):
     return send_from_directory(str(UPLOAD_DIR), filename)
 
+@app.route('/api/executive-summary', methods=['GET'])
+def executive_summary():
+    """Retorna dados agregados para o dashboard Resumo Executivo"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # 1. Receita por Setor
+        c.execute('''
+            SELECT sector, 
+                   COUNT(*) as count,
+                   SUM(average_revenue_cents) as total_revenue_cents
+            FROM accounts
+            WHERE sector IS NOT NULL AND sector != ''
+            GROUP BY sector
+            ORDER BY total_revenue_cents DESC
+        ''')
+        revenue_by_sector = [dict_from_row(row) for row in c.fetchall()]
+        
+        # 2. Atividades por Tipo
+        c.execute('''
+            SELECT contact_type, COUNT(*) as count
+            FROM activities
+            GROUP BY contact_type
+            ORDER BY count DESC
+        ''')
+        activities_by_type = [dict_from_row(row) for row in c.fetchall()]
+        
+        # 3. Status do Kanban
+        c.execute('''
+            SELECT kc.id, kc.title, COUNT(k.id) as card_count
+            FROM kanban_columns kc
+            LEFT JOIN kanban_cards k ON kc.id = k.column_id
+            GROUP BY kc.id
+            ORDER BY kc.display_order, kc.id
+        ''')
+        kanban_status = [dict_from_row(row) for row in c.fetchall()]
+        
+        # 4. Clientes por Área de Atuação
+        c.execute('''
+            SELECT area_of_activity, COUNT(*) as count
+            FROM clients
+            WHERE area_of_activity IS NOT NULL AND area_of_activity != ''
+            GROUP BY area_of_activity
+            ORDER BY count DESC
+        ''')
+        clients_by_area = [dict_from_row(row) for row in c.fetchall()]
+        
+        # 5. Timeline de Atividades (últimos 30 dias)
+        c.execute('''
+            SELECT DATE(activity_date) as date, COUNT(*) as count
+            FROM activities
+            WHERE activity_date >= datetime('now', '-30 days')
+            GROUP BY DATE(activity_date)
+            ORDER BY date ASC
+        ''')
+        activities_timeline = [dict_from_row(row) for row in c.fetchall()]
+        
+        # 6. Top Clientes por Receita
+        c.execute('''
+            SELECT a.id, a.name, a.sector,
+                   COUNT(DISTINCT cl.id) as contacts_count,
+                   SUM(a.average_revenue_cents) as total_revenue_cents
+            FROM accounts a
+            LEFT JOIN clients cl ON LOWER(TRIM(cl.company)) = LOWER(TRIM(a.name))
+            GROUP BY a.id
+            ORDER BY total_revenue_cents DESC
+            LIMIT 5
+        ''')
+        top_clients = [dict_from_row(row) for row in c.fetchall()]
+        
+        # 7. Totais Gerais
+        c.execute('SELECT COUNT(*) as total FROM accounts')
+        total_accounts = c.fetchone()[0] or 0
+        
+        c.execute('SELECT COUNT(*) as total FROM clients')
+        total_clients = c.fetchone()[0] or 0
+        
+        c.execute('SELECT COUNT(*) as total FROM activities')
+        total_activities = c.fetchone()[0] or 0
+        
+        c.execute('SELECT SUM(average_revenue_cents) as total FROM accounts')
+        total_revenue_cents = c.fetchone()[0] or 0
+        
+        conn.close()
+        
+        return jsonify({
+            'revenue_by_sector': revenue_by_sector,
+            'activities_by_type': activities_by_type,
+            'kanban_status': kanban_status,
+            'clients_by_area': clients_by_area,
+            'activities_timeline': activities_timeline,
+            'top_clients': top_clients,
+            'totals': {
+                'accounts': total_accounts,
+                'clients': total_clients,
+                'activities': total_activities,
+                'revenue_cents': total_revenue_cents
+            }
+        })
+    except Exception as e:
+        logger.error(f'[ERROR] GET /api/executive-summary: {e}')
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/system/config', methods=['GET'])
 def get_system_config():
     return jsonify({

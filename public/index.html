@@ -2152,6 +2152,267 @@
         .bgtdl-item-sub { font-size: 11px; color: #6b7280; }
         .bgtdl-header { padding: 6px 16px 4px; font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; }
 
+        /* ========== RESUMO EXECUTIVO ========== */
+        .executive-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .executive-kpi-card {
+            background: linear-gradient(135deg, rgba(52, 211, 153, 0.1) 0%, rgba(16, 185, 129, 0.05) 100%);
+            border: 1px solid rgba(52, 211, 153, 0.25);
+            border-radius: 14px;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            transition: all 200ms var(--ease-out);
+            box-shadow: 0 2px 8px rgba(52, 211, 153, 0.08);
+        }
+
+        .executive-kpi-card:hover {
+            border-color: rgba(52, 211, 153, 0.4);
+            box-shadow: 0 4px 16px rgba(52, 211, 153, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .kpi-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #34D399, #10B981);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            flex-shrink: 0;
+        }
+
+        .kpi-content {
+            flex: 1;
+        }
+
+        .kpi-label {
+            font-size: 12px;
+            color: #059669;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 4px;
+        }
+
+        .kpi-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #065f46;
+        }
+
+        .executive-charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        .executive-chart-card {
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(52, 211, 153, 0.15);
+            border-radius: 14px;
+            padding: 20px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(52, 211, 153, 0.1);
+        }
+
+        .chart-header h3 {
+            color: #065f46;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .chart-period {
+            font-size: 12px;
+            color: #9ca3af;
+            font-weight: 500;
+        }
+
+        .chart-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(52, 211, 153, 0.1);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .executive-bottom-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        @media (max-width: 1200px) {
+            .executive-bottom-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .executive-section-card {
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(52, 211, 153, 0.15);
+            border-radius: 14px;
+            padding: 20px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(52, 211, 153, 0.1);
+        }
+
+        .section-header h3 {
+            color: #065f46;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .link-btn {
+            color: #34D399;
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            transition: color 200ms var(--ease-out);
+        }
+
+        .link-btn:hover {
+            color: #10B981;
+        }
+
+        .kanban-overview {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .kanban-column-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: rgba(52, 211, 153, 0.05);
+            border-radius: 10px;
+            border-left: 3px solid #34D399;
+        }
+
+        .kanban-column-name {
+            font-weight: 600;
+            color: #065f46;
+            font-size: 14px;
+        }
+
+        .kanban-column-count {
+            background: #34D399;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .top-clients-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .top-client-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: rgba(52, 211, 153, 0.05);
+            border-radius: 10px;
+            transition: all 200ms var(--ease-out);
+        }
+
+        .top-client-item:hover {
+            background: rgba(52, 211, 153, 0.1);
+        }
+
+        .top-client-rank {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #34D399, #10B981);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .top-client-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .top-client-name {
+            font-weight: 600;
+            color: #065f46;
+            font-size: 14px;
+            margin-bottom: 2px;
+        }
+
+        .top-client-sector {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        .top-client-revenue {
+            font-weight: 600;
+            color: #10B981;
+            font-size: 13px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
     </style>
 </head>
 <body>
@@ -2162,11 +2423,15 @@
             <img class="sidebar-logo-expanded" src="/logo-coelho.png" alt="Coelho Toca do Coelho">
         </div>
 
+            <button class="nav-item nav-resumo-executivo active" onclick="switchTab(event, 'resumo-executivo')">
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Resumo Executivo</span>
+            </button>
             <button class="nav-item nav-iata" onclick="switchTab(event, 'iata')">
                 <i class="fas fa-robot"></i>
                 <span>iToca</span>
             </button>
-            <button class="nav-item nav-dashboard active" onclick="switchTab(event, 'dashboard')">
+            <button class="nav-item nav-dashboard" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
@@ -2232,6 +2497,103 @@
         <div class="alert alert-success" id="successMsg"></div>
         <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
+
+        <!-- Resumo Executivo -->
+        <div id="resumo-executivo" class="tab-content active">
+            <div class="page-header">
+                <h1>Resumo Executivo</h1>
+                <p>Visão consolidada de receita, atividades, kanban e principais indicadores</p>
+            </div>
+
+            <!-- Indicadores Principais -->
+            <div class="executive-kpi-grid">
+                <div class="executive-kpi-card">
+                    <div class="kpi-icon"><i class="fas fa-building"></i></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">Contas</div>
+                        <div class="kpi-value" id="exec-total-accounts">0</div>
+                    </div>
+                </div>
+                <div class="executive-kpi-card">
+                    <div class="kpi-icon"><i class="fas fa-users"></i></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">Contatos</div>
+                        <div class="kpi-value" id="exec-total-clients">0</div>
+                    </div>
+                </div>
+                <div class="executive-kpi-card">
+                    <div class="kpi-icon"><i class="fas fa-chart-line"></i></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">Atividades</div>
+                        <div class="kpi-value" id="exec-total-activities">0</div>
+                    </div>
+                </div>
+                <div class="executive-kpi-card">
+                    <div class="kpi-icon"><i class="fas fa-dollar-sign"></i></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">Receita Total</div>
+                        <div class="kpi-value" id="exec-total-revenue">R$ 0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Gráficos Principais -->
+            <div class="executive-charts-grid">
+                <!-- Receita por Setor -->
+                <div class="executive-chart-card">
+                    <div class="chart-header">
+                        <h3>Receita por Setor</h3>
+                        <span class="chart-period">Este ano</span>
+                    </div>
+                    <canvas id="exec-revenue-chart" style="max-height: 280px;"></canvas>
+                    <div id="exec-revenue-legend" class="chart-legend"></div>
+                </div>
+
+                <!-- Atividades por Tipo -->
+                <div class="executive-chart-card">
+                    <div class="chart-header">
+                        <h3>Atividades por Tipo</h3>
+                        <span class="chart-period">Este mês</span>
+                    </div>
+                    <canvas id="exec-activities-chart" style="max-height: 280px;"></canvas>
+                    <div id="exec-activities-legend" class="chart-legend"></div>
+                </div>
+
+                <!-- Timeline de Atividades -->
+                <div class="executive-chart-card" style="grid-column: 1 / -1;">
+                    <div class="chart-header">
+                        <h3>Linha do Tempo de Atividades</h3>
+                        <span class="chart-period">Últimos 30 dias</span>
+                    </div>
+                    <canvas id="exec-timeline-chart" style="max-height: 220px;"></canvas>
+                </div>
+            </div>
+
+            <!-- Kanban e Top Clientes -->
+            <div class="executive-bottom-grid">
+                <!-- Visão Geral do Kanban -->
+                <div class="executive-section-card">
+                    <div class="section-header">
+                        <h3><i class="fas fa-table-columns"></i> Visão Geral do Kanban</h3>
+                        <a href="#" onclick="switchTab(null, 'kanban'); return false;" class="link-btn">Ver tudo</a>
+                    </div>
+                    <div id="exec-kanban-overview" class="kanban-overview">
+                        <!-- Será preenchido via JavaScript -->
+                    </div>
+                </div>
+
+                <!-- Top Clientes -->
+                <div class="executive-section-card">
+                    <div class="section-header">
+                        <h3><i class="fas fa-star"></i> Top Clientes</h3>
+                        <a href="#" onclick="switchTab(null, 'gestao-conta'); return false;" class="link-btn">Ver tudo</a>
+                    </div>
+                    <div id="exec-top-clients" class="top-clients-list">
+                        <!-- Será preenchido via JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div id="iata" class="tab-content">
             <div class="page-header">
@@ -3676,8 +4038,9 @@
 
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
-        let _currentTab = 'dashboard';
+        let _currentTab = 'resumo-executivo';
         const TOPBAR_MODULE_COPY = {
+            'resumo-executivo': { title: 'Resumo Executivo', subtitle: 'Visão consolidada de receita, atividades, kanban e principais indicadores' },
             dashboard: { title: 'Dashboard', subtitle: 'Visão geral dos seus contatos e status de relacionamento' },
             iata: { title: 'iToca', subtitle: 'Seu assistente ligeirinho para apoiar sua operação comercial.' },
             wikitoca: { title: 'WikiToca', subtitle: 'Base de conhecimento e documentos da operação.' },
@@ -3775,7 +4138,8 @@
                 _itocaSaveSessionAndClear();
             }
 
-            if (tabName === 'dashboard') loadDashboard();
+            if (tabName === 'resumo-executivo') loadExecutiveSummary();
+            else if (tabName === 'dashboard') loadDashboard();
             else if (tabName === 'iata') {
                 clearITocaChat();
                 loadITocaHistory();
@@ -12949,6 +13313,211 @@
                 }, { once: true });
                 window.dispatchEvent(new CustomEvent('autotoca-extension-command', { detail }));
             });
+        }
+
+        // ========== RESUMO EXECUTIVO ==========
+        let executiveSummaryCharts = {};
+
+        async function loadExecutiveSummary() {
+            try {
+                const response = await fetch(`${API_BASE}/executive-summary`);
+                if (!response.ok) throw new Error('Falha ao carregar dados');
+                
+                const data = await response.json();
+                renderExecutiveSummary(data);
+            } catch (error) {
+                console.error('Erro ao carregar Resumo Executivo:', error);
+                showError('Erro ao carregar dados do Resumo Executivo');
+            }
+        }
+
+        function renderExecutiveSummary(data) {
+            // Atualizar KPIs
+            document.getElementById('exec-total-accounts').textContent = data.totals.accounts || 0;
+            document.getElementById('exec-total-clients').textContent = data.totals.clients || 0;
+            document.getElementById('exec-total-activities').textContent = data.totals.activities || 0;
+            
+            const totalRevenue = (data.totals.revenue_cents || 0) / 100;
+            document.getElementById('exec-total-revenue').textContent = formatCurrencyBR(totalRevenue);
+
+            // Renderizar gráficos
+            renderRevenueChart(data.revenue_by_sector);
+            renderActivitiesChart(data.activities_by_type);
+            renderTimelineChart(data.activities_timeline);
+            renderKanbanOverview(data.kanban_status);
+            renderTopClients(data.top_clients);
+        }
+
+        function renderRevenueChart(data) {
+            const ctx = document.getElementById('exec-revenue-chart');
+            if (!ctx) return;
+
+            const colors = ['#34D399', '#10B981', '#059669', '#047857', '#065f46'];
+            const labels = data.map(d => d.sector || 'Sem setor');
+            const values = data.map(d => (d.total_revenue_cents || 0) / 100);
+            
+            if (executiveSummaryCharts.revenue) executiveSummaryCharts.revenue.destroy();
+            
+            executiveSummaryCharts.revenue = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Receita (R$)',
+                        data: values,
+                        backgroundColor: colors.slice(0, data.length),
+                        borderColor: colors.slice(0, data.length),
+                        borderRadius: 8,
+                        borderSkipped: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { callback: v => 'R$ ' + v.toLocaleString('pt-BR', {maximumFractionDigits: 0}) }
+                        }
+                    }
+                }
+            });
+
+            // Renderizar legenda
+            const legend = document.getElementById('exec-revenue-legend');
+            if (legend) {
+                legend.innerHTML = data.map((d, i) => `
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: ${colors[i]}"></div>
+                        <span>${d.sector}: R$ ${((d.total_revenue_cents || 0) / 100).toLocaleString('pt-BR', {maximumFractionDigits: 0})}</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function renderActivitiesChart(data) {
+            const ctx = document.getElementById('exec-activities-chart');
+            if (!ctx) return;
+
+            const colors = ['#34D399', '#10B981', '#059669', '#047857'];
+            const labels = data.map(d => d.contact_type || 'Outro');
+            const values = data.map(d => d.count || 0);
+            
+            if (executiveSummaryCharts.activities) executiveSummaryCharts.activities.destroy();
+            
+            executiveSummaryCharts.activities = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: colors.slice(0, data.length),
+                        borderColor: '#ffffff',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+
+            // Renderizar legenda
+            const legend = document.getElementById('exec-activities-legend');
+            if (legend) {
+                legend.innerHTML = data.map((d, i) => `
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: ${colors[i]}"></div>
+                        <span>${d.contact_type}: ${d.count}</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function renderTimelineChart(data) {
+            const ctx = document.getElementById('exec-timeline-chart');
+            if (!ctx) return;
+
+            const labels = data.map(d => {
+                const date = new Date(d.date + 'T00:00:00');
+                return date.toLocaleDateString('pt-BR', {month: 'short', day: 'numeric'});
+            });
+            const values = data.map(d => d.count || 0);
+            
+            if (executiveSummaryCharts.timeline) executiveSummaryCharts.timeline.destroy();
+            
+            executiveSummaryCharts.timeline = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Atividades',
+                        data: values,
+                        borderColor: '#34D399',
+                        backgroundColor: 'rgba(52, 211, 153, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: '#10B981',
+                        pointBorderColor: '#ffffff',
+                        pointBorderWidth: 2,
+                        pointRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        function renderKanbanOverview(data) {
+            const container = document.getElementById('exec-kanban-overview');
+            if (!container) return;
+
+            container.innerHTML = data.map(col => `
+                <div class="kanban-column-item">
+                    <span class="kanban-column-name">${col.title}</span>
+                    <span class="kanban-column-count">${col.card_count || 0}</span>
+                </div>
+            `).join('');
+        }
+
+        function renderTopClients(data) {
+            const container = document.getElementById('exec-top-clients');
+            if (!container) return;
+
+            container.innerHTML = data.map((client, idx) => `
+                <div class="top-client-item">
+                    <div class="top-client-rank">${idx + 1}</div>
+                    <div class="top-client-info">
+                        <div class="top-client-name">${client.name || 'Sem nome'}</div>
+                        <div class="top-client-sector">${client.sector || 'Sem setor'}</div>
+                    </div>
+                    <div class="top-client-revenue">R$ ${((client.total_revenue_cents || 0) / 100).toLocaleString('pt-BR', {maximumFractionDigits: 0})}</div>
+                </div>
+            `).join('');
+        }
+
+        function formatCurrencyBR(value) {
+            return new Intl.NumberFormat('pt-BR', {
+                style: 'currency',
+                currency: 'BRL',
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(value);
         }
     </script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
