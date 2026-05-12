@@ -8328,6 +8328,46 @@
             return win;
         }
 
+        // Preferência de envio do WhatsApp: 'desktop' usa o protocolo whatsapp:// (app instalado,
+        // sem reload do WhatsApp Web a cada mensagem); 'web' mantém o comportamento antigo.
+        function getWhatsAppPreference() {
+            try {
+                const v = localStorage.getItem('whatsappOpenPreference');
+                return v === 'web' ? 'web' : 'desktop';
+            } catch (e) { return 'desktop'; }
+        }
+
+        function setWhatsAppPreference(pref) {
+            try { localStorage.setItem('whatsappOpenPreference', pref === 'web' ? 'web' : 'desktop'); } catch (e) {}
+        }
+
+        // Tenta abrir no WhatsApp Desktop via protocolo whatsapp://. Se a aba não perder foco em
+        // ~1500ms, assume que o app não está instalado/registrado e cai no fallback para o Web.
+        function openWhatsAppDesktopWithFallback(phone, message) {
+            const desktopUrl = `whatsapp://send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+            const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+
+            let resolved = false;
+            const cleanup = () => {
+                window.removeEventListener('blur', onBlur);
+                document.removeEventListener('visibilitychange', onVisibility);
+            };
+            const onBlur = () => { if (!resolved) { resolved = true; cleanup(); } };
+            const onVisibility = () => { if (document.hidden && !resolved) { resolved = true; cleanup(); } };
+            window.addEventListener('blur', onBlur);
+            document.addEventListener('visibilitychange', onVisibility);
+
+            window.location.href = desktopUrl;
+
+            setTimeout(() => {
+                if (!resolved) {
+                    resolved = true;
+                    cleanup();
+                    whatsappWindowRef = openWhatsAppTab(webUrl);
+                }
+            }, 1500);
+        }
+
 
         function openMissingContactModal() {
             let html = `<div class="modal active" id="missingContactModal" onclick="if(event.target === this) closeMissingContactModal()">`;
@@ -8352,12 +8392,14 @@
                 return;
             }
 
+            const prefDesktop = getWhatsAppPreference() === 'desktop';
             let html = `<div class="modal active" id="whatsAppModal">`;
             html += '<div class="modal-content" style="max-width: 520px;">';
             html += `<h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name)}</h2>`;
-            html += '<p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem e nós abriremos o WhatsApp Web com o texto pronto para envio.</p>';
+            html += '<p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem e nós abriremos o WhatsApp com o texto pronto para envio.</p>';
             html += '<div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="5" placeholder="Digite a mensagem para o cliente..."></textarea></div>';
-            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div>`;
+            html += `<label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#4b5563; margin-bottom:12px;"><input type="checkbox" id="whatsUseDesktop" ${prefDesktop ? 'checked' : ''}> Abrir no WhatsApp Desktop (sem reload do Web)</label>`;
+            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Enviar mensagem</button></div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
         }
@@ -8384,8 +8426,15 @@
                 return;
             }
 
-            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-            whatsappWindowRef = openWhatsAppTab(url);
+            const toggle = document.getElementById('whatsUseDesktop');
+            if (toggle) setWhatsAppPreference(toggle.checked ? 'desktop' : 'web');
+
+            if (getWhatsAppPreference() === 'desktop') {
+                openWhatsAppDesktopWithFallback(phone, message);
+            } else {
+                const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+                whatsappWindowRef = openWhatsAppTab(url);
+            }
             closeWhatsAppModal();
             askRegisterActivityFromCommunication(clientId, 'WhatsApp', message);
         }
@@ -10835,9 +10884,10 @@
         openWhatsAppMessageModal = function(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.phone) return openMissingContactModal();
+            const prefDesktop = getWhatsAppPreference() === 'desktop';
             let html = `<div class="modal active" id="whatsAppModal">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name || '-')}</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Abrir WhatsApp Web</button></div></div>`;
+            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name || '-')}</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#4b5563; margin-bottom:12px;"><input type="checkbox" id="whatsUseDesktop" ${prefDesktop ? 'checked' : ''}> Abrir no WhatsApp Desktop (sem reload do Web)</label><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Enviar mensagem</button></div></div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('whatsapp','whatsMessageText')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
