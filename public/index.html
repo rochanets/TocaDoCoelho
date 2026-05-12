@@ -4786,7 +4786,94 @@
             }
         }
 
+        // Estado e helpers do modal de orientação para liberar pop-ups.
+        // O callback de "Já liberei" é mantido num módulo para que seja chamado
+        // SINCRONAMENTE pelo onclick do botão, preservando o user gesture necessário
+        // para que o navegador permita múltiplos window.open() em sequência.
+        const _AUTOTOCA_MAILING_POPUP_HELP_KEY = 'autoTocaMailing_popupHelpDismissed';
+        let _autoTocaMailingPopupHelpOnProceed = null;
+
+        function _isAutoTocaMailingPopupHelpDismissed() {
+            try {
+                return localStorage.getItem(_AUTOTOCA_MAILING_POPUP_HELP_KEY) === 'true';
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function _openAutoTocaMailingPopupHelpModal(onProceed) {
+            _autoTocaMailingPopupHelpOnProceed = onProceed;
+            const origin = window.location.origin || 'http://localhost:3000';
+            const html = `
+                <div class="modal active" id="autoTocaMailingPopupHelpModal" onclick="if(event.target===this) _closeAutoTocaMailingPopupHelpModal()">
+                    <div class="modal-content" style="max-width:580px;">
+                        <h2 style="color:#047857; margin-bottom:8px;"><i class="fas fa-shield-alt"></i> Libere pop-ups para abrir o lote</h2>
+                        <p style="color:#4b5563; font-size:13px; line-height:1.5; margin-bottom:12px;">
+                            Para abrir várias janelas do Outlook de uma só vez, o navegador precisa permitir pop-ups e redirecionamentos deste site. Faça isso <strong>uma única vez</strong> seguindo os passos abaixo.
+                        </p>
+                        <div style="background:rgba(236,253,245,.55); border:1px solid rgba(16,185,129,.25); border-radius:8px; padding:12px 14px; margin-bottom:12px;">
+                            <strong style="color:#065f46;">No Google Chrome / Microsoft Edge</strong>
+                            <ol style="margin:8px 0 0 18px; padding:0; color:#1f2937; font-size:13px; line-height:1.7;">
+                                <li>Abra uma nova aba e cole na barra de endereço: <code style="background:#fff; padding:2px 6px; border-radius:4px; border:1px solid #e5e7eb;">chrome://settings/content/popups</code></li>
+                                <li>Na seção <em>"Permitido enviar pop-ups e usar redirecionamentos"</em>, clique em <strong>Adicionar</strong>.</li>
+                                <li>Cole o endereço deste sistema: <code style="background:#fff; padding:2px 6px; border-radius:4px; border:1px solid #e5e7eb;">${escapeHtml(origin)}</code> e confirme.</li>
+                                <li>Volte para esta aba e clique em <strong>Já liberei, abrir todos</strong>.</li>
+                            </ol>
+                        </div>
+                        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:12px; color:#4b5563; line-height:1.5;">
+                            <strong style="color:#065f46;">Atalho:</strong> se tentar o lote mesmo bloqueado, vai aparecer um ícone <i class="fas fa-ban" style="color:#dc2626;"></i> à direita da barra de endereço. Clique nele e escolha <em>"Sempre permitir pop-ups e redirecionamentos de ${escapeHtml(origin)}"</em>.
+                        </div>
+                        <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#374151; cursor:pointer; margin-bottom:14px;">
+                            <input type="checkbox" id="autoTocaMailingPopupHelpDontShow" style="cursor:pointer; width:16px; height:16px;">
+                            Não mostrar este aviso novamente
+                        </label>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button class="btn btn-secondary" onclick="_closeAutoTocaMailingPopupHelpModal()">Cancelar</button>
+                            <button class="btn btn-primary" onclick="_confirmAutoTocaMailingPopupHelp()"><i class="fas fa-bolt"></i> Já liberei, abrir todos</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+            tocaDebug('mala-direta.popup-help', 'Modal de orientação aberto');
+        }
+
+        function _closeAutoTocaMailingPopupHelpModal() {
+            document.getElementById('autoTocaMailingPopupHelpModal')?.remove();
+            _autoTocaMailingPopupHelpOnProceed = null;
+            tocaDebug('mala-direta.popup-help', 'Modal de orientação cancelado');
+        }
+
+        function _confirmAutoTocaMailingPopupHelp() {
+            const dontShow = !!document.getElementById('autoTocaMailingPopupHelpDontShow')?.checked;
+            if (dontShow) {
+                try { localStorage.setItem(_AUTOTOCA_MAILING_POPUP_HELP_KEY, 'true'); } catch (e) {}
+            }
+            const cb = _autoTocaMailingPopupHelpOnProceed;
+            _autoTocaMailingPopupHelpOnProceed = null;
+            document.getElementById('autoTocaMailingPopupHelpModal')?.remove();
+            tocaDebug('mala-direta.popup-help', 'Orientação confirmada — disparando lote', { dontShow });
+            // Chamada síncrona aqui é CRÍTICA — estamos dentro do onclick do botão,
+            // então o user gesture continua válido para os window.open() em sequência.
+            if (cb) cb();
+        }
+
         function sendAutoTocaMailingDispatchAll() {
+            const pending = autoTocaMailingDispatchDrafts.filter(d => d.status === 'pending');
+            if (!pending.length) {
+                showInfo('Não há e-mails pendentes para abrir.');
+                return;
+            }
+
+            if (!_isAutoTocaMailingPopupHelpDismissed()) {
+                _openAutoTocaMailingPopupHelpModal(_doAutoTocaMailingDispatchAll);
+                return;
+            }
+
+            _doAutoTocaMailingDispatchAll();
+        }
+
+        function _doAutoTocaMailingDispatchAll() {
             const pending = autoTocaMailingDispatchDrafts.filter(d => d.status === 'pending');
             if (!pending.length) {
                 showInfo('Não há e-mails pendentes para abrir.');
