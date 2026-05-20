@@ -5432,15 +5432,34 @@
                     return;
                 }
 
+                const commitsAhead = Number(result.commits_ahead || 0);
+                const branch = result.github_branch || '';
+                const compareUrl = result.compare_html_url || result.branch_html_url || '';
+                const commitsList = Array.isArray(result.commits_ahead_list) ? result.commits_ahead_list : [];
+                const commitsPreviewHtml = commitsList.length
+                    ? `<ul style="margin:6px 0 0 18px;padding:0;font-size:0.9em;">${commitsList.map(c => `<li><code>${escapeHtml(c.sha || '')}</code> ${escapeHtml(c.message || '')}</li>`).join('')}</ul>`
+                    : '';
+                const compareLinkHtml = compareUrl
+                    ? ` <a href="${compareUrl}" target="_blank" rel="noopener noreferrer">Ver no GitHub</a>`
+                    : '';
+
                 if (result.update_available) {
                     const releaseUrl = result.html_url || '';
                     const releaseLinkHtml = releaseUrl
                         ? ` <a href="${releaseUrl}" target="_blank" rel="noopener noreferrer">Abrir release</a>`
                         : '';
+                    const extraAheadHtml = commitsAhead > 0
+                        ? `<div style="margin-top:6px;">Além disso, há <strong>${commitsAhead}</strong> commit(s) na branch <code>${escapeHtml(branch)}</code> após esse release.${compareLinkHtml}${commitsPreviewHtml}</div>`
+                        : '';
                     if (container) {
-                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}`;
+                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}${extraAheadHtml}`;
                     }
                     showSuccess(`Nova versão disponível: ${result.latest_version}`);
+                } else if (commitsAhead > 0) {
+                    if (container) {
+                        container.innerHTML = `Você está na versão do último release (<strong>${escapeHtml(result.current_version || '')}</strong>), mas há <strong>${commitsAhead}</strong> commit(s) novo(s) na branch <code>${escapeHtml(branch)}</code> ainda não publicado(s) como release.${compareLinkHtml}${commitsPreviewHtml}`;
+                    }
+                    showSuccess(`${commitsAhead} commit(s) novo(s) na branch ${branch}.`);
                 } else {
                     if (container) {
                         container.textContent = `Você já está na versão mais recente (${result.current_version || ''}).`;

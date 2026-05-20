@@ -235,6 +235,7 @@ def _resolve_app_version():
 APP_VERSION = _resolve_app_version()
 DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
+DEFAULT_GITHUB_BRANCH = os.environ.get('TOCA_UPDATE_GITHUB_BRANCH', 'version5').strip()
 
 logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
 
@@ -6188,10 +6189,34 @@ def check_updates():
             return jsonify({'error': 'Tag da release mais recente está vazia no GitHub.'}), 502
 
         update_available = _version_key(latest_version) > _version_key(current_version)
+
+        branch = DEFAULT_GITHUB_BRANCH or 'main'
+        commits_ahead = None
+        commits_ahead_list = []
+        branch_html_url = f'https://github.com/{owner}/{repo}/tree/{branch}'
+        compare_html_url = ''
+        try:
+            compare_url = f'https://api.github.com/repos/{owner}/{repo}/compare/{latest_tag}...{branch}'
+            compare_req = urllib.request.Request(compare_url, headers={
+                'Accept': 'application/vnd.github+json',
+                'User-Agent': 'TocaDoCoelho-Updater'
+            })
+            with urllib.request.urlopen(compare_req, timeout=10) as compare_response:
+                compare_payload = json.loads(compare_response.read().decode('utf-8'))
+            commits_ahead = int(compare_payload.get('ahead_by') or 0)
+            compare_html_url = compare_payload.get('html_url') or ''
+            for commit_entry in (compare_payload.get('commits') or [])[-10:]:
+                sha = (commit_entry.get('sha') or '')[:7]
+                message = ((commit_entry.get('commit') or {}).get('message') or '').splitlines()[0]
+                commits_ahead_list.append({'sha': sha, 'message': message})
+        except Exception as compare_error:
+            logger.warning('[Update] Falha ao comparar tag %s com branch %s: %s', latest_tag, branch, compare_error)
+
         return jsonify({
             'configured': True,
             'github_owner': owner,
             'github_repo': repo,
+            'github_branch': branch,
             'current_version': current_version,
             'latest_version': latest_version,
             'latest_tag': latest_tag,
@@ -6199,7 +6224,11 @@ def check_updates():
             'release_name': payload.get('name') or latest_tag,
             'release_notes': payload.get('body') or '',
             'html_url': payload.get('html_url') or '',
-            'published_at': payload.get('published_at')
+            'published_at': payload.get('published_at'),
+            'commits_ahead': commits_ahead,
+            'commits_ahead_list': commits_ahead_list,
+            'branch_html_url': branch_html_url,
+            'compare_html_url': compare_html_url
         })
     except urllib.error.HTTPError as e:
         logger.exception(f'[ERROR] GET /api/config/check-updates (HTTP): {e}')
