@@ -1443,20 +1443,56 @@ def _relation_report_period_clause(date_column, start_date=None, end_date=None):
     return (' AND ' + ' AND '.join(clauses)) if clauses else '', params
 
 
+RELATION_REPORT_TOPICS = ['DWP e Infraestrutura', 'Application', 'Marketing', 'Cyber', 'Cloud', 'Outros']
+
+RELATION_REPORT_TOPIC_RULES = [
+    ('DWP e Infraestrutura', [
+        ' dwp', ' dws', 'digital workplace', 'digital workspace', 'workplace',
+        'workspace', 'modern workplace', 'm365', 'microsoft 365', 'office 365',
+        ' o365', 'intune', 'endpoint', ' vdi', 'service desk', 'servicedesk',
+        'help desk', 'helpdesk', 'service-desk', 'field service', 'field services',
+        'haas', 'hardware as a service', 'daas', 'device as a service',
+        'alocação de máquina', 'alocacao de maquina', 'venda de máquina',
+        'venda de maquina', 'locação de máquina', 'locacao de maquina',
+        'parque de máquinas', 'parque de maquinas', 'parque tecnológico',
+        'notebook', 'desktop', 'estação de trabalho', 'estacao de trabalho',
+        'workstation', 'infraestrutura', ' infra ', 'datacenter', 'data center',
+        'servidor', ' rede ', 'network', 'on-premises', 'on premise',
+        'backup', 'storage',
+    ]),
+    ('Application', [
+        'aplica', 'application', 'software', 'sistema', ' app ', ' erp', ' crm',
+        ' sap', 'oracle', 'totvs', 'salesforce', 'desenvolvimento', ' dev ',
+        'low-code', 'low code', 'integração', 'integracao', 'modernização',
+        'modernizacao', 'sustentação', 'sustentacao',
+    ]),
+    ('Marketing', [
+        'marketing', 'campanha', 'mídia', 'midia', ' lead', 'brand', 'marca',
+        'comunicação', 'comunicacao', 'evento', 'branding', 'publicidade',
+    ]),
+    ('Cyber', [
+        'cyber', 'segurança', 'seguranca', 'security', ' soc ', 'siem',
+        'firewall', ' iam ', 'identity', 'phishing', 'ransomware',
+        'vulnerabilidade', 'pentest', 'lgpd', 'compliance',
+    ]),
+    ('Cloud', [
+        'cloud', 'nuvem', ' aws', 'azure', ' gcp', 'google cloud',
+        'oracle cloud', 'multicloud', 'finops', 'kubernetes', 'container',
+        'devops', 'landing zone',
+    ]),
+]
+
+
 def _relation_report_topic_from_text(text):
     content = f" {str(text or '').lower()} "
-    topic_rules = [
-        ('IA', [' ia ', 'inteligência artificial', 'inteligencia artificial', ' ai ', 'openai', 'copilot', 'gemini', 'claude', 'llm', 'machine learning']),
-        ('Cyber', ['cyber', 'segurança', 'seguranca', 'security', 'soc', 'siem', 'firewall', 'iam', 'identity', 'phishing', 'ransomware']),
-        ('Aplicações', ['aplica', 'aplicações', 'aplicacoes', 'software', 'sistema', ' app ', 'erp', 'crm', 'sap', 'oracle', 'totvs', 'desenvolvimento']),
-        ('Marketing', ['marketing', 'campanha', 'mídia', 'midia', 'lead', 'brand', 'marca', 'comunicação', 'comunicacao']),
-        ('Cloud', ['cloud', 'nuvem', 'aws', 'azure', 'gcp', 'google cloud', 'oracle cloud', 'multicloud', 'finops', 'kubernetes']),
-    ]
-    for topic, keywords in topic_rules:
-        for keyword in keywords:
-            if keyword in content:
-                return topic
-    return 'Outros'
+    best_topic = 'Outros'
+    best_score = 0
+    for topic, keywords in RELATION_REPORT_TOPIC_RULES:
+        score = sum(1 for keyword in keywords if keyword in content)
+        if score > best_score:
+            best_score = score
+            best_topic = topic
+    return best_topic
 
 
 def _relation_report_collect_data(account_id, start_date=None, end_date=None):
@@ -1574,7 +1610,7 @@ def _relation_report_collect_data(account_id, start_date=None, end_date=None):
             'topics': sorted(set(_relation_report_topic_from_text(' '.join(filter(None, [a.get('description') or '', a.get('information') or '']))) for a in contact_activities if (a.get('description') or a.get('information'))))
         })
 
-    topic_buckets = {key: [] for key in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']}
+    topic_buckets = {key: [] for key in RELATION_REPORT_TOPICS}
     topic_sources = []
     for item in activities:
         topic_sources.append({
@@ -1591,8 +1627,11 @@ def _relation_report_collect_data(account_id, start_date=None, end_date=None):
             'source': 'atividade_conta'
         })
     for item in kanban_cards:
+        card_activity_text = ' '.join(
+            str(a.get('content') or '') for a in (item.get('activities') or [])
+        )
         topic_sources.append({
-            'text': ' '.join(filter(None, [item.get('title'), item.get('description'), item.get('activity')])),
+            'text': ' '.join(filter(None, [item.get('title'), item.get('description'), card_activity_text])),
             'date': item.get('updated_at') or item.get('created_at'),
             'person': item.get('contact_name') or account.get('name'),
             'source': 'kanban'
@@ -1605,6 +1644,8 @@ def _relation_report_collect_data(account_id, start_date=None, end_date=None):
             'source': 'mapeamento'
         })
     for source in topic_sources:
+        if not str(source.get('text') or '').strip():
+            continue
         topic = _relation_report_topic_from_text(source.get('text'))
         topic_buckets[topic].append(source)
 
@@ -1778,7 +1819,7 @@ def _relation_report_build_relationship_snapshot(report_data):
 
 def _relation_report_build_topic_evidence(report_data):
     sections = []
-    for topic in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']:
+    for topic in RELATION_REPORT_TOPICS:
         items = (report_data.get('topics') or {}).get(topic) or []
         if not items:
             sections.append(f"{topic}:\nSem evidências relevantes identificadas no período.")
@@ -2178,7 +2219,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
     period_label = 'Todo o período' if report_data.get('full_period') else f"{report_data.get('start_date') or '...'} a {report_data.get('end_date') or '...'}"
     latest_text = 'Sem interações registradas'
     if latest:
-        latest_text = f"{_relation_report_format_dt(latest.get('date'))} · {latest.get('with') or 'Contato não identificado'}"
+        latest_text = f"{_relation_report_format_dt(latest.get('date'))} · {latest.get('person') or 'Contato não identificado'}"
 
     def company_rank(position):
         p = str(position or '').strip().lower()
@@ -2527,10 +2568,10 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
     <div class='rr-section'>
       <h2>Leitura temática</h2>
       <div class='rr-topic-grid'>
-        {topic_card('IA', '#ecfeff')}
-        {topic_card('Cyber', '#f8fafc')}
-        {topic_card('Aplicações', '#f0fdf4')}
+        {topic_card('DWP e Infraestrutura', '#ecfeff')}
+        {topic_card('Application', '#f0fdf4')}
         {topic_card('Marketing', '#fff7ed')}
+        {topic_card('Cyber', '#f8fafc')}
         {topic_card('Cloud', '#eff6ff')}
         {topic_card('Outros', '#f9fafb')}
       </div>
@@ -2766,9 +2807,9 @@ def _relation_report_render_pdf(report_data):
     y -= 4 * mm
     c.line(18 * mm, y, page_width - 18 * mm, y)
     y -= 6 * mm
-    for topic in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']:
+    for topic in RELATION_REPORT_TOPICS:
         y = ensure_space(y, 15 * mm)
-        c.setFillColor(colors.HexColor('#ecfeff') if topic in ('IA', 'Cloud') else colors.HexColor('#f9fafb'))
+        c.setFillColor(colors.HexColor('#ecfeff') if topic in ('DWP e Infraestrutura', 'Cloud') else colors.HexColor('#f9fafb'))
         c.roundRect(18 * mm, y - 12 * mm, page_width - 36 * mm, 10 * mm, 3 * mm, fill=1, stroke=0)
         c.setFillColor(colors_map['secondary'])
         c.setFont('Helvetica-Bold', 9.5)
@@ -12817,32 +12858,18 @@ def autotoca_upload():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/autotoca/address-suggestion', methods=['POST'])
-def autotoca_address_suggestion():
+@app.route('/api/autotoca/account-info', methods=['POST'])
+def autotoca_account_info():
     try:
         data = request.get_json(force=True) or {}
         account_name = (data.get('account_name') or '').strip()
         if not account_name:
-            return jsonify({'error': 'Conta inválida para busca de endereço.'}), 400
+            return jsonify({'error': 'Conta inválida para busca de dados.'}), 400
 
-        service = AccountAddressService()
-        heuristic_result = service.find_headquarter_address(account_name)
-
-        sai_result = _autotoca_suggest_address_via_sai(
-            account_name,
-            heuristic_address=heuristic_result.get('suggested_address', ''),
-            heuristic_source=heuristic_result.get('source', '')
-        )
-
-        if sai_result and sai_result.get('suggested_address'):
-            sai_confidence = (sai_result.get('confidence') or 'medium').lower().strip()
-            if sai_confidence != 'low' or not heuristic_result.get('suggested_address'):
-                return jsonify(sai_result)
-
-        result = heuristic_result
+        result = _autotoca_account_info_via_llm(account_name)
         return jsonify(result)
     except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/address-suggestion: {e}')
+        logger.exception(f'[AutoToca] POST /api/autotoca/account-info: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12865,103 +12892,151 @@ def autotoca_support_files():
         return jsonify({'error': str(e)}), 500
 
 
-def _autotoca_suggest_address_via_sai(account_name: str, heuristic_address: str = '', heuristic_source: str = ''):
-    """Tenta obter endereço de sede via SAI LLM; retorna dict padronizado ou None."""
-    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
-    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
-    template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
-    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-
-    if not api_key:
-        return None
-
-    question = (
-        f"Qual é o endereço da sede/matriz no Brasil da empresa '{account_name}'? "
-        "Retorne SOMENTE um JSON válido no formato: "
-        "{\"suggested_address\":\"...\",\"confidence\":\"high|medium|low\",\"source\":\"...\"}. "
-        "Se não encontrar com segurança, retorne suggested_address vazio e confidence low."
-    )
-    context_sources = (
-        f"Empresa: {account_name}.\n"
-        f"Sugestão heurística anterior: {heuristic_address or 'nenhuma'}.\n"
-        f"Fonte heurística: {heuristic_source or 'n/a'}."
-    )
-
-    url = f'{base_url}/api/templates/{template_id}/execute'
-    headers = {
-        'Content-Type': 'application/json',
-        'X-Api-Key': api_key,
-    }
-    payload = {
-        'inputs': {
-            'question': question,
-            'context_sources': context_sources,
-        }
-    }
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers=headers,
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            raw = resp.read().decode('utf-8', errors='ignore')
-    except Exception as e:
-        logger.warning(f'[AutoToca][Address][SAI] falha na chamada SAI: {e}')
-        return None
-
-    def _try_parse_json(value):
-        if not value:
+def _autotoca_parse_account_info_raw(raw):
+    """Extrai razao_social, cnpj, endereco e confiavel de uma resposta bruta de LLM."""
+    def _coerce(value):
+        if value is None:
             return None
         if isinstance(value, dict):
             return value
         if not isinstance(value, str):
             return None
+        text = value.strip()
+        if text.startswith('```'):
+            m = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text, flags=re.IGNORECASE)
+            if m:
+                text = m.group(1).strip()
         try:
-            parsed = json.loads(value.strip())
-            if isinstance(parsed, dict):
-                return parsed
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
         except Exception:
-            return None
-        return None
+            pass
+        obj = _extract_json_object_from_text(text)
+        return obj if isinstance(obj, dict) else None
 
-    parsed = _try_parse_json(raw) or {}
-    if 'answer' not in parsed:
-        for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message'):
-            candidate = parsed.get(key)
-            nested = _try_parse_json(candidate)
-            if nested:
+    parsed = _coerce(raw) or {}
+    # Desembrulha respostas aninhadas comuns dos templates SAI.
+    for key in ('answer', 'output', 'result', 'text', 'content', 'response', 'data', 'message'):
+        if isinstance(parsed, dict) and 'razao_social' not in parsed and 'endereco' not in parsed and key in parsed:
+            nested = _coerce(parsed.get(key))
+            if isinstance(nested, dict):
                 parsed = nested
                 break
 
-    answer = parsed.get('answer') if isinstance(parsed, dict) else ''
-    answer_obj = _try_parse_json(answer) if isinstance(answer, str) else None
-    if answer_obj:
-        parsed = answer_obj
+    if not isinstance(parsed, dict):
+        return {}
 
-    suggested = (parsed.get('suggested_address') or '').strip() if isinstance(parsed, dict) else ''
-    confidence = (parsed.get('confidence') or 'medium').strip().lower() if isinstance(parsed, dict) else 'medium'
-    source = (parsed.get('source') or '').strip() if isinstance(parsed, dict) else ''
+    def _clean(value):
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s or s.lower() in ('null', 'none', 'n/a', 'não informado', 'nao informado', '-'):
+            return None
+        return s
 
-    # fallback: quando o template devolve texto livre em "answer"
-    if not suggested and isinstance(answer, str):
-        for line in [ln.strip(' -•\t') for ln in answer.splitlines() if ln.strip()]:
-            if AccountAddressService._is_candidate_address(line):
-                suggested = line
-                break
-
-    if not suggested or not AccountAddressService._is_candidate_address(suggested):
-        return None
-
-    if confidence not in ('high', 'medium', 'low'):
-        confidence = 'medium'
+    confiavel_raw = parsed.get('confiavel')
+    if isinstance(confiavel_raw, str):
+        confiavel = confiavel_raw.strip().lower() in ('true', 'sim', 'yes', '1')
+    else:
+        confiavel = bool(confiavel_raw)
 
     return {
-        'suggested_address': suggested,
-        'source': source or 'SAI LLM (iToca)',
-        'confidence': confidence,
+        'razao_social': _clean(parsed.get('razao_social')),
+        'cnpj': _clean(parsed.get('cnpj')),
+        'endereco': _clean(parsed.get('endereco')),
+        'confiavel': confiavel,
+    }
+
+
+def _autotoca_account_info_via_llm(account_name: str) -> dict:
+    """Busca razão social, CNPJ e endereço de sede da empresa via LLM (OpenRouter -> SAI).
+
+    Retorna dict com as chaves razao_social, cnpj e endereco. O endereço é objetivo
+    (apenas o endereço). Quando os dados não são confiáveis, o endereço recebe o
+    prefixo 'Por favor confirmar: '.
+    """
+    # Dica de endereço a partir da busca web (mesma lógica do antigo "Buscar Sede").
+    heuristic_address = ''
+    try:
+        heuristic = AccountAddressService().find_headquarter_address(account_name)
+        heuristic_address = (heuristic.get('suggested_address') or '').strip()
+    except Exception as e:
+        logger.warning(f'[AutoToca][AccountInfo] heurística de endereço falhou: {e}')
+
+    prompt = (
+        f"Empresa cliente no Brasil: '{account_name}'. "
+        + (f"Dica de endereço encontrada na web: {heuristic_address}. " if heuristic_address else "")
+        + "Pesquise os dados cadastrais oficiais desta empresa e retorne SOMENTE um JSON válido, "
+        "sem markdown e sem texto adicional, no formato exato: "
+        '{"razao_social": "...", "cnpj": "...", "endereco": "...", "confiavel": true}. '
+        "Regras: 'razao_social' é a razão social completa registrada na Receita Federal; "
+        "'cnpj' é o CNPJ da matriz no formato 00.000.000/0000-00; "
+        "'endereco' é o endereço completo da sede/matriz no Brasil no formato "
+        "'Logradouro, número, bairro, cidade - UF', contendo APENAS o endereço, "
+        "sem explicações, sem fontes e sem comentários; "
+        "'confiavel' deve ser true somente se você tem certeza dos dados, e false caso contrário. "
+        "Use null nos campos que não conseguir determinar."
+    )
+
+    raw = None
+
+    # --- Tentativa 1: OpenRouter ---
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista de dados cadastrais corporativos. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                'temperature': 0.1
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                or_data = json.loads(resp.read().decode('utf-8'))
+            choices = or_data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        except Exception as e:
+            logger.warning(f'[AutoToca][AccountInfo][OpenRouter] falha: {e}')
+            raw = None
+
+    # --- Tentativa 2: SAI (fallback) ---
+    if not raw:
+        raw = _sai_simple_prompt(prompt)
+
+    parsed = _autotoca_parse_account_info_raw(raw)
+
+    endereco = parsed.get('endereco')
+    confiavel = parsed.get('confiavel')
+
+    # Endereço: usa o do LLM; se vazio, cai para a dica heurística.
+    final_address = endereco or heuristic_address or ''
+    # Marca como "a confirmar" quando o LLM não classificou o endereço como confiável
+    # ou quando o endereço veio apenas da heurística da web.
+    address_trustworthy = bool(endereco) and confiavel is True
+    if final_address and not address_trustworthy:
+        final_address = f'Por favor confirmar: {final_address}'
+
+    return {
+        'razao_social': parsed.get('razao_social') or '',
+        'cnpj': parsed.get('cnpj') or '',
+        'endereco': final_address,
     }
 
 
