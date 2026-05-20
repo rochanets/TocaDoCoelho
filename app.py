@@ -6203,6 +6203,19 @@ def check_updates():
 
         update_available = _version_key(latest_version) > _version_key(current_version)
 
+        # Localiza o instalador (.exe) anexado como asset da release — usado pela
+        # atualização automática para baixar e executar a nova versão.
+        installer_url = ''
+        installer_name = ''
+        installer_size = 0
+        for asset in (payload.get('assets') or []):
+            asset_name = (asset.get('name') or '').strip()
+            if asset_name.lower().endswith('.exe'):
+                installer_url = (asset.get('browser_download_url') or '').strip()
+                installer_name = asset_name
+                installer_size = int(asset.get('size') or 0)
+                break
+
         branch = DEFAULT_GITHUB_BRANCH or 'main'
         commits_ahead = None
         commits_ahead_list = []
@@ -6252,6 +6265,10 @@ def check_updates():
             'commits_ahead_list': commits_ahead_list,
             'commits_check_ok': commits_check_ok,
             'commits_check_error': commits_check_error,
+            'installer_url': installer_url,
+            'installer_name': installer_name,
+            'installer_size': installer_size,
+            'can_auto_install': bool(installer_url),
             'branch_html_url': branch_html_url,
             'compare_html_url': compare_html_url
         })
@@ -6267,6 +6284,112 @@ def check_updates():
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
+
+
+# ---------------------------------------------------------------------------
+# Atualização automática baseada em release: baixa o instalador anexado à
+# release e o executa, encerrando o app para que os arquivos sejam liberados.
+# ---------------------------------------------------------------------------
+UPDATE_DOWNLOAD_DIR = DATA_DIR / 'updates'
+
+
+def _download_update_async(task_id, url, name):
+    try:
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando download...', 'progress': 3})
+        UPDATE_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+        safe_name = os.path.basename(name or '') or 'TocaDoCoelho-Setup.exe'
+        if not safe_name.lower().endswith('.exe'):
+            safe_name += '.exe'
+        dest = UPDATE_DOWNLOAD_DIR / safe_name
+
+        req = urllib.request.Request(url, headers={'User-Agent': 'TocaDoCoelho-Updater'})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            total = int(resp.headers.get('Content-Length') or 0)
+            downloaded = 0
+            with open(dest, 'wb') as fh:
+                while True:
+                    chunk = resp.read(262144)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = 3 + int(downloaded / total * 94)
+                        _bg_task_set(task_id, {
+                            'progress': min(97, pct),
+                            'step': f'Baixando... {downloaded // (1024 * 1024)} MB de {total // (1024 * 1024)} MB'
+                        })
+
+        _bg_task_set(task_id, {
+            'status': 'done', 'progress': 100, 'step': 'Download concluído.',
+            'installer_path': str(dest)
+        })
+        _bg_task_cleanup(task_id, delay=600)
+    except Exception as e:
+        logger.exception(f'[Update] Falha no download da atualização: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao baixar a atualização: {e}'})
+        _bg_task_cleanup(task_id, delay=600)
+
+
+@app.route('/api/config/download-update', methods=['POST'])
+def download_update():
+    try:
+        data = request.get_json() or {}
+        url = (data.get('installer_url') or '').strip()
+        name = (data.get('installer_name') or '').strip()
+        if not url or not url.lower().startswith('https://'):
+            return jsonify({'error': 'URL do instalador inválida.'}), 400
+
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando download...', 'progress': 1})
+        threading.Thread(target=_download_update_async, args=(task_id, url, name), daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/download-update: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/update-tasks/<task_id>', methods=['GET'])
+def get_update_task(task_id):
+    return jsonify(_bg_task_get(task_id))
+
+
+@app.route('/api/config/install-update', methods=['POST'])
+def install_update():
+    try:
+        import subprocess
+
+        data = request.get_json() or {}
+        installer_path = (data.get('installer_path') or '').strip()
+        if not installer_path:
+            return jsonify({'error': 'Caminho do instalador não informado.'}), 400
+
+        installer = Path(installer_path).resolve()
+        # Segurança: só executa um .exe que está dentro da pasta de updates.
+        if (installer.parent != UPDATE_DOWNLOAD_DIR.resolve()
+                or installer.suffix.lower() != '.exe'
+                or not installer.is_file()):
+            return jsonify({'error': 'Instalador inválido ou não encontrado.'}), 400
+
+        creationflags = 0
+        if sys.platform == 'win32':
+            creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen([str(installer)], creationflags=creationflags, close_fds=True)
+
+        # Encerra o app logo após responder, liberando os arquivos para o instalador.
+        def _shutdown():
+            time.sleep(2)
+            os._exit(0)
+        threading.Thread(target=_shutdown, daemon=True).start()
+
+        return jsonify({
+            'message': 'Instalador iniciado. O aplicativo será encerrado para concluir a atualização.'
+        }), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/install-update: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/config/startup', methods=['GET'])
 def get_startup_config():

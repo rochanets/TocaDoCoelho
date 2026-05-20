@@ -17,6 +17,10 @@ Var StartMenuFolder
 !insertmacro MUI_PAGE_STARTMENU "Application" $StartMenuFolder
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
+
+; Ao concluir, oferece reabrir o app automaticamente (usado pela atualização automática)
+!define MUI_FINISHPAGE_RUN "$INSTDIR\TocaDoCoelho.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Iniciar o Toca do Coelho agora"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_LANGUAGE "PortugueseBR"
@@ -26,6 +30,12 @@ LangString DESC_SecShortcuts ${LANG_PORTUGUESEBR} "Cria atalhos na Área de Trab
 LangString DESC_SecAutoStart ${LANG_PORTUGUESEBR} "Iniciar o Toca do Coelho automaticamente quando o Windows ligar"
 
 Section "Instalar Toca do Coelho" SecApp
+    ; Encerra qualquer instância em execução para liberar os arquivos bloqueados
+    ; (essencial para a atualização automática, que dispara o instalador com o app aberto).
+    DetailPrint "Encerrando instância em execução do Toca do Coelho..."
+    nsExec::Exec 'taskkill /F /IM TocaDoCoelho.exe /T'
+    Sleep 2500
+
     SetOutPath "$INSTDIR"
     File /r "dist\TocaDoCoelho\*.*"
     File "README.md"
