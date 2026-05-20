@@ -2876,6 +2876,11 @@
                             <label>GitHub Repositório</label>
                             <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
                         </div>
+                        <div class="form-group">
+                            <label>GitHub Token <span style="color:#9ca3af; font-weight:normal;">(opcional — evita o limite de verificações)</span></label>
+                            <input type="password" id="updateGithubToken" placeholder="ghp_..." autocomplete="off">
+                            <small id="updateGithubTokenStatus" style="color:#6b7280; display:block; margin-top:4px;"></small>
+                        </div>
                         <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
                         <div style="display:flex; gap:8px; flex-wrap:wrap;">
                             <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
@@ -5360,6 +5365,10 @@
 
             document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
             document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
+            document.getElementById('updateGithubToken').value = '';
+            document.getElementById('updateGithubTokenStatus').textContent = updateSourceConfig?.github_token_configured
+                ? `Configurado (${updateSourceConfig?.github_token_preview || '***'})`
+                : 'Não configurado — verificações usam o limite anônimo do GitHub (60/hora).';
             document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '-'}`;
             const updateResult = document.getElementById('updateCheckResult');
             if (updateResult) updateResult.textContent = '';
@@ -5398,7 +5407,8 @@
             event.preventDefault();
             const payload = {
                 github_owner: document.getElementById('updateGithubOwner').value.trim(),
-                github_repo: document.getElementById('updateGithubRepo').value.trim()
+                github_repo: document.getElementById('updateGithubRepo').value.trim(),
+                github_token: document.getElementById('updateGithubToken').value.trim()
             };
 
             const response = await fetch(`${API_BASE}/config/update-source`, {
@@ -5460,6 +5470,12 @@
                         container.innerHTML = `Você está na versão do último release (<strong>${escapeHtml(result.current_version || '')}</strong>), mas há <strong>${commitsAhead}</strong> commit(s) novo(s) na branch <code>${escapeHtml(branch)}</code> ainda não publicado(s) como release.${compareLinkHtml}${commitsPreviewHtml}`;
                     }
                     showSuccess(`${commitsAhead} commit(s) novo(s) na branch ${branch}.`);
+                } else if (result.commits_check_ok === false) {
+                    const checkMsg = result.commits_check_error || 'Não foi possível verificar os commits da branch. Tente novamente em alguns minutos.';
+                    if (container) {
+                        container.innerHTML = `<span style="color:#b45309;"><strong>⚠️ Verificação incompleta.</strong></span> ${escapeHtml(checkMsg)} O release publicado está em dia, mas não foi possível confirmar se há commits novos na branch <code>${escapeHtml(branch)}</code>.${compareLinkHtml}`;
+                    }
+                    showError('Não foi possível verificar atualizações da branch. Tente novamente.');
                 } else {
                     if (container) {
                         container.textContent = `Você já está na versão mais recente (${result.current_version || ''}).`;

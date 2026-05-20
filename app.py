@@ -860,6 +860,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_token', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
@@ -6116,13 +6117,16 @@ def save_integrations_config():
 @app.route('/api/config/update-source', methods=['GET'])
 def get_update_source_config():
     try:
-        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo', 'update_github_token'])
         owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
         repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+        token = (settings_map.get('update_github_token') or '').strip() or (os.environ.get('TOCA_UPDATE_GITHUB_TOKEN', '') or '').strip()
         return jsonify({
             'current_version': APP_VERSION,
             'github_owner': owner,
             'github_repo': repo,
+            'github_token_configured': bool(token),
+            'github_token_preview': (token[:7] + '...') if token else '',
             'configured': bool(owner and repo)
         })
     except Exception as e:
@@ -6136,6 +6140,7 @@ def save_update_source_config():
         data = request.get_json() or {}
         owner = (data.get('github_owner') or '').strip()
         repo = (data.get('github_repo') or '').strip()
+        token = (data.get('github_token') or '').strip()
 
         conn = get_db()
         c = conn.cursor()
@@ -6143,6 +6148,9 @@ def save_update_source_config():
             ('update_github_owner', owner),
             ('update_github_repo', repo)
         ]
+        # Só grava o token quando um valor é enviado, para não apagá-lo ao salvar owner/repo.
+        if token:
+            updates.append(('update_github_token', token))
         for key, value in updates:
             c.execute(
                 'INSERT INTO app_settings (key, value) VALUES (?, ?) '
@@ -6173,11 +6181,16 @@ def check_updates():
                 'message': 'Configure GitHub Owner e Repositório em Configurações para verificar updates.'
             }), 400
 
-        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
-        req = urllib.request.Request(api_url, headers={
+        github_token = _resolve_setting('update_github_token', 'TOCA_UPDATE_GITHUB_TOKEN')
+        api_headers = {
             'Accept': 'application/vnd.github+json',
             'User-Agent': 'TocaDoCoelho-Updater'
-        })
+        }
+        if github_token:
+            api_headers['Authorization'] = f'Bearer {github_token}'
+
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
+        req = urllib.request.Request(api_url, headers=api_headers)
         with urllib.request.urlopen(req, timeout=10) as response:
             payload = json.loads(response.read().decode('utf-8'))
 
@@ -6193,14 +6206,13 @@ def check_updates():
         branch = DEFAULT_GITHUB_BRANCH or 'main'
         commits_ahead = None
         commits_ahead_list = []
+        commits_check_ok = False
+        commits_check_error = ''
         branch_html_url = f'https://github.com/{owner}/{repo}/tree/{branch}'
         compare_html_url = ''
         try:
             compare_url = f'https://api.github.com/repos/{owner}/{repo}/compare/{latest_tag}...{branch}'
-            compare_req = urllib.request.Request(compare_url, headers={
-                'Accept': 'application/vnd.github+json',
-                'User-Agent': 'TocaDoCoelho-Updater'
-            })
+            compare_req = urllib.request.Request(compare_url, headers=api_headers)
             with urllib.request.urlopen(compare_req, timeout=10) as compare_response:
                 compare_payload = json.loads(compare_response.read().decode('utf-8'))
             commits_ahead = int(compare_payload.get('ahead_by') or 0)
@@ -6209,7 +6221,18 @@ def check_updates():
                 sha = (commit_entry.get('sha') or '')[:7]
                 message = ((commit_entry.get('commit') or {}).get('message') or '').splitlines()[0]
                 commits_ahead_list.append({'sha': sha, 'message': message})
+            commits_check_ok = True
+        except urllib.error.HTTPError as compare_error:
+            if compare_error.code == 403:
+                commits_check_error = ('Limite da API do GitHub atingido. Configure um Token do GitHub '
+                                       'em Configurações para evitar isso.')
+            elif compare_error.code == 401:
+                commits_check_error = 'Token do GitHub inválido ou expirado. Revise-o em Configurações.'
+            else:
+                commits_check_error = f'Falha ao comparar com a branch (HTTP {compare_error.code}).'
+            logger.warning('[Update] Falha ao comparar tag %s com branch %s: %s', latest_tag, branch, compare_error)
         except Exception as compare_error:
+            commits_check_error = 'Não foi possível verificar os commits da branch (falha de rede ou GitHub indisponível).'
             logger.warning('[Update] Falha ao comparar tag %s com branch %s: %s', latest_tag, branch, compare_error)
 
         return jsonify({
@@ -6227,6 +6250,8 @@ def check_updates():
             'published_at': payload.get('published_at'),
             'commits_ahead': commits_ahead,
             'commits_ahead_list': commits_ahead_list,
+            'commits_check_ok': commits_check_ok,
+            'commits_check_error': commits_check_error,
             'branch_html_url': branch_html_url,
             'compare_html_url': compare_html_url
         })
@@ -6234,8 +6259,10 @@ def check_updates():
         logger.exception(f'[ERROR] GET /api/config/check-updates (HTTP): {e}')
         if e.code == 404:
             return jsonify({'error': 'Nenhuma release encontrada nesse repositório ou repositório inválido.'}), 404
+        if e.code == 401:
+            return jsonify({'error': 'Token do GitHub inválido ou expirado. Revise-o em Configurações.'}), 401
         if e.code == 403:
-            return jsonify({'error': 'GitHub API limit atingido temporariamente. Tente novamente mais tarde.'}), 429
+            return jsonify({'error': 'Limite da API do GitHub atingido. Configure um Token do GitHub em Configurações para evitar isso.'}), 429
         return jsonify({'error': f'Falha ao consultar GitHub Releases (HTTP {e.code}).'}), 502
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
