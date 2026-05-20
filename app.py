@@ -235,6 +235,7 @@ def _resolve_app_version():
 APP_VERSION = _resolve_app_version()
 DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
+DEFAULT_GITHUB_BRANCH = os.environ.get('TOCA_UPDATE_GITHUB_BRANCH', 'version5').strip()
 
 logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
 
@@ -859,6 +860,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('openrouter_app_name', 'TocaDoCoelho'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_token', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
@@ -1442,20 +1444,56 @@ def _relation_report_period_clause(date_column, start_date=None, end_date=None):
     return (' AND ' + ' AND '.join(clauses)) if clauses else '', params
 
 
+RELATION_REPORT_TOPICS = ['DWP e Infraestrutura', 'Application', 'Marketing', 'Cyber', 'Cloud', 'Outros']
+
+RELATION_REPORT_TOPIC_RULES = [
+    ('DWP e Infraestrutura', [
+        ' dwp', ' dws', 'digital workplace', 'digital workspace', 'workplace',
+        'workspace', 'modern workplace', 'm365', 'microsoft 365', 'office 365',
+        ' o365', 'intune', 'endpoint', ' vdi', 'service desk', 'servicedesk',
+        'help desk', 'helpdesk', 'service-desk', 'field service', 'field services',
+        'haas', 'hardware as a service', 'daas', 'device as a service',
+        'alocação de máquina', 'alocacao de maquina', 'venda de máquina',
+        'venda de maquina', 'locação de máquina', 'locacao de maquina',
+        'parque de máquinas', 'parque de maquinas', 'parque tecnológico',
+        'notebook', 'desktop', 'estação de trabalho', 'estacao de trabalho',
+        'workstation', 'infraestrutura', ' infra ', 'datacenter', 'data center',
+        'servidor', ' rede ', 'network', 'on-premises', 'on premise',
+        'backup', 'storage',
+    ]),
+    ('Application', [
+        'aplica', 'application', 'software', 'sistema', ' app ', ' erp', ' crm',
+        ' sap', 'oracle', 'totvs', 'salesforce', 'desenvolvimento', ' dev ',
+        'low-code', 'low code', 'integração', 'integracao', 'modernização',
+        'modernizacao', 'sustentação', 'sustentacao',
+    ]),
+    ('Marketing', [
+        'marketing', 'campanha', 'mídia', 'midia', ' lead', 'brand', 'marca',
+        'comunicação', 'comunicacao', 'evento', 'branding', 'publicidade',
+    ]),
+    ('Cyber', [
+        'cyber', 'segurança', 'seguranca', 'security', ' soc ', 'siem',
+        'firewall', ' iam ', 'identity', 'phishing', 'ransomware',
+        'vulnerabilidade', 'pentest', 'lgpd', 'compliance',
+    ]),
+    ('Cloud', [
+        'cloud', 'nuvem', ' aws', 'azure', ' gcp', 'google cloud',
+        'oracle cloud', 'multicloud', 'finops', 'kubernetes', 'container',
+        'devops', 'landing zone',
+    ]),
+]
+
+
 def _relation_report_topic_from_text(text):
     content = f" {str(text or '').lower()} "
-    topic_rules = [
-        ('IA', [' ia ', 'inteligência artificial', 'inteligencia artificial', ' ai ', 'openai', 'copilot', 'gemini', 'claude', 'llm', 'machine learning']),
-        ('Cyber', ['cyber', 'segurança', 'seguranca', 'security', 'soc', 'siem', 'firewall', 'iam', 'identity', 'phishing', 'ransomware']),
-        ('Aplicações', ['aplica', 'aplicações', 'aplicacoes', 'software', 'sistema', ' app ', 'erp', 'crm', 'sap', 'oracle', 'totvs', 'desenvolvimento']),
-        ('Marketing', ['marketing', 'campanha', 'mídia', 'midia', 'lead', 'brand', 'marca', 'comunicação', 'comunicacao']),
-        ('Cloud', ['cloud', 'nuvem', 'aws', 'azure', 'gcp', 'google cloud', 'oracle cloud', 'multicloud', 'finops', 'kubernetes']),
-    ]
-    for topic, keywords in topic_rules:
-        for keyword in keywords:
-            if keyword in content:
-                return topic
-    return 'Outros'
+    best_topic = 'Outros'
+    best_score = 0
+    for topic, keywords in RELATION_REPORT_TOPIC_RULES:
+        score = sum(1 for keyword in keywords if keyword in content)
+        if score > best_score:
+            best_score = score
+            best_topic = topic
+    return best_topic
 
 
 def _relation_report_collect_data(account_id, start_date=None, end_date=None):
@@ -1573,7 +1611,7 @@ def _relation_report_collect_data(account_id, start_date=None, end_date=None):
             'topics': sorted(set(_relation_report_topic_from_text(' '.join(filter(None, [a.get('description') or '', a.get('information') or '']))) for a in contact_activities if (a.get('description') or a.get('information'))))
         })
 
-    topic_buckets = {key: [] for key in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']}
+    topic_buckets = {key: [] for key in RELATION_REPORT_TOPICS}
     topic_sources = []
     for item in activities:
         topic_sources.append({
@@ -1590,8 +1628,11 @@ def _relation_report_collect_data(account_id, start_date=None, end_date=None):
             'source': 'atividade_conta'
         })
     for item in kanban_cards:
+        card_activity_text = ' '.join(
+            str(a.get('content') or '') for a in (item.get('activities') or [])
+        )
         topic_sources.append({
-            'text': ' '.join(filter(None, [item.get('title'), item.get('description'), item.get('activity')])),
+            'text': ' '.join(filter(None, [item.get('title'), item.get('description'), card_activity_text])),
             'date': item.get('updated_at') or item.get('created_at'),
             'person': item.get('contact_name') or account.get('name'),
             'source': 'kanban'
@@ -1604,6 +1645,8 @@ def _relation_report_collect_data(account_id, start_date=None, end_date=None):
             'source': 'mapeamento'
         })
     for source in topic_sources:
+        if not str(source.get('text') or '').strip():
+            continue
         topic = _relation_report_topic_from_text(source.get('text'))
         topic_buckets[topic].append(source)
 
@@ -1777,7 +1820,7 @@ def _relation_report_build_relationship_snapshot(report_data):
 
 def _relation_report_build_topic_evidence(report_data):
     sections = []
-    for topic in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']:
+    for topic in RELATION_REPORT_TOPICS:
         items = (report_data.get('topics') or {}).get(topic) or []
         if not items:
             sections.append(f"{topic}:\nSem evidências relevantes identificadas no período.")
@@ -2177,7 +2220,7 @@ def _relation_report_build_browser_html(report_data, profile=None, embed_images=
     period_label = 'Todo o período' if report_data.get('full_period') else f"{report_data.get('start_date') or '...'} a {report_data.get('end_date') or '...'}"
     latest_text = 'Sem interações registradas'
     if latest:
-        latest_text = f"{_relation_report_format_dt(latest.get('date'))} · {latest.get('with') or 'Contato não identificado'}"
+        latest_text = f"{_relation_report_format_dt(latest.get('date'))} · {latest.get('person') or 'Contato não identificado'}"
 
     def company_rank(position):
         p = str(position or '').strip().lower()
@@ -2526,10 +2569,10 @@ body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:linear
     <div class='rr-section'>
       <h2>Leitura temática</h2>
       <div class='rr-topic-grid'>
-        {topic_card('IA', '#ecfeff')}
-        {topic_card('Cyber', '#f8fafc')}
-        {topic_card('Aplicações', '#f0fdf4')}
+        {topic_card('DWP e Infraestrutura', '#ecfeff')}
+        {topic_card('Application', '#f0fdf4')}
         {topic_card('Marketing', '#fff7ed')}
+        {topic_card('Cyber', '#f8fafc')}
         {topic_card('Cloud', '#eff6ff')}
         {topic_card('Outros', '#f9fafb')}
       </div>
@@ -2765,9 +2808,9 @@ def _relation_report_render_pdf(report_data):
     y -= 4 * mm
     c.line(18 * mm, y, page_width - 18 * mm, y)
     y -= 6 * mm
-    for topic in ['IA', 'Cyber', 'Aplicações', 'Marketing', 'Cloud', 'Outros']:
+    for topic in RELATION_REPORT_TOPICS:
         y = ensure_space(y, 15 * mm)
-        c.setFillColor(colors.HexColor('#ecfeff') if topic in ('IA', 'Cloud') else colors.HexColor('#f9fafb'))
+        c.setFillColor(colors.HexColor('#ecfeff') if topic in ('DWP e Infraestrutura', 'Cloud') else colors.HexColor('#f9fafb'))
         c.roundRect(18 * mm, y - 12 * mm, page_width - 36 * mm, 10 * mm, 3 * mm, fill=1, stroke=0)
         c.setFillColor(colors_map['secondary'])
         c.setFont('Helvetica-Bold', 9.5)
@@ -6115,13 +6158,16 @@ def save_integrations_config():
 @app.route('/api/config/update-source', methods=['GET'])
 def get_update_source_config():
     try:
-        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo', 'update_github_token'])
         owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
         repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+        token = (settings_map.get('update_github_token') or '').strip() or (os.environ.get('TOCA_UPDATE_GITHUB_TOKEN', '') or '').strip()
         return jsonify({
             'current_version': APP_VERSION,
             'github_owner': owner,
             'github_repo': repo,
+            'github_token_configured': bool(token),
+            'github_token_preview': (token[:7] + '...') if token else '',
             'configured': bool(owner and repo)
         })
     except Exception as e:
@@ -6135,6 +6181,7 @@ def save_update_source_config():
         data = request.get_json() or {}
         owner = (data.get('github_owner') or '').strip()
         repo = (data.get('github_repo') or '').strip()
+        token = (data.get('github_token') or '').strip()
 
         conn = get_db()
         c = conn.cursor()
@@ -6142,6 +6189,9 @@ def save_update_source_config():
             ('update_github_owner', owner),
             ('update_github_repo', repo)
         ]
+        # Só grava o token quando um valor é enviado, para não apagá-lo ao salvar owner/repo.
+        if token:
+            updates.append(('update_github_token', token))
         for key, value in updates:
             c.execute(
                 'INSERT INTO app_settings (key, value) VALUES (?, ?) '
@@ -6172,11 +6222,16 @@ def check_updates():
                 'message': 'Configure GitHub Owner e Repositório em Configurações para verificar updates.'
             }), 400
 
-        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
-        req = urllib.request.Request(api_url, headers={
+        github_token = _resolve_setting('update_github_token', 'TOCA_UPDATE_GITHUB_TOKEN')
+        api_headers = {
             'Accept': 'application/vnd.github+json',
             'User-Agent': 'TocaDoCoelho-Updater'
-        })
+        }
+        if github_token:
+            api_headers['Authorization'] = f'Bearer {github_token}'
+
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
+        req = urllib.request.Request(api_url, headers=api_headers)
         with urllib.request.urlopen(req, timeout=10) as response:
             payload = json.loads(response.read().decode('utf-8'))
 
@@ -6188,10 +6243,57 @@ def check_updates():
             return jsonify({'error': 'Tag da release mais recente está vazia no GitHub.'}), 502
 
         update_available = _version_key(latest_version) > _version_key(current_version)
+
+        # Localiza o instalador (.exe) anexado como asset da release — usado pela
+        # atualização automática para baixar e executar a nova versão.
+        installer_url = ''
+        installer_name = ''
+        installer_size = 0
+        for asset in (payload.get('assets') or []):
+            asset_name = (asset.get('name') or '').strip()
+            if asset_name.lower().endswith('.exe'):
+                installer_url = (asset.get('browser_download_url') or '').strip()
+                installer_name = asset_name
+                installer_size = int(asset.get('size') or 0)
+                break
+
+        branch = DEFAULT_GITHUB_BRANCH or 'main'
+        commits_ahead = None
+        commits_ahead_list = []
+        commits_check_ok = False
+        commits_check_error = ''
+        branch_html_url = f'https://github.com/{owner}/{repo}/tree/{branch}'
+        compare_html_url = ''
+        try:
+            compare_url = f'https://api.github.com/repos/{owner}/{repo}/compare/{latest_tag}...{branch}'
+            compare_req = urllib.request.Request(compare_url, headers=api_headers)
+            with urllib.request.urlopen(compare_req, timeout=10) as compare_response:
+                compare_payload = json.loads(compare_response.read().decode('utf-8'))
+            commits_ahead = int(compare_payload.get('ahead_by') or 0)
+            compare_html_url = compare_payload.get('html_url') or ''
+            for commit_entry in (compare_payload.get('commits') or [])[-10:]:
+                sha = (commit_entry.get('sha') or '')[:7]
+                message = ((commit_entry.get('commit') or {}).get('message') or '').splitlines()[0]
+                commits_ahead_list.append({'sha': sha, 'message': message})
+            commits_check_ok = True
+        except urllib.error.HTTPError as compare_error:
+            if compare_error.code == 403:
+                commits_check_error = ('Limite da API do GitHub atingido. Configure um Token do GitHub '
+                                       'em Configurações para evitar isso.')
+            elif compare_error.code == 401:
+                commits_check_error = 'Token do GitHub inválido ou expirado. Revise-o em Configurações.'
+            else:
+                commits_check_error = f'Falha ao comparar com a branch (HTTP {compare_error.code}).'
+            logger.warning('[Update] Falha ao comparar tag %s com branch %s: %s', latest_tag, branch, compare_error)
+        except Exception as compare_error:
+            commits_check_error = 'Não foi possível verificar os commits da branch (falha de rede ou GitHub indisponível).'
+            logger.warning('[Update] Falha ao comparar tag %s com branch %s: %s', latest_tag, branch, compare_error)
+
         return jsonify({
             'configured': True,
             'github_owner': owner,
             'github_repo': repo,
+            'github_branch': branch,
             'current_version': current_version,
             'latest_version': latest_version,
             'latest_tag': latest_tag,
@@ -6199,18 +6301,136 @@ def check_updates():
             'release_name': payload.get('name') or latest_tag,
             'release_notes': payload.get('body') or '',
             'html_url': payload.get('html_url') or '',
-            'published_at': payload.get('published_at')
+            'published_at': payload.get('published_at'),
+            'commits_ahead': commits_ahead,
+            'commits_ahead_list': commits_ahead_list,
+            'commits_check_ok': commits_check_ok,
+            'commits_check_error': commits_check_error,
+            'installer_url': installer_url,
+            'installer_name': installer_name,
+            'installer_size': installer_size,
+            'can_auto_install': bool(installer_url),
+            'branch_html_url': branch_html_url,
+            'compare_html_url': compare_html_url
         })
     except urllib.error.HTTPError as e:
         logger.exception(f'[ERROR] GET /api/config/check-updates (HTTP): {e}')
         if e.code == 404:
             return jsonify({'error': 'Nenhuma release encontrada nesse repositório ou repositório inválido.'}), 404
+        if e.code == 401:
+            return jsonify({'error': 'Token do GitHub inválido ou expirado. Revise-o em Configurações.'}), 401
         if e.code == 403:
-            return jsonify({'error': 'GitHub API limit atingido temporariamente. Tente novamente mais tarde.'}), 429
+            return jsonify({'error': 'Limite da API do GitHub atingido. Configure um Token do GitHub em Configurações para evitar isso.'}), 429
         return jsonify({'error': f'Falha ao consultar GitHub Releases (HTTP {e.code}).'}), 502
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
+
+
+# ---------------------------------------------------------------------------
+# Atualização automática baseada em release: baixa o instalador anexado à
+# release e o executa, encerrando o app para que os arquivos sejam liberados.
+# ---------------------------------------------------------------------------
+UPDATE_DOWNLOAD_DIR = DATA_DIR / 'updates'
+
+
+def _download_update_async(task_id, url, name):
+    try:
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando download...', 'progress': 3})
+        UPDATE_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+        safe_name = os.path.basename(name or '') or 'TocaDoCoelho-Setup.exe'
+        if not safe_name.lower().endswith('.exe'):
+            safe_name += '.exe'
+        dest = UPDATE_DOWNLOAD_DIR / safe_name
+
+        req = urllib.request.Request(url, headers={'User-Agent': 'TocaDoCoelho-Updater'})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            total = int(resp.headers.get('Content-Length') or 0)
+            downloaded = 0
+            with open(dest, 'wb') as fh:
+                while True:
+                    chunk = resp.read(262144)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = 3 + int(downloaded / total * 94)
+                        _bg_task_set(task_id, {
+                            'progress': min(97, pct),
+                            'step': f'Baixando... {downloaded // (1024 * 1024)} MB de {total // (1024 * 1024)} MB'
+                        })
+
+        _bg_task_set(task_id, {
+            'status': 'done', 'progress': 100, 'step': 'Download concluído.',
+            'installer_path': str(dest)
+        })
+        _bg_task_cleanup(task_id, delay=600)
+    except Exception as e:
+        logger.exception(f'[Update] Falha no download da atualização: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao baixar a atualização: {e}'})
+        _bg_task_cleanup(task_id, delay=600)
+
+
+@app.route('/api/config/download-update', methods=['POST'])
+def download_update():
+    try:
+        data = request.get_json() or {}
+        url = (data.get('installer_url') or '').strip()
+        name = (data.get('installer_name') or '').strip()
+        if not url or not url.lower().startswith('https://'):
+            return jsonify({'error': 'URL do instalador inválida.'}), 400
+
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando download...', 'progress': 1})
+        threading.Thread(target=_download_update_async, args=(task_id, url, name), daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/download-update: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/update-tasks/<task_id>', methods=['GET'])
+def get_update_task(task_id):
+    return jsonify(_bg_task_get(task_id))
+
+
+@app.route('/api/config/install-update', methods=['POST'])
+def install_update():
+    try:
+        import subprocess
+
+        data = request.get_json() or {}
+        installer_path = (data.get('installer_path') or '').strip()
+        if not installer_path:
+            return jsonify({'error': 'Caminho do instalador não informado.'}), 400
+
+        installer = Path(installer_path).resolve()
+        # Segurança: só executa um .exe que está dentro da pasta de updates.
+        if (installer.parent != UPDATE_DOWNLOAD_DIR.resolve()
+                or installer.suffix.lower() != '.exe'
+                or not installer.is_file()):
+            return jsonify({'error': 'Instalador inválido ou não encontrado.'}), 400
+
+        creationflags = 0
+        if sys.platform == 'win32':
+            creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen([str(installer)], creationflags=creationflags, close_fds=True)
+
+        # Encerra o app logo após responder, liberando os arquivos para o instalador.
+        def _shutdown():
+            time.sleep(2)
+            os._exit(0)
+        threading.Thread(target=_shutdown, daemon=True).start()
+
+        return jsonify({
+            'message': 'Instalador iniciado. O aplicativo será encerrado para concluir a atualização.'
+        }), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/install-update: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/config/startup', methods=['GET'])
 def get_startup_config():
@@ -12788,32 +13008,18 @@ def autotoca_upload():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/autotoca/address-suggestion', methods=['POST'])
-def autotoca_address_suggestion():
+@app.route('/api/autotoca/account-info', methods=['POST'])
+def autotoca_account_info():
     try:
         data = request.get_json(force=True) or {}
         account_name = (data.get('account_name') or '').strip()
         if not account_name:
-            return jsonify({'error': 'Conta inválida para busca de endereço.'}), 400
+            return jsonify({'error': 'Conta inválida para busca de dados.'}), 400
 
-        service = AccountAddressService()
-        heuristic_result = service.find_headquarter_address(account_name)
-
-        sai_result = _autotoca_suggest_address_via_sai(
-            account_name,
-            heuristic_address=heuristic_result.get('suggested_address', ''),
-            heuristic_source=heuristic_result.get('source', '')
-        )
-
-        if sai_result and sai_result.get('suggested_address'):
-            sai_confidence = (sai_result.get('confidence') or 'medium').lower().strip()
-            if sai_confidence != 'low' or not heuristic_result.get('suggested_address'):
-                return jsonify(sai_result)
-
-        result = heuristic_result
+        result = _autotoca_account_info_via_llm(account_name)
         return jsonify(result)
     except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/address-suggestion: {e}')
+        logger.exception(f'[AutoToca] POST /api/autotoca/account-info: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12836,103 +13042,151 @@ def autotoca_support_files():
         return jsonify({'error': str(e)}), 500
 
 
-def _autotoca_suggest_address_via_sai(account_name: str, heuristic_address: str = '', heuristic_source: str = ''):
-    """Tenta obter endereço de sede via SAI LLM; retorna dict padronizado ou None."""
-    settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
-    api_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
-    template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
-    base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-
-    if not api_key:
-        return None
-
-    question = (
-        f"Qual é o endereço da sede/matriz no Brasil da empresa '{account_name}'? "
-        "Retorne SOMENTE um JSON válido no formato: "
-        "{\"suggested_address\":\"...\",\"confidence\":\"high|medium|low\",\"source\":\"...\"}. "
-        "Se não encontrar com segurança, retorne suggested_address vazio e confidence low."
-    )
-    context_sources = (
-        f"Empresa: {account_name}.\n"
-        f"Sugestão heurística anterior: {heuristic_address or 'nenhuma'}.\n"
-        f"Fonte heurística: {heuristic_source or 'n/a'}."
-    )
-
-    url = f'{base_url}/api/templates/{template_id}/execute'
-    headers = {
-        'Content-Type': 'application/json',
-        'X-Api-Key': api_key,
-    }
-    payload = {
-        'inputs': {
-            'question': question,
-            'context_sources': context_sources,
-        }
-    }
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers=headers,
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            raw = resp.read().decode('utf-8', errors='ignore')
-    except Exception as e:
-        logger.warning(f'[AutoToca][Address][SAI] falha na chamada SAI: {e}')
-        return None
-
-    def _try_parse_json(value):
-        if not value:
+def _autotoca_parse_account_info_raw(raw):
+    """Extrai razao_social, cnpj, endereco e confiavel de uma resposta bruta de LLM."""
+    def _coerce(value):
+        if value is None:
             return None
         if isinstance(value, dict):
             return value
         if not isinstance(value, str):
             return None
+        text = value.strip()
+        if text.startswith('```'):
+            m = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text, flags=re.IGNORECASE)
+            if m:
+                text = m.group(1).strip()
         try:
-            parsed = json.loads(value.strip())
-            if isinstance(parsed, dict):
-                return parsed
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
         except Exception:
-            return None
-        return None
+            pass
+        obj = _extract_json_object_from_text(text)
+        return obj if isinstance(obj, dict) else None
 
-    parsed = _try_parse_json(raw) or {}
-    if 'answer' not in parsed:
-        for key in ('output', 'result', 'text', 'content', 'response', 'data', 'message'):
-            candidate = parsed.get(key)
-            nested = _try_parse_json(candidate)
-            if nested:
+    parsed = _coerce(raw) or {}
+    # Desembrulha respostas aninhadas comuns dos templates SAI.
+    for key in ('answer', 'output', 'result', 'text', 'content', 'response', 'data', 'message'):
+        if isinstance(parsed, dict) and 'razao_social' not in parsed and 'endereco' not in parsed and key in parsed:
+            nested = _coerce(parsed.get(key))
+            if isinstance(nested, dict):
                 parsed = nested
                 break
 
-    answer = parsed.get('answer') if isinstance(parsed, dict) else ''
-    answer_obj = _try_parse_json(answer) if isinstance(answer, str) else None
-    if answer_obj:
-        parsed = answer_obj
+    if not isinstance(parsed, dict):
+        return {}
 
-    suggested = (parsed.get('suggested_address') or '').strip() if isinstance(parsed, dict) else ''
-    confidence = (parsed.get('confidence') or 'medium').strip().lower() if isinstance(parsed, dict) else 'medium'
-    source = (parsed.get('source') or '').strip() if isinstance(parsed, dict) else ''
+    def _clean(value):
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s or s.lower() in ('null', 'none', 'n/a', 'não informado', 'nao informado', '-'):
+            return None
+        return s
 
-    # fallback: quando o template devolve texto livre em "answer"
-    if not suggested and isinstance(answer, str):
-        for line in [ln.strip(' -•\t') for ln in answer.splitlines() if ln.strip()]:
-            if AccountAddressService._is_candidate_address(line):
-                suggested = line
-                break
-
-    if not suggested or not AccountAddressService._is_candidate_address(suggested):
-        return None
-
-    if confidence not in ('high', 'medium', 'low'):
-        confidence = 'medium'
+    confiavel_raw = parsed.get('confiavel')
+    if isinstance(confiavel_raw, str):
+        confiavel = confiavel_raw.strip().lower() in ('true', 'sim', 'yes', '1')
+    else:
+        confiavel = bool(confiavel_raw)
 
     return {
-        'suggested_address': suggested,
-        'source': source or 'SAI LLM (iToca)',
-        'confidence': confidence,
+        'razao_social': _clean(parsed.get('razao_social')),
+        'cnpj': _clean(parsed.get('cnpj')),
+        'endereco': _clean(parsed.get('endereco')),
+        'confiavel': confiavel,
+    }
+
+
+def _autotoca_account_info_via_llm(account_name: str) -> dict:
+    """Busca razão social, CNPJ e endereço de sede da empresa via LLM (OpenRouter -> SAI).
+
+    Retorna dict com as chaves razao_social, cnpj e endereco. O endereço é objetivo
+    (apenas o endereço). Quando os dados não são confiáveis, o endereço recebe o
+    prefixo 'Por favor confirmar: '.
+    """
+    # Dica de endereço a partir da busca web (mesma lógica do antigo "Buscar Sede").
+    heuristic_address = ''
+    try:
+        heuristic = AccountAddressService().find_headquarter_address(account_name)
+        heuristic_address = (heuristic.get('suggested_address') or '').strip()
+    except Exception as e:
+        logger.warning(f'[AutoToca][AccountInfo] heurística de endereço falhou: {e}')
+
+    prompt = (
+        f"Empresa cliente no Brasil: '{account_name}'. "
+        + (f"Dica de endereço encontrada na web: {heuristic_address}. " if heuristic_address else "")
+        + "Pesquise os dados cadastrais oficiais desta empresa e retorne SOMENTE um JSON válido, "
+        "sem markdown e sem texto adicional, no formato exato: "
+        '{"razao_social": "...", "cnpj": "...", "endereco": "...", "confiavel": true}. '
+        "Regras: 'razao_social' é a razão social completa registrada na Receita Federal; "
+        "'cnpj' é o CNPJ da matriz no formato 00.000.000/0000-00; "
+        "'endereco' é o endereço completo da sede/matriz no Brasil no formato "
+        "'Logradouro, número, bairro, cidade - UF', contendo APENAS o endereço, "
+        "sem explicações, sem fontes e sem comentários; "
+        "'confiavel' deve ser true somente se você tem certeza dos dados, e false caso contrário. "
+        "Use null nos campos que não conseguir determinar."
+    )
+
+    raw = None
+
+    # --- Tentativa 1: OpenRouter ---
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista de dados cadastrais corporativos. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                'temperature': 0.1
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                or_data = json.loads(resp.read().decode('utf-8'))
+            choices = or_data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        except Exception as e:
+            logger.warning(f'[AutoToca][AccountInfo][OpenRouter] falha: {e}')
+            raw = None
+
+    # --- Tentativa 2: SAI (fallback) ---
+    if not raw:
+        raw = _sai_simple_prompt(prompt)
+
+    parsed = _autotoca_parse_account_info_raw(raw)
+
+    endereco = parsed.get('endereco')
+    confiavel = parsed.get('confiavel')
+
+    # Endereço: usa o do LLM; se vazio, cai para a dica heurística.
+    final_address = endereco or heuristic_address or ''
+    # Marca como "a confirmar" quando o LLM não classificou o endereço como confiável
+    # ou quando o endereço veio apenas da heurística da web.
+    address_trustworthy = bool(endereco) and confiavel is True
+    if final_address and not address_trustworthy:
+        final_address = f'Por favor confirmar: {final_address}'
+
+    return {
+        'razao_social': parsed.get('razao_social') or '',
+        'cnpj': parsed.get('cnpj') or '',
+        'endereco': final_address,
     }
 
 

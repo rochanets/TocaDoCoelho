@@ -2170,6 +2170,10 @@
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
+            <button class="nav-item nav-reports" onclick="switchTab(event, 'reports')">
+                <i class="fas fa-chart-bar"></i>
+                <span>Reports</span>
+            </button>
             <button class="nav-item nav-wikitoca" onclick="switchTab(event, 'wikitoca')">
                 <i class="fas fa-book-open"></i>
                 <span>WikiToca</span>
@@ -2201,10 +2205,6 @@
             <button class="nav-item nav-clientes" onclick="switchTab(event, 'clientes')">
                 <i class="fas fa-users"></i>
                 <span>Gestão de Contatos</span>
-            </button>
-            <button class="nav-item nav-reports" onclick="switchTab(event, 'reports')">
-                <i class="fas fa-chart-bar"></i>
-                <span>Reports</span>
             </button>
 
         <div class="sidebar-footer">
@@ -2691,18 +2691,26 @@
                             <div id="autotocaContaOutroWrap" style="display:none; margin-top:8px;">
                                 <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
                             </div>
+                            <div style="margin-top:10px;">
+                                <button type="button" class="btn btn-auto-mapping btn-small" id="autotocaAutoFillBtn" onclick="autotocaAutoFill(event)" style="padding:6px 12px; font-size:12px; margin:0;">
+                                    <span class="ai-star-icon">✦</span> AutoFill
+                                </button>
+                            </div>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
+                                <div>
+                                    <label>Razão Social</label>
+                                    <input id="autotocaRazaoSocial" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:text; user-select:text;">
+                                </div>
+                                <div>
+                                    <label>CNPJ</label>
+                                    <input id="autotocaCnpj" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:text; user-select:text;">
+                                </div>
+                            </div>
                         </div>
 
                         <div class="form-group" style="margin-bottom:0;">
-                            <label style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-                                <span>Endereço <span style="color:#dc2626;">*</span></span>
-                                <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
-                                    <span class="ai-star-icon">✦</span> Buscar Sede
-                                </button>
-                            </label>
+                            <label>Endereço <span style="color:#dc2626;">*</span></label>
                             <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
-                            <input type="hidden" id="autotocaEnderecoSugerido">
-                            <input type="hidden" id="autotocaEnderecoFonte">
                         </div>
                     </div>
 
@@ -2875,6 +2883,11 @@
                         <div class="form-group">
                             <label>GitHub Repositório</label>
                             <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>GitHub Token <span style="color:#9ca3af; font-weight:normal;">(opcional — evita o limite de verificações)</span></label>
+                            <input type="password" id="updateGithubToken" placeholder="ghp_..." autocomplete="off">
+                            <small id="updateGithubTokenStatus" style="color:#6b7280; display:block; margin-top:4px;"></small>
                         </div>
                         <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
                         <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -4304,6 +4317,10 @@
                 select.innerHTML = options.join('');
                 select.onchange = () => {
                     document.getElementById('autotocaContaOutroWrap').style.display = select.value === 'OUTRO' ? 'block' : 'none';
+                    const rs = document.getElementById('autotocaRazaoSocial');
+                    const cnpj = document.getElementById('autotocaCnpj');
+                    if (rs) rs.value = '';
+                    if (cnpj) cnpj.value = '';
                 };
             }
             const extensionNotice = document.getElementById('autotocaExtensionNotice');
@@ -4951,13 +4968,13 @@
             })();
         }
 
-        async function buscarEnderecoAutoToca(evt) {
+        async function autotocaAutoFill(evt) {
             const conta = document.getElementById('autotocaConta').value === 'OUTRO'
                 ? document.getElementById('autotocaContaOutro').value.trim()
                 : document.getElementById('autotocaConta').value;
-            if (!conta) return showError('Informe a conta para buscar endereço.');
-            
-            const btn = evt?.currentTarget || document.querySelector('button[onclick*="buscarEnderecoAutoToca"]');
+            if (!conta) return showError('Selecione ou informe a Conta antes de usar o AutoFill.');
+
+            const btn = evt?.currentTarget || document.getElementById('autotocaAutoFillBtn');
             const originalHtml = btn?.innerHTML;
             if (btn) {
                 btn.disabled = true;
@@ -4965,20 +4982,20 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE}/autotoca/address-suggestion`, {
+                const response = await fetch(`${API_BASE}/autotoca/account-info`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account_name: conta })
                 });
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Falha na busca');
-                
-                document.getElementById('autotocaEnderecoFinal').value = data.suggested_address || '';
-                document.getElementById('autotocaEnderecoSugerido').value = data.suggested_address || '';
-                document.getElementById('autotocaEnderecoFonte').value = data.source || '';
-                
-                if (data.suggested_address) {
-                    showSuccess('Endereço localizado com sucesso!');
+                if (!response.ok) throw new Error(data.error || 'Falha ao buscar dados da conta.');
+
+                document.getElementById('autotocaRazaoSocial').value = data.razao_social || '';
+                document.getElementById('autotocaCnpj').value = data.cnpj || '';
+                document.getElementById('autotocaEnderecoFinal').value = data.endereco || '';
+
+                if (data.razao_social || data.cnpj || data.endereco) {
+                    showSuccess('Dados preenchidos pelo AutoFill. Confira antes de enviar.');
                 } else {
-                    showInfo('Não encontrei um endereço exato. Por favor, preencha manualmente.');
+                    showInfo('Não encontrei dados confiáveis. Por favor, preencha manualmente.');
                 }
             } catch (e) {
                 showError(e.message);
@@ -5360,6 +5377,10 @@
 
             document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
             document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
+            document.getElementById('updateGithubToken').value = '';
+            document.getElementById('updateGithubTokenStatus').textContent = updateSourceConfig?.github_token_configured
+                ? `Configurado (${updateSourceConfig?.github_token_preview || '***'})`
+                : 'Não configurado — verificações usam o limite anônimo do GitHub (60/hora).';
             document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '-'}`;
             const updateResult = document.getElementById('updateCheckResult');
             if (updateResult) updateResult.textContent = '';
@@ -5398,7 +5419,8 @@
             event.preventDefault();
             const payload = {
                 github_owner: document.getElementById('updateGithubOwner').value.trim(),
-                github_repo: document.getElementById('updateGithubRepo').value.trim()
+                github_repo: document.getElementById('updateGithubRepo').value.trim(),
+                github_token: document.getElementById('updateGithubToken').value.trim()
             };
 
             const response = await fetch(`${API_BASE}/config/update-source`, {
@@ -5432,15 +5454,46 @@
                     return;
                 }
 
+                const commitsAhead = Number(result.commits_ahead || 0);
+                const branch = result.github_branch || '';
+                const compareUrl = result.compare_html_url || result.branch_html_url || '';
+                const commitsList = Array.isArray(result.commits_ahead_list) ? result.commits_ahead_list : [];
+                const commitsPreviewHtml = commitsList.length
+                    ? `<ul style="margin:6px 0 0 18px;padding:0;font-size:0.9em;">${commitsList.map(c => `<li><code>${escapeHtml(c.sha || '')}</code> ${escapeHtml(c.message || '')}</li>`).join('')}</ul>`
+                    : '';
+                const compareLinkHtml = compareUrl
+                    ? ` <a href="${compareUrl}" target="_blank" rel="noopener noreferrer">Ver no GitHub</a>`
+                    : '';
+
                 if (result.update_available) {
                     const releaseUrl = result.html_url || '';
                     const releaseLinkHtml = releaseUrl
                         ? ` <a href="${releaseUrl}" target="_blank" rel="noopener noreferrer">Abrir release</a>`
                         : '';
+                    const extraAheadHtml = commitsAhead > 0
+                        ? `<div style="margin-top:6px;">Além disso, há <strong>${commitsAhead}</strong> commit(s) na branch <code>${escapeHtml(branch)}</code> após esse release.${compareLinkHtml}${commitsPreviewHtml}</div>`
+                        : '';
+                    window._pendingUpdate = result.installer_url
+                        ? { url: result.installer_url, name: result.installer_name || 'TocaDoCoelho-Setup.exe' }
+                        : null;
+                    const autoInstallHtml = result.installer_url
+                        ? `<div style="margin-top:10px;"><button class="btn btn-primary btn-small" id="autoUpdateBtn" onclick="downloadAndInstallUpdate()"><i class="fas fa-download"></i> Baixar e instalar atualização</button></div>`
+                        : `<div style="margin-top:8px; color:#9ca3af; font-size:12px;">Esta release não tem instalador (.exe) anexado — instalação automática indisponível.</div>`;
                     if (container) {
-                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}`;
+                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}${extraAheadHtml}${autoInstallHtml}`;
                     }
                     showSuccess(`Nova versão disponível: ${result.latest_version}`);
+                } else if (commitsAhead > 0) {
+                    if (container) {
+                        container.innerHTML = `Você está na versão do último release (<strong>${escapeHtml(result.current_version || '')}</strong>), mas há <strong>${commitsAhead}</strong> commit(s) novo(s) na branch <code>${escapeHtml(branch)}</code> ainda não publicado(s) como release.${compareLinkHtml}${commitsPreviewHtml}`;
+                    }
+                    showSuccess(`${commitsAhead} commit(s) novo(s) na branch ${branch}.`);
+                } else if (result.commits_check_ok === false) {
+                    const checkMsg = result.commits_check_error || 'Não foi possível verificar os commits da branch. Tente novamente em alguns minutos.';
+                    if (container) {
+                        container.innerHTML = `<span style="color:#b45309;"><strong>⚠️ Verificação incompleta.</strong></span> ${escapeHtml(checkMsg)} O release publicado está em dia, mas não foi possível confirmar se há commits novos na branch <code>${escapeHtml(branch)}</code>.${compareLinkHtml}`;
+                    }
+                    showError('Não foi possível verificar atualizações da branch. Tente novamente.');
                 } else {
                     if (container) {
                         container.textContent = `Você já está na versão mais recente (${result.current_version || ''}).`;
@@ -5450,6 +5503,96 @@
             } catch (error) {
                 if (container) container.textContent = 'Erro ao verificar atualizações.';
                 showError('Erro ao verificar atualizações.');
+            }
+        }
+
+        function _ensureUpdateBunnyStyle() {
+            if (document.getElementById('update-bunny-style')) return;
+            const style = document.createElement('style');
+            style.id = 'update-bunny-style';
+            style.textContent = `
+                @keyframes upd-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
+                .upd-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:16px; line-height:1; animation:upd-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
+            `;
+            document.head.appendChild(style);
+        }
+
+        function _updSetProgress(pct, step) {
+            const bar = document.getElementById('updProgressBar');
+            const stepEl = document.getElementById('updProgressStep');
+            const pctEl = document.getElementById('updProgressPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        async function downloadAndInstallUpdate() {
+            const info = window._pendingUpdate;
+            if (!info || !info.url) { showError('Nenhum instalador disponível para esta release.'); return; }
+            if (!await uiConfirm('O Toca do Coelho vai baixar a nova versão e abrir o instalador. O aplicativo será fechado automaticamente para concluir a atualização e reaberto ao final. Deseja continuar?', 'Atualizar aplicativo')) return;
+
+            const btn = document.getElementById('autoUpdateBtn');
+            if (btn) btn.disabled = true;
+            const container = document.getElementById('updateCheckResult');
+            _ensureUpdateBunnyStyle();
+            if (container) {
+                container.innerHTML = `
+                    <div id="updProgressStep" style="font-size:13px;color:#6b7280;margin-bottom:8px;">Iniciando download...</div>
+                    <div style="position:relative;background:#d1fae5;border-radius:99px;height:12px;overflow:visible;margin:0 18px 6px 0;">
+                        <div id="updProgressBar" style="position:relative;height:100%;width:5%;background:linear-gradient(90deg,#059669,#10b981,#34d399);border-radius:99px;transition:width .5s ease;">
+                            <span class="upd-bunny">🐇</span>
+                        </div>
+                    </div>
+                    <div id="updProgressPct" style="font-size:11px;color:#6b7280;text-align:right;">5%</div>
+                `;
+            }
+
+            try {
+                const startResp = await fetch(`${API_BASE}/config/download-update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ installer_url: info.url, installer_name: info.name })
+                });
+                const startData = await startResp.json().catch(() => ({}));
+                if (!startResp.ok || !startData.task_id) {
+                    throw new Error(startData.error || 'Falha ao iniciar o download.');
+                }
+
+                const taskId = startData.task_id;
+                let task = {};
+                while (true) {
+                    await new Promise(r => setTimeout(r, 800));
+                    const pollResp = await fetch(`${API_BASE}/config/update-tasks/${taskId}`);
+                    task = await pollResp.json().catch(() => ({}));
+                    _updSetProgress(Number(task.progress || 5), task.step || 'Baixando...');
+                    if (task.status === 'done' || task.status === 'error') break;
+                }
+
+                if (task.status === 'error') {
+                    throw new Error(task.error || 'Falha no download da atualização.');
+                }
+
+                _updSetProgress(100, 'Download concluído. Abrindo o instalador...');
+                const installResp = await fetch(`${API_BASE}/config/install-update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ installer_path: task.installer_path })
+                });
+                const installData = await installResp.json().catch(() => ({}));
+                if (!installResp.ok) {
+                    throw new Error(installData.error || 'Falha ao iniciar o instalador.');
+                }
+
+                if (container) {
+                    container.innerHTML = `<div style="color:#059669;"><strong>Instalador iniciado.</strong> O Toca do Coelho vai fechar agora para concluir a atualização. Siga o assistente de instalação — o app reabrirá ao final.</div>`;
+                }
+                showSuccess('Instalador iniciado. O aplicativo será encerrado.');
+            } catch (error) {
+                if (btn) btn.disabled = false;
+                if (container) {
+                    container.innerHTML = `<span style="color:#b45309;"><strong>⚠️ ${escapeHtml(error.message || 'Erro ao atualizar.')}</strong></span>`;
+                }
+                showError(error.message || 'Erro ao baixar/instalar a atualização.');
             }
         }
 
