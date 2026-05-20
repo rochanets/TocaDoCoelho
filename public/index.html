@@ -2696,13 +2696,15 @@
                                     <span class="ai-star-icon">✦</span> AutoFill
                                 </button>
                             </div>
-                            <div style="margin-top:10px;">
-                                <label>Razão Social</label>
-                                <input id="autotocaRazaoSocial" type="text" readonly placeholder="Preenchido automaticamente pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:not-allowed;">
-                            </div>
-                            <div style="margin-top:10px;">
-                                <label>CNPJ</label>
-                                <input id="autotocaCnpj" type="text" readonly placeholder="Preenchido automaticamente pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:not-allowed;">
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
+                                <div>
+                                    <label>Razão Social</label>
+                                    <input id="autotocaRazaoSocial" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:text; user-select:text;">
+                                </div>
+                                <div>
+                                    <label>CNPJ</label>
+                                    <input id="autotocaCnpj" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:text; user-select:text;">
+                                </div>
                             </div>
                         </div>
 

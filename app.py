@@ -1447,11 +1447,18 @@ RELATION_REPORT_TOPICS = ['DWP e Infraestrutura', 'Application', 'Marketing', 'C
 
 RELATION_REPORT_TOPIC_RULES = [
     ('DWP e Infraestrutura', [
-        'dwp', 'digital workplace', 'workplace', 'modern workplace', 'm365',
-        'microsoft 365', 'office 365', ' o365', 'intune', 'endpoint', ' vdi',
-        'service desk', 'help desk', 'helpdesk', 'field service',
-        'infraestrutura', 'datacenter', 'data center', 'servidor',
-        ' rede ', 'network', 'on-premises', 'on premise', 'backup', 'storage',
+        ' dwp', ' dws', 'digital workplace', 'digital workspace', 'workplace',
+        'workspace', 'modern workplace', 'm365', 'microsoft 365', 'office 365',
+        ' o365', 'intune', 'endpoint', ' vdi', 'service desk', 'servicedesk',
+        'help desk', 'helpdesk', 'service-desk', 'field service', 'field services',
+        'haas', 'hardware as a service', 'daas', 'device as a service',
+        'alocação de máquina', 'alocacao de maquina', 'venda de máquina',
+        'venda de maquina', 'locação de máquina', 'locacao de maquina',
+        'parque de máquinas', 'parque de maquinas', 'parque tecnológico',
+        'notebook', 'desktop', 'estação de trabalho', 'estacao de trabalho',
+        'workstation', 'infraestrutura', ' infra ', 'datacenter', 'data center',
+        'servidor', ' rede ', 'network', 'on-premises', 'on premise',
+        'backup', 'storage',
     ]),
     ('Application', [
         'aplica', 'application', 'software', 'sistema', ' app ', ' erp', ' crm',
