@@ -2170,6 +2170,10 @@
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
+            <button class="nav-item nav-reports" onclick="switchTab(event, 'reports')">
+                <i class="fas fa-chart-bar"></i>
+                <span>Reports</span>
+            </button>
             <button class="nav-item nav-wikitoca" onclick="switchTab(event, 'wikitoca')">
                 <i class="fas fa-book-open"></i>
                 <span>WikiToca</span>
@@ -2201,10 +2205,6 @@
             <button class="nav-item nav-clientes" onclick="switchTab(event, 'clientes')">
                 <i class="fas fa-users"></i>
                 <span>Gestão de Contatos</span>
-            </button>
-            <button class="nav-item nav-reports" onclick="switchTab(event, 'reports')">
-                <i class="fas fa-chart-bar"></i>
-                <span>Reports</span>
             </button>
 
         <div class="sidebar-footer">
@@ -2691,18 +2691,24 @@
                             <div id="autotocaContaOutroWrap" style="display:none; margin-top:8px;">
                                 <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
                             </div>
+                            <div style="margin-top:10px;">
+                                <button type="button" class="btn btn-auto-mapping btn-small" id="autotocaAutoFillBtn" onclick="autotocaAutoFill(event)" style="padding:6px 12px; font-size:12px; margin:0;">
+                                    <span class="ai-star-icon">✦</span> AutoFill
+                                </button>
+                            </div>
+                            <div style="margin-top:10px;">
+                                <label>Razão Social</label>
+                                <input id="autotocaRazaoSocial" type="text" readonly placeholder="Preenchido automaticamente pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:not-allowed;">
+                            </div>
+                            <div style="margin-top:10px;">
+                                <label>CNPJ</label>
+                                <input id="autotocaCnpj" type="text" readonly placeholder="Preenchido automaticamente pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:not-allowed;">
+                            </div>
                         </div>
 
                         <div class="form-group" style="margin-bottom:0;">
-                            <label style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-                                <span>Endereço <span style="color:#dc2626;">*</span></span>
-                                <button type="button" class="btn btn-auto-mapping btn-small" onclick="buscarEnderecoAutoToca(event)" style="padding:6px 12px; font-size:12px; margin:0;">
-                                    <span class="ai-star-icon">✦</span> Buscar Sede
-                                </button>
-                            </label>
+                            <label>Endereço <span style="color:#dc2626;">*</span></label>
                             <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
-                            <input type="hidden" id="autotocaEnderecoSugerido">
-                            <input type="hidden" id="autotocaEnderecoFonte">
                         </div>
                     </div>
 
@@ -4304,6 +4310,10 @@
                 select.innerHTML = options.join('');
                 select.onchange = () => {
                     document.getElementById('autotocaContaOutroWrap').style.display = select.value === 'OUTRO' ? 'block' : 'none';
+                    const rs = document.getElementById('autotocaRazaoSocial');
+                    const cnpj = document.getElementById('autotocaCnpj');
+                    if (rs) rs.value = '';
+                    if (cnpj) cnpj.value = '';
                 };
             }
             const extensionNotice = document.getElementById('autotocaExtensionNotice');
@@ -4951,13 +4961,13 @@
             })();
         }
 
-        async function buscarEnderecoAutoToca(evt) {
+        async function autotocaAutoFill(evt) {
             const conta = document.getElementById('autotocaConta').value === 'OUTRO'
                 ? document.getElementById('autotocaContaOutro').value.trim()
                 : document.getElementById('autotocaConta').value;
-            if (!conta) return showError('Informe a conta para buscar endereço.');
-            
-            const btn = evt?.currentTarget || document.querySelector('button[onclick*="buscarEnderecoAutoToca"]');
+            if (!conta) return showError('Selecione ou informe a Conta antes de usar o AutoFill.');
+
+            const btn = evt?.currentTarget || document.getElementById('autotocaAutoFillBtn');
             const originalHtml = btn?.innerHTML;
             if (btn) {
                 btn.disabled = true;
@@ -4965,20 +4975,20 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE}/autotoca/address-suggestion`, {
+                const response = await fetch(`${API_BASE}/autotoca/account-info`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account_name: conta })
                 });
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Falha na busca');
-                
-                document.getElementById('autotocaEnderecoFinal').value = data.suggested_address || '';
-                document.getElementById('autotocaEnderecoSugerido').value = data.suggested_address || '';
-                document.getElementById('autotocaEnderecoFonte').value = data.source || '';
-                
-                if (data.suggested_address) {
-                    showSuccess('Endereço localizado com sucesso!');
+                if (!response.ok) throw new Error(data.error || 'Falha ao buscar dados da conta.');
+
+                document.getElementById('autotocaRazaoSocial').value = data.razao_social || '';
+                document.getElementById('autotocaCnpj').value = data.cnpj || '';
+                document.getElementById('autotocaEnderecoFinal').value = data.endereco || '';
+
+                if (data.razao_social || data.cnpj || data.endereco) {
+                    showSuccess('Dados preenchidos pelo AutoFill. Confira antes de enviar.');
                 } else {
-                    showInfo('Não encontrei um endereço exato. Por favor, preencha manualmente.');
+                    showInfo('Não encontrei dados confiáveis. Por favor, preencha manualmente.');
                 }
             } catch (e) {
                 showError(e.message);
