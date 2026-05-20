@@ -2884,6 +2884,11 @@
                             <label>GitHub Repositório</label>
                             <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
                         </div>
+                        <div class="form-group">
+                            <label>GitHub Token <span style="color:#9ca3af; font-weight:normal;">(opcional — evita o limite de verificações)</span></label>
+                            <input type="password" id="updateGithubToken" placeholder="ghp_..." autocomplete="off">
+                            <small id="updateGithubTokenStatus" style="color:#6b7280; display:block; margin-top:4px;"></small>
+                        </div>
                         <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
                         <div style="display:flex; gap:8px; flex-wrap:wrap;">
                             <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
@@ -5372,6 +5377,10 @@
 
             document.getElementById('updateGithubOwner').value = updateSourceConfig?.github_owner || '';
             document.getElementById('updateGithubRepo').value = updateSourceConfig?.github_repo || '';
+            document.getElementById('updateGithubToken').value = '';
+            document.getElementById('updateGithubTokenStatus').textContent = updateSourceConfig?.github_token_configured
+                ? `Configurado (${updateSourceConfig?.github_token_preview || '***'})`
+                : 'Não configurado — verificações usam o limite anônimo do GitHub (60/hora).';
             document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '-'}`;
             const updateResult = document.getElementById('updateCheckResult');
             if (updateResult) updateResult.textContent = '';
@@ -5410,7 +5419,8 @@
             event.preventDefault();
             const payload = {
                 github_owner: document.getElementById('updateGithubOwner').value.trim(),
-                github_repo: document.getElementById('updateGithubRepo').value.trim()
+                github_repo: document.getElementById('updateGithubRepo').value.trim(),
+                github_token: document.getElementById('updateGithubToken').value.trim()
             };
 
             const response = await fetch(`${API_BASE}/config/update-source`, {
@@ -5463,8 +5473,14 @@
                     const extraAheadHtml = commitsAhead > 0
                         ? `<div style="margin-top:6px;">Além disso, há <strong>${commitsAhead}</strong> commit(s) na branch <code>${escapeHtml(branch)}</code> após esse release.${compareLinkHtml}${commitsPreviewHtml}</div>`
                         : '';
+                    window._pendingUpdate = result.installer_url
+                        ? { url: result.installer_url, name: result.installer_name || 'TocaDoCoelho-Setup.exe' }
+                        : null;
+                    const autoInstallHtml = result.installer_url
+                        ? `<div style="margin-top:10px;"><button class="btn btn-primary btn-small" id="autoUpdateBtn" onclick="downloadAndInstallUpdate()"><i class="fas fa-download"></i> Baixar e instalar atualização</button></div>`
+                        : `<div style="margin-top:8px; color:#9ca3af; font-size:12px;">Esta release não tem instalador (.exe) anexado — instalação automática indisponível.</div>`;
                     if (container) {
-                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}${extraAheadHtml}`;
+                        container.innerHTML = `Nova versão disponível: <strong>${escapeHtml(result.latest_version || '')}</strong> (atual: ${escapeHtml(result.current_version || '')}).${releaseLinkHtml}${extraAheadHtml}${autoInstallHtml}`;
                     }
                     showSuccess(`Nova versão disponível: ${result.latest_version}`);
                 } else if (commitsAhead > 0) {
@@ -5472,6 +5488,12 @@
                         container.innerHTML = `Você está na versão do último release (<strong>${escapeHtml(result.current_version || '')}</strong>), mas há <strong>${commitsAhead}</strong> commit(s) novo(s) na branch <code>${escapeHtml(branch)}</code> ainda não publicado(s) como release.${compareLinkHtml}${commitsPreviewHtml}`;
                     }
                     showSuccess(`${commitsAhead} commit(s) novo(s) na branch ${branch}.`);
+                } else if (result.commits_check_ok === false) {
+                    const checkMsg = result.commits_check_error || 'Não foi possível verificar os commits da branch. Tente novamente em alguns minutos.';
+                    if (container) {
+                        container.innerHTML = `<span style="color:#b45309;"><strong>⚠️ Verificação incompleta.</strong></span> ${escapeHtml(checkMsg)} O release publicado está em dia, mas não foi possível confirmar se há commits novos na branch <code>${escapeHtml(branch)}</code>.${compareLinkHtml}`;
+                    }
+                    showError('Não foi possível verificar atualizações da branch. Tente novamente.');
                 } else {
                     if (container) {
                         container.textContent = `Você já está na versão mais recente (${result.current_version || ''}).`;
@@ -5481,6 +5503,96 @@
             } catch (error) {
                 if (container) container.textContent = 'Erro ao verificar atualizações.';
                 showError('Erro ao verificar atualizações.');
+            }
+        }
+
+        function _ensureUpdateBunnyStyle() {
+            if (document.getElementById('update-bunny-style')) return;
+            const style = document.createElement('style');
+            style.id = 'update-bunny-style';
+            style.textContent = `
+                @keyframes upd-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
+                .upd-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:16px; line-height:1; animation:upd-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
+            `;
+            document.head.appendChild(style);
+        }
+
+        function _updSetProgress(pct, step) {
+            const bar = document.getElementById('updProgressBar');
+            const stepEl = document.getElementById('updProgressStep');
+            const pctEl = document.getElementById('updProgressPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        async function downloadAndInstallUpdate() {
+            const info = window._pendingUpdate;
+            if (!info || !info.url) { showError('Nenhum instalador disponível para esta release.'); return; }
+            if (!await uiConfirm('O Toca do Coelho vai baixar a nova versão e abrir o instalador. O aplicativo será fechado automaticamente para concluir a atualização e reaberto ao final. Deseja continuar?', 'Atualizar aplicativo')) return;
+
+            const btn = document.getElementById('autoUpdateBtn');
+            if (btn) btn.disabled = true;
+            const container = document.getElementById('updateCheckResult');
+            _ensureUpdateBunnyStyle();
+            if (container) {
+                container.innerHTML = `
+                    <div id="updProgressStep" style="font-size:13px;color:#6b7280;margin-bottom:8px;">Iniciando download...</div>
+                    <div style="position:relative;background:#d1fae5;border-radius:99px;height:12px;overflow:visible;margin:0 18px 6px 0;">
+                        <div id="updProgressBar" style="position:relative;height:100%;width:5%;background:linear-gradient(90deg,#059669,#10b981,#34d399);border-radius:99px;transition:width .5s ease;">
+                            <span class="upd-bunny">🐇</span>
+                        </div>
+                    </div>
+                    <div id="updProgressPct" style="font-size:11px;color:#6b7280;text-align:right;">5%</div>
+                `;
+            }
+
+            try {
+                const startResp = await fetch(`${API_BASE}/config/download-update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ installer_url: info.url, installer_name: info.name })
+                });
+                const startData = await startResp.json().catch(() => ({}));
+                if (!startResp.ok || !startData.task_id) {
+                    throw new Error(startData.error || 'Falha ao iniciar o download.');
+                }
+
+                const taskId = startData.task_id;
+                let task = {};
+                while (true) {
+                    await new Promise(r => setTimeout(r, 800));
+                    const pollResp = await fetch(`${API_BASE}/config/update-tasks/${taskId}`);
+                    task = await pollResp.json().catch(() => ({}));
+                    _updSetProgress(Number(task.progress || 5), task.step || 'Baixando...');
+                    if (task.status === 'done' || task.status === 'error') break;
+                }
+
+                if (task.status === 'error') {
+                    throw new Error(task.error || 'Falha no download da atualização.');
+                }
+
+                _updSetProgress(100, 'Download concluído. Abrindo o instalador...');
+                const installResp = await fetch(`${API_BASE}/config/install-update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ installer_path: task.installer_path })
+                });
+                const installData = await installResp.json().catch(() => ({}));
+                if (!installResp.ok) {
+                    throw new Error(installData.error || 'Falha ao iniciar o instalador.');
+                }
+
+                if (container) {
+                    container.innerHTML = `<div style="color:#059669;"><strong>Instalador iniciado.</strong> O Toca do Coelho vai fechar agora para concluir a atualização. Siga o assistente de instalação — o app reabrirá ao final.</div>`;
+                }
+                showSuccess('Instalador iniciado. O aplicativo será encerrado.');
+            } catch (error) {
+                if (btn) btn.disabled = false;
+                if (container) {
+                    container.innerHTML = `<span style="color:#b45309;"><strong>⚠️ ${escapeHtml(error.message || 'Erro ao atualizar.')}</strong></span>`;
+                }
+                showError(error.message || 'Erro ao baixar/instalar a atualização.');
             }
         }
 
