@@ -2207,7 +2207,7 @@
                 <span>Gestão de Contatos</span>
             </button>
 
-        <div class="sidebar-footer">
+        <div class="sidebar-footer" id="sidebarVersion">
             Versão 2.0.0
         </div>
     </aside>
@@ -3632,6 +3632,10 @@
                 const response = await fetch(`${API_BASE}/system/config`);
                 if (!response.ok) return;
                 systemConfig = await response.json();
+                const versionEl = document.getElementById('sidebarVersion');
+                if (versionEl && systemConfig.version) {
+                    versionEl.textContent = `Versão ${systemConfig.version}`;
+                }
                 if ((systemConfig.env || '').toLowerCase() === 'beta') {
                     const logoContainer = document.querySelector('.sidebar-logo');
                     if (logoContainer && !logoContainer.querySelector('.beta-badge')) {
