@@ -6413,10 +6413,23 @@ def install_update():
                 or not installer.is_file()):
             return jsonify({'error': 'Instalador inválido ou não encontrado.'}), 400
 
-        creationflags = 0
         if sys.platform == 'win32':
-            creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen([str(installer)], creationflags=creationflags, close_fds=True)
+            # ShellExecuteW com verbo 'runas' dispara o prompt UAC e eleva o processo.
+            # subprocess.Popen não consegue elevar privilégios, por isso falha com WinError 740.
+            import ctypes
+            ret = ctypes.windll.shell32.ShellExecuteW(
+                None,           # hwnd
+                'runas',        # verbo — solicita elevação UAC
+                str(installer), # executável
+                None,           # parâmetros
+                None,           # diretório de trabalho (None = diretório do executável)
+                1,              # SW_SHOWNORMAL
+            )
+            # ShellExecuteW retorna > 32 em sucesso
+            if ret <= 32:
+                raise OSError(f'ShellExecuteW falhou com código {ret}')
+        else:
+            subprocess.Popen([str(installer)], close_fds=True)
 
         # Encerra o app logo após responder, liberando os arquivos para o instalador.
         def _shutdown():
