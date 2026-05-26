@@ -3111,18 +3111,9 @@
                 <div class="form-group">
                     <label>LinkedIn (opcional)</label>
                     <input type="url" name="linkedin" id="clientLinkedinInput" placeholder="https://www.linkedin.com/in/...">
-                    <button type="button" class="btn btn-auto-mapping btn-small" onclick="clientLinkedInAutoFill()" id="clientLinkedinFillBtn" style="margin-top:8px; width:100%;">
-                        <span class="ai-star-icon">✦</span> AutoFill via LinkedIn
+                    <button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientLinkedinModal()" id="clientLinkedinFillBtn" style="margin-top:8px; width:100%;">
+                        <i class="fab fa-linkedin" style="margin-right:5px;"></i><span class="ai-star-icon">✦</span> AutoFill via LinkedIn
                     </button>
-                </div>
-                <div id="clientLinkedinAutoFillProgress" style="display:none; grid-column:1/-1; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:12px 14px;">
-                    <div style="font-size:13px; color:#065f46; margin-bottom:8px;" id="clientLinkedinProgressStep">Buscando perfil...</div>
-                    <div style="background:#d1fae5; border-radius:99px; height:10px; overflow:hidden; position:relative;">
-                        <div id="clientLinkedinProgressBar" style="height:100%; width:5%; background:linear-gradient(90deg,#10b981,#34d399); border-radius:99px; transition:width 0.5s ease; position:relative;">
-                            <span id="clientLinkedinBunny" style="position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:16px; line-height:1; pointer-events:none;">🐇</span>
-                        </div>
-                    </div>
-                    <div style="font-size:11px; color:#059669; text-align:right; margin-top:4px;" id="clientLinkedinProgressPct">5%</div>
                 </div>
                 <div class="form-group">
                     <label>Foto</label>
@@ -6730,26 +6721,210 @@
             }
         }
 
-        // ---- LinkedIn AutoFill para o cadastro de contato ----
-        function _ensureLinkedinBunnyStyle() {
+        // ---- LinkedIn AutoFill — modal para o cadastro de contato ----
+
+        // Estado do modal
+        let _clImportedProfileText = '';
+        let _clImportedPhotoUrl = '';
+        let _clImportedProfileUrl = '';
+
+        function _clEnsureBunnyStyle() {
             if (document.getElementById('cl-bunny-style')) return;
-            const style = document.createElement('style');
-            style.id = 'cl-bunny-style';
-            style.textContent = `
+            const s = document.createElement('style');
+            s.id = 'cl-bunny-style';
+            s.textContent = `
                 @keyframes cl-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
-                #clientLinkedinBunny { animation: cl-bunny-hop .5s ease-in-out infinite; }
+                #clModalBunny { animation: cl-bunny-hop .5s ease-in-out infinite; }
             `;
-            document.head.appendChild(style);
+            document.head.appendChild(s);
         }
 
-        function _clSetProgress(pct, step) {
-            const bar = document.getElementById('clientLinkedinProgressBar');
-            const stepEl = document.getElementById('clientLinkedinProgressStep');
-            const pctEl = document.getElementById('clientLinkedinProgressPct');
+        function _clModalSetProgress(pct, step) {
+            const bar = document.getElementById('clModalProgressBar');
+            const stepEl = document.getElementById('clModalProgressStep');
+            const pctEl = document.getElementById('clModalProgressPct');
             const p = Math.min(100, Math.max(0, pct));
             if (bar) bar.style.width = p + '%';
             if (stepEl) stepEl.textContent = step || '';
             if (pctEl) pctEl.textContent = Math.round(p) + '%';
+        }
+
+        async function openClientLinkedinModal() {
+            _clImportedProfileText = '';
+            _clImportedPhotoUrl = '';
+            _clImportedProfileUrl = '';
+
+            // Pré-preenche URL do campo do form principal
+            const linkedinInput = document.getElementById('clientLinkedinInput');
+            _clImportedProfileUrl = (linkedinInput?.value || '').trim();
+
+            // Reseta modal
+            const formArea = document.getElementById('clModalFormArea');
+            const progressArea = document.getElementById('clModalProgressArea');
+            if (formArea) formArea.style.display = '';
+            if (progressArea) progressArea.style.display = 'none';
+
+            const textarea = document.getElementById('clModalProfileText');
+            if (textarea) textarea.value = '';
+
+            const importFeedback = document.getElementById('clModalImportFeedback');
+            if (importFeedback) importFeedback.textContent = '';
+
+            // Mostra modal
+            document.getElementById('clientLinkedinModal').classList.add('active');
+            _clEnsureBunnyStyle();
+
+            // Checa extensão
+            await clModalCheckExtension();
+        }
+
+        function closeClientLinkedinModal() {
+            document.getElementById('clientLinkedinModal').classList.remove('active');
+        }
+
+        async function clModalCheckExtension() {
+            const statusIcon = document.getElementById('clModalExtStatusIcon');
+            const statusText = document.getElementById('clModalExtStatusText');
+            const checkBtn = document.getElementById('clModalCheckBtn');
+            const importArea = document.getElementById('clModalExtImportArea');
+            const installArea = document.getElementById('clModalInstallArea');
+            const extStatus = document.getElementById('clModalExtStatus');
+
+            if (statusIcon) statusIcon.textContent = '⏳';
+            if (statusText) { statusText.textContent = 'Verificando extensão...'; statusText.style.color = '#6b7280'; }
+            if (importArea) importArea.style.display = 'none';
+            if (installArea) installArea.style.display = 'none';
+
+            const installed = await _checkAutoTocaExtensionInstalled();
+
+            if (installed) {
+                if (statusIcon) statusIcon.textContent = '✅';
+                if (statusText) { statusText.textContent = 'Extensão instalada e ativa!'; statusText.style.color = '#059669'; }
+                if (extStatus) extStatus.style.background = '#f0fdf4';
+                if (extStatus) extStatus.style.borderColor = '#bbf7d0';
+                if (importArea) importArea.style.display = '';
+                if (installArea) installArea.style.display = 'none';
+            } else {
+                if (statusIcon) statusIcon.textContent = '❌';
+                if (statusText) { statusText.textContent = 'Extensão não encontrada.'; statusText.style.color = '#b91c1c'; }
+                if (extStatus) extStatus.style.background = '#fff8f8';
+                if (extStatus) extStatus.style.borderColor = '#fecaca';
+                if (importArea) importArea.style.display = 'none';
+                if (installArea) installArea.style.display = '';
+            }
+            if (checkBtn) checkBtn.style.display = '';
+        }
+
+        async function clModalImportFromExtension() {
+            const btn = document.getElementById('clModalImportBtn');
+            const feedback = document.getElementById('clModalImportFeedback');
+            const originalHtml = btn?.innerHTML;
+
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-circle-notch fa-spin" style="margin-right:5px;"></i> Buscando perfil...'; }
+            if (feedback) feedback.textContent = '';
+
+            try {
+                const result = await _sendAutoTocaCommand({ command: 'get_linkedin_profile' });
+
+                if (!result?.ok) {
+                    if (feedback) {
+                        feedback.style.color = '#b45309';
+                        feedback.innerHTML = `<i class="fas fa-info-circle"></i> Nenhum perfil capturado ainda. Abra um perfil no LinkedIn e clique no botão <strong>✦ Analisar com AutoToca</strong> que aparece na página. <button onclick="abrirGuiaLinkedIn()" class="btn btn-secondary btn-small" style="margin-left:6px;">Ver tutorial</button>`;
+                    }
+                    return;
+                }
+
+                // Salva os dados importados
+                _clImportedProfileText = result.profileText || '';
+                _clImportedPhotoUrl = result.profilePhotoUrl || '';
+                _clImportedProfileUrl = result.profileUrl || _clImportedProfileUrl;
+
+                // Popula textarea
+                const textarea = document.getElementById('clModalProfileText');
+                if (textarea) textarea.value = _clImportedProfileText;
+
+                const photoInfo = _clImportedPhotoUrl ? ' · foto capturada' : '';
+                if (feedback) {
+                    feedback.style.color = '#059669';
+                    feedback.innerHTML = `<i class="fas fa-check-circle"></i> Perfil importado com sucesso${photoInfo}! Clique em <strong>Processar e Preencher</strong>.`;
+                }
+
+            } catch (e) {
+                if (feedback) {
+                    feedback.style.color = '#b91c1c';
+                    feedback.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Erro ao comunicar com a extensão: ${e.message}. Verifique se a extensão está ativa.`;
+                }
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+            }
+        }
+
+        async function clModalProcess() {
+            const profileText = (document.getElementById('clModalProfileText')?.value || '').trim();
+            const photoUrl = _clImportedPhotoUrl || '';
+            const linkedinUrl = _clImportedProfileUrl || (document.getElementById('clientLinkedinInput')?.value || '').trim();
+
+            if (!profileText) {
+                showError('Cole o texto do perfil LinkedIn ou use a extensão para importar antes de processar.');
+                return;
+            }
+
+            const formArea = document.getElementById('clModalFormArea');
+            const progressArea = document.getElementById('clModalProgressArea');
+            if (formArea) formArea.style.display = 'none';
+            if (progressArea) progressArea.style.display = '';
+            _clModalSetProgress(5, 'Iniciando...');
+
+            try {
+                const res = await fetch(`${API_BASE}/clientes/linkedin-autofill`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        linkedin_url: linkedinUrl,
+                        profile_text: profileText,
+                        extension_photo_url: photoUrl
+                    })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Falha ao iniciar AutoFill.');
+
+                const taskId = payload.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
+
+                const poll = setInterval(async () => {
+                    try {
+                        const tr = await fetch(`${API_BASE}/tasks/${taskId}`);
+                        const task = await tr.json();
+                        _clModalSetProgress(task.progress || 5, task.step || '...');
+
+                        if (task.status === 'done') {
+                            clearInterval(poll);
+                            closeClientLinkedinModal();
+                            _clApplyLinkedInResult(task.result || {});
+                            // Preenche URL do LinkedIn no campo do form principal
+                            if (linkedinUrl) {
+                                const liInput = document.getElementById('clientLinkedinInput');
+                                if (liInput && !liInput.value) liInput.value = linkedinUrl;
+                            }
+                            showSuccess('Campos preenchidos via LinkedIn! Confira os dados antes de salvar.');
+                        } else if (task.status === 'error') {
+                            clearInterval(poll);
+                            if (formArea) formArea.style.display = '';
+                            if (progressArea) progressArea.style.display = 'none';
+                            showError(task.error || 'Erro ao processar o perfil LinkedIn.');
+                        }
+                    } catch (e) {
+                        clearInterval(poll);
+                        if (formArea) formArea.style.display = '';
+                        if (progressArea) progressArea.style.display = 'none';
+                        showError('Erro ao verificar status do AutoFill.');
+                    }
+                }, 800);
+            } catch (e) {
+                if (formArea) formArea.style.display = '';
+                if (progressArea) progressArea.style.display = 'none';
+                showError(e.message || 'Erro ao iniciar AutoFill LinkedIn.');
+            }
         }
 
         function _clApplyLinkedInResult(result) {
@@ -6802,7 +6977,7 @@
                 form.area_of_activity.value = result.area_atuacao;
             }
 
-            // Email
+            // Email (só preenche se campo vazio)
             if (result.email && form.email && !form.email.value) {
                 form.email.value = result.email;
             }
@@ -6816,78 +6991,8 @@
                     preview.src = result.photo_url;
                     preview.style.display = 'block';
                 }
-            }
-        }
-
-        async function clientLinkedInAutoFill() {
-            const linkedinInput = document.getElementById('clientLinkedinInput');
-            const url = (linkedinInput?.value || '').trim();
-
-            if (!url) {
-                showError('Cole a URL do perfil LinkedIn no campo acima antes de usar o AutoFill.');
-                linkedinInput?.focus();
-                return;
-            }
-            if (!url.includes('linkedin.com')) {
-                showError('URL inválida. Use um link do LinkedIn (ex: https://www.linkedin.com/in/nome-da-pessoa).');
-                return;
-            }
-
-            _ensureLinkedinBunnyStyle();
-
-            const btn = document.getElementById('clientLinkedinFillBtn');
-            const progressArea = document.getElementById('clientLinkedinAutoFillProgress');
-            const originalBtnHtml = btn?.innerHTML;
-
-            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Buscando...'; }
-            if (progressArea) progressArea.style.display = '';
-            _clSetProgress(5, 'Iniciando...');
-
-            try {
-                const res = await fetch(`${API_BASE}/clientes/linkedin-autofill`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ linkedin_url: url })
-                });
-                const payload = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(payload.error || 'Falha ao iniciar AutoFill.');
-
-                const taskId = payload.task_id;
-                if (!taskId) throw new Error('Resposta inesperada do servidor.');
-
-                const poll = setInterval(async () => {
-                    try {
-                        const tr = await fetch(`${API_BASE}/tasks/${taskId}`);
-                        const task = await tr.json();
-                        _clSetProgress(task.progress || 5, task.step || '...');
-
-                        if (task.status === 'done') {
-                            clearInterval(poll);
-                            _clApplyLinkedInResult(task.result || {});
-                            if (progressArea) progressArea.style.display = 'none';
-                            if (btn) { btn.disabled = false; btn.innerHTML = originalBtnHtml; }
-                            if (task.result?.data_is_rich === false) {
-                                showInfo('Campos preenchidos! O LinkedIn limitou o acesso — cole o texto do perfil para dados mais precisos.');
-                            } else {
-                                showSuccess('Campos preenchidos via LinkedIn! Confira os dados antes de salvar.');
-                            }
-                        } else if (task.status === 'error') {
-                            clearInterval(poll);
-                            if (progressArea) progressArea.style.display = 'none';
-                            if (btn) { btn.disabled = false; btn.innerHTML = originalBtnHtml; }
-                            showError(task.error || 'Erro ao processar o perfil LinkedIn.');
-                        }
-                    } catch (e) {
-                        clearInterval(poll);
-                        if (progressArea) progressArea.style.display = 'none';
-                        if (btn) { btn.disabled = false; btn.innerHTML = originalBtnHtml; }
-                        showError('Erro ao verificar status do AutoFill.');
-                    }
-                }, 800);
-            } catch (e) {
-                if (progressArea) progressArea.style.display = 'none';
-                if (btn) { btn.disabled = false; btn.innerHTML = originalBtnHtml; }
-                showError(e.message || 'Erro ao iniciar AutoFill LinkedIn.');
+                const removeBtn = document.getElementById('removePhotoBtn');
+                if (removeBtn) removeBtn.style.display = 'inline-flex';
             }
         }
 
@@ -13420,6 +13525,82 @@
     <!-- html2canvas + jsPDF para exportação do resumo LinkedIn -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" defer></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
+
+    <!-- Modal: AutoFill LinkedIn — Cadastro de Contato -->
+    <div id="clientLinkedinModal" class="modal" onclick="if(event.target===this) closeClientLinkedinModal()">
+        <div class="modal-content" style="max-width:540px;">
+            <div class="modal-header">
+                <h2 style="display:flex; align-items:center; gap:8px;">
+                    <i class="fab fa-linkedin" style="color:#0a66c2;"></i>
+                    <span class="ai-star-icon" style="font-size:16px;">✦</span>
+                    AutoFill via LinkedIn
+                </h2>
+                <button class="modal-close" onclick="closeClientLinkedinModal()">×</button>
+            </div>
+
+            <!-- Área de formulário -->
+            <div id="clModalFormArea">
+                <!-- Status da extensão -->
+                <div id="clModalExtStatus" style="margin-bottom:14px; padding:10px 14px; border-radius:8px; background:#f9fafb; border:1px solid #e5e7eb; font-size:13px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <span id="clModalExtStatusIcon" style="font-size:18px;">⏳</span>
+                    <span id="clModalExtStatusText" style="color:#6b7280;">Verificando extensão...</span>
+                    <button class="btn btn-secondary btn-small" onclick="clModalCheckExtension()" id="clModalCheckBtn" style="margin-left:auto; display:none;">Verificar novamente</button>
+                </div>
+
+                <!-- Botão importar da extensão (aparece só se instalada) -->
+                <div id="clModalExtImportArea" style="display:none; margin-bottom:14px;">
+                    <button class="btn btn-auto-mapping" onclick="clModalImportFromExtension()" id="clModalImportBtn" style="width:100%; justify-content:center;">
+                        <i class="fab fa-linkedin" style="margin-right:6px;"></i> Importar perfil da Extensão
+                    </button>
+                    <div id="clModalImportFeedback" style="margin-top:8px; font-size:12px; color:#6b7280;"></div>
+                </div>
+
+                <!-- Área instalação (aparece só se NÃO instalada) -->
+                <div id="clModalInstallArea" style="display:none; margin-bottom:14px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:12px 14px;">
+                    <div style="font-weight:600; color:#92400e; margin-bottom:8px; font-size:13px;"><i class="fas fa-puzzle-piece" style="margin-right:5px;"></i>Extensão não encontrada</div>
+                    <div style="font-size:12px; color:#92400e; margin-bottom:10px;">Instale a extensão do AutoToca para importar perfis com um clique. Ou cole o texto do perfil manualmente abaixo.</div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <a href="/autotoca-extension/autotoca-chrome-extension.xpi" class="btn btn-secondary btn-small" style="text-decoration:none;"><i class="fab fa-firefox-browser" style="color:#ff6611;"></i> Firefox</a>
+                        <a href="/autotoca-extension/autotoca-chrome-extension.zip" download class="btn btn-secondary btn-small" style="text-decoration:none;"><i class="fab fa-chrome" style="color:#4285f4;"></i> Chrome (.zip)</a>
+                        <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()"><i class="fas fa-question-circle"></i> Como instalar</button>
+                    </div>
+                </div>
+
+                <!-- Separador -->
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+                    <div style="flex:1; height:1px; background:#e5e7eb;"></div>
+                    <span style="font-size:12px; color:#9ca3af; white-space:nowrap;">ou cole o texto do perfil manualmente</span>
+                    <div style="flex:1; height:1px; background:#e5e7eb;"></div>
+                </div>
+
+                <!-- Textarea texto manual -->
+                <div class="form-group" style="margin-bottom:14px;">
+                    <label style="font-size:13px; font-weight:600;">Texto do Perfil LinkedIn</label>
+                    <textarea id="clModalProfileText" rows="7"
+                        placeholder="Abra o perfil no LinkedIn, selecione todo o texto (Ctrl+A → Ctrl+C) e cole aqui. Ou clique em 'Importar da Extensão' acima."
+                        style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
+                </div>
+
+                <div class="modal-footer" style="padding-top:0;">
+                    <button class="btn btn-secondary" onclick="closeClientLinkedinModal()">Cancelar</button>
+                    <button class="btn btn-auto-mapping" onclick="clModalProcess()" id="clModalProcessBtn">
+                        <span class="ai-star-icon">✦</span> Processar e Preencher
+                    </button>
+                </div>
+            </div>
+
+            <!-- Área de progresso (substitui o formulário durante o processamento) -->
+            <div id="clModalProgressArea" style="display:none; padding:20px 4px 12px;">
+                <div style="font-size:13px; color:#065f46; margin-bottom:10px; text-align:center;" id="clModalProgressStep">Iniciando...</div>
+                <div style="background:#d1fae5; border-radius:99px; height:10px; overflow:hidden; position:relative;">
+                    <div id="clModalProgressBar" style="height:100%; width:5%; background:linear-gradient(90deg,#10b981,#34d399); border-radius:99px; transition:width 0.5s ease; position:relative;">
+                        <span id="clModalBunny" style="position:absolute; right:-14px; top:50%; font-size:16px; line-height:1; pointer-events:none;">🐇</span>
+                    </div>
+                </div>
+                <div style="font-size:11px; color:#059669; text-align:right; margin-top:5px;" id="clModalProgressPct">5%</div>
+            </div>
+        </div>
+    </div>
 
     <!-- Modal: Guia de uso da extensão LinkedIn -->
     <div id="linkedinGuideModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9999; overflow-y:auto; padding:24px 16px;">

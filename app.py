@@ -11834,21 +11834,17 @@ def account_autofill():
 # LinkedIn AutoFill — Preenche ficha de contato via perfil LinkedIn
 # ---------------------------------------------------------------------------
 
-def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text):
-    """Extrai dados cadastrais de um contato a partir do perfil LinkedIn via LLM."""
+def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extension_photo_url=''):
+    """Extrai dados cadastrais de um contato a partir do texto do perfil LinkedIn via LLM.
+    Não tenta scraping — recebe apenas o texto capturado pela extensão ou colado pelo usuário.
+    """
     try:
-        _bg_task_set(task_id, {'step': 'Buscando perfil público no LinkedIn...', 'progress': 15})
+        _bg_task_set(task_id, {'step': 'Extraindo dados cadastrais com IA...', 'progress': 20})
 
-        fetched_text = None
-        if linkedin_url and not profile_text:
-            fetched_text = _linkedin_try_fetch_public(linkedin_url)
-
-        data_is_rich = bool(profile_text) or bool(fetched_text and len(fetched_text) > 2000)
-        profile_content = profile_text or fetched_text or ''
+        data_is_rich = bool(profile_text and len(profile_text.strip()) > 100)
+        profile_content = (profile_text or '').strip()
         if not profile_content and linkedin_url:
             profile_content = f'URL do perfil LinkedIn: {linkedin_url}'
-
-        _bg_task_set(task_id, {'step': 'Extraindo dados cadastrais com IA...', 'progress': 40})
 
         quality_note = (
             'Use SOMENTE as informações explicitamente presentes no perfil. '
@@ -11919,15 +11915,13 @@ def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text):
 
         _bg_task_set(task_id, {'step': 'Buscando foto de perfil...', 'progress': 75})
 
-        photo_url = None
-        if linkedin_url:
-            try:
-                photo_url = _linkedin_extract_og_image(linkedin_url)
-            except Exception:
-                pass
+        # Foto: extensão tem prioridade → Bing fallback (sem scraping do LinkedIn)
+        photo_url = (extension_photo_url or '').strip() or None
         if not photo_url and parsed.get('nome'):
             try:
-                query = f'{parsed["nome"]} {parsed.get("empresa", "")} foto perfil'.strip()
+                nome = parsed.get('nome') or ''
+                empresa = parsed.get('empresa') or ''
+                query = f'{nome} {empresa} foto perfil'.strip()
                 candidates = _find_image_candidates_on_web(query, limit=3)
                 if candidates:
                     photo_url = candidates[0]
@@ -11958,13 +11952,14 @@ def client_linkedin_autofill():
         data = request.get_json() or {}
         linkedin_url = (data.get('linkedin_url') or '').strip()
         profile_text = (data.get('profile_text') or '').strip()
+        extension_photo_url = (data.get('extension_photo_url') or '').strip()
         if not linkedin_url and not profile_text:
-            return jsonify({'error': 'Informe a URL do LinkedIn ou cole o texto do perfil.'}), 400
+            return jsonify({'error': 'Cole o texto do perfil LinkedIn ou use a extensão para importar.'}), 400
         task_id = uuid.uuid4().hex
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
         threading.Thread(
             target=_client_linkedin_autofill_async,
-            args=(task_id, linkedin_url, profile_text),
+            args=(task_id, linkedin_url, profile_text, extension_photo_url),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
