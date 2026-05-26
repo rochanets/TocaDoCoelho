@@ -8131,6 +8131,31 @@ def clients_autofind_photo_candidates():
         return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
 
 
+def _save_photo_from_base64(data_url, person_name='linkedin'):
+    """Recebe um data URL base64 (data:image/...;base64,...), salva localmente e retorna '/uploads/<filename>'.
+    Retorna None se o data_url não for válido."""
+    try:
+        if not data_url or not data_url.startswith('data:image/'):
+            return None
+        header, encoded = data_url.split(',', 1)
+        mime_type = header.split(';')[0].replace('data:', '')
+        ext_map = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif'}
+        ext = ext_map.get(mime_type, '.jpg')
+        img_data = base64.b64decode(encoded)
+        if len(img_data) > 6 * 1024 * 1024:
+            logger.warning(f'[_save_photo_from_base64] imagem muito grande ({len(img_data)} bytes), ignorando')
+            return None
+        safe_prefix = secure_filename(person_name) or 'linkedin'
+        filename = secure_filename(f"{safe_prefix}-{int(time.time()*1000)}{ext}")
+        path = UPLOAD_DIR / filename
+        with open(path, 'wb') as f:
+            f.write(img_data)
+        return f'/uploads/{filename}'
+    except Exception as e:
+        logger.warning(f'[_save_photo_from_base64] falha: {e}')
+        return None
+
+
 @app.route('/api/clients/autofind-photo', methods=['POST'])
 def clients_autofind_photo():
     try:
@@ -8234,7 +8259,12 @@ def create_client():
                 if existing:
                     return jsonify({'error': 'Possível duplicidade encontrada', 'duplicate': existing}), 409
 
-        photo_url = autofind_photo_url or None
+        # Suporte a foto em base64 (enviada pela extensão AutoToca)
+        if autofind_photo_url and autofind_photo_url.startswith('data:image/'):
+            saved = _save_photo_from_base64(autofind_photo_url, person_name=name or 'linkedin')
+            photo_url = saved or None
+        else:
+            photo_url = autofind_photo_url or None
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
@@ -8242,7 +8272,7 @@ def create_client():
                 filepath = UPLOAD_DIR / filename
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
-        
+
         conn = get_db()
         c = conn.cursor()
         c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived)
@@ -8295,7 +8325,12 @@ def update_client(client_id):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         
-        photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
+        # Suporte a foto em base64 (enviada pela extensão AutoToca)
+        if autofind_photo_url and autofind_photo_url.startswith('data:image/'):
+            saved = _save_photo_from_base64(autofind_photo_url, person_name=name or 'linkedin')
+            photo_url = None if remove_photo else (saved or client['photo_url'])
+        else:
+            photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:

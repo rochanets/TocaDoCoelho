@@ -6839,9 +6839,12 @@
                 _clImportedPhotoUrl = result.profilePhotoUrl || '';
                 _clImportedProfileUrl = result.profileUrl || _clImportedProfileUrl;
 
-                // Popula textarea
+                // Popula textarea e ajusta cor para texto legível
                 const textarea = document.getElementById('clModalProfileText');
-                if (textarea) textarea.value = _clImportedProfileText;
+                if (textarea) {
+                    textarea.value = _clImportedProfileText;
+                    textarea.style.color = _clImportedProfileText ? '#374151' : '#9ca3af';
+                }
 
                 const photoInfo = _clImportedPhotoUrl ? ' · foto capturada' : '';
                 if (feedback) {
@@ -13575,10 +13578,11 @@
 
                 <!-- Textarea texto manual -->
                 <div class="form-group" style="margin-bottom:14px;">
-                    <label style="font-size:13px; font-weight:600;">Texto do Perfil LinkedIn</label>
+                    <label style="font-size:13px; font-weight:600; color:#6b7280;">Texto do Perfil LinkedIn <span style="font-weight:400; font-style:italic;">(preenchido automaticamente pela extensão)</span></label>
                     <textarea id="clModalProfileText" rows="7"
-                        placeholder="Abra o perfil no LinkedIn, selecione todo o texto (Ctrl+A → Ctrl+C) e cole aqui. Ou clique em 'Importar da Extensão' acima."
-                        style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
+                        placeholder="Use o botão 'Importar da Extensão' acima para capturar o perfil automaticamente. Ou cole o texto manualmente se preferir."
+                        oninput="this.style.color=this.value?'#374151':'#9ca3af'"
+                        style="width:100%; padding:8px 12px; border:1px solid #e5e7eb; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box; background:#f9fafb; color:#9ca3af;"></textarea>
                 </div>
 
                 <div class="modal-footer" style="padding-top:0;">
