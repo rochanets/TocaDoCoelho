@@ -2758,6 +2758,7 @@
                             <option value="position">Por Cargo</option>
                             <option value="area">Por Área de Atuação</option>
                             <option value="company">Por Conta</option>
+                            <option value="status">Por Status</option>
                             <option value="manual">Manual</option>
                         </select>
                     </div>
@@ -4438,6 +4439,35 @@
                 return;
             }
 
+            if (mode === 'status') {
+                wrap.innerHTML = `
+                    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; width:100%;">
+                        <div class="form-group" style="margin:0; min-width:180px;">
+                            <label>Status</label>
+                            <select id="atMailingFilterValue" onchange="onAutoTocaMailingStatusSubModeChange()">
+                                <option value="red">Atrasado</option>
+                                <option value="yellow">Atenção</option>
+                                <option value="green">Em dia</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; min-width:200px;">
+                            <label>Subfiltro (opcional)</label>
+                            <select id="atMailingStatusSubMode" onchange="onAutoTocaMailingStatusSubModeChange()">
+                                <option value="">Nenhum</option>
+                                <option value="position">Cargo</option>
+                                <option value="area">Área de Atuação</option>
+                                <option value="company">Conta</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; min-width:220px; flex:1; display:none;" id="atMailingStatusSubValueWrap">
+                            <label id="atMailingStatusSubValueLabel">Cargo</label>
+                            <select id="atMailingStatusSubValue"></select>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
             wrap.innerHTML = `
                 <label id="atMailingFilterLabel"></label>
                 <select id="atMailingFilterValue"></select>
@@ -4455,6 +4485,43 @@
             filterEl.innerHTML = options.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
         }
 
+        function onAutoTocaMailingStatusSubModeChange() {
+            const subModeEl = document.getElementById('atMailingStatusSubMode');
+            const wrap = document.getElementById('atMailingStatusSubValueWrap');
+            const label = document.getElementById('atMailingStatusSubValueLabel');
+            const valueEl = document.getElementById('atMailingStatusSubValue');
+            if (!subModeEl || !wrap || !label || !valueEl) return;
+
+            const subMode = subModeEl.value;
+            if (!subMode) {
+                wrap.style.display = 'none';
+                valueEl.innerHTML = '';
+                return;
+            }
+
+            const status = (document.getElementById('atMailingFilterValue')?.value || 'red').trim();
+            const pool = (autoTocaMailingClients || []).filter(c =>
+                getStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact) === status
+            );
+
+            let options;
+            if (subMode === 'position') {
+                label.textContent = 'Cargo';
+                options = Array.from(new Set(pool.map(c => (c.position || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            } else if (subMode === 'area') {
+                label.textContent = 'Área de Atuação';
+                options = Array.from(new Set(pool.map(c => (c.area_of_activity || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            } else {
+                label.textContent = 'Conta';
+                options = Array.from(new Set(pool.map(c => (c.company || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            }
+
+            wrap.style.display = '';
+            valueEl.innerHTML = options.length
+                ? options.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')
+                : '<option value="">Nenhum contato neste status</option>';
+        }
+
         function _getAutoTocaFilteredMailingClients() {
             const mode = document.getElementById('atMailingMode')?.value || 'position';
             if (mode === 'manual') {
@@ -4462,6 +4529,22 @@
                 const terms = q.split(',').map(s => s.trim()).filter(Boolean);
                 if (!terms.length) return [];
                 return autoTocaMailingClients.filter(c => terms.some(term => String(c.name || '').toLowerCase().includes(term)));
+            }
+
+            if (mode === 'status') {
+                const status = (document.getElementById('atMailingFilterValue')?.value || '').trim();
+                if (!status) return [];
+                let pool = (autoTocaMailingClients || []).filter(c =>
+                    getStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact) === status
+                );
+                const subMode = (document.getElementById('atMailingStatusSubMode')?.value || '').trim();
+                const subValue = (document.getElementById('atMailingStatusSubValue')?.value || '').trim();
+                if (subMode && subValue) {
+                    if (subMode === 'position') pool = pool.filter(c => (c.position || '') === subValue);
+                    else if (subMode === 'area') pool = pool.filter(c => (c.area_of_activity || '') === subValue);
+                    else if (subMode === 'company') pool = pool.filter(c => (c.company || '') === subValue);
+                }
+                return pool;
             }
 
             const selected = (document.getElementById('atMailingFilterValue')?.value || '').trim();
@@ -6946,6 +7029,11 @@
                     closeActivityModal();
                     loadActivities();
                     loadDashboard();
+                    if (_profileModalOpenClientId) {
+                        const refreshId = _profileModalOpenClientId;
+                        await loadClients();
+                        await openProfileModal(refreshId);
+                    }
                 } else {
                     showError('Erro ao salvar atividade');
                 }
@@ -9249,6 +9337,8 @@
             return `<div class="${className}">${initial}</div>`;
         }
 
+        let _profileModalOpenClientId = null;
+
         async function openProfileModal(clientId) {
             try {
                 const client = clients.find(c => c.id === clientId);
@@ -9256,6 +9346,7 @@
                     showError('Cliente não encontrado');
                     return;
                 }
+                _profileModalOpenClientId = clientId;
 
                 const response = await fetch(`${API_BASE}/atividades`);
                 const allActivities = await response.json();
@@ -9285,7 +9376,8 @@
                 }
 
                 const modalBody = `
-                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+                        <button class="btn btn-primary btn-small" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company || '')}')"><i class="fas fa-plus-circle"></i> Registrar Atividade</button>
                         ${archivedContact ? '' : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
                         <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
@@ -9320,6 +9412,7 @@
         }
 
         function closeProfileModal() {
+            _profileModalOpenClientId = null;
             document.getElementById('profileModal').classList.remove('active');
         }
 
