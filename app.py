@@ -13260,6 +13260,423 @@ def serve_static(path):
     return send_from_directory(app.static_folder, path)
 
 
+@app.route('/api/home/overview', methods=['GET'])
+def home_overview():
+    """Agregados do módulo Home (dashboard executivo).
+    Query params:
+      period: 'all' (default) | 'months'
+      months: lista de YYYY-MM separados por vírgula (se period=months)
+    """
+    try:
+        period = (request.args.get('period') or 'all').strip().lower()
+        months_arg = (request.args.get('months') or '').strip()
+        months_filter = []
+        if period == 'months' and months_arg:
+            months_filter = [m.strip() for m in months_arg.split(',') if re.match(r'^\d{4}-\d{2}$', m.strip())]
+
+        conn = get_db()
+        c = conn.cursor()
+
+        # Thresholds de status (rule universal)
+        c.execute("SELECT key, value FROM app_settings WHERE key IN ('status_green_days', 'status_yellow_days')")
+        s_map = {row['key']: row['value'] for row in c.fetchall()}
+        try:
+            green_days = int(s_map.get('status_green_days') or 7)
+        except Exception:
+            green_days = 7
+        try:
+            yellow_days = int(s_map.get('status_yellow_days') or 14)
+        except Exception:
+            yellow_days = 14
+
+        def month_clause(col):
+            if not months_filter:
+                return '', []
+            ph = ','.join(['?'] * len(months_filter))
+            return f" AND strftime('%Y-%m', {col}) IN ({ph})", list(months_filter)
+
+        # --- KPIs base ---
+        c.execute("SELECT COUNT(*) AS n FROM accounts")
+        total_accounts = c.fetchone()['n']
+
+        c.execute("SELECT COUNT(*) AS n FROM clients WHERE COALESCE(is_archived,0)=0")
+        total_contacts = c.fetchone()['n']
+
+        # Status snapshot
+        c.execute("""
+            SELECT c.id,
+                   (SELECT MAX(activity_date) FROM activities WHERE client_id=c.id) AS last_date
+            FROM clients c
+            WHERE COALESCE(c.is_archived,0)=0
+        """)
+        em_dia = atencao = atrasado = 0
+        now_dt = datetime.now()
+        for row in c.fetchall():
+            last = row['last_date']
+            if not last:
+                atrasado += 1
+                continue
+            try:
+                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
+                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+                days = (now_dt - d).days
+            except Exception:
+                atrasado += 1
+                continue
+            if days < green_days:
+                em_dia += 1
+            elif days < yellow_days:
+                atencao += 1
+            else:
+                atrasado += 1
+
+        # Cobertura de relacionamento (% contas com >=1 atividade no recorte)
+        mf_a, mfp_a = month_clause('a.activity_date')
+        mf_aa, mfp_aa = month_clause('aa.activity_date')
+        c.execute(f"""
+            SELECT COUNT(DISTINCT acc_name) AS n FROM (
+                SELECT cl.company AS acc_name
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}
+                UNION
+                SELECT acc.name AS acc_name
+                FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
+                WHERE 1=1 {mf_aa}
+            )
+        """, mfp_a + mfp_aa)
+        covered_accounts = c.fetchone()['n'] or 0
+        cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
+
+        # --- Top 10 contas por faturamento (soma das presenças STF) ---
+        c.execute("""
+            SELECT a.name, COALESCE(SUM(p.current_revenue_cents), 0) AS receita
+            FROM accounts a
+            LEFT JOIN account_presences p ON p.account_id = a.id
+            GROUP BY a.id, a.name
+            HAVING receita > 0
+            ORDER BY receita DESC
+            LIMIT 10
+        """)
+        top_faturamento = [{'name': r['name'], 'revenue_cents': r['receita']} for r in c.fetchall()]
+
+        # --- Top 10 contas com mais interações no período ---
+        c.execute(f"""
+            WITH client_acts AS (
+                SELECT cl.company AS acc, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}
+                GROUP BY cl.company
+            ),
+            acc_acts AS (
+                SELECT acc.name AS acc, COUNT(*) AS n
+                FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
+                WHERE 1=1 {mf_aa}
+                GROUP BY acc.name
+            )
+            SELECT acc AS name, SUM(n) AS total FROM (
+                SELECT * FROM client_acts UNION ALL SELECT * FROM acc_acts
+            )
+            GROUP BY acc
+            ORDER BY total DESC
+            LIMIT 10
+        """, mfp_a + mfp_aa)
+        top_interacoes = [{'name': r['name'], 'count': r['total']} for r in c.fetchall()]
+
+        # --- Top 5 contas TARGET com menor interação no período ---
+        # (inclui target com 0 interações)
+        c.execute(f"""
+            SELECT a.name,
+                   COALESCE((
+                       SELECT COUNT(*) FROM activities ac
+                       JOIN clients cl ON cl.id = ac.client_id
+                       WHERE cl.company = a.name
+                       {mf_a.replace('a.activity_date', 'ac.activity_date')}
+                   ), 0)
+                   +
+                   COALESCE((
+                       SELECT COUNT(*) FROM account_activities aa2
+                       WHERE aa2.account_id = a.id
+                       {mf_aa.replace('aa.activity_date', 'aa2.activity_date')}
+                   ), 0) AS total
+            FROM accounts a
+            WHERE COALESCE(a.is_target, 0) = 1
+            ORDER BY total ASC, a.name ASC
+            LIMIT 5
+        """, mfp_a + mfp_aa)
+        target_menor_interacao = [{'name': r['name'], 'count': r['total']} for r in c.fetchall()]
+
+        # --- Interações por cargo (donut) ---
+        c.execute(f"""
+            SELECT cl.position AS cargo, COUNT(*) AS n
+            FROM activities a JOIN clients cl ON cl.id = a.client_id
+            WHERE cl.position IS NOT NULL AND TRIM(cl.position) != '' {mf_a}
+            GROUP BY cl.position
+            ORDER BY n DESC
+            LIMIT 8
+        """, mfp_a)
+        interacoes_cargo = [{'name': r['cargo'], 'count': r['n']} for r in c.fetchall()]
+
+        # --- Evolução mensal de interações (últimos 12 meses, ignora filtro de período) ---
+        c.execute("""
+            WITH all_acts AS (
+                SELECT strftime('%Y-%m', activity_date) AS ym FROM activities
+                UNION ALL
+                SELECT strftime('%Y-%m', activity_date) AS ym FROM account_activities
+            )
+            SELECT ym, COUNT(*) AS n
+            FROM all_acts
+            WHERE ym IS NOT NULL
+            GROUP BY ym
+            ORDER BY ym ASC
+        """)
+        evolucao_raw = {r['ym']: r['n'] for r in c.fetchall()}
+        # Gera últimos 12 meses com base na data atual
+        evolucao_mensal = []
+        cur = now_dt.replace(day=1)
+        ms = []
+        for _ in range(12):
+            ms.append(cur.strftime('%Y-%m'))
+            # voltar 1 mês
+            if cur.month == 1:
+                cur = cur.replace(year=cur.year - 1, month=12)
+            else:
+                cur = cur.replace(month=cur.month - 1)
+        for ym in reversed(ms):
+            evolucao_mensal.append({'ym': ym, 'count': evolucao_raw.get(ym, 0)})
+
+        # --- Canal de Relacionamento (contact_type) ---
+        c.execute(f"""
+            SELECT COALESCE(NULLIF(TRIM(a.contact_type), ''), 'Outro') AS canal, COUNT(*) AS n
+            FROM activities a JOIN clients cl ON cl.id = a.client_id
+            WHERE 1=1 {mf_a}
+            GROUP BY canal
+            ORDER BY n DESC
+        """, mfp_a)
+        canais = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
+
+        # --- Heatmap dia da semana × período do dia (a partir de activities.activity_date) ---
+        # SQLite: strftime('%w') -> 0=Dom .. 6=Sáb; strftime('%H') -> hora
+        # Períodos: manhã (06-12), tarde (12-18), noite (18-06)
+        c.execute(f"""
+            SELECT strftime('%w', a.activity_date) AS dow,
+                   CAST(strftime('%H', a.activity_date) AS INTEGER) AS hr,
+                   COUNT(*) AS n
+            FROM activities a
+            WHERE a.activity_date IS NOT NULL {mf_a}
+            GROUP BY dow, hr
+        """, mfp_a)
+        heatmap = {}
+        for r in c.fetchall():
+            dow = int(r['dow']) if r['dow'] is not None else 0
+            hr = int(r['hr'] or 0)
+            if 6 <= hr < 12:
+                periodo = 'Manhã'
+            elif 12 <= hr < 18:
+                periodo = 'Tarde'
+            else:
+                periodo = 'Noite'
+            key = (dow, periodo)
+            heatmap[key] = heatmap.get(key, 0) + r['n']
+        heatmap_list = [{'dow': k[0], 'periodo': k[1], 'count': v} for k, v in heatmap.items()]
+
+        # --- Funil de Engajamento ---
+        ativas = total_contacts  # já considera não-arquivados
+        c.execute(f"""
+            SELECT COUNT(DISTINCT a.client_id) AS n
+            FROM activities a JOIN clients cl ON cl.id = a.client_id
+            WHERE COALESCE(cl.is_archived,0)=0 AND a.activity_date >= date('now', '-30 day')
+        """)
+        com_contato_mes = c.fetchone()['n'] or 0
+        c.execute(f"""
+            SELECT COUNT(DISTINCT a.client_id) AS n
+            FROM activities a JOIN clients cl ON cl.id = a.client_id
+            WHERE COALESCE(cl.is_archived,0)=0
+        """)
+        com_interacao = c.fetchone()['n'] or 0
+        c.execute(f"""
+            SELECT a.client_id, COUNT(*) AS n
+            FROM activities a JOIN clients cl ON cl.id = a.client_id
+            WHERE COALESCE(cl.is_archived,0)=0
+            GROUP BY a.client_id
+            HAVING n >= 3
+        """)
+        engajadas = len(c.fetchall())
+        alta_proximidade = em_dia
+
+        funil = [
+            {'label': 'Contas Ativas', 'count': ativas},
+            {'label': 'Com Contato no Mês', 'count': com_contato_mes},
+            {'label': 'Com Interação', 'count': com_interacao},
+            {'label': 'Engajadas', 'count': engajadas},
+            {'label': 'Alta Proximidade', 'count': alta_proximidade},
+        ]
+
+        # --- Tempo médio sem contato (buckets) ---
+        c.execute("""
+            SELECT (SELECT MAX(activity_date) FROM activities WHERE client_id=c.id) AS last_date
+            FROM clients c
+            WHERE COALESCE(c.is_archived,0)=0
+        """)
+        buckets = {'0-7': 0, '8-14': 0, '15-30': 0, '+30': 0}
+        for row in c.fetchall():
+            last = row['last_date']
+            if not last:
+                buckets['+30'] += 1
+                continue
+            try:
+                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
+                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+                days = (now_dt - d).days
+            except Exception:
+                buckets['+30'] += 1
+                continue
+            if days <= 7:
+                buckets['0-7'] += 1
+            elif days <= 14:
+                buckets['8-14'] += 1
+            elif days <= 30:
+                buckets['15-30'] += 1
+            else:
+                buckets['+30'] += 1
+        tempo_sem_contato = [{'bucket': k, 'count': v} for k, v in buckets.items()]
+
+        # --- Novos contatos por mês (últimos 12 meses) ---
+        c.execute("""
+            SELECT strftime('%Y-%m', created_at) AS ym, COUNT(*) AS n
+            FROM clients
+            GROUP BY ym
+            ORDER BY ym ASC
+        """)
+        novos_raw = {r['ym']: r['n'] for r in c.fetchall()}
+        novos_contatos = []
+        for ym in reversed(ms):
+            novos_contatos.append({'ym': ym, 'count': novos_raw.get(ym, 0)})
+
+        # --- Insights & Alertas ---
+        # Contas estratégicas (target) sem contato há >20 dias
+        c.execute("""
+            SELECT a.name,
+                   MAX(COALESCE(
+                       (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE cl2.company=a.name),
+                       (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id)
+                   )) AS last_act
+            FROM accounts a
+            WHERE COALESCE(a.is_target,0)=1
+            GROUP BY a.id, a.name
+        """)
+        target_sem_contato = 0
+        for r in c.fetchall():
+            last = r['last_act']
+            if not last:
+                target_sem_contato += 1
+                continue
+            try:
+                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
+                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+                if (now_dt - d).days > 20:
+                    target_sem_contato += 1
+            except Exception:
+                target_sem_contato += 1
+
+        # Crescimento m/m de interações por conta (top 3)
+        crescimento_top = []
+        if len(evolucao_mensal) >= 2:
+            ym_atual = evolucao_mensal[-1]['ym']
+            ym_anterior = evolucao_mensal[-2]['ym']
+            c.execute("""
+                WITH acts AS (
+                    SELECT cl.company AS acc, strftime('%Y-%m', a.activity_date) AS ym
+                    FROM activities a JOIN clients cl ON cl.id = a.client_id
+                    WHERE cl.company IS NOT NULL AND TRIM(cl.company) != ''
+                    UNION ALL
+                    SELECT acc.name AS acc, strftime('%Y-%m', aa.activity_date) AS ym
+                    FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
+                )
+                SELECT acc,
+                       SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS atual,
+                       SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS anterior
+                FROM acts
+                GROUP BY acc
+                HAVING anterior > 0 AND atual > anterior
+                ORDER BY (atual * 1.0 - anterior) / anterior DESC
+                LIMIT 3
+            """, (ym_atual, ym_anterior))
+            for r in c.fetchall():
+                growth = round(((r['atual'] - r['anterior']) / r['anterior']) * 100) if r['anterior'] > 0 else 0
+                crescimento_top.append({'name': r['acc'], 'growth_pct': growth})
+
+        target_risco_atencao = 0
+        c.execute("""
+            SELECT a.name,
+                   (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE cl2.company=a.name) AS la_cli,
+                   (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id) AS la_acc
+            FROM accounts a
+            WHERE COALESCE(a.is_target,0)=1
+        """)
+        for r in c.fetchall():
+            last = r['la_cli'] or r['la_acc']
+            if not last:
+                target_risco_atencao += 1
+                continue
+            try:
+                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
+                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+                if green_days <= (now_dt - d).days < yellow_days:
+                    target_risco_atencao += 1
+            except Exception:
+                pass
+
+        # --- Meses disponíveis (para o filtro) ---
+        c.execute("""
+            SELECT DISTINCT ym FROM (
+                SELECT strftime('%Y-%m', activity_date) AS ym FROM activities WHERE activity_date IS NOT NULL
+                UNION
+                SELECT strftime('%Y-%m', activity_date) AS ym FROM account_activities WHERE activity_date IS NOT NULL
+                UNION
+                SELECT strftime('%Y-%m', created_at) AS ym FROM clients WHERE created_at IS NOT NULL
+            )
+            WHERE ym IS NOT NULL
+            ORDER BY ym DESC
+        """)
+        meses_disponiveis = [r['ym'] for r in c.fetchall()]
+
+        conn.close()
+
+        return jsonify({
+            'period': period,
+            'months_filter': months_filter,
+            'meses_disponiveis': meses_disponiveis,
+            'kpis': {
+                'total_accounts': total_accounts,
+                'total_contacts': total_contacts,
+                'em_dia': em_dia,
+                'atencao': atencao,
+                'atrasado': atrasado,
+                'cobertura_pct': cobertura_pct,
+            },
+            'top_faturamento': top_faturamento,
+            'top_interacoes': top_interacoes,
+            'target_menor_interacao': target_menor_interacao,
+            'interacoes_cargo': interacoes_cargo,
+            'evolucao_mensal': evolucao_mensal,
+            'canais': canais,
+            'heatmap': heatmap_list,
+            'funil': funil,
+            'tempo_sem_contato': tempo_sem_contato,
+            'novos_contatos': novos_contatos,
+            'insights': {
+                'target_sem_contato_20d': target_sem_contato,
+                'crescimento_top': crescimento_top,
+                'target_em_risco': target_risco_atencao,
+                'meta_cobertura_pct': 80,
+            },
+        })
+    except Exception as e:
+        print(f'[ERROR] GET /api/home/overview: {e}')
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.errorhandler(Exception)
 def handle_unexpected_exception(error):
     if isinstance(error, HTTPException):
