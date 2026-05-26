@@ -13578,11 +13578,16 @@ def home_overview():
             except Exception:
                 target_sem_contato += 1
 
-        # Crescimento m/m de interações por conta (top 3)
+        # Crescimento m/m de interações por conta (ranking completo + top 3)
         crescimento_top = []
+        crescimento_ranking = []
+        crescimento_ym_atual = ''
+        crescimento_ym_anterior = ''
         if len(evolucao_mensal) >= 2:
             ym_atual = evolucao_mensal[-1]['ym']
             ym_anterior = evolucao_mensal[-2]['ym']
+            crescimento_ym_atual = ym_atual
+            crescimento_ym_anterior = ym_anterior
             c.execute("""
                 WITH acts AS (
                     SELECT cl.company AS acc, strftime('%Y-%m', a.activity_date) AS ym
@@ -13597,13 +13602,38 @@ def home_overview():
                        SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS anterior
                 FROM acts
                 GROUP BY acc
-                HAVING anterior > 0 AND atual > anterior
-                ORDER BY (atual * 1.0 - anterior) / anterior DESC
-                LIMIT 3
+                HAVING atual > 0 OR anterior > 0
             """, (ym_atual, ym_anterior))
             for r in c.fetchall():
-                growth = round(((r['atual'] - r['anterior']) / r['anterior']) * 100) if r['anterior'] > 0 else 0
-                crescimento_top.append({'name': r['acc'], 'growth_pct': growth})
+                atual = int(r['atual'] or 0)
+                anterior = int(r['anterior'] or 0)
+                if anterior > 0:
+                    growth_pct = round(((atual - anterior) / anterior) * 100)
+                    is_new = False
+                else:
+                    growth_pct = None  # crescimento "infinito" — conta nova nesse mês
+                    is_new = True
+                crescimento_ranking.append({
+                    'name': r['acc'],
+                    'atual': atual,
+                    'anterior': anterior,
+                    'growth_pct': growth_pct,
+                    'is_new': is_new,
+                })
+            # Ordena: novas (atual>0, anterior=0) primeiro com maior atual, depois pct desc
+            def _rank_key(item):
+                if item['is_new']:
+                    return (-2, -item['atual'])
+                if item['growth_pct'] is None:
+                    return (0, 0)
+                return (-1 if item['growth_pct'] > 0 else (0 if item['growth_pct'] == 0 else 1), -item['growth_pct'])
+            crescimento_ranking.sort(key=_rank_key)
+            # Top 3 só com crescimento positivo (≥1%)
+            crescimento_top = [
+                {'name': it['name'], 'growth_pct': it['growth_pct']}
+                for it in crescimento_ranking
+                if not it['is_new'] and it['growth_pct'] is not None and it['growth_pct'] > 0
+            ][:3]
 
         target_risco_atencao = 0
         c.execute("""
@@ -13667,6 +13697,9 @@ def home_overview():
             'insights': {
                 'target_sem_contato_20d': target_sem_contato,
                 'crescimento_top': crescimento_top,
+                'crescimento_ranking': crescimento_ranking,
+                'crescimento_ym_atual': crescimento_ym_atual,
+                'crescimento_ym_anterior': crescimento_ym_anterior,
                 'target_em_risco': target_risco_atencao,
                 'meta_cobertura_pct': 80,
             },

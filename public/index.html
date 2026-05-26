@@ -2215,7 +2215,7 @@
             flex-wrap: wrap;
             margin-bottom: 18px;
             position: relative;
-            z-index: 1;
+            z-index: 50;
         }
         .home-title-block h1 {
             font-size: 28px;
@@ -2267,7 +2267,7 @@
             box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
             padding: 10px;
             min-width: 260px;
-            z-index: 50;
+            z-index: 200;
         }
         .home-period-menu.open { display: block; }
         .home-period-menu-head {
@@ -2415,17 +2415,152 @@
             min-height: 220px;
         }
         .home-card-compact { min-height: 200px; }
-        .home-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-        .home-card-head h3 { font-size: 13px; font-weight: 600; color: #fff; letter-spacing: 0.01em; }
-        .home-card-head::after {
-            content: '⋯';
+        .home-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; }
+        .home-card-head h3 { font-size: 13px; font-weight: 600; color: #fff; letter-spacing: 0.01em; flex: 1; min-width: 0; }
+        .home-card-actions {
+            background: transparent;
+            border: 1px solid transparent;
             color: var(--hm-text-dim);
-            font-size: 16px;
+            width: 26px; height: 26px;
+            border-radius: 6px;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            transition: background 140ms var(--ease-out), color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+            flex-shrink: 0;
         }
+        .home-card-actions:hover { background: rgba(34, 211, 238, 0.1); color: var(--hm-cyan); border-color: rgba(34, 211, 238, 0.4); }
         .home-card-danger .home-card-head h3 { color: #fca5a5; }
         .home-chart { flex: 1; min-height: 180px; width: 100%; }
         .home-card-compact .home-chart { min-height: 160px; }
+
+        /* KPI info button (cobertura) */
+        .home-kpi-card { position: relative; }
+        .home-kpi-info {
+            position: absolute;
+            right: 8px;
+            bottom: 8px;
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            background: transparent;
+            border: 1px solid var(--hm-border-strong);
+            color: var(--hm-text-muted);
+            font-size: 9px;
+            cursor: help;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            transition: color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+        }
+        .home-kpi-info:hover, .home-kpi-info:focus { color: var(--hm-cyan); border-color: var(--hm-cyan); outline: none; }
+        .home-kpi-info-tooltip {
+            position: absolute;
+            bottom: calc(100% + 8px);
+            right: -6px;
+            background: #15243a;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #e6ecf3;
+            padding: 12px 14px;
+            border-radius: 10px;
+            font-size: 12px;
+            width: 280px;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+            z-index: 300;
+            display: none;
+            line-height: 1.5;
+            pointer-events: none;
+            text-align: left;
+            font-weight: 400;
+            letter-spacing: 0;
+            text-transform: none;
+        }
+        .home-kpi-info-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            right: 10px;
+            border: 6px solid transparent;
+            border-top-color: #15243a;
+        }
+        .home-kpi-info-tooltip strong { color: var(--hm-cyan); display: block; margin-bottom: 4px; font-weight: 600; }
+        .home-kpi-info-tooltip code { background: rgba(34, 211, 238, 0.12); padding: 1px 5px; border-radius: 4px; font-family: 'Geist', monospace; font-size: 11px; color: var(--hm-cyan); }
+        .home-kpi-info:hover + .home-kpi-info-tooltip,
+        .home-kpi-info:focus + .home-kpi-info-tooltip { display: block; }
+
+        /* Chart maximize modal */
+        .home-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 9000;
+            background: rgba(4, 12, 22, 0.78);
+            backdrop-filter: blur(6px);
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .home-modal.active { display: flex; }
+        .home-modal-content {
+            background: linear-gradient(135deg, #0b1d33 0%, #15243a 100%);
+            border: 1px solid var(--hm-border-strong);
+            border-radius: 18px;
+            width: min(1100px, 92vw);
+            max-height: 88vh;
+            padding: 20px 22px 22px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            color: var(--hm-text);
+        }
+        .home-modal-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            gap: 12px;
+        }
+        .home-modal-head h2 { font-size: 17px; font-weight: 600; color: #fff; }
+        .home-modal-close {
+            background: rgba(20, 33, 50, 0.7);
+            border: 1px solid var(--hm-border-strong);
+            color: var(--hm-text);
+            width: 32px; height: 32px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            transition: background 140ms var(--ease-out), color 140ms var(--ease-out);
+        }
+        .home-modal-close:hover { background: var(--hm-red); color: #fff; }
+        .home-modal-chart {
+            flex: 1;
+            min-height: 60vh;
+            width: 100%;
+        }
+
+        /* Growth ranking modal */
+        .home-ranking-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; color: var(--hm-text); }
+        .home-ranking-table thead th { text-align: left; font-weight: 600; color: var(--hm-text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; padding: 8px 10px; border-bottom: 1px solid var(--hm-border); position: sticky; top: 0; background: linear-gradient(135deg, #0b1d33 0%, #15243a 100%); }
+        .home-ranking-table tbody tr { transition: background 120ms var(--ease-out); }
+        .home-ranking-table tbody tr:hover { background: rgba(34, 211, 238, 0.04); }
+        .home-ranking-table tbody td { padding: 10px; border-bottom: 1px solid var(--hm-border); vertical-align: middle; }
+        .home-ranking-pos { color: var(--hm-text-dim); font-weight: 700; width: 36px; }
+        .home-ranking-name { font-weight: 500; color: #fff; }
+        .home-ranking-num { text-align: right; color: var(--hm-text-muted); font-variant-numeric: tabular-nums; }
+        .home-ranking-pct { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .home-ranking-pct.pos { color: var(--hm-green); }
+        .home-ranking-pct.neg { color: var(--hm-red); }
+        .home-ranking-pct.zero { color: var(--hm-text-muted); }
+        .home-ranking-pct.new { color: var(--hm-cyan); }
+        .home-ranking-meta { font-size: 12px; color: var(--hm-text-muted); margin-bottom: 10px; }
+        .home-ranking-scroll { overflow-y: auto; flex: 1; min-height: 0; border-radius: 10px; border: 1px solid var(--hm-border); }
+        .home-ranking-scroll::-webkit-scrollbar { width: 8px; }
+        .home-ranking-scroll::-webkit-scrollbar-thumb { background: var(--hm-border-strong); border-radius: 4px; }
 
         .home-empty {
             display: flex;
@@ -2700,6 +2835,17 @@
                             <div class="home-kpi-value" id="kpiCobertura">—</div>
                             <div class="home-kpi-foot" id="kpiCoberturaFoot"></div>
                         </div>
+                        <button type="button" class="home-kpi-info" aria-label="Como é calculado" tabindex="0">
+                            <i class="fas fa-info"></i>
+                        </button>
+                        <div class="home-kpi-info-tooltip" role="tooltip">
+                            <strong>Como é calculado</strong>
+                            Percentual de contas que tiveram <b>pelo menos uma interação registrada</b> dentro do período filtrado, sobre o total de contas cadastradas.
+                            <br><br>
+                            <code>cobertura = contas com interação ÷ total de contas × 100</code>
+                            <br><br>
+                            Considera registros das tabelas <code>activities</code> (via contato) e <code>account_activities</code> (direto na conta).
+                        </div>
                     </div>
                 </div>
 
@@ -2774,7 +2920,7 @@
                             <div class="home-insight-body">
                                 <div class="home-insight-title">Contas com maior crescimento de interação no mês</div>
                                 <div class="home-insight-list" id="insGrowthList"></div>
-                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); switchTab(event, 'reports')">Ver ranking completo <i class="fas fa-arrow-right"></i></a>
+                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); openHomeGrowthRanking()">Ver ranking completo <i class="fas fa-arrow-right"></i></a>
                             </div>
                         </div>
                         <div class="home-insight home-insight-warning" id="insightRisco">
@@ -2797,6 +2943,19 @@
                             </div>
                         </div>
                     </aside>
+                </div>
+            </div>
+
+            <!-- Modal compartilhado (chart maximize / growth ranking) -->
+            <div class="home-modal" id="homeModal" onclick="if(event.target===this) closeHomeModal()" role="dialog" aria-modal="true">
+                <div class="home-modal-content">
+                    <div class="home-modal-head">
+                        <h2 id="homeModalTitle">—</h2>
+                        <button type="button" class="home-modal-close" onclick="closeHomeModal()" aria-label="Fechar">
+                            <i class="fas fa-xmark"></i>
+                        </button>
+                    </div>
+                    <div id="homeModalBody" style="flex:1; min-height:0; display:flex; flex-direction:column;"></div>
                 </div>
             </div>
         </div>
@@ -6443,8 +6602,24 @@
             months: [],
             availableMonths: [],
             charts: {},
+            chartOptions: {},
+            chartTitles: {
+                chartFaturamento: 'Top 10 Contas por Faturamento',
+                chartInteracoes: 'Top 10 Contas com Mais Interações',
+                chartTargetMenor: 'Top 5 Contas Target com Menor Nível de Interação',
+                chartCargo: 'Interações por Cargo',
+                chartEvolucao: 'Evolução Mensal das Interações',
+                chartCanal: 'Canal de Relacionamento',
+                chartHeatmap: 'Mapa de Atividade por Dia da Semana',
+                chartFunil: 'Funil de Engajamento',
+                chartTempo: 'Tempo Médio Sem Contato (dias)',
+                chartNovos: 'Novos Contatos Criados por Mês',
+            },
+            lastInsights: null,
+            modalChart: null,
             firstLoad: true,
             resizeHandlerBound: false,
+            cardActionsInjected: false,
         };
 
         const HOME_PALETTE = ['#22d3ee', '#3b82f6', '#a855f7', '#ec4899', '#f97316', '#facc15', '#22c55e', '#14b8a6'];
@@ -6488,8 +6663,16 @@
                     HOME_STATE.charts[id].dispose();
                 }
             } catch (_) {}
+            // garante container vivo (caso tenha sido substituído por empty state antes)
+            if (el.querySelector('.home-empty')) el.innerHTML = '';
             const chart = echarts.init(el, null, { renderer: 'canvas' });
             HOME_STATE.charts[id] = chart;
+            // intercept setOption to also store the option for later (maximize modal)
+            const origSetOption = chart.setOption.bind(chart);
+            chart.setOption = (option, ...rest) => {
+                HOME_STATE.chartOptions[id] = option;
+                return origSetOption(option, ...rest);
+            };
             return chart;
         }
 
@@ -6500,7 +6683,136 @@
                 try { HOME_STATE.charts[id].dispose(); } catch (_) {}
                 delete HOME_STATE.charts[id];
             }
+            HOME_STATE.chartOptions[id] = null;
             el.innerHTML = `<div class="home-empty"><i class="fas fa-chart-simple"></i><span>${escapeHtml(msg)}</span></div>`;
+        }
+
+        function _homeInjectCardActions() {
+            if (HOME_STATE.cardActionsInjected) return;
+            const cards = document.querySelectorAll('#home .home-card');
+            cards.forEach(card => {
+                const head = card.querySelector('.home-card-head');
+                const chartEl = card.querySelector('.home-chart');
+                if (!head || !chartEl || head.querySelector('.home-card-actions')) return;
+                const chartId = chartEl.id;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'home-card-actions';
+                btn.title = 'Expandir';
+                btn.setAttribute('aria-label', 'Expandir gráfico');
+                btn.innerHTML = '<i class="fas fa-up-right-and-down-left-from-center"></i>';
+                btn.onclick = () => openHomeChartModal(chartId);
+                head.appendChild(btn);
+            });
+            HOME_STATE.cardActionsInjected = true;
+        }
+
+        function _homeOpenModal(title, bodyHtml) {
+            const modal = document.getElementById('homeModal');
+            const titleEl = document.getElementById('homeModalTitle');
+            const bodyEl = document.getElementById('homeModalBody');
+            if (!modal || !bodyEl || !titleEl) return;
+            // Dispose any previous modal chart
+            if (HOME_STATE.modalChart) {
+                try { HOME_STATE.modalChart.dispose(); } catch (_) {}
+                HOME_STATE.modalChart = null;
+            }
+            titleEl.textContent = title || '';
+            bodyEl.innerHTML = bodyHtml;
+            modal.classList.add('active');
+            document.addEventListener('keydown', _homeModalEsc);
+        }
+        function _homeModalEsc(e) { if (e.key === 'Escape') closeHomeModal(); }
+        function closeHomeModal() {
+            const modal = document.getElementById('homeModal');
+            if (!modal) return;
+            modal.classList.remove('active');
+            if (HOME_STATE.modalChart) {
+                try { HOME_STATE.modalChart.dispose(); } catch (_) {}
+                HOME_STATE.modalChart = null;
+            }
+            document.removeEventListener('keydown', _homeModalEsc);
+        }
+
+        function openHomeChartModal(chartId) {
+            const title = HOME_STATE.chartTitles[chartId] || 'Gráfico';
+            const option = HOME_STATE.chartOptions[chartId];
+            if (!option) {
+                _homeOpenModal(title, '<div class="home-empty" style="min-height:60vh;"><i class="fas fa-chart-simple"></i><span>Sem dados para exibir.</span></div>');
+                return;
+            }
+            _homeOpenModal(title, '<div id="homeModalChart" class="home-modal-chart"></div>');
+            setTimeout(() => {
+                const el = document.getElementById('homeModalChart');
+                if (!el) return;
+                const chart = echarts.init(el, null, { renderer: 'canvas' });
+                HOME_STATE.modalChart = chart;
+                // Re-render with the same option; ECharts adapta ao container maior automaticamente
+                chart.setOption(option, true);
+            }, 30);
+        }
+
+        function openHomeGrowthRanking() {
+            const ins = HOME_STATE.lastInsights || {};
+            const ranking = ins.crescimento_ranking || [];
+            const ymAtual = ins.crescimento_ym_atual || '';
+            const ymAnterior = ins.crescimento_ym_anterior || '';
+
+            const labelAtual = ymAtual ? _homeFmtMonthLong(ymAtual) : 'Mês atual';
+            const labelAnterior = ymAnterior ? _homeFmtMonthLong(ymAnterior) : 'Mês anterior';
+
+            if (!ranking.length) {
+                _homeOpenModal('Ranking de Crescimento de Interação', `
+                    <div class="home-empty" style="min-height:40vh;">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Sem dados de comparação entre meses ainda.</span>
+                    </div>
+                `);
+                return;
+            }
+
+            const rows = ranking.map((it, i) => {
+                let pctCell;
+                if (it.is_new) {
+                    pctCell = '<span class="home-ranking-pct new">NOVO</span>';
+                } else if (it.growth_pct === null || it.growth_pct === undefined) {
+                    pctCell = '<span class="home-ranking-pct zero">—</span>';
+                } else if (it.growth_pct > 0) {
+                    pctCell = `<span class="home-ranking-pct pos">▲ ${it.growth_pct}%</span>`;
+                } else if (it.growth_pct < 0) {
+                    pctCell = `<span class="home-ranking-pct neg">▼ ${Math.abs(it.growth_pct)}%</span>`;
+                } else {
+                    pctCell = '<span class="home-ranking-pct zero">= 0%</span>';
+                }
+                return `<tr>
+                    <td class="home-ranking-pos">${i + 1}</td>
+                    <td class="home-ranking-name">${escapeHtml(it.name || '-')}</td>
+                    <td class="home-ranking-num">${(it.anterior || 0).toLocaleString('pt-BR')}</td>
+                    <td class="home-ranking-num">${(it.atual || 0).toLocaleString('pt-BR')}</td>
+                    <td>${pctCell}</td>
+                </tr>`;
+            }).join('');
+
+            const html = `
+                <div class="home-ranking-meta">
+                    Comparativo entre <b>${escapeHtml(labelAnterior)}</b> e <b>${escapeHtml(labelAtual)}</b> &middot; ${ranking.length} contas com atividade
+                </div>
+                <div class="home-ranking-scroll">
+                    <table class="home-ranking-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Conta</th>
+                                <th style="text-align:right;">${escapeHtml(labelAnterior)}</th>
+                                <th style="text-align:right;">${escapeHtml(labelAtual)}</th>
+                                <th style="text-align:right;">Variação</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+            _homeOpenModal('Ranking de Crescimento de Interação', html);
         }
 
         function _homeBaseTooltip() {
@@ -6579,6 +6891,9 @@
                 Object.values(HOME_STATE.charts).forEach(chart => {
                     try { chart?.resize(); } catch (_) {}
                 });
+                if (HOME_STATE.modalChart) {
+                    try { HOME_STATE.modalChart.resize(); } catch (_) {}
+                }
             });
         }
 
@@ -6598,7 +6913,9 @@
                 const data = await resp.json();
 
                 HOME_STATE.availableMonths = data.meses_disponiveis || [];
+                HOME_STATE.lastInsights = data.insights || {};
                 _homePopulateMonthOptions();
+                _homeInjectCardActions();
 
                 _renderHomeKpis(data.kpis || {});
                 _renderHomeFaturamento(data.top_faturamento || []);
