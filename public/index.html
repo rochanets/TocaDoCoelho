@@ -7,6 +7,8 @@
     <link rel="icon" type="image/png" href="/images/favicon-toca.png">
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -2152,6 +2154,611 @@
         .bgtdl-item-sub { font-size: 11px; color: #6b7280; }
         .bgtdl-header { padding: 6px 16px 4px; font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; }
 
+        /* ============================================== */
+        /* HOME (Dashboard Executivo) — tema dark próprio  */
+        /* ============================================== */
+        #home {
+            --hm-bg-0: #0b1726;
+            --hm-bg-1: #0f1e30;
+            --hm-bg-card: rgba(20, 33, 50, 0.85);
+            --hm-bg-card-solid: #15243a;
+            --hm-border: rgba(255, 255, 255, 0.08);
+            --hm-border-strong: rgba(255, 255, 255, 0.14);
+            --hm-text: #e6ecf3;
+            --hm-text-muted: #8aa0b8;
+            --hm-text-dim: #5e7390;
+            --hm-cyan: #22d3ee;
+            --hm-blue: #3b82f6;
+            --hm-green: #22c55e;
+            --hm-yellow: #facc15;
+            --hm-red: #ef4444;
+            --hm-orange: #f97316;
+            --hm-violet: #a855f7;
+            --hm-pink: #ec4899;
+        }
+        #home.tab-content {
+            padding: 0;
+            font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        .home-shell {
+            background: linear-gradient(135deg, #061121 0%, #0b1d33 50%, #0a1525 100%);
+            color: var(--hm-text);
+            border-radius: 20px;
+            padding: 22px 22px 26px;
+            min-height: calc(100vh - 110px);
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+            position: relative;
+            overflow: hidden;
+        }
+        .home-shell::before {
+            content: '';
+            position: absolute;
+            top: -120px; right: -80px;
+            width: 380px; height: 380px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.18) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .home-shell::after {
+            content: '';
+            position: absolute;
+            bottom: -120px; left: 25%;
+            width: 320px; height: 320px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.12) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .home-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 24px;
+            flex-wrap: wrap;
+            margin-bottom: 18px;
+            position: relative;
+            z-index: 50;
+        }
+        .home-title-block h1 {
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.15;
+            color: #fff;
+            letter-spacing: -0.01em;
+            margin-bottom: 6px;
+        }
+        .home-title-block p {
+            font-size: 13px;
+            color: var(--hm-text-muted);
+            max-width: 720px;
+        }
+        .home-header-controls {
+            display: flex;
+            gap: 18px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .home-period-wrapper { position: relative; display: flex; flex-direction: column; gap: 4px; }
+        .home-period-label { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+        .home-period-trigger {
+            background: rgba(20, 33, 50, 0.85);
+            border: 1px solid var(--hm-border-strong);
+            color: var(--hm-text);
+            padding: 9px 14px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 180px;
+            justify-content: space-between;
+            transition: border-color 140ms var(--ease-out), background 140ms var(--ease-out);
+        }
+        .home-period-trigger:hover { border-color: var(--hm-cyan); }
+        .home-period-trigger i { font-size: 10px; color: var(--hm-text-muted); }
+        .home-period-menu {
+            display: none;
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            background: var(--hm-bg-card-solid);
+            border: 1px solid var(--hm-border-strong);
+            border-radius: 12px;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+            padding: 10px;
+            min-width: 260px;
+            z-index: 200;
+        }
+        .home-period-menu.open { display: block; }
+        .home-period-menu-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 6px 10px;
+            border-bottom: 1px solid var(--hm-border);
+            margin-bottom: 6px;
+        }
+        .home-period-all { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--hm-text); cursor: pointer; font-weight: 500; }
+        .home-period-all input { accent-color: var(--hm-cyan); }
+        .home-period-apply {
+            background: var(--hm-cyan);
+            color: #062533;
+            border: none;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .home-period-apply:hover { background: #67e8f9; }
+        .home-period-menu-body { max-height: 260px; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; padding: 2px 4px 4px; }
+        .home-period-menu-body::-webkit-scrollbar { width: 6px; }
+        .home-period-menu-body::-webkit-scrollbar-thumb { background: var(--hm-border-strong); border-radius: 4px; }
+        .home-month-opt {
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+            padding: 5px 6px;
+            font-size: 13px;
+            color: var(--hm-text);
+            cursor: pointer;
+            border-radius: 6px;
+        }
+        .home-month-opt:hover { background: rgba(34, 211, 238, 0.08); }
+        .home-month-opt input { accent-color: var(--hm-cyan); }
+        .home-update-block { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+        .home-update-stamp {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--hm-text-muted);
+        }
+        .home-update-text { display: flex; flex-direction: column; align-items: flex-end; }
+        .home-update-stamp-label { display: block; font-size: 11px; color: var(--hm-text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+        .home-update-stamp-value { display: block; font-size: 13px; color: var(--hm-text); font-weight: 600; }
+        .home-export-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            background: transparent;
+            color: var(--hm-text-muted);
+            border: 1px solid var(--hm-border);
+            padding: 5px 11px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 140ms var(--ease-out), color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+        }
+        .home-export-btn:hover { background: rgba(34, 211, 238, 0.08); color: var(--hm-cyan); border-color: rgba(34, 211, 238, 0.35); }
+        .home-export-btn[disabled] { opacity: 0.6; cursor: progress; }
+        .home-export-btn i { font-size: 10px; }
+        .home-refresh-btn {
+            background: rgba(20, 33, 50, 0.85);
+            color: var(--hm-text);
+            border: 1px solid var(--hm-border-strong);
+            border-radius: 999px;
+            width: 34px; height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 140ms var(--ease-out), color 140ms var(--ease-out), transform 200ms var(--ease-out);
+        }
+        .home-refresh-btn:hover { background: var(--hm-cyan); color: #062533; transform: rotate(60deg); }
+
+        /* KPI cards */
+        .home-kpi-row {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 14px;
+            margin-bottom: 16px;
+            position: relative;
+            z-index: 1;
+        }
+        .home-kpi-card {
+            background: var(--hm-bg-card);
+            border: 1px solid var(--hm-border);
+            border-radius: 14px;
+            padding: 14px 16px;
+            display: flex;
+            gap: 14px;
+            align-items: center;
+            backdrop-filter: blur(8px);
+            transition: transform 200ms var(--ease-out), border-color 200ms var(--ease-out);
+        }
+        .home-kpi-card:hover { transform: translateY(-2px); border-color: var(--hm-border-strong); }
+        .home-kpi-icon {
+            width: 44px; height: 44px;
+            border-radius: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+        .home-kpi-body { min-width: 0; flex: 1; }
+        .home-kpi-label { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 2px; line-height: 1.2; }
+        .home-kpi-value { font-size: 26px; font-weight: 700; color: #fff; line-height: 1.1; letter-spacing: -0.02em; }
+        .home-kpi-foot { font-size: 11px; color: var(--hm-text-dim); margin-top: 2px; font-weight: 500; }
+        .home-kpi-foot.delta-up { color: var(--hm-green); }
+        .home-kpi-foot.delta-down { color: var(--hm-red); }
+        .home-kpi-foot.delta-up::before { content: '▲ '; }
+        .home-kpi-foot.delta-down::before { content: '▼ '; }
+        .kpi-accent-cyan .home-kpi-icon { background: rgba(34, 211, 238, 0.15); color: var(--hm-cyan); }
+        .kpi-accent-blue .home-kpi-icon { background: rgba(59, 130, 246, 0.15); color: var(--hm-blue); }
+        .kpi-accent-green .home-kpi-icon { background: rgba(34, 197, 94, 0.15); color: var(--hm-green); }
+        .kpi-accent-green .home-kpi-value { color: var(--hm-green); }
+        .kpi-accent-yellow .home-kpi-icon { background: rgba(250, 204, 21, 0.15); color: var(--hm-yellow); }
+        .kpi-accent-yellow .home-kpi-value { color: var(--hm-yellow); }
+        .kpi-accent-red .home-kpi-icon { background: rgba(239, 68, 68, 0.15); color: var(--hm-red); }
+        .kpi-accent-red .home-kpi-value { color: var(--hm-red); }
+        .kpi-accent-violet .home-kpi-icon { background: rgba(168, 85, 247, 0.15); color: var(--hm-violet); }
+
+        /* User card (substitui Cobertura na KPI row) */
+        .home-user-card {
+            padding: 12px 16px;
+            gap: 14px;
+            background: linear-gradient(135deg, rgba(34, 211, 238, 0.08) 0%, rgba(20, 33, 50, 0.85) 100%);
+            border-color: rgba(34, 211, 238, 0.22);
+        }
+        .home-user-avatar {
+            width: 56px; height: 56px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            overflow: hidden;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #22d3ee, #3b82f6);
+            color: #062533;
+            font-size: 22px;
+            font-weight: 700;
+            border: 2px solid rgba(34, 211, 238, 0.45);
+            box-shadow: 0 6px 18px rgba(34, 211, 238, 0.25), inset 0 0 0 2px rgba(255, 255, 255, 0.08);
+            position: relative;
+        }
+        .home-user-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .home-user-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+        .home-user-greeting { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+        .home-user-name { font-size: 18px; font-weight: 700; color: #fff; line-height: 1.15; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .home-user-role { font-size: 11px; color: var(--hm-text-dim); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* Cobertura card (no aside, acima de Insights) */
+        .home-cobertura-card {
+            background: linear-gradient(135deg, rgba(168, 85, 247, 0.18) 0%, rgba(20, 33, 50, 0.9) 100%);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 14px;
+            padding: 14px 16px;
+            position: relative;
+        }
+        .home-cobertura-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .home-cobertura-label { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px; }
+        .home-cobertura-value { font-size: 30px; font-weight: 700; color: #fff; line-height: 1.05; letter-spacing: -0.02em; }
+        .home-cobertura-foot { font-size: 11px; color: var(--hm-text-dim); margin-top: 2px; font-weight: 500; }
+        .home-cobertura-icon {
+            width: 42px; height: 42px;
+            border-radius: 12px;
+            background: rgba(168, 85, 247, 0.2);
+            color: var(--hm-violet);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .home-cobertura-info { right: 10px; top: 10px; bottom: auto; }
+
+        /* Tooltip da Cobertura: aparece à ESQUERDA do botão (entra na área de
+           gráficos), não acima — pra não extrapolar o dashboard nem ficar atrás
+           do topbar fixo (z-index 90, stacking context independente). */
+        .home-cobertura-card .home-kpi-info-tooltip {
+            bottom: auto;
+            top: 0;
+            right: calc(100% + 14px);
+            left: auto;
+            z-index: 9999;
+        }
+        .home-cobertura-card .home-kpi-info-tooltip::after {
+            top: 14px;
+            bottom: auto;
+            right: -12px;
+            left: auto;
+            border: 6px solid transparent;
+            border-top-color: transparent;
+            border-left-color: #07121f;
+        }
+
+        /* Main grid */
+        .home-main-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 280px;
+            gap: 16px;
+            position: relative;
+            z-index: 1;
+        }
+        @media (max-width: 1200px) {
+            .home-main-grid { grid-template-columns: 1fr; }
+            .home-insights { order: -1; }
+        }
+        .home-grid-area { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+        .home-row { display: grid; gap: 16px; min-width: 0; }
+        .home-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .home-row-3-balanced { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr); }
+        .home-row-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        @media (max-width: 1400px) {
+            .home-row-3, .home-row-3-balanced { grid-template-columns: 1fr 1fr; }
+            .home-row-4 { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 800px) {
+            .home-row-3, .home-row-3-balanced, .home-row-4 { grid-template-columns: 1fr; }
+            .home-kpi-row { grid-template-columns: 1fr 1fr; }
+        }
+
+        .home-card {
+            background: var(--hm-bg-card);
+            border: 1px solid var(--hm-border);
+            border-radius: 14px;
+            padding: 14px 16px 12px;
+            backdrop-filter: blur(8px);
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 220px;
+        }
+        .home-card-compact { min-height: 200px; }
+        .home-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; }
+        .home-card-head h3 { font-size: 13px; font-weight: 600; color: #fff; letter-spacing: 0.01em; flex: 1; min-width: 0; }
+        .home-card-actions {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--hm-text-dim);
+            width: 26px; height: 26px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            transition: background 140ms var(--ease-out), color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+            flex-shrink: 0;
+        }
+        .home-card-actions:hover { background: rgba(34, 211, 238, 0.1); color: var(--hm-cyan); border-color: rgba(34, 211, 238, 0.4); }
+        .home-card-danger .home-card-head h3 { color: #fca5a5; }
+        .home-chart { flex: 1; min-height: 180px; width: 100%; }
+        .home-card-compact .home-chart { min-height: 160px; }
+
+        /* KPI info button (cobertura) */
+        .home-kpi-card { position: relative; }
+        .home-kpi-info {
+            position: absolute;
+            right: 8px;
+            bottom: 8px;
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            background: transparent;
+            border: 1px solid var(--hm-border-strong);
+            color: var(--hm-text-muted);
+            font-size: 9px;
+            cursor: help;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            transition: color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+        }
+        .home-kpi-info:hover, .home-kpi-info:focus { color: var(--hm-cyan); border-color: var(--hm-cyan); outline: none; }
+        .home-kpi-info-tooltip {
+            position: absolute;
+            bottom: calc(100% + 8px);
+            right: -6px;
+            background: #0a1525;
+            background: linear-gradient(180deg, #0d1b30 0%, #07121f 100%);
+            border: 1px solid rgba(34, 211, 238, 0.25);
+            color: #f1f5f9;
+            padding: 12px 14px;
+            border-radius: 10px;
+            font-size: 12px;
+            width: 280px;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+            z-index: 300;
+            display: none;
+            line-height: 1.5;
+            pointer-events: none;
+            text-align: left;
+            font-weight: 400;
+            letter-spacing: 0;
+            text-transform: none;
+        }
+        .home-kpi-info-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            right: 10px;
+            border: 6px solid transparent;
+            border-top-color: #07121f;
+        }
+        .home-kpi-info-tooltip strong { color: var(--hm-cyan); display: block; margin-bottom: 4px; font-weight: 600; }
+        .home-kpi-info-tooltip code { background: rgba(34, 211, 238, 0.12); padding: 1px 5px; border-radius: 4px; font-family: 'Geist', monospace; font-size: 11px; color: var(--hm-cyan); }
+        .home-kpi-info:hover + .home-kpi-info-tooltip,
+        .home-kpi-info:focus + .home-kpi-info-tooltip { display: block; }
+
+        /* Chart maximize modal */
+        .home-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 9000;
+            background: rgba(4, 12, 22, 0.78);
+            backdrop-filter: blur(6px);
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .home-modal.active { display: flex; }
+        .home-modal-content {
+            background: linear-gradient(135deg, #0b1d33 0%, #15243a 100%);
+            border: 1px solid var(--hm-border-strong);
+            border-radius: 18px;
+            width: min(1100px, 92vw);
+            max-height: 88vh;
+            padding: 20px 22px 22px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            color: var(--hm-text);
+        }
+        .home-modal-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            gap: 12px;
+        }
+        .home-modal-head h2 { font-size: 17px; font-weight: 600; color: #fff; }
+        .home-modal-close {
+            background: rgba(20, 33, 50, 0.7);
+            border: 1px solid var(--hm-border-strong);
+            color: var(--hm-text);
+            width: 32px; height: 32px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            transition: background 140ms var(--ease-out), color 140ms var(--ease-out);
+        }
+        .home-modal-close:hover { background: var(--hm-red); color: #fff; }
+        .home-modal-chart {
+            flex: 1;
+            min-height: 60vh;
+            width: 100%;
+        }
+
+        /* Growth ranking modal */
+        .home-ranking-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; color: var(--hm-text); }
+        .home-ranking-table thead th { text-align: left; font-weight: 600; color: var(--hm-text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; padding: 8px 10px; border-bottom: 1px solid var(--hm-border); position: sticky; top: 0; background: linear-gradient(135deg, #0b1d33 0%, #15243a 100%); }
+        .home-ranking-table tbody tr { transition: background 120ms var(--ease-out); }
+        .home-ranking-table tbody tr:hover { background: rgba(34, 211, 238, 0.04); }
+        .home-ranking-table tbody td { padding: 10px; border-bottom: 1px solid var(--hm-border); vertical-align: middle; }
+        .home-ranking-pos { color: var(--hm-text-dim); font-weight: 700; width: 36px; }
+        .home-ranking-name { font-weight: 500; color: #fff; }
+        .home-ranking-num { text-align: right; color: var(--hm-text-muted); font-variant-numeric: tabular-nums; }
+        .home-ranking-pct { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .home-ranking-pct.pos { color: var(--hm-green); }
+        .home-ranking-pct.neg { color: var(--hm-red); }
+        .home-ranking-pct.zero { color: var(--hm-text-muted); }
+        .home-ranking-pct.new { color: var(--hm-cyan); }
+        .home-ranking-meta { font-size: 12px; color: var(--hm-text-muted); margin-bottom: 10px; }
+        .home-ranking-scroll { overflow-y: auto; flex: 1; min-height: 0; border-radius: 10px; border: 1px solid var(--hm-border); }
+        .home-ranking-scroll::-webkit-scrollbar { width: 8px; }
+        .home-ranking-scroll::-webkit-scrollbar-thumb { background: var(--hm-border-strong); border-radius: 4px; }
+
+        .home-empty {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: var(--hm-text-dim);
+            font-size: 12px;
+            padding: 24px 8px;
+            gap: 6px;
+            height: 100%;
+        }
+        .home-empty i { font-size: 22px; color: var(--hm-text-dim); opacity: 0.5; }
+
+        .home-heatmap-legend {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: var(--hm-text-dim);
+            margin-top: 6px;
+            gap: 10px;
+        }
+        .home-heatmap-gradient {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: linear-gradient(to right, rgba(34, 211, 238, 0.08) 0%, rgba(34, 211, 238, 0.4) 50%, var(--hm-cyan) 100%);
+        }
+
+        /* Insights sidebar */
+        .home-insights {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-width: 0;
+        }
+        .home-insights-title { font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 2px; }
+        .home-insight {
+            background: var(--hm-bg-card);
+            border: 1px solid var(--hm-border);
+            border-radius: 14px;
+            padding: 14px;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            border-left: 3px solid transparent;
+        }
+        .home-insight-danger { border-left-color: var(--hm-red); }
+        .home-insight-success { border-left-color: var(--hm-green); }
+        .home-insight-warning { border-left-color: var(--hm-yellow); }
+        .home-insight-info { border-left-color: var(--hm-cyan); }
+        .home-insight-icon {
+            width: 32px; height: 32px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 15px;
+            flex-shrink: 0;
+        }
+        .home-insight-danger .home-insight-icon { background: rgba(239, 68, 68, 0.15); color: var(--hm-red); }
+        .home-insight-success .home-insight-icon { background: rgba(34, 197, 94, 0.15); color: var(--hm-green); }
+        .home-insight-warning .home-insight-icon { background: rgba(250, 204, 21, 0.15); color: var(--hm-yellow); }
+        .home-insight-info .home-insight-icon { background: rgba(34, 211, 238, 0.15); color: var(--hm-cyan); }
+        .home-insight-body { min-width: 0; flex: 1; font-size: 13px; line-height: 1.4; }
+        .home-insight-title { color: var(--hm-text); margin-bottom: 6px; }
+        .home-insight-title strong { color: #fff; font-size: 16px; font-weight: 700; margin-right: 4px; }
+        .home-insight-title span { color: var(--hm-text-muted); display: block; font-size: 12px; }
+        .home-insight-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 8px; font-size: 12px; }
+        .home-insight-list .ins-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .home-insight-list .ins-item-name { color: var(--hm-text); }
+        .home-insight-list .ins-item-val { color: var(--hm-green); font-weight: 700; }
+        .home-insight-big { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 8px; }
+        .home-insight-big strong { font-size: 28px; color: #fff; font-weight: 700; line-height: 1; }
+        .home-insight-big span { color: var(--hm-text-muted); font-size: 12px; }
+        .home-insight-meta { display: flex; gap: 14px; margin: 6px 0 8px; font-size: 12px; color: var(--hm-text-muted); }
+        .home-insight-meta strong { color: #fff; font-weight: 700; margin-left: 4px; }
+        .home-insight-link { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--hm-cyan); font-weight: 500; text-decoration: none; cursor: pointer; }
+        .home-insight-link:hover { text-decoration: underline; }
+        .home-insight-link i { font-size: 10px; }
+
+        /* Loading overlay */
+        .home-loading-bar {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            overflow: hidden;
+            border-radius: 20px 20px 0 0;
+        }
+        .home-loading-bar::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, var(--hm-cyan), transparent);
+            animation: home-loading-slide 1.4s ease-in-out infinite;
+        }
+        @keyframes home-loading-slide {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
     </style>
 </head>
 <body>
@@ -2162,11 +2769,15 @@
             <img class="sidebar-logo-expanded" src="/logo-coelho.png" alt="Coelho Toca do Coelho">
         </div>
 
+            <button class="nav-item nav-home active" onclick="switchTab(event, 'home')">
+                <i class="fas fa-house"></i>
+                <span>Home</span>
+            </button>
             <button class="nav-item nav-iata" onclick="switchTab(event, 'iata')">
                 <i class="fas fa-robot"></i>
                 <span>iToca</span>
             </button>
-            <button class="nav-item nav-dashboard active" onclick="switchTab(event, 'dashboard')">
+            <button class="nav-item nav-dashboard" onclick="switchTab(event, 'dashboard')">
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
@@ -2232,6 +2843,237 @@
         <div class="alert alert-success" id="successMsg"></div>
         <div id="orgSuccessMsg"></div>
         <div class="alert alert-error" id="errorMsg"></div>
+
+        <!-- HOME (Dashboard Executivo) -->
+        <div id="home" class="tab-content active">
+            <div class="home-shell">
+                <div class="home-header">
+                    <div class="home-title-block">
+                        <h1>Dashboard Executivo de Relacionamento com Clientes</h1>
+                        <p>Visão estratégica da evolução do relacionamento, cobertura e engajamento das contas.</p>
+                    </div>
+                    <div class="home-header-controls">
+                        <div class="home-period-wrapper">
+                            <label class="home-period-label">Período</label>
+                            <button type="button" class="home-period-trigger" id="homePeriodTrigger" onclick="toggleHomePeriodMenu(event)">
+                                <span id="homePeriodLabel">Todo o período</span>
+                                <i class="fas fa-chevron-down"></i>
+                            </button>
+                            <div class="home-period-menu" id="homePeriodMenu" role="menu">
+                                <div class="home-period-menu-head">
+                                    <label class="home-period-all">
+                                        <input type="checkbox" id="homePeriodAll" checked onchange="toggleHomePeriodAll(this)">
+                                        Todo o período
+                                    </label>
+                                    <button type="button" class="home-period-apply" onclick="applyHomePeriod()">Aplicar</button>
+                                </div>
+                                <div class="home-period-menu-body" id="homePeriodMonths">
+                                    <!-- meses preenchidos via JS -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="home-update-block">
+                            <div class="home-update-stamp">
+                                <div class="home-update-text">
+                                    <span class="home-update-stamp-label">Última atualização</span>
+                                    <span class="home-update-stamp-value" id="homeUpdateStamp">—</span>
+                                </div>
+                                <button type="button" class="home-refresh-btn" onclick="loadHome(true)" title="Atualizar dados">
+                                    <i class="fas fa-rotate-right"></i>
+                                </button>
+                            </div>
+                            <button type="button" class="home-export-btn" id="homeExportBtn" onclick="exportHomeDashboard()" title="Exportar dashboard como imagem PNG">
+                                <i class="fas fa-image"></i>
+                                <span>Exportar como imagem</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="home-kpi-row">
+                    <div class="home-kpi-card kpi-accent-cyan">
+                        <div class="home-kpi-icon"><i class="fas fa-people-group"></i></div>
+                        <div class="home-kpi-body">
+                            <div class="home-kpi-label">Total de Contas</div>
+                            <div class="home-kpi-value" id="kpiTotalAccounts">—</div>
+                            <div class="home-kpi-foot" id="kpiTotalAccountsFoot"></div>
+                        </div>
+                    </div>
+                    <div class="home-kpi-card kpi-accent-blue">
+                        <div class="home-kpi-icon"><i class="fas fa-id-card"></i></div>
+                        <div class="home-kpi-body">
+                            <div class="home-kpi-label">Total de Contatos</div>
+                            <div class="home-kpi-value" id="kpiTotalContacts">—</div>
+                            <div class="home-kpi-foot" id="kpiTotalContactsFoot"></div>
+                        </div>
+                    </div>
+                    <div class="home-kpi-card kpi-accent-green">
+                        <div class="home-kpi-icon"><i class="fas fa-circle-check"></i></div>
+                        <div class="home-kpi-body">
+                            <div class="home-kpi-label">Em Dia</div>
+                            <div class="home-kpi-value" id="kpiEmDia">—</div>
+                            <div class="home-kpi-foot" id="kpiEmDiaFoot"></div>
+                        </div>
+                    </div>
+                    <div class="home-kpi-card kpi-accent-yellow">
+                        <div class="home-kpi-icon"><i class="fas fa-circle-exclamation"></i></div>
+                        <div class="home-kpi-body">
+                            <div class="home-kpi-label">Atenção</div>
+                            <div class="home-kpi-value" id="kpiAtencao">—</div>
+                            <div class="home-kpi-foot" id="kpiAtencaoFoot"></div>
+                        </div>
+                    </div>
+                    <div class="home-kpi-card kpi-accent-red">
+                        <div class="home-kpi-icon"><i class="fas fa-triangle-exclamation"></i></div>
+                        <div class="home-kpi-body">
+                            <div class="home-kpi-label">Atrasado</div>
+                            <div class="home-kpi-value" id="kpiAtrasado">—</div>
+                            <div class="home-kpi-foot" id="kpiAtrasadoFoot"></div>
+                        </div>
+                    </div>
+                    <div class="home-kpi-card home-user-card" id="homeUserCard">
+                        <div class="home-user-avatar" id="homeUserAvatar">
+                            <span id="homeUserInitial">U</span>
+                        </div>
+                        <div class="home-user-body">
+                            <div class="home-user-greeting" id="homeUserGreeting">Olá</div>
+                            <div class="home-user-name" id="homeUserName">—</div>
+                            <div class="home-user-role" id="homeUserRole"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="home-main-grid">
+                    <div class="home-grid-area">
+                        <div class="home-row home-row-3">
+                            <div class="home-card">
+                                <div class="home-card-head"><h3>Top 10 Contas por Faturamento</h3></div>
+                                <div class="home-chart" id="chartFaturamento"></div>
+                            </div>
+                            <div class="home-card">
+                                <div class="home-card-head"><h3>Top 10 Contas com Mais Interações</h3></div>
+                                <div class="home-chart" id="chartInteracoes"></div>
+                            </div>
+                            <div class="home-card home-card-danger">
+                                <div class="home-card-head"><h3>Top 5 Contas Target com Menor Nível de Interação</h3></div>
+                                <div class="home-chart" id="chartTargetMenor"></div>
+                            </div>
+                        </div>
+
+                        <div class="home-row home-row-3-balanced">
+                            <div class="home-card home-card-narrow">
+                                <div class="home-card-head"><h3>Interações por Cargo</h3></div>
+                                <div class="home-chart" id="chartCargo"></div>
+                            </div>
+                            <div class="home-card home-card-wide">
+                                <div class="home-card-head"><h3>Evolução Mensal das Interações</h3></div>
+                                <div class="home-chart" id="chartEvolucao"></div>
+                            </div>
+                            <div class="home-card home-card-narrow">
+                                <div class="home-card-head"><h3>Canal de Relacionamento</h3></div>
+                                <div class="home-chart" id="chartCanal"></div>
+                            </div>
+                        </div>
+
+                        <div class="home-row home-row-4">
+                            <div class="home-card home-card-compact">
+                                <div class="home-card-head"><h3>Mapa de Atividade por Dia da Semana</h3></div>
+                                <div class="home-chart" id="chartHeatmap"></div>
+                                <div class="home-heatmap-legend">
+                                    <span>Baixa atividade</span>
+                                    <span class="home-heatmap-gradient"></span>
+                                    <span>Alta atividade</span>
+                                </div>
+                            </div>
+                            <div class="home-card home-card-compact">
+                                <div class="home-card-head"><h3>Funil de Engajamento</h3></div>
+                                <div class="home-chart" id="chartFunil"></div>
+                            </div>
+                            <div class="home-card home-card-compact">
+                                <div class="home-card-head"><h3>Tempo Médio Sem Contato (dias)</h3></div>
+                                <div class="home-chart" id="chartTempo"></div>
+                            </div>
+                            <div class="home-card home-card-compact">
+                                <div class="home-card-head"><h3>Novos Contatos Criados por Mês</h3></div>
+                                <div class="home-chart" id="chartNovos"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <aside class="home-insights">
+                        <div class="home-cobertura-card">
+                            <div class="home-cobertura-head">
+                                <div>
+                                    <div class="home-cobertura-label">Cobertura de Relacionamento</div>
+                                    <div class="home-cobertura-value" id="kpiCobertura">—</div>
+                                    <div class="home-cobertura-foot" id="kpiCoberturaFoot"></div>
+                                </div>
+                                <div class="home-cobertura-icon"><i class="fas fa-bullseye"></i></div>
+                            </div>
+                            <button type="button" class="home-kpi-info home-cobertura-info" aria-label="Como é calculado" tabindex="0">
+                                <i class="fas fa-info"></i>
+                            </button>
+                            <div class="home-kpi-info-tooltip" role="tooltip">
+                                <strong>Como é calculado</strong>
+                                Percentual de contas que tiveram <b>pelo menos uma interação registrada</b> dentro do período filtrado, sobre o total de contas cadastradas.
+                                <br><br>
+                                <code>cobertura = contas com interação ÷ total de contas × 100</code>
+                                <br><br>
+                                Considera registros das tabelas <code>activities</code> (via contato) e <code>account_activities</code> (direto na conta).
+                            </div>
+                        </div>
+                        <h2 class="home-insights-title">Insights &amp; Alertas</h2>
+                        <div class="home-insight home-insight-danger" id="insightTargetSemContato">
+                            <div class="home-insight-icon"><i class="fas fa-triangle-exclamation"></i></div>
+                            <div class="home-insight-body">
+                                <div class="home-insight-title"><strong id="insTargetCount">0</strong> contas estratégicas <span>sem contato há mais de 20 dias</span></div>
+                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); switchTab(event, 'gestao-conta')">Ver detalhes <i class="fas fa-arrow-right"></i></a>
+                            </div>
+                        </div>
+                        <div class="home-insight home-insight-success" id="insightCrescimento">
+                            <div class="home-insight-icon"><i class="fas fa-arrow-trend-up"></i></div>
+                            <div class="home-insight-body">
+                                <div class="home-insight-title">Contas com maior crescimento de interação no mês</div>
+                                <div class="home-insight-list" id="insGrowthList"></div>
+                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); openHomeGrowthRanking()">Ver ranking completo <i class="fas fa-arrow-right"></i></a>
+                            </div>
+                        </div>
+                        <div class="home-insight home-insight-warning" id="insightRisco">
+                            <div class="home-insight-icon"><i class="fas fa-circle-exclamation"></i></div>
+                            <div class="home-insight-body">
+                                <div class="home-insight-title">Risco de perda de proximidade em contas target</div>
+                                <div class="home-insight-big"><strong id="insRiscoCount">0</strong><span>Contas em atenção</span></div>
+                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); switchTab(event, 'gestao-conta')">Ver detalhes <i class="fas fa-arrow-right"></i></a>
+                            </div>
+                        </div>
+                        <div class="home-insight home-insight-info" id="insightCobertura">
+                            <div class="home-insight-icon"><i class="fas fa-circle-info"></i></div>
+                            <div class="home-insight-body">
+                                <div class="home-insight-title">Cobertura de relacionamento abaixo da meta</div>
+                                <div class="home-insight-meta">
+                                    <div><span>Meta:</span> <strong>80%</strong></div>
+                                    <div><span>Atual:</span> <strong id="insCobAtual">—</strong></div>
+                                </div>
+                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); switchTab(event, 'reports')">Ver análise <i class="fas fa-arrow-right"></i></a>
+                            </div>
+                        </div>
+                    </aside>
+                </div>
+            </div>
+
+            <!-- Modal compartilhado (chart maximize / growth ranking) -->
+            <div class="home-modal" id="homeModal" onclick="if(event.target===this) closeHomeModal()" role="dialog" aria-modal="true">
+                <div class="home-modal-content">
+                    <div class="home-modal-head">
+                        <h2 id="homeModalTitle">—</h2>
+                        <button type="button" class="home-modal-close" onclick="closeHomeModal()" aria-label="Fechar">
+                            <i class="fas fa-xmark"></i>
+                        </button>
+                    </div>
+                    <div id="homeModalBody" style="flex:1; min-height:0; display:flex; flex-direction:column;"></div>
+                </div>
+            </div>
+        </div>
 
         <div id="iata" class="tab-content">
             <div class="page-header">
@@ -2406,7 +3248,7 @@
         </div>
 
         <!-- Dashboard Tab -->
-        <div id="dashboard" class="tab-content active">
+        <div id="dashboard" class="tab-content">
             <div class="page-header">
                 <div>
                     <h1>Dashboard</h1>
@@ -3698,6 +4540,7 @@
         // Rastreia a aba ativa anterior para detectar saída do iToca
         let _currentTab = 'dashboard';
         const TOPBAR_MODULE_COPY = {
+            home: { title: 'Home', subtitle: 'Dashboard executivo de relacionamento com clientes.' },
             dashboard: { title: 'Dashboard', subtitle: 'Visão geral dos seus contatos e status de relacionamento' },
             iata: { title: 'iToca', subtitle: 'Seu assistente ligeirinho para apoiar sua operação comercial.' },
             wikitoca: { title: 'WikiToca', subtitle: 'Base de conhecimento e documentos da operação.' },
@@ -3795,7 +4638,8 @@
                 _itocaSaveSessionAndClear();
             }
 
-            if (tabName === 'dashboard') loadDashboard();
+            if (tabName === 'home') loadHome();
+            else if (tabName === 'dashboard') loadDashboard();
             else if (tabName === 'iata') {
                 clearITocaChat();
                 loadITocaHistory();
@@ -5867,6 +6711,721 @@
             bellEl.title = weekCount > 0
                 ? `Você tem ${weekCount} compromisso(s) nesta semana`
                 : 'Nenhum compromisso nesta semana';
+        }
+
+        // =========================================================
+        // HOME — Dashboard Executivo (ECharts)
+        // =========================================================
+        const HOME_STATE = {
+            period: 'all',
+            months: [],
+            availableMonths: [],
+            charts: {},
+            chartOptions: {},
+            chartTitles: {
+                chartFaturamento: 'Top 10 Contas por Faturamento',
+                chartInteracoes: 'Top 10 Contas com Mais Interações',
+                chartTargetMenor: 'Top 5 Contas Target com Menor Nível de Interação',
+                chartCargo: 'Interações por Cargo',
+                chartEvolucao: 'Evolução Mensal das Interações',
+                chartCanal: 'Canal de Relacionamento',
+                chartHeatmap: 'Mapa de Atividade por Dia da Semana',
+                chartFunil: 'Funil de Engajamento',
+                chartTempo: 'Tempo Médio Sem Contato (dias)',
+                chartNovos: 'Novos Contatos Criados por Mês',
+            },
+            lastInsights: null,
+            modalChart: null,
+            firstLoad: true,
+            resizeHandlerBound: false,
+            cardActionsInjected: false,
+        };
+
+        const HOME_PALETTE = ['#22d3ee', '#3b82f6', '#a855f7', '#ec4899', '#f97316', '#facc15', '#22c55e', '#14b8a6'];
+
+        function _homeFmtMonthLabel(ym) {
+            if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return ym || '';
+            const [y, m] = ym.split('-').map(Number);
+            const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+            return `${meses[m - 1]}/${String(y).slice(2)}`;
+        }
+        function _homeFmtMonthLong(ym) {
+            if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return ym || '';
+            const [y, m] = ym.split('-').map(Number);
+            const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+            return `${meses[m - 1]}/${y}`;
+        }
+        function _homeFmtBRL(cents) {
+            const v = Number(cents || 0) / 100;
+            if (v >= 1_000_000) return `R$ ${(v / 1_000_000).toFixed(1).replace('.', ',')}M`;
+            if (v >= 1_000) return `R$ ${(v / 1_000).toFixed(0)}k`;
+            return `R$ ${v.toFixed(0)}`;
+        }
+        function _homeShortName(name, max = 18) {
+            if (!name) return '—';
+            const s = String(name).trim();
+            return s.length > max ? s.slice(0, max - 1) + '…' : s;
+        }
+
+        function _homeDisposeAllCharts() {
+            Object.keys(HOME_STATE.charts).forEach(key => {
+                try { HOME_STATE.charts[key]?.dispose(); } catch (_) {}
+            });
+            HOME_STATE.charts = {};
+        }
+
+        function _homeInitChart(id) {
+            const el = document.getElementById(id);
+            if (!el) return null;
+            try {
+                if (HOME_STATE.charts[id]) {
+                    HOME_STATE.charts[id].dispose();
+                }
+            } catch (_) {}
+            // garante container vivo (caso tenha sido substituído por empty state antes)
+            if (el.querySelector('.home-empty')) el.innerHTML = '';
+            const chart = echarts.init(el, null, { renderer: 'canvas' });
+            HOME_STATE.charts[id] = chart;
+            // intercept setOption to also store the option for later (maximize modal)
+            const origSetOption = chart.setOption.bind(chart);
+            chart.setOption = (option, ...rest) => {
+                HOME_STATE.chartOptions[id] = option;
+                return origSetOption(option, ...rest);
+            };
+            return chart;
+        }
+
+        function _homeRenderEmpty(id, msg = 'Sem dados no período') {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (HOME_STATE.charts[id]) {
+                try { HOME_STATE.charts[id].dispose(); } catch (_) {}
+                delete HOME_STATE.charts[id];
+            }
+            HOME_STATE.chartOptions[id] = null;
+            el.innerHTML = `<div class="home-empty"><i class="fas fa-chart-simple"></i><span>${escapeHtml(msg)}</span></div>`;
+        }
+
+        function _homeInjectCardActions() {
+            if (HOME_STATE.cardActionsInjected) return;
+            const cards = document.querySelectorAll('#home .home-card');
+            cards.forEach(card => {
+                const head = card.querySelector('.home-card-head');
+                const chartEl = card.querySelector('.home-chart');
+                if (!head || !chartEl || head.querySelector('.home-card-actions')) return;
+                const chartId = chartEl.id;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'home-card-actions';
+                btn.title = 'Expandir';
+                btn.setAttribute('aria-label', 'Expandir gráfico');
+                btn.innerHTML = '<i class="fas fa-up-right-and-down-left-from-center"></i>';
+                btn.onclick = () => openHomeChartModal(chartId);
+                head.appendChild(btn);
+            });
+            HOME_STATE.cardActionsInjected = true;
+        }
+
+        function _homeOpenModal(title, bodyHtml) {
+            const modal = document.getElementById('homeModal');
+            const titleEl = document.getElementById('homeModalTitle');
+            const bodyEl = document.getElementById('homeModalBody');
+            if (!modal || !bodyEl || !titleEl) return;
+            // Dispose any previous modal chart
+            if (HOME_STATE.modalChart) {
+                try { HOME_STATE.modalChart.dispose(); } catch (_) {}
+                HOME_STATE.modalChart = null;
+            }
+            titleEl.textContent = title || '';
+            bodyEl.innerHTML = bodyHtml;
+            modal.classList.add('active');
+            document.addEventListener('keydown', _homeModalEsc);
+        }
+        function _homeModalEsc(e) { if (e.key === 'Escape') closeHomeModal(); }
+        function closeHomeModal() {
+            const modal = document.getElementById('homeModal');
+            if (!modal) return;
+            modal.classList.remove('active');
+            if (HOME_STATE.modalChart) {
+                try { HOME_STATE.modalChart.dispose(); } catch (_) {}
+                HOME_STATE.modalChart = null;
+            }
+            document.removeEventListener('keydown', _homeModalEsc);
+        }
+
+        function openHomeChartModal(chartId) {
+            const title = HOME_STATE.chartTitles[chartId] || 'Gráfico';
+            const option = HOME_STATE.chartOptions[chartId];
+            if (!option) {
+                _homeOpenModal(title, '<div class="home-empty" style="min-height:60vh;"><i class="fas fa-chart-simple"></i><span>Sem dados para exibir.</span></div>');
+                return;
+            }
+            _homeOpenModal(title, '<div id="homeModalChart" class="home-modal-chart"></div>');
+            setTimeout(() => {
+                const el = document.getElementById('homeModalChart');
+                if (!el) return;
+                const chart = echarts.init(el, null, { renderer: 'canvas' });
+                HOME_STATE.modalChart = chart;
+                // Re-render with the same option; ECharts adapta ao container maior automaticamente
+                chart.setOption(option, true);
+            }, 30);
+        }
+
+        function openHomeGrowthRanking() {
+            const ins = HOME_STATE.lastInsights || {};
+            const ranking = ins.crescimento_ranking || [];
+            const ymAtual = ins.crescimento_ym_atual || '';
+            const ymAnterior = ins.crescimento_ym_anterior || '';
+
+            const labelAtual = ymAtual ? _homeFmtMonthLong(ymAtual) : 'Mês atual';
+            const labelAnterior = ymAnterior ? _homeFmtMonthLong(ymAnterior) : 'Mês anterior';
+
+            if (!ranking.length) {
+                _homeOpenModal('Ranking de Crescimento de Interação', `
+                    <div class="home-empty" style="min-height:40vh;">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Sem dados de comparação entre meses ainda.</span>
+                    </div>
+                `);
+                return;
+            }
+
+            const rows = ranking.map((it, i) => {
+                let pctCell;
+                if (it.is_new) {
+                    pctCell = '<span class="home-ranking-pct new">NOVO</span>';
+                } else if (it.growth_pct === null || it.growth_pct === undefined) {
+                    pctCell = '<span class="home-ranking-pct zero">—</span>';
+                } else if (it.growth_pct > 0) {
+                    pctCell = `<span class="home-ranking-pct pos">▲ ${it.growth_pct}%</span>`;
+                } else if (it.growth_pct < 0) {
+                    pctCell = `<span class="home-ranking-pct neg">▼ ${Math.abs(it.growth_pct)}%</span>`;
+                } else {
+                    pctCell = '<span class="home-ranking-pct zero">= 0%</span>';
+                }
+                return `<tr>
+                    <td class="home-ranking-pos">${i + 1}</td>
+                    <td class="home-ranking-name">${escapeHtml(it.name || '-')}</td>
+                    <td class="home-ranking-num">${(it.anterior || 0).toLocaleString('pt-BR')}</td>
+                    <td class="home-ranking-num">${(it.atual || 0).toLocaleString('pt-BR')}</td>
+                    <td>${pctCell}</td>
+                </tr>`;
+            }).join('');
+
+            const html = `
+                <div class="home-ranking-meta">
+                    Comparativo entre <b>${escapeHtml(labelAnterior)}</b> e <b>${escapeHtml(labelAtual)}</b> &middot; ${ranking.length} contas com atividade
+                </div>
+                <div class="home-ranking-scroll">
+                    <table class="home-ranking-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Conta</th>
+                                <th style="text-align:right;">${escapeHtml(labelAnterior)}</th>
+                                <th style="text-align:right;">${escapeHtml(labelAtual)}</th>
+                                <th style="text-align:right;">Variação</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+            _homeOpenModal('Ranking de Crescimento de Interação', html);
+        }
+
+        function _homeBaseTooltip() {
+            return {
+                backgroundColor: 'rgba(15, 30, 48, 0.95)',
+                borderColor: 'rgba(255,255,255,0.15)',
+                borderWidth: 1,
+                textStyle: { color: '#e6ecf3', fontSize: 12, fontFamily: 'Geist' },
+                extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,0.4); border-radius: 8px;',
+            };
+        }
+
+        function toggleHomePeriodMenu(ev) {
+            if (ev) ev.stopPropagation();
+            const menu = document.getElementById('homePeriodMenu');
+            if (!menu) return;
+            menu.classList.toggle('open');
+            if (menu.classList.contains('open')) {
+                setTimeout(() => {
+                    document.addEventListener('click', _homeClosePeriodMenuOutside, { once: true });
+                }, 0);
+            }
+        }
+        function _homeClosePeriodMenuOutside(e) {
+            const menu = document.getElementById('homePeriodMenu');
+            const trigger = document.getElementById('homePeriodTrigger');
+            if (!menu) return;
+            if (menu.contains(e.target) || trigger.contains(e.target)) {
+                document.addEventListener('click', _homeClosePeriodMenuOutside, { once: true });
+                return;
+            }
+            menu.classList.remove('open');
+        }
+        function toggleHomePeriodAll(checkbox) {
+            if (!checkbox.checked) return;
+            document.querySelectorAll('.home-month-opt input').forEach(cb => { cb.checked = false; });
+        }
+        function _homePopulateMonthOptions() {
+            const wrap = document.getElementById('homePeriodMonths');
+            if (!wrap) return;
+            if (!HOME_STATE.availableMonths.length) {
+                wrap.innerHTML = '<div style="grid-column:1/-1; padding:8px 6px; font-size:12px; color:var(--hm-text-muted);">Nenhum mês com dados ainda.</div>';
+                return;
+            }
+            wrap.innerHTML = HOME_STATE.availableMonths.map(ym => {
+                const checked = HOME_STATE.months.includes(ym);
+                return `<label class="home-month-opt"><input type="checkbox" value="${ym}" ${checked ? 'checked' : ''} onchange="_homeOnMonthToggle()"> ${_homeFmtMonthLong(ym)}</label>`;
+            }).join('');
+        }
+        function _homeOnMonthToggle() {
+            const any = Array.from(document.querySelectorAll('.home-month-opt input')).some(cb => cb.checked);
+            const allCb = document.getElementById('homePeriodAll');
+            if (allCb) allCb.checked = !any;
+        }
+        function applyHomePeriod() {
+            const allCb = document.getElementById('homePeriodAll');
+            const checked = Array.from(document.querySelectorAll('.home-month-opt input:checked')).map(cb => cb.value);
+            if (allCb && allCb.checked || checked.length === 0) {
+                HOME_STATE.period = 'all';
+                HOME_STATE.months = [];
+                document.getElementById('homePeriodLabel').textContent = 'Todo o período';
+            } else {
+                HOME_STATE.period = 'months';
+                HOME_STATE.months = checked.sort();
+                const lbl = checked.length === 1 ? _homeFmtMonthLong(checked[0]) : `${checked.length} meses selecionados`;
+                document.getElementById('homePeriodLabel').textContent = lbl;
+            }
+            document.getElementById('homePeriodMenu')?.classList.remove('open');
+            loadHome(true);
+        }
+
+        function _homeBindResize() {
+            if (HOME_STATE.resizeHandlerBound) return;
+            HOME_STATE.resizeHandlerBound = true;
+            window.addEventListener('resize', () => {
+                Object.values(HOME_STATE.charts).forEach(chart => {
+                    try { chart?.resize(); } catch (_) {}
+                });
+                if (HOME_STATE.modalChart) {
+                    try { HOME_STATE.modalChart.resize(); } catch (_) {}
+                }
+            });
+        }
+
+        async function loadHome(force = false) {
+            const tab = document.getElementById('home');
+            if (!tab) return;
+
+            const params = new URLSearchParams();
+            params.set('period', HOME_STATE.period);
+            if (HOME_STATE.period === 'months' && HOME_STATE.months.length) {
+                params.set('months', HOME_STATE.months.join(','));
+            }
+
+            try {
+                const resp = await fetch(`/api/home/overview?${params.toString()}`);
+                if (!resp.ok) throw new Error('Falha ao carregar dados');
+                const data = await resp.json();
+
+                HOME_STATE.availableMonths = data.meses_disponiveis || [];
+                HOME_STATE.lastInsights = data.insights || {};
+                _homePopulateMonthOptions();
+                _homeInjectCardActions();
+
+                _renderHomeKpis(data.kpis || {});
+                _renderHomeUserCard();
+                _renderHomeFaturamento(data.top_faturamento || []);
+                _renderHomeInteracoes(data.top_interacoes || []);
+                _renderHomeTargetMenor(data.target_menor_interacao || []);
+                _renderHomeCargo(data.interacoes_cargo || []);
+                _renderHomeEvolucao(data.evolucao_mensal || []);
+                _renderHomeCanal(data.canais || []);
+                _renderHomeHeatmap(data.heatmap || []);
+                _renderHomeFunil(data.funil || []);
+                _renderHomeTempo(data.tempo_sem_contato || []);
+                _renderHomeNovos(data.novos_contatos || []);
+                _renderHomeInsights(data.insights || {}, data.kpis || {});
+
+                const stamp = document.getElementById('homeUpdateStamp');
+                if (stamp) {
+                    const now = new Date();
+                    stamp.textContent = now.toLocaleDateString('pt-BR') + ' ' + now.toTimeString().slice(0, 5);
+                }
+
+                _homeBindResize();
+            } catch (e) {
+                console.error('[home] erro:', e);
+                showError('Erro ao carregar dashboard Home.');
+            }
+        }
+
+        function _renderHomeKpis(k) {
+            const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+            const setFoot = (id, txt, cls = '') => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = txt || '';
+                el.className = 'home-kpi-foot' + (cls ? ' ' + cls : '');
+            };
+            const total = Number(k.total_contacts || 0);
+            const pct = n => total > 0 ? ` (${Math.round((Number(n || 0) / total) * 100)}% do total)` : '';
+            setText('kpiTotalAccounts', (k.total_accounts || 0).toLocaleString('pt-BR'));
+            setFoot('kpiTotalAccountsFoot', '');
+            setText('kpiTotalContacts', (k.total_contacts || 0).toLocaleString('pt-BR'));
+            setFoot('kpiTotalContactsFoot', '');
+            setText('kpiEmDia', (k.em_dia || 0).toLocaleString('pt-BR'));
+            setFoot('kpiEmDiaFoot', `${Math.round(((k.em_dia || 0) / Math.max(total, 1)) * 100)}% do total`);
+            setText('kpiAtencao', (k.atencao || 0).toLocaleString('pt-BR'));
+            setFoot('kpiAtencaoFoot', `${Math.round(((k.atencao || 0) / Math.max(total, 1)) * 100)}% do total`);
+            setText('kpiAtrasado', (k.atrasado || 0).toLocaleString('pt-BR'));
+            setFoot('kpiAtrasadoFoot', `${Math.round(((k.atrasado || 0) / Math.max(total, 1)) * 100)}% do total`);
+            setText('kpiCobertura', `${k.cobertura_pct || 0}%`);
+            const meta = 80;
+            const cob = Number(k.cobertura_pct || 0);
+            const diff = cob - meta;
+            const delta = diff === 0 ? `Meta atingida (${meta}%)` : (diff > 0 ? `${diff} p.p. acima da meta (${meta}%)` : `${Math.abs(diff)} p.p. abaixo da meta (${meta}%)`);
+            setFoot('kpiCoberturaFoot', delta, diff < 0 ? 'delta-down' : (diff > 0 ? 'delta-up' : ''));
+        }
+
+        function _renderHomeUserCard() {
+            const greetingEl = document.getElementById('homeUserGreeting');
+            const nameEl = document.getElementById('homeUserName');
+            const roleEl = document.getElementById('homeUserRole');
+            const avatarEl = document.getElementById('homeUserAvatar');
+            if (!greetingEl || !nameEl || !avatarEl) return;
+
+            const profile = (typeof userProfile === 'object' && userProfile) || {};
+            // Slot maior (mantém comportamento atual: nickname > full_name)
+            const lastNameDisplay = profile.nickname || profile.full_name || 'Visitante';
+            // Slot menor: primeiro nome extraído de full_name (apenas quando há ≥2 palavras)
+            const parts = (profile.full_name || '').trim().split(/\s+/).filter(Boolean);
+            const firstName = parts.length >= 2 ? parts[0] : '';
+            const role = profile.position || '';
+            const fullName = profile.full_name || profile.nickname || 'Visitante';
+
+            greetingEl.textContent = firstName;
+            greetingEl.style.display = firstName ? '' : 'none';
+            nameEl.textContent = lastNameDisplay;
+            if (roleEl) roleEl.textContent = role;
+            nameEl.title = fullName;
+
+            if (profile.photo_url) {
+                avatarEl.innerHTML = `<img src="${profile.photo_url}" alt="${escapeHtml(lastNameDisplay)}" onerror="this.parentElement.innerHTML='<span>${escapeHtml((lastNameDisplay || 'U').charAt(0).toUpperCase())}</span>'">`;
+            } else {
+                avatarEl.innerHTML = `<span>${escapeHtml((lastNameDisplay || 'U').charAt(0).toUpperCase())}</span>`;
+            }
+        }
+
+        async function exportHomeDashboard() {
+            const btn = document.getElementById('homeExportBtn');
+            const shell = document.querySelector('#home .home-shell');
+            if (!shell) return;
+            if (!window.html2canvas) {
+                showError('Biblioteca de exportação ainda não carregou. Tente novamente em instantes.');
+                return;
+            }
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Gerando…</span>';
+            }
+            try {
+                // Espera 1 frame para garantir que o spinner aparece e ECharts renderizou
+                await new Promise(r => requestAnimationFrame(r));
+                const canvas = await html2canvas(shell, {
+                    backgroundColor: '#061121',
+                    scale: 2,
+                    useCORS: true,
+                    allowTaint: false,
+                    logging: false,
+                    windowWidth: shell.scrollWidth,
+                    windowHeight: shell.scrollHeight,
+                });
+                const link = document.createElement('a');
+                const ts = new Date();
+                const stamp = `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}_${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}`;
+                link.download = `toca-home-dashboard_${stamp}.png`;
+                link.href = canvas.toDataURL('image/png');
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                if (typeof showInfo === 'function') showInfo('Dashboard exportado com sucesso.');
+            } catch (e) {
+                console.error('[home export] erro:', e);
+                showError('Falha ao exportar dashboard. Veja o console para detalhes.');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-image"></i><span>Exportar como imagem</span>';
+                }
+            }
+        }
+
+        function _renderHomeFaturamento(rows) {
+            if (!rows.length) return _homeRenderEmpty('chartFaturamento', 'Sem dados de faturamento cadastrado');
+            const chart = _homeInitChart('chartFaturamento');
+            if (!chart) return;
+            const reversed = rows.slice().reverse();
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip(), formatter: (p) => `<b>${p[0].name}</b><br>${_homeFmtBRL(p[0].value)}` },
+                grid: { left: 8, right: 36, top: 8, bottom: 8, containLabel: true },
+                xAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10, formatter: v => _homeFmtBRL(v) }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
+                yAxis: { type: 'category', data: reversed.map(r => _homeShortName(r.name, 14)), axisLabel: { color: '#cbd5e1', fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+                series: [{
+                    type: 'bar',
+                    data: reversed.map(r => r.revenue_cents),
+                    itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#1d4ed8' }, { offset: 1, color: '#3b82f6' }]), borderRadius: [0, 4, 4, 0] },
+                    barWidth: '60%',
+                    label: { show: true, position: 'right', color: '#cbd5e1', fontSize: 10, formatter: p => _homeFmtBRL(p.value) },
+                }],
+            });
+        }
+
+        function _renderHomeInteracoes(rows) {
+            if (!rows.length) return _homeRenderEmpty('chartInteracoes', 'Nenhuma interação registrada');
+            const chart = _homeInitChart('chartInteracoes');
+            if (!chart) return;
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip(), trigger: 'axis', axisPointer: { type: 'shadow' } },
+                grid: { left: 8, right: 8, top: 28, bottom: 32, containLabel: true },
+                xAxis: { type: 'category', data: rows.map(r => _homeShortName(r.name, 9)), axisLabel: { color: '#cbd5e1', fontSize: 10, interval: 0, rotate: 35 }, axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } }, axisTick: { show: false } },
+                yAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10 }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
+                series: [{
+                    type: 'bar',
+                    data: rows.map(r => r.count),
+                    itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#22d3ee' }, { offset: 1, color: '#0e7490' }]), borderRadius: [4, 4, 0, 0] },
+                    barWidth: '55%',
+                    label: { show: true, position: 'top', color: '#cbd5e1', fontSize: 10 },
+                }],
+            });
+        }
+
+        function _renderHomeTargetMenor(rows) {
+            if (!rows.length) return _homeRenderEmpty('chartTargetMenor', 'Nenhuma conta target cadastrada');
+            const chart = _homeInitChart('chartTargetMenor');
+            if (!chart) return;
+            chart.setOption({
+                tooltip: _homeBaseTooltip(),
+                grid: { left: 8, right: 70, top: 8, bottom: 8, containLabel: true },
+                xAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10 }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
+                yAxis: { type: 'category', data: rows.map(r => _homeShortName(r.name, 16)).reverse(), axisLabel: { color: '#fca5a5', fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+                series: [{
+                    type: 'bar',
+                    data: rows.slice().reverse().map(r => r.count),
+                    itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#7f1d1d' }, { offset: 1, color: '#ef4444' }]), borderRadius: [0, 4, 4, 0] },
+                    barWidth: '55%',
+                    label: {
+                        show: true,
+                        position: 'right',
+                        color: '#fca5a5',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        formatter: p => `${p.value}   ☹  △`,
+                    },
+                }],
+            });
+        }
+
+        function _renderHomeCargo(rows) {
+            if (!rows.length) return _homeRenderEmpty('chartCargo', 'Nenhuma interação por cargo');
+            const chart = _homeInitChart('chartCargo');
+            if (!chart) return;
+            const total = rows.reduce((a, b) => a + (b.count || 0), 0);
+            chart.setOption({
+                color: HOME_PALETTE,
+                tooltip: { ..._homeBaseTooltip(), trigger: 'item', formatter: p => `<b>${p.name}</b><br>${p.value} interações (${p.percent}%)` },
+                legend: { orient: 'vertical', right: 0, top: 'middle', textStyle: { color: '#cbd5e1', fontSize: 11 }, itemWidth: 10, itemHeight: 10, icon: 'circle' },
+                series: [{
+                    type: 'pie',
+                    radius: ['55%', '78%'],
+                    center: ['32%', '50%'],
+                    avoidLabelOverlap: true,
+                    itemStyle: { borderRadius: 4, borderColor: '#0f1e30', borderWidth: 2 },
+                    label: { show: true, position: 'inside', color: '#fff', fontSize: 10, fontWeight: 700, formatter: p => p.percent >= 6 ? `${p.percent}%` : '' },
+                    labelLine: { show: false },
+                    data: rows.map(r => ({ name: r.name, value: r.count })),
+                }],
+                graphic: [{
+                    type: 'text',
+                    left: '32%',
+                    top: '46%',
+                    style: { text: total.toLocaleString('pt-BR'), fill: '#fff', fontSize: 18, fontWeight: 700, textAlign: 'center' },
+                }, {
+                    type: 'text',
+                    left: '32%',
+                    top: '58%',
+                    style: { text: 'Total', fill: '#8aa0b8', fontSize: 11, textAlign: 'center' },
+                }],
+            });
+        }
+
+        function _renderHomeEvolucao(rows) {
+            if (!rows.length || !rows.some(r => r.count > 0)) return _homeRenderEmpty('chartEvolucao', 'Sem evolução para exibir');
+            const chart = _homeInitChart('chartEvolucao');
+            if (!chart) return;
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip(), trigger: 'axis', formatter: p => `<b>${_homeFmtMonthLong(p[0].name)}</b><br>${p[0].value} interações` },
+                grid: { left: 8, right: 16, top: 24, bottom: 28, containLabel: true },
+                xAxis: { type: 'category', boundaryGap: false, data: rows.map(r => r.ym), axisLabel: { color: '#5e7390', fontSize: 10, formatter: _homeFmtMonthLabel }, axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } }, axisTick: { show: false } },
+                yAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10 }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
+                series: [{
+                    type: 'line',
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 7,
+                    lineStyle: { width: 2.5, color: '#22d3ee' },
+                    itemStyle: { color: '#22d3ee', borderColor: '#0f1e30', borderWidth: 2 },
+                    areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(34,211,238,0.35)' }, { offset: 1, color: 'rgba(34,211,238,0)' }]) },
+                    label: { show: true, position: 'top', color: '#cbd5e1', fontSize: 10 },
+                    data: rows.map(r => r.count),
+                }],
+            });
+        }
+
+        function _renderHomeCanal(rows) {
+            if (!rows.length) return _homeRenderEmpty('chartCanal', 'Sem canais registrados');
+            const chart = _homeInitChart('chartCanal');
+            if (!chart) return;
+            chart.setOption({
+                color: ['#3b82f6', '#22d3ee', '#22c55e', '#facc15', '#a855f7', '#ec4899'],
+                tooltip: { ..._homeBaseTooltip(), trigger: 'item', formatter: p => `<b>${p.name}</b><br>${p.value} contatos (${p.percent}%)` },
+                legend: { orient: 'vertical', right: 0, top: 'middle', textStyle: { color: '#cbd5e1', fontSize: 11 }, itemWidth: 10, itemHeight: 10, icon: 'circle' },
+                series: [{
+                    type: 'pie',
+                    radius: ['55%', '78%'],
+                    center: ['32%', '50%'],
+                    itemStyle: { borderRadius: 4, borderColor: '#0f1e30', borderWidth: 2 },
+                    label: { show: true, position: 'inside', color: '#fff', fontSize: 10, fontWeight: 700, formatter: p => p.percent >= 6 ? `${p.percent}%` : '' },
+                    labelLine: { show: false },
+                    data: rows.map(r => ({ name: r.name, value: r.count })),
+                }],
+                graphic: [{
+                    type: 'text',
+                    left: '32%',
+                    top: '48%',
+                    style: { text: '💬', fontSize: 20, textAlign: 'center' },
+                }],
+            });
+        }
+
+        function _renderHomeHeatmap(rows) {
+            const periodos = ['Manhã', 'Tarde', 'Noite'];
+            const diasIdx = [1, 2, 3, 4, 5, 6, 0]; // Seg..Dom
+            const diasLabel = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+            const data = [];
+            let max = 0;
+            diasIdx.forEach((dow, dx) => {
+                periodos.forEach((per, py) => {
+                    const found = rows.find(r => Number(r.dow) === dow && r.periodo === per);
+                    const v = found ? found.count : 0;
+                    if (v > max) max = v;
+                    data.push([dx, py, v]);
+                });
+            });
+            if (max === 0) return _homeRenderEmpty('chartHeatmap', 'Sem registros de atividade');
+            const chart = _homeInitChart('chartHeatmap');
+            if (!chart) return;
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip(), formatter: p => `${diasLabel[p.value[0]]} • ${periodos[p.value[1]]}<br><b>${p.value[2]}</b> interações` },
+                grid: { left: 40, right: 8, top: 16, bottom: 24 },
+                xAxis: { type: 'category', data: diasLabel, splitArea: { show: false }, axisLabel: { color: '#cbd5e1', fontSize: 10 }, axisLine: { show: false }, axisTick: { show: false } },
+                yAxis: { type: 'category', data: periodos, splitArea: { show: false }, axisLabel: { color: '#cbd5e1', fontSize: 10 }, axisLine: { show: false }, axisTick: { show: false } },
+                visualMap: { show: false, min: 0, max: max, inRange: { color: ['rgba(34,211,238,0.06)', 'rgba(34,211,238,0.4)', '#22d3ee'] } },
+                series: [{ type: 'heatmap', data, itemStyle: { borderRadius: 4, borderColor: '#0f1e30', borderWidth: 2 }, emphasis: { itemStyle: { shadowBlur: 8, shadowColor: 'rgba(34,211,238,0.6)' } } }],
+            });
+        }
+
+        function _renderHomeFunil(rows) {
+            if (!rows.length || rows.every(r => r.count === 0)) return _homeRenderEmpty('chartFunil', 'Sem dados de funil');
+            const chart = _homeInitChart('chartFunil');
+            if (!chart) return;
+            const top = rows[0]?.count || 1;
+            const colors = ['#3b82f6', '#22d3ee', '#22c55e', '#facc15', '#ef4444'];
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip(), formatter: p => `<b>${p.name}</b><br>${p.value} (${Math.round((p.value / top) * 100)}%)` },
+                series: [{
+                    type: 'funnel',
+                    left: 0,
+                    top: 8,
+                    bottom: 8,
+                    width: '100%',
+                    sort: 'descending',
+                    gap: 2,
+                    label: {
+                        show: true,
+                        position: 'inside',
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        formatter: p => `${p.name}: ${p.value} (${Math.round((p.value / top) * 100)}%)`,
+                    },
+                    itemStyle: { borderColor: '#0f1e30', borderWidth: 1 },
+                    data: rows.map((r, i) => ({ name: r.label, value: r.count, itemStyle: { color: colors[i % colors.length] } })),
+                }],
+            });
+        }
+
+        function _renderHomeTempo(rows) {
+            if (!rows.length || rows.every(r => r.count === 0)) return _homeRenderEmpty('chartTempo', 'Sem dados de tempo sem contato');
+            const chart = _homeInitChart('chartTempo');
+            if (!chart) return;
+            const labels = ['0 - 7 dias', '8 - 14 dias', '15 - 30 dias', '+ 30 dias'];
+            const colors = ['#22c55e', '#facc15', '#f97316', '#ef4444'];
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip() },
+                grid: { left: 8, right: 28, top: 8, bottom: 8, containLabel: true },
+                xAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10 }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
+                yAxis: { type: 'category', data: labels, axisLabel: { color: '#cbd5e1', fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+                series: [{
+                    type: 'bar',
+                    data: rows.map((r, i) => ({ value: r.count, itemStyle: { color: colors[i], borderRadius: [0, 4, 4, 0] } })),
+                    barWidth: '65%',
+                    label: { show: true, position: 'right', color: '#cbd5e1', fontSize: 11, fontWeight: 600 },
+                }],
+            });
+        }
+
+        function _renderHomeNovos(rows) {
+            if (!rows.length || rows.every(r => r.count === 0)) return _homeRenderEmpty('chartNovos', 'Sem novos contatos no histórico');
+            const chart = _homeInitChart('chartNovos');
+            if (!chart) return;
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip(), trigger: 'axis', formatter: p => `<b>${_homeFmtMonthLong(p[0].name)}</b><br>${p[0].value} novos contatos` },
+                grid: { left: 8, right: 8, top: 24, bottom: 22, containLabel: true },
+                xAxis: { type: 'category', data: rows.map(r => r.ym), axisLabel: { color: '#5e7390', fontSize: 9, formatter: _homeFmtMonthLabel }, axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } }, axisTick: { show: false } },
+                yAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10 }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
+                series: [{
+                    type: 'bar',
+                    data: rows.map(r => r.count),
+                    itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#a855f7' }, { offset: 1, color: '#6d28d9' }]), borderRadius: [4, 4, 0, 0] },
+                    barWidth: '55%',
+                    label: { show: true, position: 'top', color: '#cbd5e1', fontSize: 9 },
+                }],
+            });
+        }
+
+        function _renderHomeInsights(ins, kpis) {
+            const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+            setTxt('insTargetCount', ins.target_sem_contato_20d || 0);
+            setTxt('insRiscoCount', ins.target_em_risco || 0);
+            setTxt('insCobAtual', `${kpis.cobertura_pct || 0}%`);
+
+            const growthList = document.getElementById('insGrowthList');
+            if (growthList) {
+                const items = (ins.crescimento_top || []);
+                if (!items.length) {
+                    growthList.innerHTML = '<div style="font-size:12px; color:var(--hm-text-dim);">Sem crescimento expressivo no mês.</div>';
+                } else {
+                    growthList.innerHTML = items.map(it => `
+                        <div class="ins-item">
+                            <span class="ins-item-name">${escapeHtml(_homeShortName(it.name, 22))}</span>
+                            <span class="ins-item-val">▲ ${it.growth_pct}%</span>
+                        </div>`).join('');
+                }
+            }
         }
 
         async function loadDashboard() {
@@ -13133,6 +14692,7 @@
             if (wikiTitle) wikiTitle.addEventListener('blur', autoFillWikiTags);
             if (wikiContent) wikiContent.addEventListener('blur', autoFillWikiTags);
             loadDashboard();
+            loadHome();
         });
 
         // -----------------------------------------------------------------------
