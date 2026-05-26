@@ -8,6 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -2306,6 +2307,7 @@
         }
         .home-month-opt:hover { background: rgba(34, 211, 238, 0.08); }
         .home-month-opt input { accent-color: var(--hm-cyan); }
+        .home-update-block { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
         .home-update-stamp {
             display: flex;
             align-items: center;
@@ -2313,8 +2315,26 @@
             font-size: 12px;
             color: var(--hm-text-muted);
         }
+        .home-update-text { display: flex; flex-direction: column; align-items: flex-end; }
         .home-update-stamp-label { display: block; font-size: 11px; color: var(--hm-text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
         .home-update-stamp-value { display: block; font-size: 13px; color: var(--hm-text); font-weight: 600; }
+        .home-export-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            background: transparent;
+            color: var(--hm-text-muted);
+            border: 1px solid var(--hm-border);
+            padding: 5px 11px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 140ms var(--ease-out), color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+        }
+        .home-export-btn:hover { background: rgba(34, 211, 238, 0.08); color: var(--hm-cyan); border-color: rgba(34, 211, 238, 0.35); }
+        .home-export-btn[disabled] { opacity: 0.6; cursor: progress; }
+        .home-export-btn i { font-size: 10px; }
         .home-refresh-btn {
             background: rgba(20, 33, 50, 0.85);
             color: var(--hm-text);
@@ -2376,6 +2396,60 @@
         .kpi-accent-red .home-kpi-icon { background: rgba(239, 68, 68, 0.15); color: var(--hm-red); }
         .kpi-accent-red .home-kpi-value { color: var(--hm-red); }
         .kpi-accent-violet .home-kpi-icon { background: rgba(168, 85, 247, 0.15); color: var(--hm-violet); }
+
+        /* User card (substitui Cobertura na KPI row) */
+        .home-user-card {
+            padding: 12px 16px;
+            gap: 14px;
+            background: linear-gradient(135deg, rgba(34, 211, 238, 0.08) 0%, rgba(20, 33, 50, 0.85) 100%);
+            border-color: rgba(34, 211, 238, 0.22);
+        }
+        .home-user-avatar {
+            width: 56px; height: 56px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            overflow: hidden;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #22d3ee, #3b82f6);
+            color: #062533;
+            font-size: 22px;
+            font-weight: 700;
+            border: 2px solid rgba(34, 211, 238, 0.45);
+            box-shadow: 0 6px 18px rgba(34, 211, 238, 0.25), inset 0 0 0 2px rgba(255, 255, 255, 0.08);
+            position: relative;
+        }
+        .home-user-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .home-user-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+        .home-user-greeting { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+        .home-user-name { font-size: 18px; font-weight: 700; color: #fff; line-height: 1.15; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .home-user-role { font-size: 11px; color: var(--hm-text-dim); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* Cobertura card (no aside, acima de Insights) */
+        .home-cobertura-card {
+            background: linear-gradient(135deg, rgba(168, 85, 247, 0.18) 0%, rgba(20, 33, 50, 0.9) 100%);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 14px;
+            padding: 14px 16px;
+            position: relative;
+        }
+        .home-cobertura-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .home-cobertura-label { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px; }
+        .home-cobertura-value { font-size: 30px; font-weight: 700; color: #fff; line-height: 1.05; letter-spacing: -0.02em; }
+        .home-cobertura-foot { font-size: 11px; color: var(--hm-text-dim); margin-top: 2px; font-weight: 500; }
+        .home-cobertura-icon {
+            width: 42px; height: 42px;
+            border-radius: 12px;
+            background: rgba(168, 85, 247, 0.2);
+            color: var(--hm-violet);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .home-cobertura-info { right: 10px; top: 10px; bottom: auto; }
 
         /* Main grid */
         .home-main-grid {
@@ -2460,14 +2534,15 @@
             position: absolute;
             bottom: calc(100% + 8px);
             right: -6px;
-            background: #15243a;
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            color: #e6ecf3;
+            background: #0a1525;
+            background: linear-gradient(180deg, #0d1b30 0%, #07121f 100%);
+            border: 1px solid rgba(34, 211, 238, 0.25);
+            color: #f1f5f9;
             padding: 12px 14px;
             border-radius: 10px;
             font-size: 12px;
             width: 280px;
-            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
             z-index: 300;
             display: none;
             line-height: 1.5;
@@ -2483,7 +2558,7 @@
             top: 100%;
             right: 10px;
             border: 6px solid transparent;
-            border-top-color: #15243a;
+            border-top-color: #07121f;
         }
         .home-kpi-info-tooltip strong { color: var(--hm-cyan); display: block; margin-bottom: 4px; font-weight: 600; }
         .home-kpi-info-tooltip code { background: rgba(34, 211, 238, 0.12); padding: 1px 5px; border-radius: 4px; font-family: 'Geist', monospace; font-size: 11px; color: var(--hm-cyan); }
@@ -2777,11 +2852,19 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="home-update-stamp">
-                            <span class="home-update-stamp-label">Última atualização</span>
-                            <span class="home-update-stamp-value" id="homeUpdateStamp">—</span>
-                            <button type="button" class="home-refresh-btn" onclick="loadHome(true)" title="Atualizar dados">
-                                <i class="fas fa-rotate-right"></i>
+                        <div class="home-update-block">
+                            <div class="home-update-stamp">
+                                <div class="home-update-text">
+                                    <span class="home-update-stamp-label">Última atualização</span>
+                                    <span class="home-update-stamp-value" id="homeUpdateStamp">—</span>
+                                </div>
+                                <button type="button" class="home-refresh-btn" onclick="loadHome(true)" title="Atualizar dados">
+                                    <i class="fas fa-rotate-right"></i>
+                                </button>
+                            </div>
+                            <button type="button" class="home-export-btn" id="homeExportBtn" onclick="exportHomeDashboard()" title="Exportar dashboard como imagem PNG">
+                                <i class="fas fa-image"></i>
+                                <span>Exportar como imagem</span>
                             </button>
                         </div>
                     </div>
@@ -2828,23 +2911,14 @@
                             <div class="home-kpi-foot" id="kpiAtrasadoFoot"></div>
                         </div>
                     </div>
-                    <div class="home-kpi-card kpi-accent-violet">
-                        <div class="home-kpi-icon"><i class="fas fa-bullseye"></i></div>
-                        <div class="home-kpi-body">
-                            <div class="home-kpi-label">Cobertura de Relacionamento</div>
-                            <div class="home-kpi-value" id="kpiCobertura">—</div>
-                            <div class="home-kpi-foot" id="kpiCoberturaFoot"></div>
+                    <div class="home-kpi-card home-user-card" id="homeUserCard">
+                        <div class="home-user-avatar" id="homeUserAvatar">
+                            <span id="homeUserInitial">U</span>
                         </div>
-                        <button type="button" class="home-kpi-info" aria-label="Como é calculado" tabindex="0">
-                            <i class="fas fa-info"></i>
-                        </button>
-                        <div class="home-kpi-info-tooltip" role="tooltip">
-                            <strong>Como é calculado</strong>
-                            Percentual de contas que tiveram <b>pelo menos uma interação registrada</b> dentro do período filtrado, sobre o total de contas cadastradas.
-                            <br><br>
-                            <code>cobertura = contas com interação ÷ total de contas × 100</code>
-                            <br><br>
-                            Considera registros das tabelas <code>activities</code> (via contato) e <code>account_activities</code> (direto na conta).
+                        <div class="home-user-body">
+                            <div class="home-user-greeting" id="homeUserGreeting">Olá</div>
+                            <div class="home-user-name" id="homeUserName">—</div>
+                            <div class="home-user-role" id="homeUserRole"></div>
                         </div>
                     </div>
                 </div>
@@ -2907,6 +2981,27 @@
                     </div>
 
                     <aside class="home-insights">
+                        <div class="home-cobertura-card">
+                            <div class="home-cobertura-head">
+                                <div>
+                                    <div class="home-cobertura-label">Cobertura de Relacionamento</div>
+                                    <div class="home-cobertura-value" id="kpiCobertura">—</div>
+                                    <div class="home-cobertura-foot" id="kpiCoberturaFoot"></div>
+                                </div>
+                                <div class="home-cobertura-icon"><i class="fas fa-bullseye"></i></div>
+                            </div>
+                            <button type="button" class="home-kpi-info home-cobertura-info" aria-label="Como é calculado" tabindex="0">
+                                <i class="fas fa-info"></i>
+                            </button>
+                            <div class="home-kpi-info-tooltip" role="tooltip">
+                                <strong>Como é calculado</strong>
+                                Percentual de contas que tiveram <b>pelo menos uma interação registrada</b> dentro do período filtrado, sobre o total de contas cadastradas.
+                                <br><br>
+                                <code>cobertura = contas com interação ÷ total de contas × 100</code>
+                                <br><br>
+                                Considera registros das tabelas <code>activities</code> (via contato) e <code>account_activities</code> (direto na conta).
+                            </div>
+                        </div>
                         <h2 class="home-insights-title">Insights &amp; Alertas</h2>
                         <div class="home-insight home-insight-danger" id="insightTargetSemContato">
                             <div class="home-insight-icon"><i class="fas fa-triangle-exclamation"></i></div>
@@ -6918,6 +7013,7 @@
                 _homeInjectCardActions();
 
                 _renderHomeKpis(data.kpis || {});
+                _renderHomeUserCard();
                 _renderHomeFaturamento(data.top_faturamento || []);
                 _renderHomeInteracoes(data.top_interacoes || []);
                 _renderHomeTargetMenor(data.target_menor_interacao || []);
@@ -6964,7 +7060,82 @@
             setText('kpiAtrasado', (k.atrasado || 0).toLocaleString('pt-BR'));
             setFoot('kpiAtrasadoFoot', `${Math.round(((k.atrasado || 0) / Math.max(total, 1)) * 100)}% do total`);
             setText('kpiCobertura', `${k.cobertura_pct || 0}%`);
-            setFoot('kpiCoberturaFoot', '');
+            const meta = 80;
+            const cob = Number(k.cobertura_pct || 0);
+            const diff = cob - meta;
+            const delta = diff === 0 ? `Meta atingida (${meta}%)` : (diff > 0 ? `${diff} p.p. acima da meta (${meta}%)` : `${Math.abs(diff)} p.p. abaixo da meta (${meta}%)`);
+            setFoot('kpiCoberturaFoot', delta, diff < 0 ? 'delta-down' : (diff > 0 ? 'delta-up' : ''));
+        }
+
+        function _renderHomeUserCard() {
+            const greetingEl = document.getElementById('homeUserGreeting');
+            const nameEl = document.getElementById('homeUserName');
+            const roleEl = document.getElementById('homeUserRole');
+            const avatarEl = document.getElementById('homeUserAvatar');
+            const initialEl = document.getElementById('homeUserInitial');
+            if (!greetingEl || !nameEl || !avatarEl) return;
+
+            const profile = (typeof userProfile === 'object' && userProfile) || {};
+            const displayName = profile.nickname || profile.full_name || 'Visitante';
+            const fullName = profile.full_name || profile.nickname || 'Visitante';
+            const role = profile.position || '';
+            const hour = new Date().getHours();
+            const greet = hour < 5 ? 'Boa madrugada' : hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+
+            greetingEl.textContent = `${greet},`;
+            nameEl.textContent = displayName;
+            if (roleEl) roleEl.textContent = role;
+            nameEl.title = fullName;
+
+            if (profile.photo_url) {
+                avatarEl.innerHTML = `<img src="${profile.photo_url}" alt="${escapeHtml(displayName)}" onerror="this.parentElement.innerHTML='<span>${escapeHtml((displayName || 'U').charAt(0).toUpperCase())}</span>'">`;
+            } else if (initialEl) {
+                avatarEl.innerHTML = `<span>${escapeHtml((displayName || 'U').charAt(0).toUpperCase())}</span>`;
+            }
+        }
+
+        async function exportHomeDashboard() {
+            const btn = document.getElementById('homeExportBtn');
+            const shell = document.querySelector('#home .home-shell');
+            if (!shell) return;
+            if (!window.html2canvas) {
+                showError('Biblioteca de exportação ainda não carregou. Tente novamente em instantes.');
+                return;
+            }
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Gerando…</span>';
+            }
+            try {
+                // Espera 1 frame para garantir que o spinner aparece e ECharts renderizou
+                await new Promise(r => requestAnimationFrame(r));
+                const canvas = await html2canvas(shell, {
+                    backgroundColor: '#061121',
+                    scale: 2,
+                    useCORS: true,
+                    allowTaint: false,
+                    logging: false,
+                    windowWidth: shell.scrollWidth,
+                    windowHeight: shell.scrollHeight,
+                });
+                const link = document.createElement('a');
+                const ts = new Date();
+                const stamp = `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}_${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}`;
+                link.download = `toca-home-dashboard_${stamp}.png`;
+                link.href = canvas.toDataURL('image/png');
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                if (typeof showInfo === 'function') showInfo('Dashboard exportado com sucesso.');
+            } catch (e) {
+                console.error('[home export] erro:', e);
+                showError('Falha ao exportar dashboard. Veja o console para detalhes.');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-image"></i><span>Exportar como imagem</span>';
+                }
+            }
         }
 
         function _renderHomeFaturamento(rows) {
