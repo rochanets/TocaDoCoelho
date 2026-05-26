@@ -4290,7 +4290,7 @@
             if (!autoTocaExtensionInstalled && showFeedback) {
                 await openSystemDialog({
                     title: 'Extensão não detectada',
-                    message: 'A extensão do AutoToca ainda não foi detectada no navegador. Instale a extensão, ative-a no Chrome e clique novamente em “Verificar novamente”.',
+                    message: 'A extensão do AutoToca ainda não foi detectada. Se acabou de instalar, recarregue esta página (F5) e tente novamente. Se ainda não instalou, clique em “Como instalar”.',
                     showCancel: false,
                 });
             }
@@ -4305,10 +4305,11 @@
                     '1. Clique em “Baixar Extensão”.',
                     '2. Extraia o arquivo ZIP em uma pasta do seu computador.',
                     '3. Abra chrome://extensions no Google Chrome.',
-                    '4. Ative o “Modo do desenvolvedor”.',
+                    '4. Ative o “Modo do desenvolvedor” (canto superior direito).',
                     '5. Clique em “Carregar sem compactação”.',
                     '6. Selecione a pasta extraída da extensão.',
-                    '7. Volte ao AutoToca e clique em “Verificar novamente”.',
+                    '⚠️ 7. IMPORTANTE: Recarregue esta página (F5) após instalar.',
+                    '8. Clique em “Verificar novamente”.',
                 ].join('\n'),
                 showCancel: false,
             });
@@ -13560,12 +13561,16 @@
 
                 <!-- Área instalação (aparece só se NÃO instalada) -->
                 <div id="clModalInstallArea" style="display:none; margin-bottom:14px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:12px 14px;">
-                    <div style="font-weight:600; color:#92400e; margin-bottom:8px; font-size:13px;"><i class="fas fa-puzzle-piece" style="margin-right:5px;"></i>Extensão não encontrada</div>
-                    <div style="font-size:12px; color:#92400e; margin-bottom:10px;">Instale a extensão do AutoToca para importar perfis com um clique. Ou cole o texto do perfil manualmente abaixo.</div>
+                    <div style="font-weight:600; color:#92400e; margin-bottom:6px; font-size:13px;"><i class="fas fa-puzzle-piece" style="margin-right:5px;"></i>Extensão não encontrada</div>
+                    <div style="font-size:12px; color:#92400e; margin-bottom:6px;">Instale a extensão do AutoToca para importar perfis com um clique.</div>
+                    <div style="font-size:12px; color:#b45309; background:#fef3c7; border-radius:5px; padding:6px 10px; margin-bottom:10px;">
+                        <i class="fas fa-rotate-right" style="margin-right:4px;"></i><strong>Já instalou?</strong> Recarregue esta página (F5) e clique em "Verificar novamente" abaixo.
+                    </div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap;">
                         <a href="/autotoca-extension/autotoca-chrome-extension.xpi" class="btn btn-secondary btn-small" style="text-decoration:none;"><i class="fab fa-firefox-browser" style="color:#ff6611;"></i> Firefox</a>
                         <a href="/autotoca-extension/autotoca-chrome-extension.zip" download class="btn btn-secondary btn-small" style="text-decoration:none;"><i class="fab fa-chrome" style="color:#4285f4;"></i> Chrome (.zip)</a>
                         <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()"><i class="fas fa-question-circle"></i> Como instalar</button>
+                        <button class="btn btn-secondary btn-small" onclick="clModalCheckExtension()"><i class="fas fa-rotate-right"></i> Verificar novamente</button>
                     </div>
                 </div>
 
