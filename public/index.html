@@ -6434,14 +6434,17 @@
             if (clientSelect) {
                 clientSelect.disabled = false;
             }
-            
+
             // Reabilitar o select de empresa caso tenha sido bloqueado
             const companySelect = document.getElementById('companySelect');
             if (companySelect) {
                 companySelect.disabled = false;
             }
-            
-            document.getElementById('activityModal').classList.remove('active');
+
+            const activityModalEl = document.getElementById('activityModal');
+            activityModalEl.classList.remove('active');
+            // Restaura o z-index padrão caso tenha sido elevado por sobrepor a ficha.
+            activityModalEl.style.zIndex = '';
         }
 
         // Open Quick Activity Modal (from Dashboard)
@@ -6449,24 +6452,29 @@
             currentEditingActivityId = null;
             document.getElementById('activityModalTitle').textContent = `Nova Atividade - ${clientName}`;
             document.getElementById('activityForm').reset();
-            
+
             // Carregar clientes e pré-selecionar empresa
             await loadClientSelect(clientCompany);
-            
+
             // Pré-selecionar o cliente
             const clientSelect = document.getElementById('clientSelect');
             if (clientSelect) {
                 clientSelect.value = clientId;
                 clientSelect.disabled = true; // Bloquear alteração do cliente
             }
-            
+
             // Bloquear também a empresa
             const companySelect = document.getElementById('companySelect');
             if (companySelect) {
                 companySelect.disabled = true;
             }
-            
-            document.getElementById('activityModal').classList.add('active');
+
+            const activityModalEl = document.getElementById('activityModal');
+            // Se aberto por cima da ficha do contato, elevar para ficar acima do profileModal.
+            if (_profileModalOpenClientId) {
+                activityModalEl.style.zIndex = '1100';
+            }
+            activityModalEl.classList.add('active');
         }
 
         // Open Import Modal
