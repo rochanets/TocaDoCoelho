@@ -2451,6 +2451,26 @@
         }
         .home-cobertura-info { right: 10px; top: 10px; bottom: auto; }
 
+        /* Tooltip da Cobertura: aparece à ESQUERDA do botão (entra na área de
+           gráficos), não acima — pra não extrapolar o dashboard nem ficar atrás
+           do topbar fixo (z-index 90, stacking context independente). */
+        .home-cobertura-card .home-kpi-info-tooltip {
+            bottom: auto;
+            top: 0;
+            right: calc(100% + 14px);
+            left: auto;
+            z-index: 9999;
+        }
+        .home-cobertura-card .home-kpi-info-tooltip::after {
+            top: 14px;
+            bottom: auto;
+            right: -12px;
+            left: auto;
+            border: 6px solid transparent;
+            border-top-color: transparent;
+            border-left-color: #07121f;
+        }
+
         /* Main grid */
         .home-main-grid {
             display: grid;
@@ -7072,25 +7092,27 @@
             const nameEl = document.getElementById('homeUserName');
             const roleEl = document.getElementById('homeUserRole');
             const avatarEl = document.getElementById('homeUserAvatar');
-            const initialEl = document.getElementById('homeUserInitial');
             if (!greetingEl || !nameEl || !avatarEl) return;
 
             const profile = (typeof userProfile === 'object' && userProfile) || {};
-            const displayName = profile.nickname || profile.full_name || 'Visitante';
-            const fullName = profile.full_name || profile.nickname || 'Visitante';
+            // Slot maior (mantém comportamento atual: nickname > full_name)
+            const lastNameDisplay = profile.nickname || profile.full_name || 'Visitante';
+            // Slot menor: primeiro nome extraído de full_name (apenas quando há ≥2 palavras)
+            const parts = (profile.full_name || '').trim().split(/\s+/).filter(Boolean);
+            const firstName = parts.length >= 2 ? parts[0] : '';
             const role = profile.position || '';
-            const hour = new Date().getHours();
-            const greet = hour < 5 ? 'Boa madrugada' : hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+            const fullName = profile.full_name || profile.nickname || 'Visitante';
 
-            greetingEl.textContent = `${greet},`;
-            nameEl.textContent = displayName;
+            greetingEl.textContent = firstName;
+            greetingEl.style.display = firstName ? '' : 'none';
+            nameEl.textContent = lastNameDisplay;
             if (roleEl) roleEl.textContent = role;
             nameEl.title = fullName;
 
             if (profile.photo_url) {
-                avatarEl.innerHTML = `<img src="${profile.photo_url}" alt="${escapeHtml(displayName)}" onerror="this.parentElement.innerHTML='<span>${escapeHtml((displayName || 'U').charAt(0).toUpperCase())}</span>'">`;
-            } else if (initialEl) {
-                avatarEl.innerHTML = `<span>${escapeHtml((displayName || 'U').charAt(0).toUpperCase())}</span>`;
+                avatarEl.innerHTML = `<img src="${profile.photo_url}" alt="${escapeHtml(lastNameDisplay)}" onerror="this.parentElement.innerHTML='<span>${escapeHtml((lastNameDisplay || 'U').charAt(0).toUpperCase())}</span>'">`;
+            } else {
+                avatarEl.innerHTML = `<span>${escapeHtml((lastNameDisplay || 'U').charAt(0).toUpperCase())}</span>`;
             }
         }
 
