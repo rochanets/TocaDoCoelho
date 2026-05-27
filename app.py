@@ -8144,6 +8144,31 @@ def clients_autofind_photo_candidates():
         return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
 
 
+def _save_photo_from_base64(data_url, person_name='linkedin'):
+    """Recebe um data URL base64 (data:image/...;base64,...), salva localmente e retorna '/uploads/<filename>'.
+    Retorna None se o data_url não for válido."""
+    try:
+        if not data_url or not data_url.startswith('data:image/'):
+            return None
+        header, encoded = data_url.split(',', 1)
+        mime_type = header.split(';')[0].replace('data:', '')
+        ext_map = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif'}
+        ext = ext_map.get(mime_type, '.jpg')
+        img_data = base64.b64decode(encoded)
+        if len(img_data) > 6 * 1024 * 1024:
+            logger.warning(f'[_save_photo_from_base64] imagem muito grande ({len(img_data)} bytes), ignorando')
+            return None
+        safe_prefix = secure_filename(person_name) or 'linkedin'
+        filename = secure_filename(f"{safe_prefix}-{int(time.time()*1000)}{ext}")
+        path = UPLOAD_DIR / filename
+        with open(path, 'wb') as f:
+            f.write(img_data)
+        return f'/uploads/{filename}'
+    except Exception as e:
+        logger.warning(f'[_save_photo_from_base64] falha: {e}')
+        return None
+
+
 @app.route('/api/clients/autofind-photo', methods=['POST'])
 def clients_autofind_photo():
     try:
@@ -8247,7 +8272,12 @@ def create_client():
                 if existing:
                     return jsonify({'error': 'Possível duplicidade encontrada', 'duplicate': existing}), 409
 
-        photo_url = autofind_photo_url or None
+        # Suporte a foto em base64 (enviada pela extensão AutoToca)
+        if autofind_photo_url and autofind_photo_url.startswith('data:image/'):
+            saved = _save_photo_from_base64(autofind_photo_url, person_name=name or 'linkedin')
+            photo_url = saved or None
+        else:
+            photo_url = autofind_photo_url or None
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
@@ -8255,7 +8285,7 @@ def create_client():
                 filepath = UPLOAD_DIR / filename
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
-        
+
         conn = get_db()
         c = conn.cursor()
         c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived)
@@ -8308,7 +8338,12 @@ def update_client(client_id):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         
-        photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
+        # Suporte a foto em base64 (enviada pela extensão AutoToca)
+        if autofind_photo_url and autofind_photo_url.startswith('data:image/'):
+            saved = _save_photo_from_base64(autofind_photo_url, person_name=name or 'linkedin')
+            photo_url = None if remove_photo else (saved or client['photo_url'])
+        else:
+            photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
@@ -11840,6 +11875,144 @@ def account_autofill():
         return jsonify({'task_id': task_id}), 202
     except Exception as e:
         logger.exception(f'[AccountAutoFill] Erro: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn AutoFill — Preenche ficha de contato via perfil LinkedIn
+# ---------------------------------------------------------------------------
+
+def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extension_photo_url=''):
+    """Extrai dados cadastrais de um contato a partir do texto do perfil LinkedIn via LLM.
+    Não tenta scraping — recebe apenas o texto capturado pela extensão ou colado pelo usuário.
+    """
+    try:
+        _bg_task_set(task_id, {'step': 'Extraindo dados cadastrais com IA...', 'progress': 20})
+
+        data_is_rich = bool(profile_text and len(profile_text.strip()) > 100)
+        profile_content = (profile_text or '').strip()
+        if not profile_content and linkedin_url:
+            profile_content = f'URL do perfil LinkedIn: {linkedin_url}'
+
+        quality_note = (
+            'Use SOMENTE as informações explicitamente presentes no perfil. '
+            if data_is_rich else
+            'Dados limitados — use null para campos não encontrados. NÃO invente informações. '
+        )
+
+        llm_prompt = (
+            f'Analise as informações do perfil LinkedIn abaixo e extraia os dados cadastrais desta pessoa. '
+            f'{quality_note}'
+            f'PERFIL:\n{profile_content}\n\n'
+            'Retorne SOMENTE JSON válido, sem texto adicional: '
+            '{"nome": "Nome completo da pessoa", '
+            '"empresa": "Nome da empresa atual (somente o nome da empresa)", '
+            '"cargo": "Cargo ou título profissional atual", '
+            '"area_atuacao": "Área de atuação profissional (ex: Tecnologia, Comercial, RH, Financeiro, Marketing, Jurídico, Operações)", '
+            '"email": "email@dominio.com ou null se não encontrado"} '
+            'Use null para campos desconhecidos. Responda em português (BR).'
+        )
+
+        raw = _sai_simple_prompt(llm_prompt)
+
+        if not raw:
+            or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+            if or_key:
+                or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+                model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
+                site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip()
+                app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip()
+                try:
+                    or_payload = {
+                        'model': model,
+                        'messages': [
+                            {'role': 'system', 'content': 'Você é um analista de dados. Responda SEMPRE e SOMENTE com JSON válido, sem texto adicional.'},
+                            {'role': 'user', 'content': llm_prompt}
+                        ],
+                        'temperature': 0.1
+                    }
+                    req = urllib.request.Request(
+                        'https://openrouter.ai/api/v1/chat/completions',
+                        data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                        headers={
+                            'Content-Type': 'application/json',
+                            'Authorization': f'Bearer {or_key}',
+                            'HTTP-Referer': site_url,
+                            'X-Title': app_name
+                        },
+                        method='POST'
+                    )
+                    with urllib.request.urlopen(req, timeout=45) as resp:
+                        data = json.loads(resp.read().decode('utf-8'))
+                    choices = data.get('choices') or []
+                    raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+                except Exception as e:
+                    logger.warning(f'[ClientLinkedInAutoFill][OpenRouter] Falha: {e}')
+
+        parsed = {}
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                m = re.search(r'\{[\s\S]*\}', raw)
+                if m:
+                    try:
+                        parsed = json.loads(m.group(0))
+                    except Exception:
+                        pass
+
+        _bg_task_set(task_id, {'step': 'Buscando foto de perfil...', 'progress': 75})
+
+        # Foto: extensão tem prioridade → Bing fallback (sem scraping do LinkedIn)
+        photo_url = (extension_photo_url or '').strip() or None
+        if not photo_url and parsed.get('nome'):
+            try:
+                nome = parsed.get('nome') or ''
+                empresa = parsed.get('empresa') or ''
+                query = f'{nome} {empresa} foto perfil'.strip()
+                candidates = _find_image_candidates_on_web(query, limit=3)
+                if candidates:
+                    photo_url = candidates[0]
+            except Exception:
+                pass
+
+        result = {
+            'nome': parsed.get('nome') or '',
+            'empresa': parsed.get('empresa') or '',
+            'cargo': parsed.get('cargo') or '',
+            'area_atuacao': parsed.get('area_atuacao') or '',
+            'email': parsed.get('email') or '',
+            'photo_url': photo_url or '',
+            'data_is_rich': data_is_rich,
+        }
+        _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': result})
+    except Exception as e:
+        logger.exception(f'[ClientLinkedInAutoFill][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/clientes/linkedin-autofill', methods=['POST'])
+def client_linkedin_autofill():
+    """Preenche automaticamente o cadastro de contato a partir de um perfil LinkedIn via IA."""
+    try:
+        data = request.get_json() or {}
+        linkedin_url = (data.get('linkedin_url') or '').strip()
+        profile_text = (data.get('profile_text') or '').strip()
+        extension_photo_url = (data.get('extension_photo_url') or '').strip()
+        if not linkedin_url and not profile_text:
+            return jsonify({'error': 'Cole o texto do perfil LinkedIn ou use a extensão para importar.'}), 400
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_client_linkedin_autofill_async,
+            args=(task_id, linkedin_url, profile_text, extension_photo_url),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[ClientLinkedInAutoFill] Erro: {e}')
         return jsonify({'error': str(e)}), 500
 
 

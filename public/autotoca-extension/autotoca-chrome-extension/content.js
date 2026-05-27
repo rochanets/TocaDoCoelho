@@ -24,7 +24,7 @@
 
   function normalize(value) {
     return String(value || '')
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
       .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
 
@@ -42,7 +42,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.2.0',
+        version: '0.3.0',
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -185,26 +185,86 @@
     return parts.join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 10000);
   }
 
-  function extractLinkedInPhoto() {
+  function extractLinkedInPhotoUrl() {
+    // Seletores ordenados por especificidade/confiabilidade para a foto do perfil LinkedIn
     const selectors = [
+      // Seletores específicos do perfil
       '.pv-top-card-profile-picture__image--show',
       '.pv-top-card-profile-picture__image',
       '.profile-photo-edit__preview',
       '.ph5 img.pv-top-card-profile-picture__image',
+      // Seletores por aria-label (mais robusto a mudanças de classe)
+      'button[aria-label*="foto de perfil"] img',
+      'button[aria-label*="profile picture"] img',
+      'button[aria-label*="Foto de perfil"] img',
+      // Seletores alternativos mais recentes
+      '.pv-top-card__photo img',
+      '.profile-header-section img',
+      // Por alt text
       'main img[alt*="foto de perfil"]',
       'main img[alt*="profile photo"]',
+      'main img[alt*="Foto de"]',
     ];
+
     for (const selector of selectors) {
       const el = document.querySelector(selector);
       const src = el?.getAttribute('src')?.trim() || '';
-      if (src && /^https?:\/\//i.test(src)) return src;
+      // Garante que é uma URL real (não um ghost/placeholder)
+      if (src && /^https?:\/\//i.test(src) && !src.includes('ghost') && !src.includes('data:')) {
+        return src;
+      }
     }
-    const topImg = Array.from(document.querySelectorAll('main img')).find(img => {
-      const src = img?.getAttribute('src') || '';
-      const alt = (img?.getAttribute('alt') || '').toLowerCase();
-      return /^https?:\/\//i.test(src) && (alt.includes('profile') || alt.includes('perfil'));
-    });
-    return topImg?.getAttribute('src')?.trim() || null;
+
+    // Fallback robusto: procura a primeira imagem quadrada/circular de perfil no main
+    const mainEl = document.querySelector('main, .scaffold-layout__main');
+    if (mainEl) {
+      const imgs = Array.from(mainEl.querySelectorAll('img'));
+      for (const img of imgs) {
+        const src = (img.getAttribute('src') || '').trim();
+        if (!src.startsWith('http')) continue;
+        if (src.includes('ghost') || src.includes('placeholder')) continue;
+        const alt = (img.getAttribute('alt') || '').toLowerCase();
+        if (alt.includes('profile') || alt.includes('perfil') || alt.includes('foto')) return src;
+        // Heurística: imagem quadrada (±10px) com tamanho entre 80-500px
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (w >= 80 && w <= 500 && Math.abs(w - h) <= 20) return src;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Converte a foto de perfil para base64 usando fetch() com credenciais do browser.
+   * Funciona porque a extensão tem host_permissions para *.licdn.com e www.linkedin.com.
+   * Retorna null se falhar (cai no fallback de URL).
+   */
+  async function fetchPhotoAsBase64(photoUrl) {
+    if (!photoUrl) return null;
+    try {
+      const response = await fetch(photoUrl, { credentials: 'include', mode: 'cors' });
+      if (!response.ok) return null;
+      const blob = await response.blob();
+      if (!blob || blob.size === 0) return null;
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          // Valida que é uma imagem real (data:image/...)
+          if (typeof result === 'string' && result.startsWith('data:image/')) {
+            resolve(result);
+          } else {
+            resolve(null);
+          }
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.warn('[AutoToca Helper] Falha ao converter foto para base64:', e);
+      return null;
+    }
   }
 
   function injectLinkedInButton() {
@@ -247,15 +307,28 @@
       btn.disabled = true;
     }
 
-    const profileText = extractLinkedInText();
-    const profileUrl  = window.location.href;
-    const profilePhotoUrl = extractLinkedInPhoto();
+    const profileText  = extractLinkedInText();
+    const profileUrl   = window.location.href;
+    const photoUrl     = extractLinkedInPhotoUrl();
+
+    // Tenta converter a foto para base64 (evita restrições cross-origin no TocaDoCoelho)
+    let photoBase64 = null;
+    let photoSource = 'none';
+    if (photoUrl) {
+      if (btn) {
+        btn.innerHTML = '<span style="margin-right:6px;">📷</span> Capturando foto...';
+      }
+      photoBase64 = await fetchPhotoAsBase64(photoUrl);
+      photoSource = photoBase64 ? 'linkedin_extension_base64' : 'linkedin_extension_url';
+    }
+
     const data = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       text: profileText,
       url: profileUrl,
-      photoUrl: profilePhotoUrl || null,
-      photoSource: profilePhotoUrl ? 'linkedin_extension' : 'none',
+      // Usa base64 se disponível (funciona fora do LinkedIn), senão URL original
+      photoUrl: photoBase64 || photoUrl || null,
+      photoSource,
       capturedAt: new Date().toISOString(),
     };
 
