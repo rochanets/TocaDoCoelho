@@ -5598,34 +5598,110 @@
             const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
             if (!selectedContacts.length) return showInfo('Selecione ao menos um contato.');
             closeAutoTocaMailingPreview();
+            _autoTocaMailingChannel = 'email'; // sempre inicia em e-mail
 
-            const chips = selectedContacts.map(c => {
+            const emailChips = selectedContacts.map(c => {
                 const missing = !String(c.email || '').trim();
                 return `<span id="chip-destinatario-${c.id}" style="display:inline-flex; gap:6px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${escapeHtml(c.name || '-')} ${missing ? '<i class="fas fa-triangle-exclamation" title="Sem e-mail"></i>' : ''}<button type="button" onclick="removeAutoTocaMailingRecipient(${Number(c.id)})" title="Remover destinatário" aria-label="Remover destinatário ${escapeHtml(c.name || '-')}" style="border:none; background:transparent; color:#ef4444; cursor:pointer; padding:0; font-size:12px; line-height:1;"><i class="fas fa-times"></i></button></span>`;
             }).join('');
 
-            const mergeTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            const emailMergeTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            const mergeTagsBtns = emailMergeTags.map(tag =>
+                `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`
+            ).join('');
+
             let html = `<div class="modal active" id="autoTocaMailingComposerModal">`;
             html += `<div class="modal-content" style="max-width:1120px;">`;
             html += `<h2 style="color:#047857; margin-bottom:10px;">Mala Direta — Composição</h2>`;
+            // Toggle de canal
+            html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:9px 14px; background:rgba(243,244,246,.6); border:1px solid #e5e7eb; border-radius:10px; flex-wrap:wrap;">
+                <span style="font-size:13px; font-weight:600; color:#374151;">Canal de envio:</span>
+                <button id="atMailingChEmail" class="btn btn-primary btn-small" onclick="_switchAutoTocaMailingChannel('email')"><i class="fas fa-envelope"></i> E-mail</button>
+                <button id="atMailingChWpp" class="btn btn-secondary btn-small" onclick="_switchAutoTocaMailingChannel('whatsapp')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+                <span id="atMailingChannelNote" style="font-size:12px; color:#6b7280; margin-left:4px;">Os contatos sem e-mail serão ignorados no envio.</span>
+            </div>`;
             html += `<div style="display:grid; grid-template-columns:220px 1fr 250px; gap:14px;">`;
             html += `<div style="border:1px solid rgba(16,185,129,.2); border-radius:10px; padding:10px; background:rgba(236,253,245,.55);">
                 <div style="font-weight:700; color:#065f46; margin-bottom:8px;">Chaves de merge</div>
-                <p style="font-size:12px; color:#4b5563; line-height:1.45;">Use as chaves ao lado para personalizar o texto. Cada chave será substituída automaticamente pelo dado real de cada contato no momento do envio.</p>
-                <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
-                    ${mergeTags.map(tag => `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`).join('')}
-                </div>
+                <p style="font-size:12px; color:#4b5563; line-height:1.45;">Cada chave será substituída pelo dado real do contato no momento do envio.</p>
+                <div id="atMailingMergeTagsPanel" style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">${mergeTagsBtns}</div>
             </div>`;
             html += `<div>
-                <div class="form-group"><label>Destinatários confirmados</label><div id="autoTocaMailingComposerRecipients" style="display:flex; flex-wrap:wrap; gap:6px; border:1px solid #d1d5db; border-radius:8px; padding:8px; min-height:42px; background:#fff;">${chips}</div></div>
-                <div class="form-group"><label>Assunto</label><input id="autoTocaMailingSubject" type="text" placeholder="Ex: Olá <nome do contato>, oportunidade para <conta>"></div>
-                <div class="form-group"><label>Mensagem</label><textarea id="autoTocaMailingBody" rows="10" placeholder="Escreva o corpo do e-mail usando as chaves desejadas."></textarea></div>
-                <div style="display:flex; justify-content:flex-end; gap:10px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingComposer()">Cancelar</button><button id="autoTocaMailingSendBtn" class="btn btn-primary" onclick="sendAutoTocaMailingBatch()">Abrir e-mails no Outlook</button></div>
+                <div class="form-group"><label>Destinatários confirmados</label><div id="autoTocaMailingComposerRecipients" style="display:flex; flex-wrap:wrap; gap:6px; border:1px solid #d1d5db; border-radius:8px; padding:8px; min-height:42px; background:#fff;">${emailChips}</div></div>
+                <div id="atMailingSubjectGroup" class="form-group"><label>Assunto</label><input id="autoTocaMailingSubject" type="text" placeholder="Ex: Olá &lt;nome do contato&gt;, oportunidade para &lt;conta&gt;"></div>
+                <div class="form-group"><label id="atMailingBodyLabel">Mensagem</label><textarea id="autoTocaMailingBody" rows="10" placeholder="Escreva o corpo do e-mail usando as chaves desejadas."></textarea></div>
+                <div style="display:flex; justify-content:flex-end; gap:10px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingComposer()">Cancelar</button><button id="autoTocaMailingSendBtn" class="btn btn-primary" onclick="sendAutoTocaMailingBatch()"><i class="fas fa-paper-plane"></i> Abrir e-mails no Outlook</button></div>
             </div>`;
-            html += `<div style="border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','autoTocaMailingBody')}</div>`;
+            html += `<div style="border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4><div id="atMailingTemplateDrawer">${renderTemplateDrawer('email','autoTocaMailingBody')}</div></div>`;
             html += `</div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
             updateAutoTocaMailingComposerSendState();
+        }
+
+        function _switchAutoTocaMailingChannel(ch) {
+            _autoTocaMailingChannel = ch;
+
+            // Botões de toggle
+            const emailBtn = document.getElementById('atMailingChEmail');
+            const wppBtn   = document.getElementById('atMailingChWpp');
+            if (emailBtn) emailBtn.className = `btn btn-small ${ch === 'email' ? 'btn-primary' : 'btn-secondary'}`;
+            if (wppBtn)   wppBtn.className   = `btn btn-small ${ch === 'whatsapp' ? 'btn-primary' : 'btn-secondary'}`;
+
+            // Nota de canal
+            const note = document.getElementById('atMailingChannelNote');
+            if (note) note.textContent = ch === 'email'
+                ? 'Os contatos sem e-mail serão ignorados no envio.'
+                : 'Os contatos sem telefone serão ignorados no envio.';
+
+            // Assunto (só e-mail tem assunto)
+            const subjectGroup = document.getElementById('atMailingSubjectGroup');
+            if (subjectGroup) subjectGroup.style.display = ch === 'email' ? '' : 'none';
+
+            // Label e placeholder do corpo
+            const bodyLabel = document.getElementById('atMailingBodyLabel');
+            const bodyEl    = document.getElementById('autoTocaMailingBody');
+            if (bodyLabel) bodyLabel.textContent = ch === 'email' ? 'Mensagem' : 'Mensagem WhatsApp';
+            if (bodyEl) bodyEl.placeholder = ch === 'email'
+                ? 'Escreva o corpo do e-mail usando as chaves desejadas.'
+                : 'Olá <nome do contato>! Tudo bem?\n\nEstamos entrando em contato sobre...';
+
+            // Painel de chaves de merge
+            const mergePanel = document.getElementById('atMailingMergeTagsPanel');
+            if (mergePanel) {
+                const tags = ch === 'email'
+                    ? ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>']
+                    : ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>'];
+                mergePanel.innerHTML = tags.map(tag =>
+                    `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`
+                ).join('');
+            }
+
+            // Chips de destinatários
+            const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
+            const recipientsEl = document.getElementById('autoTocaMailingComposerRecipients');
+            if (recipientsEl) {
+                const chips = selectedContacts.map(c => {
+                    const missing = ch === 'whatsapp'
+                        ? !normalizePhoneForWhatsapp(c.phone)
+                        : !String(c.email || '').trim();
+                    const icon = missing
+                        ? (ch === 'whatsapp' ? '<i class="fas fa-triangle-exclamation" title="Sem telefone"></i>' : '<i class="fas fa-triangle-exclamation" title="Sem e-mail"></i>')
+                        : '';
+                    const wppIcon = ch === 'whatsapp' ? `<i class="fab fa-whatsapp" style="color:${missing ? '#b45309' : '#059669'}; font-size:11px;"></i> ` : '';
+                    return `<span id="chip-destinatario-${c.id}" style="display:inline-flex; gap:5px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${wppIcon}${escapeHtml(c.name || '-')} ${icon}<button type="button" onclick="removeAutoTocaMailingRecipient(${Number(c.id)})" title="Remover" style="border:none; background:transparent; color:#ef4444; cursor:pointer; padding:0; font-size:12px; line-height:1; margin-left:2px;"><i class="fas fa-times"></i></button></span>`;
+                }).join('') || '<span style="font-size:12px; color:#6b7280;">Nenhum destinatário.</span>';
+                recipientsEl.innerHTML = chips;
+            }
+
+            // Botão de envio
+            const sendBtn = document.getElementById('autoTocaMailingSendBtn');
+            if (sendBtn) sendBtn.innerHTML = ch === 'email'
+                ? '<i class="fas fa-paper-plane"></i> Abrir e-mails no Outlook'
+                : '<i class="fab fa-whatsapp"></i> Disparar via WhatsApp';
+
+            // Gaveta de templates
+            const drawerEl = document.getElementById('atMailingTemplateDrawer');
+            if (drawerEl) drawerEl.innerHTML = renderTemplateDrawer(ch === 'email' ? 'email' : 'whatsapp', 'autoTocaMailingBody');
         }
 
         function updateAutoTocaMailingComposerSendState() {
@@ -5679,13 +5755,43 @@
                 .replaceAll('<conta>', contact.company || '')
                 .replaceAll('<cargo>', contact.position || '')
                 .replaceAll('<area de atuacao>', contact.area_of_activity || '')
-                .replaceAll('<email>', contact.email || '');
+                .replaceAll('<email>', contact.email || '')
+                .replaceAll('<telefone>', contact.phone || '');
+        }
+
+        /** Insere uma chave de merge na posição do cursor de qualquer textarea/input pelo id. */
+        function insertMergeTagInto(textareaId, tag) {
+            const el = document.getElementById(textareaId);
+            if (!el) return;
+            el.focus();
+            const start = Number.isFinite(el.selectionStart) ? el.selectionStart : el.value.length;
+            const end   = Number.isFinite(el.selectionEnd)   ? el.selectionEnd   : start;
+            el.value = el.value.slice(0, start) + tag + el.value.slice(end);
+            const pos = start + tag.length;
+            el.setSelectionRange(pos, pos);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        /** Insere chave de merge no campo ativo do modal de e-mail individual (assunto ou corpo). */
+        function insertEmailDraftMergeTag(tag) {
+            const subjectEl = document.getElementById('emailDraftSubject');
+            const bodyEl    = document.getElementById('emailDraftBody');
+            const activeEl  = document.activeElement;
+            const target    = (activeEl === subjectEl || activeEl === bodyEl) ? activeEl : (bodyEl || subjectEl);
+            if (!target) return;
+            insertMergeTagInto(target.id, tag);
         }
 
         // Estado global do despacho da mala direta (uma lista por vez).
         let autoTocaMailingDispatchDrafts = [];
+        let _autoTocaMailingChannel = 'email'; // 'email' | 'whatsapp'
 
         function sendAutoTocaMailingBatch() {
+            if (_autoTocaMailingChannel === 'whatsapp') {
+                _sendAutoTocaWhatsAppBatch();
+                return;
+            }
+
             const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
             const subjectTemplate = document.getElementById('autoTocaMailingSubject')?.value || '';
             const bodyTemplate = document.getElementById('autoTocaMailingBody')?.value || '';
@@ -5708,7 +5814,39 @@
                     contact,
                     subject,
                     body,
+                    channel: 'email',
                     url: `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+                    status: 'pending'
+                };
+            });
+
+            closeAutoTocaMailingComposer();
+            openAutoTocaMailingDispatchModal(skipped);
+        }
+
+        function _sendAutoTocaWhatsAppBatch() {
+            const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
+            const bodyTemplate = document.getElementById('autoTocaMailingBody')?.value || '';
+            const contactsWithPhone = selectedContacts.filter(c => normalizePhoneForWhatsapp(c.phone));
+            const skipped = selectedContacts.length - contactsWithPhone.length;
+
+            if (!contactsWithPhone.length) return showError('Nenhum contato selecionado possui telefone válido para WhatsApp.');
+
+            tocaDebug('mala-direta.send-wpp', 'Iniciando despacho WhatsApp', {
+                selected: selectedContacts.length,
+                withPhone: contactsWithPhone.length,
+                skipped
+            });
+
+            autoTocaMailingDispatchDrafts = contactsWithPhone.map((contact, idx) => {
+                const body = applyMergeFields(bodyTemplate, contact);
+                const phone = normalizePhoneForWhatsapp(contact.phone);
+                return {
+                    idx,
+                    contact,
+                    body,
+                    phone,
+                    channel: 'whatsapp',
                     status: 'pending'
                 };
             });
@@ -5721,30 +5859,48 @@
             const drafts = autoTocaMailingDispatchDrafts;
             if (!drafts.length) return;
 
-            const rowsHtml = drafts.map((d, i) => `
+            const isWpp = drafts[0]?.channel === 'whatsapp';
+
+            const rowsHtml = drafts.map((d, i) => {
+                const subInfo = isWpp
+                    ? `<div style="font-size:12px; color:#6b7280;"><i class="fab fa-whatsapp" style="color:#25d366;"></i> ${escapeHtml(d.phone || '-')}</div>`
+                    : `<div style="font-size:12px; color:#6b7280;">${escapeHtml(d.contact.email || '-')}</div>
+                       <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>`;
+                const btnIcon = isWpp ? '<i class="fab fa-whatsapp"></i>' : '<i class="fas fa-paper-plane"></i>';
+                const btnLabel = isWpp ? 'Abrir no WhatsApp' : 'Abrir no Outlook';
+                return `
                 <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
                     <div style="min-width:0; overflow:hidden;">
                         <div style="font-weight:600; color:#065f46;">${escapeHtml(d.contact.name || '-')}</div>
-                        <div style="font-size:12px; color:#6b7280;">${escapeHtml(d.contact.email)}</div>
-                        <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>
+                        ${subInfo}
                     </div>
                     <span class="mailing-dispatch-status" id="mailingDispatchStatus_${i}" style="font-size:12px; color:#92400e; white-space:nowrap;">Pendente</span>
-                    <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})"><i class="fas fa-paper-plane"></i> Abrir no Outlook</button>
-                </div>
-            `).join('');
+                    <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})">${btnIcon} ${btnLabel}</button>
+                </div>`;
+            }).join('');
+
+            const batchBtnHtml = isWpp
+                ? `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-forward-step"></i> Abrir próximo no WhatsApp</button>`
+                : `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;
+
+            const batchNote = isWpp
+                ? `Cada mensagem WhatsApp deve ser aberta e enviada individualmente — o sistema reutiliza a mesma aba do WhatsApp Web. Use <strong>Abrir próximo no WhatsApp</strong> para ciclar pelos contatos em sequência, ou <strong>Abrir no WhatsApp</strong> em cada linha para enviar um por vez.`
+                : `Para evitar o bloqueador de pop-ups do navegador, cada janela do Outlook é aberta por um clique individual.
+                   Clique em <strong>Abrir no Outlook</strong> em cada linha para disparar a janela correspondente e registrar automaticamente a atividade daquele contato.
+                   Se você já autorizou pop-ups deste site, pode tentar o modo em lote no botão abaixo.`;
+
+            const skippedNote = skipped
+                ? `<p style="color:#92400e; font-size:12px; margin-bottom:10px;">${skipped} contato(s) sem ${isWpp ? 'telefone' : 'e-mail'} foram ignorados.</p>`
+                : '';
 
             const html = `
                 <div class="modal active" id="autoTocaMailingDispatchModal" onclick="if(event.target===this) closeAutoTocaMailingDispatchModal()">
                     <div class="modal-content" style="max-width:900px;">
-                        <h2 style="color:#047857; margin-bottom:8px;">Mala Direta — Despacho</h2>
-                        <p style="color:#4b5563; font-size:13px; margin-bottom:10px; line-height:1.45;">
-                            Para evitar o bloqueador de pop-ups do navegador, cada janela do Outlook é aberta por um clique individual.
-                            Clique em <strong>Abrir no Outlook</strong> em cada linha para disparar a janela correspondente e registrar automaticamente a atividade daquele contato.
-                            Se você já autorizou pop-ups deste site, pode tentar o modo em lote no botão abaixo.
-                        </p>
-                        ${skipped ? `<p style="color:#92400e; font-size:12px; margin-bottom:10px;">${skipped} contato(s) sem e-mail foram ignorados.</p>` : ''}
+                        <h2 style="color:#047857; margin-bottom:8px;">Mala Direta — Despacho ${isWpp ? '<i class="fab fa-whatsapp" style="color:#25d366; font-size:20px;"></i>' : '<i class="fas fa-envelope"></i>'}</h2>
+                        <p style="color:#4b5563; font-size:13px; margin-bottom:10px; line-height:1.45;">${batchNote}</p>
+                        ${skippedNote}
                         <div style="display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap;">
-                            <button class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>
+                            ${batchBtnHtml}
                             <span id="mailingDispatchCounter" style="font-size:12px; color:#6b7280;">0 de ${drafts.length} enviados</span>
                         </div>
                         <div style="display:flex; flex-direction:column; gap:8px; max-height:55vh; overflow:auto; padding-right:4px;">
@@ -5757,7 +5913,7 @@
                 </div>
             `;
             document.body.insertAdjacentHTML('beforeend', html);
-            tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length });
+            tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length, channel: drafts[0]?.channel });
         }
 
         function closeAutoTocaMailingDispatchModal() {
@@ -5792,8 +5948,8 @@
             try {
                 const formData = new FormData();
                 formData.set('client_id', draft.contact.id);
-                formData.set('contact_type', 'Email');
-                formData.set('information', draft.body || 'Email enviado.');
+                formData.set('contact_type', draft.channel === 'whatsapp' ? 'WhatsApp' : 'Email');
+                formData.set('information', draft.body || (draft.channel === 'whatsapp' ? 'Mensagem WhatsApp enviada.' : 'Email enviado.'));
                 const response = await fetch(`${API_BASE}/atividades`, { method: 'POST', body: formData });
                 if (!response.ok) {
                     tocaDebug('mala-direta.activity', 'Falha HTTP ao registrar atividade', {
@@ -5822,20 +5978,35 @@
             const draft = autoTocaMailingDispatchDrafts[idx];
             if (!draft || draft.status === 'sent') return;
 
+            const isWpp = draft.channel === 'whatsapp';
+
             tocaDebug('mala-direta.dispatch-one', 'Abrindo janela individual', {
                 idx,
                 contact_id: draft.contact.id,
-                email: draft.contact.email
+                channel: draft.channel,
+                contact: isWpp ? draft.phone : draft.contact.email
             });
 
-            const win = window.open(draft.url, '_blank');
-            if (!win) {
-                tocaDebug('mala-direta.dispatch-one', 'window.open retornou null (pop-up bloqueado)', {
-                    idx,
-                    contact_id: draft.contact.id
-                });
-                showError('O navegador bloqueou a janela. Permita pop-ups para este site e tente novamente.');
-                return;
+            if (isWpp) {
+                // WhatsApp: abre na aba reutilizável do WhatsApp Web
+                const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
+                const win = openWhatsAppTab(webUrl);
+                if (!win) {
+                    tocaDebug('mala-direta.dispatch-one', 'openWhatsAppTab retornou null (pop-up bloqueado)', { idx });
+                    showError('O navegador bloqueou a janela. Permita pop-ups para este site e tente novamente.');
+                    return;
+                }
+            } else {
+                // Email: abre no Outlook Web
+                const win = window.open(draft.url, '_blank');
+                if (!win) {
+                    tocaDebug('mala-direta.dispatch-one', 'window.open retornou null (pop-up bloqueado)', {
+                        idx,
+                        contact_id: draft.contact.id
+                    });
+                    showError('O navegador bloqueou a janela. Permita pop-ups para este site e tente novamente.');
+                    return;
+                }
             }
 
             draft.status = 'sent';
@@ -5844,9 +6015,10 @@
             // Pergunta UMA vez, por contato, se deseja registrar a atividade.
             // O modal de despacho garante que este fluxo é serial (um clique por vez),
             // então não há o problema de concorrência do resolve global do openSystemDialog.
-            const contactName = draft.contact.name || draft.contact.email;
+            const contactName = draft.contact.name || (isWpp ? draft.phone : draft.contact.email);
+            const channelLabel = isWpp ? 'WhatsApp' : 'Email';
             const shouldRegister = await uiConfirm(
-                `Deseja registrar essa interação de Email como atividade em "${contactName}"?`
+                `Deseja registrar essa interação de ${channelLabel} como atividade em "${contactName}"?`
             );
             tocaDebug('mala-direta.dispatch-one', 'Decisão sobre registro da atividade', {
                 idx,
@@ -5936,10 +6108,45 @@
         function sendAutoTocaMailingDispatchAll() {
             const pending = autoTocaMailingDispatchDrafts.filter(d => d.status === 'pending');
             if (!pending.length) {
-                showInfo('Não há e-mails pendentes para abrir.');
+                showInfo('Não há mensagens pendentes para abrir.');
                 return;
             }
 
+            if (_autoTocaMailingChannel === 'whatsapp') {
+                // WhatsApp: modo sequencial — abre um por vez na aba reutilizável
+                const draft = pending[0];
+                const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
+                openWhatsAppTab(webUrl);
+                draft.status = 'sent';
+                _updateAutoTocaMailingDispatchRow(draft.idx);
+
+                const remaining = autoTocaMailingDispatchDrafts.filter(d => d.status === 'pending');
+                const batchBtnEl = document.getElementById('mailingDispatchBatchBtn');
+                if (batchBtnEl) {
+                    if (remaining.length > 0) {
+                        batchBtnEl.innerHTML = `<i class="fas fa-forward-step"></i> Próximo (${remaining.length} restantes)`;
+                    } else {
+                        batchBtnEl.innerHTML = `<i class="fas fa-check-double"></i> Todos abertos`;
+                        batchBtnEl.disabled = true;
+                    }
+                }
+
+                (async () => {
+                    const contactName = draft.contact.name || draft.phone;
+                    const shouldRegister = await uiConfirm(
+                        `Deseja registrar essa interação de WhatsApp como atividade em "${contactName}"?`
+                    );
+                    if (shouldRegister) {
+                        const ok = await _registerAutoTocaMailingActivity(draft);
+                        if (ok) {
+                            try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+                        }
+                    }
+                })();
+                return;
+            }
+
+            // Email: verifica permissão de pop-ups e abre todos de uma vez
             if (!_isAutoTocaMailingPopupHelpDismissed()) {
                 _openAutoTocaMailingPopupHelpModal(_doAutoTocaMailingDispatchAll);
                 return;
@@ -10721,7 +10928,8 @@
                 return;
             }
 
-            const message = document.getElementById('whatsMessageText')?.value?.trim() || '';
+            const rawMessage = document.getElementById('whatsMessageText')?.value?.trim() || '';
+            const message = applyMergeFields(rawMessage, client);
             const phone = normalizePhoneForWhatsapp(client.phone);
 
             if (!phone) {
@@ -13194,9 +13402,34 @@
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.phone) return openMissingContactModal();
             const prefDesktop = getWhatsAppPreference() === 'desktop';
+            const wppTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>'];
+            const tagsBar = `<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; padding:7px 10px; background:rgba(236,253,245,.6); border:1px solid rgba(16,185,129,.25); border-radius:8px; align-items:center;">
+                <span style="font-size:11px; font-weight:700; color:#065f46; white-space:nowrap; margin-right:2px; text-transform:uppercase; letter-spacing:.04em;">Chaves:</span>
+                ${wppTags.map(t => `<button type="button" class="btn btn-secondary btn-small" onclick="insertMergeTagInto('whatsMessageText','${t.replace(/'/g, "\\'")}')" style="font-size:11px;">${escapeHtml(t)}</button>`).join('')}
+                <span style="font-size:11px; color:#6b7280; margin-left:4px;">→ substituídas pelo dado real ao enviar</span>
+            </div>`;
             let html = `<div class="modal active" id="whatsAppModal">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name || '-')}</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#4b5563; margin-bottom:12px;"><input type="checkbox" id="whatsUseDesktop" ${prefDesktop ? 'checked' : ''}> Abrir no WhatsApp Desktop (sem reload do Web)</label><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Enviar mensagem</button></div></div>`;
+            html += `<div style="flex:1;">
+                <h2 style="margin-bottom:8px; color:#047857;"><i class="fab fa-whatsapp"></i> Mensagem WhatsApp — ${escapeHtml(client.name || '-')}</h2>
+                <div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);">
+                    <img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);">
+                    <div>
+                        <div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div>
+                        <div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div>
+                        <div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div>
+                    </div>
+                </div>
+                ${tagsBar}
+                <div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8" placeholder="Olá &lt;nome do contato&gt;! Tudo bem?"></textarea></div>
+                <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#4b5563; margin-bottom:12px;">
+                    <input type="checkbox" id="whatsUseDesktop" ${prefDesktop ? 'checked' : ''}> Abrir no WhatsApp Desktop (sem reload do Web)
+                </label>
+                <div style="display:flex; gap:10px; justify-content:flex-end;">
+                    <button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button>
+                    <button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Enviar mensagem</button>
+                </div>
+            </div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('whatsapp','whatsMessageText')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -13205,9 +13438,32 @@
         openEmailDraftModal = function(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.email) return openMissingContactModal();
+            const emailTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            const tagsBar = `<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; padding:7px 10px; background:rgba(236,253,245,.6); border:1px solid rgba(16,185,129,.25); border-radius:8px; align-items:center;">
+                <span style="font-size:11px; font-weight:700; color:#065f46; white-space:nowrap; margin-right:2px; text-transform:uppercase; letter-spacing:.04em;">Chaves:</span>
+                ${emailTags.map(t => `<button type="button" class="btn btn-secondary btn-small" onclick="insertEmailDraftMergeTag('${t.replace(/'/g, "\\'")}')" style="font-size:11px;">${escapeHtml(t)}</button>`).join('')}
+                <span style="font-size:11px; color:#6b7280; margin-left:4px;">→ clique no campo antes de inserir</span>
+            </div>`;
             let html = `<div class="modal active" id="emailDraftModal">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
+            html += `<div style="flex:1;">
+                <h2 style="margin-bottom:8px; color:#047857;"><i class="fas fa-envelope"></i> Novo e-mail — ${escapeHtml(client.name || '-')}</h2>
+                <div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);">
+                    <img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);">
+                    <div>
+                        <div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div>
+                        <div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div>
+                        <div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div>
+                    </div>
+                </div>
+                ${tagsBar}
+                <div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text" placeholder="Ex: Olá &lt;nome do contato&gt;, oportunidade para &lt;conta&gt;"></div>
+                <div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div>
+                <div style="display:flex; gap:10px; justify-content:flex-end;">
+                    <button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button>
+                    <button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button>
+                </div>
+            </div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','emailDraftBody')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -13217,8 +13473,11 @@
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.email) return openMissingContactModal();
 
-            const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
-            const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
+            const rawSubject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
+            const rawBody    = document.getElementById('emailDraftBody')?.value?.trim() || '';
+            // Substitui chaves de merge pelos dados reais do contato antes de abrir o Outlook
+            const subject = applyMergeFields(rawSubject, client);
+            const body    = applyMergeFields(rawBody, client);
             const cc = '';
 
             const queryParts = [
@@ -13226,10 +13485,7 @@
                 `subject=${encodeURIComponent(subject)}`,
                 `body=${encodeURIComponent(body)}`
             ];
-
-            if (cc) {
-                queryParts.push(`cc=${encodeURIComponent(cc)}`);
-            }
+            if (cc) queryParts.push(`cc=${encodeURIComponent(cc)}`);
 
             const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?${queryParts.join('&')}`;
             emailWindowRef = window.open(outlookUrl, '_blank');
