@@ -2239,6 +2239,36 @@
         }
         .home-period-wrapper { position: relative; display: flex; flex-direction: column; gap: 4px; }
         .home-period-label { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+        .home-contact-filters {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .home-contact-filters-title {
+            font-size: 11px;
+            color: var(--hm-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 600;
+        }
+        .home-contact-filter-opt {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 12px;
+            color: var(--hm-text-muted);
+            cursor: pointer;
+            user-select: none;
+            transition: color 120ms;
+        }
+        .home-contact-filter-opt:hover { color: var(--hm-text); }
+        .home-contact-filter-opt input[type="checkbox"] {
+            accent-color: var(--hm-cyan);
+            cursor: pointer;
+            width: 13px;
+            height: 13px;
+        }
+        .home-contact-filter-opt i { font-size: 11px; }
         .home-period-trigger {
             background: rgba(20, 33, 50, 0.85);
             border: 1px solid var(--hm-border-strong);
@@ -2871,6 +2901,19 @@
                                     <!-- meses preenchidos via JS -->
                                 </div>
                             </div>
+                        </div>
+                        <div class="home-contact-filters">
+                            <span class="home-contact-filters-title">Considerar</span>
+                            <label class="home-contact-filter-opt" title="Incluir contatos arquivados nos cálculos do dashboard">
+                                <input type="checkbox" id="homeIncludeArchived" onchange="onHomeFilterChange()">
+                                <i class="fas fa-box-archive"></i>
+                                Arquivados
+                            </label>
+                            <label class="home-contact-filter-opt" title="Incluir contatos frios nos cálculos do dashboard">
+                                <input type="checkbox" id="homeIncludeCold" onchange="onHomeFilterChange()">
+                                <i class="fas fa-snowflake"></i>
+                                Frios
+                            </label>
                         </div>
                         <div class="home-update-block">
                             <div class="home-update-stamp">
@@ -4536,6 +4579,7 @@
         let autoTocaMailingPositions = [];
         let autoTocaMailingAreas = [];
         let autoTocaMailingSelection = [];
+        let _autoTocaMailingPreviewFiltered = [];
 
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
@@ -5425,14 +5469,63 @@
         function openAutoTocaMailingPreview() {
             const filtered = _getAutoTocaFilteredMailingClients();
             if (!filtered.length) return showInfo('Nenhum contato encontrado para esse filtro.');
-            autoTocaMailingSelection = filtered.filter(c => String(c.email || '').trim()).map(c => c.id);
+            _autoTocaMailingPreviewFiltered = filtered;
+
+            // Seleção inicial: apenas contatos visíveis (não arquivados e não frios) com e-mail
+            autoTocaMailingSelection = filtered
+                .filter(c => !isArchivedClient(c) && !Number(c.is_cold_contact))
+                .filter(c => String(c.email || '').trim())
+                .map(c => c.id);
+
+            const hasArchived = filtered.some(c => isArchivedClient(c));
+            const hasCold = filtered.some(c => Number(c.is_cold_contact) === 1);
 
             let html = `<div class="modal active" id="autoTocaMailingPreviewModal" onclick="if(event.target===this) closeAutoTocaMailingPreview()">`;
             html += `<div class="modal-content" style="max-width:920px;">`;
             html += `<h2 style="color:#047857;">Mala Direta — Seleção de Contatos</h2>`;
-            html += `<p style="color:#6b7280; margin-bottom:12px;">Desmarque quem não deve receber. Contatos sem e-mail serão ignorados no envio.</p>`;
-            html += `<div style="max-height:420px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(250px,1fr)); gap:10px;">`;
-            html += filtered.map(c => {
+            html += `<p style="color:#6b7280; margin-bottom:10px;">Desmarque quem não deve receber. Contatos sem e-mail serão ignorados no envio.</p>`;
+
+            // Barra de filtros internos do modal
+            html += `<div style="display:flex; align-items:center; gap:20px; padding:9px 14px; background:rgba(243,244,246,.85); border:1px solid #e5e7eb; border-radius:10px; margin-bottom:14px; flex-wrap:wrap;">
+                <span style="font-size:12px; font-weight:700; color:#374151; text-transform:uppercase; letter-spacing:.04em;">Exibir também:</span>
+                <label style="display:flex; align-items:center; gap:7px; cursor:pointer; font-size:13px; color:#4b5563; ${!hasArchived ? 'opacity:.4; pointer-events:none;' : ''}">
+                    <input type="checkbox" id="atMailingShowArchived" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#6b7280;" ${!hasArchived ? 'disabled' : ''}>
+                    <i class="fas fa-box-archive" style="color:#6b7280; font-size:12px;"></i>
+                    Arquivados${hasArchived ? '' : ' <em style="font-size:11px;">(nenhum neste filtro)</em>'}
+                </label>
+                <label style="display:flex; align-items:center; gap:7px; cursor:pointer; font-size:13px; color:#4b5563; ${!hasCold ? 'opacity:.4; pointer-events:none;' : ''}">
+                    <input type="checkbox" id="atMailingShowCold" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#0e7490;" ${!hasCold ? 'disabled' : ''}>
+                    <i class="fas fa-snowflake" style="color:#0e7490; font-size:12px;"></i>
+                    Frios${hasCold ? '' : ' <em style="font-size:11px;">(nenhum neste filtro)</em>'}
+                </label>
+            </div>`;
+
+            html += `<div id="atMailingPreviewGrid" style="max-height:420px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(250px,1fr)); gap:10px;">`;
+            html += _buildAutoTocaMailingPreviewContactsHTML();
+            html += `</div>`;
+            html += `<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingPreview()">Cancelar</button><button class="btn btn-primary" onclick="openAutoTocaMailingComposer()">Próximo →</button></div>`;
+            html += `</div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function _buildAutoTocaMailingPreviewContactsHTML() {
+            const showArchived = document.getElementById('atMailingShowArchived')?.checked || false;
+            const showCold = document.getElementById('atMailingShowCold')?.checked || false;
+
+            const visible = _autoTocaMailingPreviewFiltered.filter(c => {
+                if (isArchivedClient(c) && !showArchived) return false;
+                if (Number(c.is_cold_contact) === 1 && !showCold) return false;
+                return true;
+            });
+
+            if (!visible.length) {
+                return `<div style="grid-column:1/-1; text-align:center; color:#6b7280; padding:30px 0; font-size:14px;">
+                    <i class="fas fa-filter" style="margin-bottom:8px; font-size:22px; opacity:.4; display:block;"></i>
+                    Nenhum contato a exibir com os filtros selecionados.
+                </div>`;
+            }
+
+            return visible.map(c => {
                 const noEmail = !String(c.email || '').trim();
                 const status = getAutoTocaMailingStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact);
                 const isCold = Number(c.is_cold_contact) === 1;
@@ -5441,8 +5534,9 @@
                 if (isCold) badges.push('<span title="Contato marcado como frio" style="display:inline-flex; align-items:center; gap:4px; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(8,145,178,.12); color:#0e7490; border:1px solid rgba(8,145,178,.3); font-weight:600;"><i class="fas fa-snowflake"></i> Frio</span>');
                 if (isArchived) badges.push('<span title="Contato arquivado" style="display:inline-flex; align-items:center; gap:4px; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(107,114,128,.15); color:#374151; border:1px solid rgba(107,114,128,.3); font-weight:600;"><i class="fas fa-box-archive"></i> Arquivado</span>');
                 const badgesHtml = badges.length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">${badges.join('')}</div>` : '';
+                const isSelected = autoTocaMailingSelection.includes(c.id);
                 return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noEmail ? 'rgba(156,163,175,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noEmail ? 'rgba(243,244,246,.7)' : 'rgba(236,253,245,.5)'}; ${noEmail ? 'opacity:.6; cursor:not-allowed;' : 'cursor:pointer;'}">
-                    <input type="checkbox" ${noEmail ? 'disabled' : 'checked'} onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
+                    <input type="checkbox" ${noEmail ? 'disabled' : (isSelected ? 'checked' : '')} onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
                     <img src="${c.photo_url || '/logo-coelho.png'}" style="width:40px;height:40px;border-radius:999px;object-fit:cover;">
                     <div style="min-width:0;">
                         <div style="font-weight:700; color:#065f46; display:flex; align-items:center; gap:6px;">
@@ -5457,10 +5551,32 @@
                     </div>
                 </label>`;
             }).join('');
-            html += `</div>`;
-            html += `<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingPreview()">Cancelar</button><button class="btn btn-primary" onclick="openAutoTocaMailingComposer()">Próximo →</button></div>`;
-            html += `</div></div>`;
-            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function _renderAutoTocaMailingPreviewContacts() {
+            const showArchived = document.getElementById('atMailingShowArchived')?.checked || false;
+            const showCold = document.getElementById('atMailingShowCold')?.checked || false;
+
+            // Calcula quais ficam visíveis após a mudança
+            const visible = _autoTocaMailingPreviewFiltered.filter(c => {
+                if (isArchivedClient(c) && !showArchived) return false;
+                if (Number(c.is_cold_contact) === 1 && !showCold) return false;
+                return true;
+            });
+            const visibleIds = new Set(visible.map(c => c.id));
+
+            // Remove da seleção os que ficaram ocultos
+            autoTocaMailingSelection = autoTocaMailingSelection.filter(id => visibleIds.has(id));
+
+            // Adiciona automaticamente os recém-exibidos que têm e-mail
+            visible.forEach(c => {
+                if (String(c.email || '').trim() && !autoTocaMailingSelection.includes(c.id)) {
+                    autoTocaMailingSelection.push(c.id);
+                }
+            });
+
+            const grid = document.getElementById('atMailingPreviewGrid');
+            if (grid) grid.innerHTML = _buildAutoTocaMailingPreviewContactsHTML();
         }
 
         function toggleAutoTocaMailingContact(contactId, checked) {
@@ -6822,6 +6938,8 @@
             firstLoad: true,
             resizeHandlerBound: false,
             cardActionsInjected: false,
+            includeArchived: false,
+            includeCold: false,
         };
 
         const HOME_PALETTE = ['#22d3ee', '#3b82f6', '#a855f7', '#ec4899', '#f97316', '#facc15', '#22c55e', '#14b8a6'];
@@ -7099,6 +7217,12 @@
             });
         }
 
+        function onHomeFilterChange() {
+            HOME_STATE.includeArchived = document.getElementById('homeIncludeArchived')?.checked || false;
+            HOME_STATE.includeCold = document.getElementById('homeIncludeCold')?.checked || false;
+            loadHome(true);
+        }
+
         async function loadHome(force = false) {
             const tab = document.getElementById('home');
             if (!tab) return;
@@ -7108,6 +7232,8 @@
             if (HOME_STATE.period === 'months' && HOME_STATE.months.length) {
                 params.set('months', HOME_STATE.months.join(','));
             }
+            params.set('include_archived', HOME_STATE.includeArchived ? '1' : '0');
+            params.set('include_cold', HOME_STATE.includeCold ? '1' : '0');
 
             try {
                 const resp = await fetch(`/api/home/overview?${params.toString()}`);

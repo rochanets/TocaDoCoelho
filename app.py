@@ -13460,10 +13460,22 @@ def home_overview():
         if period == 'months' and months_arg:
             months_filter = [m.strip() for m in months_arg.split(',') if re.match(r'^\d{4}-\d{2}$', m.strip())]
 
+        include_archived = request.args.get('include_archived') == '1'
+        include_cold = request.args.get('include_cold') == '1'
+
+        def client_filter(alias='c'):
+            """Retorna fragmento AND para filtrar clientes arquivados/frios conforme flags."""
+            clauses = []
+            if not include_archived:
+                clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
+            if not include_cold:
+                clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
+            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
+
         conn = get_db()
         c = conn.cursor()
 
-        # Thresholds de status (rule universal)
+        # Thresholds de status — universal + regras por cargo
         c.execute("SELECT key, value FROM app_settings WHERE key IN ('status_green_days', 'status_yellow_days')")
         s_map = {row['key']: row['value'] for row in c.fetchall()}
         try:
@@ -13475,6 +13487,19 @@ def home_overview():
         except Exception:
             yellow_days = 14
 
+        # Regras por cargo (espelha exatamente o que o frontend usa)
+        c.execute('SELECT position, green_days, yellow_days FROM status_rules')
+        _rules_map = {
+            (row['position'] or '').strip().lower(): (int(row['green_days']), int(row['yellow_days']))
+            for row in c.fetchall()
+            if row['position']
+        }
+
+        def _get_thresholds(position):
+            """Retorna (green_days, yellow_days) para o cargo dado, igual à lógica do frontend."""
+            key = (position or '').strip().lower()
+            return _rules_map.get(key, (green_days, yellow_days))
+
         def month_clause(col):
             if not months_filter:
                 return '', []
@@ -13485,19 +13510,20 @@ def home_overview():
         c.execute("SELECT COUNT(*) AS n FROM accounts")
         total_accounts = c.fetchone()['n']
 
-        c.execute("SELECT COUNT(*) AS n FROM clients WHERE COALESCE(is_archived,0)=0")
+        c.execute(f"SELECT COUNT(*) AS n FROM clients c WHERE 1=1{client_filter()}")
         total_contacts = c.fetchone()['n']
 
-        # Status snapshot
-        c.execute("""
-            SELECT c.id,
-                   (SELECT MAX(activity_date) FROM activities WHERE client_id=c.id) AS last_date
+        # Status snapshot — usa clients.last_activity_date (igual ao frontend)
+        # e aplica regras por cargo (igual ao getStatus() do frontend)
+        c.execute(f"""
+            SELECT c.id, c.position, c.last_activity_date AS last_date
             FROM clients c
-            WHERE COALESCE(c.is_archived,0)=0
+            WHERE 1=1{client_filter()}
         """)
         em_dia = atencao = atrasado = 0
         now_dt = datetime.now()
         for row in c.fetchall():
+            g, y = _get_thresholds(row['position'])
             last = row['last_date']
             if not last:
                 atrasado += 1
@@ -13509,9 +13535,9 @@ def home_overview():
             except Exception:
                 atrasado += 1
                 continue
-            if days < green_days:
+            if days < g:
                 em_dia += 1
-            elif days < yellow_days:
+            elif days < y:
                 atencao += 1
             else:
                 atrasado += 1
@@ -13550,7 +13576,7 @@ def home_overview():
             WITH client_acts AS (
                 SELECT cl.company AS acc, COUNT(*) AS n
                 FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}
+                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}{client_filter('cl')}
                 GROUP BY cl.company
             ),
             acc_acts AS (
@@ -13595,7 +13621,7 @@ def home_overview():
         c.execute(f"""
             SELECT cl.position AS cargo, COUNT(*) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE cl.position IS NOT NULL AND TRIM(cl.position) != '' {mf_a}
+            WHERE cl.position IS NOT NULL AND TRIM(cl.position) != '' {mf_a}{client_filter('cl')}
             GROUP BY cl.position
             ORDER BY n DESC
             LIMIT 8
@@ -13634,7 +13660,7 @@ def home_overview():
         c.execute(f"""
             SELECT COALESCE(NULLIF(TRIM(a.contact_type), ''), 'Outro') AS canal, COUNT(*) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE 1=1 {mf_a}
+            WHERE 1=1 {mf_a}{client_filter('cl')}
             GROUP BY canal
             ORDER BY n DESC
         """, mfp_a)
@@ -13647,8 +13673,8 @@ def home_overview():
             SELECT strftime('%w', a.activity_date) AS dow,
                    CAST(strftime('%H', a.activity_date) AS INTEGER) AS hr,
                    COUNT(*) AS n
-            FROM activities a
-            WHERE a.activity_date IS NOT NULL {mf_a}
+            FROM activities a JOIN clients cl ON cl.id = a.client_id
+            WHERE a.activity_date IS NOT NULL {mf_a}{client_filter('cl')}
             GROUP BY dow, hr
         """, mfp_a)
         heatmap = {}
@@ -13666,23 +13692,23 @@ def home_overview():
         heatmap_list = [{'dow': k[0], 'periodo': k[1], 'count': v} for k, v in heatmap.items()]
 
         # --- Funil de Engajamento ---
-        ativas = total_contacts  # já considera não-arquivados
+        ativas = total_contacts  # já respeita os filtros de arquivado/frio
         c.execute(f"""
             SELECT COUNT(DISTINCT a.client_id) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE COALESCE(cl.is_archived,0)=0 AND a.activity_date >= date('now', '-30 day')
+            WHERE a.activity_date >= date('now', '-30 day'){client_filter('cl')}
         """)
         com_contato_mes = c.fetchone()['n'] or 0
         c.execute(f"""
             SELECT COUNT(DISTINCT a.client_id) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE COALESCE(cl.is_archived,0)=0
+            WHERE 1=1{client_filter('cl')}
         """)
         com_interacao = c.fetchone()['n'] or 0
         c.execute(f"""
             SELECT a.client_id, COUNT(*) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE COALESCE(cl.is_archived,0)=0
+            WHERE 1=1{client_filter('cl')}
             GROUP BY a.client_id
             HAVING n >= 3
         """)
@@ -13698,10 +13724,11 @@ def home_overview():
         ]
 
         # --- Tempo médio sem contato (buckets) ---
-        c.execute("""
-            SELECT (SELECT MAX(activity_date) FROM activities WHERE client_id=c.id) AS last_date
+        # Usa clients.last_activity_date para consistência com o frontend
+        c.execute(f"""
+            SELECT c.last_activity_date AS last_date
             FROM clients c
-            WHERE COALESCE(c.is_archived,0)=0
+            WHERE 1=1{client_filter()}
         """)
         buckets = {'0-7': 0, '8-14': 0, '15-30': 0, '+30': 0}
         for row in c.fetchall():
@@ -13727,9 +13754,10 @@ def home_overview():
         tempo_sem_contato = [{'bucket': k, 'count': v} for k, v in buckets.items()]
 
         # --- Novos contatos por mês (últimos 12 meses) ---
-        c.execute("""
+        c.execute(f"""
             SELECT strftime('%Y-%m', created_at) AS ym, COUNT(*) AS n
-            FROM clients
+            FROM clients c
+            WHERE 1=1{client_filter()}
             GROUP BY ym
             ORDER BY ym ASC
         """)
