@@ -148,8 +148,8 @@
         .settings-grid {
             display: grid;
             gap: 14px;
-            grid-template-columns: repeat(2, minmax(260px, 1fr));
-            max-width: 920px;
+            grid-template-columns: repeat(3, minmax(260px, 1fr));
+            max-width: 1280px;
             align-items: start;
         }
 
@@ -1549,6 +1549,12 @@
 
         /* Responsive */
         @media (max-width: 980px) {
+            .settings-grid {
+                grid-template-columns: repeat(2, 1fr);
+                max-width: 100%;
+            }
+        }
+        @media (max-width: 640px) {
             .settings-grid {
                 grid-template-columns: 1fr;
                 max-width: 100%;
@@ -3241,6 +3247,7 @@
                             <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
                         </div>
                         <span id="wikiFileName" class="wiki-file-name"></span>
+                        <button id="wikiFileClearBtn" type="button" onclick="clearWikiFileSelection()" title="Cancelar seleção" style="display:none; background:none; border:none; cursor:pointer; color:#ef4444; font-size:15px; padding:0 2px; line-height:1; vertical-align:middle;"><i class="fas fa-times-circle"></i></button>
                         <div class="wiki-upload-actions">
                             <button id="wikiUploadBtn" class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
                         </div>
@@ -3675,8 +3682,104 @@
                 <p>Parametrizações do sistema e cadastro do usuário</p>
             </div>
             <div class="settings-grid">
+
+                <!-- 1. Agrupamento de Cargos -->
                 <section class="settings-card">
-                    <h3>Faixa de Status</h3>
+                    <h3><i class="fas fa-layer-group" style="margin-right:8px; color:#059669;"></i>Agrupamento de Cargos</h3>
+                    <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
+                    <div class="form-group"><label>Cargos (separados por vírgula)</label><input type="text" id="groupingPositions" placeholder="Diretor, Head, Gerente Executivo"></div>
+                    <button class="btn btn-secondary btn-small" onclick="savePositionGrouping()"><i class="fas fa-plus"></i> Criar agrupamento</button>
+                    <div id="positionGroupingList" style="margin-top:12px;"></div>
+                </section>
+
+                <!-- 2. Ajuda e Atualizações -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-rotate" style="margin-right:8px; color:#059669;"></i>Ajuda e Atualizações</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
+                    <form id="updateSourceForm" onsubmit="saveUpdateSourceConfig(event)">
+                        <div class="form-group">
+                            <label>GitHub Owner</label>
+                            <input type="text" id="updateGithubOwner" placeholder="seu-usuario-ou-org" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>GitHub Repositório</label>
+                            <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>GitHub Token <span style="color:#9ca3af; font-weight:normal;">(opcional — evita o limite de verificações)</span></label>
+                            <input type="password" id="updateGithubToken" placeholder="ghp_..." autocomplete="off">
+                            <small id="updateGithubTokenStatus" style="color:#6b7280; display:block; margin-top:4px;"></small>
+                        </div>
+                        <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
+                            <button type="button" class="btn btn-primary btn-small" onclick="checkForUpdates()"><i class="fas fa-cloud-download-alt"></i> Verificar atualizações</button>
+                        </div>
+                    </form>
+                    <div id="updateCheckResult" style="margin-top:12px; color:#4b5563; font-size:13px;"></div>
+                </section>
+
+                <!-- 3. Backup do Banco de Dados -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-database" style="margin-right:8px; color:#059669;"></i>Backup do Banco de Dados</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Faça backup completo ou restaure o banco de dados.</p>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+                        <div>
+                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Exportar Banco</h4>
+                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Baixe uma cópia completa do banco de dados (com opção de incluir imagens)</p>
+                            <button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>
+                        </div>
+                        <div>
+                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Importar Banco</h4>
+                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Restaure um backup .db ou pacote .zip (cria backup automático antes)</p>
+                            <input type="file" id="restoreDbInput" accept=".db,.zip" style="display:none;" onchange="restoreDatabase(event)">
+                            <button class="btn btn-secondary" onclick="document.getElementById('restoreDbInput').click()"><i class="fas fa-upload"></i> Importar Banco</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. Cadastro do Usuário -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-id-card" style="margin-right:8px; color:#059669;"></i>Cadastro do Usuário</h3>
+                    <form id="userProfileForm" onsubmit="saveUserProfile(event)">
+                        <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
+                        <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
+                        <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
+                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
+                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
+                        <div class="form-group"><label>Boss (opcional)</label><input type="text" name="boss_name"></div>
+                        <div class="form-group"><label>Email do Boss (opcional)</label><input type="email" name="boss_email"></div>
+                        <div class="form-group">
+                            <label>Foto *</label>
+                            <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
+                            <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
+                            <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- 5. Exportar Atividades -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-file-export" style="margin-right:8px; color:#059669;"></i>Exportar Atividades</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Exporte atividades com filtro de período.</p>
+                    <div class="form-group"><label>Data Inicial</label><input type="date" id="startDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
+                    <div class="form-group"><label>Data Final</label><input type="date" id="endDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
+                    <button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>
+                </section>
+
+                <!-- 6. Exportar Base de Clientes -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-users" style="margin-right:8px; color:#059669;"></i>Exportar Base de Clientes</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Exporte todos os dados cadastrais dos clientes em CSV.</p>
+                    <button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>
+                </section>
+
+                <!-- 7. Faixa de Status -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-gauge-high" style="margin-right:8px; color:#059669;"></i>Faixa de Status</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Regra A (universal) será aplicada quando não houver regra específica por cargo (Regra B).</p>
                     <form id="universalStatusForm" onsubmit="saveUniversalStatus(event)">
                         <div style="display:grid; grid-template-columns: repeat(2,minmax(160px,1fr)); gap:12px;">
@@ -3706,7 +3809,7 @@
                             <button class="btn btn-secondary btn-small" onclick="saveTargetStatus()"><i class="fas fa-save"></i> Salvar Regra C</button>
                         </div>
                     </div>
-                                    <div style="margin-top:14px; border-top:1px solid rgba(52,211,153,0.2); padding-top:12px;">
+                    <div style="margin-top:14px; border-top:1px solid rgba(52,211,153,0.2); padding-top:12px;">
                         <h4 style="color:#065f46; font-weight:400; margin-bottom:8px;">Regra D Contato Frio</h4>
                         <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
                             <div class="form-group" style="margin:0;"><label>Dias Em dia</label><input type="number" id="coldGreen" min="0" style="width:110px;"></div>
@@ -3716,16 +3819,9 @@
                     </div>
                 </section>
 
+                <!-- 8. Integrações de API -->
                 <section class="settings-card">
-                    <h3>Agrupamento de Cargos</h3>
-                    <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
-                    <div class="form-group"><label>Cargos (separados por vírgula)</label><input type="text" id="groupingPositions" placeholder="Diretor, Head, Gerente Executivo"></div>
-                    <button class="btn btn-secondary btn-small" onclick="savePositionGrouping()"><i class="fas fa-plus"></i> Criar agrupamento</button>
-                    <div id="positionGroupingList" style="margin-top:12px;"></div>
-                </section>
-
-                <section class="settings-card">
-                    <h3>Integrações de API</h3>
+                    <h3><i class="fas fa-plug" style="margin-right:8px; color:#059669;"></i>Integrações de API</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Configure as chaves do usuário final para busca (Tavily), LLM (OpenRouter) e o assistente iToca (SAI).</p>
                     <form id="integrationConfigForm" onsubmit="saveIntegrationConfig(event)">
                         <div class="form-group">
@@ -3769,50 +3865,9 @@
                     </form>
                 </section>
 
-                <section class="settings-card">
-                    <h3>Ajuda e Atualizações</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
-                    <form id="updateSourceForm" onsubmit="saveUpdateSourceConfig(event)">
-                        <div class="form-group">
-                            <label>GitHub Owner</label>
-                            <input type="text" id="updateGithubOwner" placeholder="seu-usuario-ou-org" autocomplete="off">
-                        </div>
-                        <div class="form-group">
-                            <label>GitHub Repositório</label>
-                            <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
-                        </div>
-                        <div class="form-group">
-                            <label>GitHub Token <span style="color:#9ca3af; font-weight:normal;">(opcional — evita o limite de verificações)</span></label>
-                            <input type="password" id="updateGithubToken" placeholder="ghp_..." autocomplete="off">
-                            <small id="updateGithubTokenStatus" style="color:#6b7280; display:block; margin-top:4px;"></small>
-                        </div>
-                        <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
-                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                            <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
-                            <button type="button" class="btn btn-primary btn-small" onclick="checkForUpdates()"><i class="fas fa-cloud-download-alt"></i> Verificar atualizações</button>
-                        </div>
-                    </form>
-                    <div id="updateCheckResult" style="margin-top:12px; color:#4b5563; font-size:13px;"></div>
-                </section>
-
-
-                <section class="settings-card" id="startupSettingsCard">
-                    <h3>Sistema</h3>
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
-                        <div>
-                            <strong>Iniciar com o Windows</strong>
-                            <p style="margin:4px 0 0; color:#6b7280; font-size:13px;">Iniciar o Toca do Coelho automaticamente quando o Windows ligar.</p>
-                        </div>
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;">
-                            <input type="checkbox" id="startupToggle" onchange="setStartupConfig(this.checked)" disabled style="width:18px; height:18px; cursor:pointer; accent-color:#10b981;">
-                            <span id="startupToggleLabel" style="font-size:13px; color:#6b7280;">Carregando...</span>
-                        </label>
-                    </div>
-                    <small id="startupSettingStatus" style="color:#6b7280; display:block; margin-top:8px;"></small>
-                </section>
-
+                <!-- 9. Logs de Depuração -->
                 <section class="settings-card" id="debugLogsSettingsCard">
-                    <h3>Logs de Depuração</h3>
+                    <h3><i class="fas fa-bug" style="margin-right:8px; color:#059669;"></i>Logs de Depuração</h3>
                     <p style="margin-bottom:10px; color:#4b5563;">Habilite para capturar eventos detalhados do cliente (janelas abertas, chamadas à API, erros) e sincronizá-los com o log do servidor. Útil para diagnosticar falhas intermitentes — como pop-ups bloqueados na Mala Direta.</p>
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:10px;">
                         <div>
@@ -3833,8 +3888,9 @@
                     <pre id="debugLogsViewer" style="max-height:340px; min-height:140px; overflow:auto; background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px; font-size:11px; font-family:'Courier New',monospace; white-space:pre-wrap; margin:0;">Clique em "Atualizar" para carregar os logs do servidor.</pre>
                 </section>
 
+                <!-- 10. MSG Padrão -->
                 <section class="settings-card">
-                    <h3>MSG Padrão</h3>
+                    <h3><i class="fas fa-comment-dots" style="margin-right:8px; color:#059669;"></i>MSG Padrão</h3>
                     <form onsubmit="saveMessageTemplate(event)">
                         <input type="hidden" id="templateId">
                         <div class="form-group"><label>Título</label><input type="text" id="templateTitle" required></div>
@@ -3848,59 +3904,22 @@
                     <div id="templateList" style="margin-top:12px;"></div>
                 </section>
 
-                <section class="settings-card">
-                    <h3>Cadastro do Usuário</h3>
-                    <form id="userProfileForm" onsubmit="saveUserProfile(event)">
-                        <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
-                        <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
-                        <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
-                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
-                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
-                        <div class="form-group"><label>Boss (opcional)</label><input type="text" name="boss_name"></div>
-                        <div class="form-group"><label>Email do Boss (opcional)</label><input type="email" name="boss_email"></div>
-                        <div class="form-group">
-                            <label>Foto *</label>
-                            <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
-                            <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
-                        </div>
-                        <div style="display: flex; gap: 10px; align-items: center;">
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
-                            <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
-                        </div>
-                    </form>
-                </section>
-
-                <section class="settings-card">
-                    <h3><i class="fas fa-download"></i> Exportar Base de Clientes</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Exporte todos os dados cadastrais dos clientes em CSV.</p>
-                    <button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>
-                </section>
-
-                <section class="settings-card">
-                    <h3><i class="fas fa-download"></i> Exportar Atividades</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Exporte atividades com filtro de período.</p>
-                    <div class="form-group"><label>Data Inicial</label><input type="date" id="startDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
-                    <div class="form-group"><label>Data Final</label><input type="date" id="endDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
-                    <button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>
-                </section>
-
-                <section class="settings-card">
-                    <h3><i class="fas fa-database"></i> Backup do Banco de Dados</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Faça backup completo ou restaure o banco de dados.</p>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+                <!-- 11. Sistema -->
+                <section class="settings-card" id="startupSettingsCard">
+                    <h3><i class="fas fa-gear" style="margin-right:8px; color:#059669;"></i>Sistema</h3>
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
                         <div>
-                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Exportar Banco</h4>
-                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Baixe uma cópia completa do banco de dados (com opção de incluir imagens)</p>
-                            <button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>
+                            <strong>Iniciar com o Windows</strong>
+                            <p style="margin:4px 0 0; color:#6b7280; font-size:13px;">Iniciar o Toca do Coelho automaticamente quando o Windows ligar.</p>
                         </div>
-                        <div>
-                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Importar Banco</h4>
-                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Restaure um backup .db ou pacote .zip (cria backup automático antes)</p>
-                            <input type="file" id="restoreDbInput" accept=".db,.zip" style="display:none;" onchange="restoreDatabase(event)">
-                            <button class="btn btn-secondary" onclick="document.getElementById('restoreDbInput').click()"><i class="fas fa-upload"></i> Importar Banco</button>
-                        </div>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;">
+                            <input type="checkbox" id="startupToggle" onchange="setStartupConfig(this.checked)" disabled style="width:18px; height:18px; cursor:pointer; accent-color:#10b981;">
+                            <span id="startupToggleLabel" style="font-size:13px; color:#6b7280;">Carregando...</span>
+                        </label>
                     </div>
+                    <small id="startupSettingStatus" style="color:#6b7280; display:block; margin-top:8px;"></small>
                 </section>
+
             </div>
         </div>
 
@@ -4697,6 +4716,11 @@
             if (tabName === 'home') loadHome();
             else if (tabName === 'dashboard') loadDashboard();
             else if (tabName === 'iata') {
+                // Reativa input caso tenha ficado travado por um processo anterior
+                const iataEl = document.getElementById('iataText');
+                const iataBtn = document.getElementById('iataAskBtn');
+                if (iataEl) { iataEl.disabled = false; }
+                if (iataBtn) { iataBtn.disabled = false; }
                 clearITocaChat();
                 loadITocaHistory();
                 loadITocaBaseStatus();
@@ -5062,15 +5086,7 @@
             const grid = document.querySelector('#configuracoes .settings-grid');
             if (!grid) return;
 
-            const userCard = Array.from(grid.querySelectorAll('.settings-card')).find(card => {
-                const title = card.querySelector('h3');
-                return title && title.textContent.trim() === 'Cadastro do Usuário';
-            });
-            if (userCard && grid.firstElementChild !== userCard) {
-                grid.insertBefore(userCard, grid.firstElementChild);
-            }
-
-            grid.querySelectorAll('.settings-card').forEach((card, index) => {
+            grid.querySelectorAll('.settings-card').forEach((card) => {
                 if (card.dataset.collapsibleReady === '1') return;
                 const title = card.querySelector('h3');
                 if (!title) return;
@@ -5085,7 +5101,8 @@
                 }
                 card.appendChild(body);
 
-                if (index !== 0) card.classList.add('settings-collapsed');
+                // Todas as seções iniciam fechadas
+                card.classList.add('settings-collapsed');
                 title.addEventListener('click', () => {
                     const shouldOpen = card.classList.contains('settings-collapsed');
                     grid.querySelectorAll('.settings-collapsible').forEach(otherCard => {
@@ -5482,6 +5499,9 @@
             if (!filtered.length) return showInfo('Nenhum contato encontrado para esse filtro.');
             _autoTocaMailingPreviewFiltered = filtered;
 
+            // Reseta canal para e-mail ao abrir o preview
+            _autoTocaMailingChannel = 'email';
+
             // Seleção inicial: apenas contatos visíveis (não arquivados e não frios) com e-mail
             autoTocaMailingSelection = filtered
                 .filter(c => !isArchivedClient(c) && !Number(c.is_cold_contact))
@@ -5494,10 +5514,17 @@
             let html = `<div class="modal active" id="autoTocaMailingPreviewModal" onclick="if(event.target===this) closeAutoTocaMailingPreview()">`;
             html += `<div class="modal-content" style="max-width:920px;">`;
             html += `<h2 style="color:#047857;">Mala Direta — Seleção de Contatos</h2>`;
-            html += `<p style="color:#6b7280; margin-bottom:10px;">Desmarque quem não deve receber. Contatos sem e-mail serão ignorados no envio.</p>`;
+
+            // Toggle de canal — fica AQUI, no preview, onde o usuário vê quem tem o dado de contato
+            html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; padding:9px 14px; background:rgba(243,244,246,.6); border:1px solid #e5e7eb; border-radius:10px; flex-wrap:wrap;">
+                <span style="font-size:13px; font-weight:600; color:#374151;">Canal de envio:</span>
+                <button id="atPreviewChEmail" class="btn btn-primary btn-small" onclick="_switchAutoTocaMailingChannelInPreview('email')"><i class="fas fa-envelope"></i> E-mail</button>
+                <button id="atPreviewChWpp" class="btn btn-secondary btn-small" onclick="_switchAutoTocaMailingChannelInPreview('whatsapp')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+                <span id="atPreviewChannelNote" style="font-size:12px; color:#6b7280; margin-left:4px;">Apenas contatos com e-mail poderão ser selecionados.</span>
+            </div>`;
 
             // Barra de filtros internos do modal
-            html += `<div style="display:flex; align-items:center; gap:20px; padding:9px 14px; background:rgba(243,244,246,.85); border:1px solid #e5e7eb; border-radius:10px; margin-bottom:14px; flex-wrap:wrap;">
+            html += `<div style="display:flex; align-items:center; gap:16px; padding:9px 14px; background:rgba(243,244,246,.85); border:1px solid #e5e7eb; border-radius:10px; margin-bottom:14px; flex-wrap:wrap;">
                 <span style="font-size:12px; font-weight:700; color:#374151; text-transform:uppercase; letter-spacing:.04em;">Exibir também:</span>
                 <label style="display:flex; align-items:center; gap:7px; cursor:pointer; font-size:13px; color:#4b5563; ${!hasArchived ? 'opacity:.4; pointer-events:none;' : ''}">
                     <input type="checkbox" id="atMailingShowArchived" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#6b7280;" ${!hasArchived ? 'disabled' : ''}>
@@ -5508,6 +5535,11 @@
                     <input type="checkbox" id="atMailingShowCold" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#0e7490;" ${!hasCold ? 'disabled' : ''}>
                     <i class="fas fa-snowflake" style="color:#0e7490; font-size:12px;"></i>
                     Frios${hasCold ? '' : ' <em style="font-size:11px;">(nenhum neste filtro)</em>'}
+                </label>
+                <label style="display:flex; align-items:center; gap:7px; cursor:pointer; font-size:13px; color:#4b5563; margin-left:auto;">
+                    <input type="checkbox" id="atMailingHideNoContact" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#dc2626;" checked>
+                    <i class="fas fa-eye-slash" style="color:#dc2626; font-size:12px;"></i>
+                    <span id="atMailingHideNoContactLabel">Ocultar sem e-mail</span>
                 </label>
             </div>`;
 
@@ -5522,10 +5554,18 @@
         function _buildAutoTocaMailingPreviewContactsHTML() {
             const showArchived = document.getElementById('atMailingShowArchived')?.checked || false;
             const showCold = document.getElementById('atMailingShowCold')?.checked || false;
+            const hideNoContact = document.getElementById('atMailingHideNoContact')?.checked ?? true;
+            const isWpp = _autoTocaMailingChannel === 'whatsapp';
 
             const visible = _autoTocaMailingPreviewFiltered.filter(c => {
                 if (isArchivedClient(c) && !showArchived) return false;
                 if (Number(c.is_cold_contact) === 1 && !showCold) return false;
+                if (hideNoContact) {
+                    const hasContact = isWpp
+                        ? !!normalizePhoneForWhatsapp(c.phone)
+                        : !!String(c.email || '').trim();
+                    if (!hasContact) return false;
+                }
                 return true;
             });
 
@@ -5537,7 +5577,10 @@
             }
 
             return visible.map(c => {
-                const noEmail = !String(c.email || '').trim();
+                const noContact = isWpp
+                    ? !normalizePhoneForWhatsapp(c.phone)
+                    : !String(c.email || '').trim();
+                const missingLabel = isWpp ? 'Sem telefone' : 'Sem e-mail';
                 const status = getAutoTocaMailingStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact);
                 const isCold = Number(c.is_cold_contact) === 1;
                 const isArchived = isArchivedClient(c);
@@ -5546,8 +5589,8 @@
                 if (isArchived) badges.push('<span title="Contato arquivado" style="display:inline-flex; align-items:center; gap:4px; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(107,114,128,.15); color:#374151; border:1px solid rgba(107,114,128,.3); font-weight:600;"><i class="fas fa-box-archive"></i> Arquivado</span>');
                 const badgesHtml = badges.length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">${badges.join('')}</div>` : '';
                 const isSelected = autoTocaMailingSelection.includes(c.id);
-                return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noEmail ? 'rgba(156,163,175,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noEmail ? 'rgba(243,244,246,.7)' : 'rgba(236,253,245,.5)'}; ${noEmail ? 'opacity:.6; cursor:not-allowed;' : 'cursor:pointer;'}">
-                    <input type="checkbox" ${noEmail ? 'disabled' : (isSelected ? 'checked' : '')} onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
+                return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noContact ? 'rgba(156,163,175,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noContact ? 'rgba(243,244,246,.7)' : 'rgba(236,253,245,.5)'}; ${noContact ? 'opacity:.6; cursor:not-allowed;' : 'cursor:pointer;'}">
+                    <input type="checkbox" ${noContact ? 'disabled' : (isSelected ? 'checked' : '')} onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
                     <img src="${c.photo_url || '/logo-coelho.png'}" style="width:40px;height:40px;border-radius:999px;object-fit:cover;">
                     <div style="min-width:0;">
                         <div style="font-weight:700; color:#065f46; display:flex; align-items:center; gap:6px;">
@@ -5558,7 +5601,7 @@
                         <div style="font-size:12px;color:#9ca3af;">${escapeHtml(c.position || '-')}</div>
                         <div style="font-size:12px;color:#9ca3af;">${escapeHtml(c.area_of_activity || '-')}</div>
                         ${badgesHtml}
-                        ${noEmail ? '<div style="font-size:12px;color:#b45309; margin-top:4px;"><i class="fas fa-triangle-exclamation"></i> Sem e-mail</div>' : ''}
+                        ${noContact ? `<div style="font-size:12px;color:#b45309; margin-top:4px;"><i class="fas fa-triangle-exclamation"></i> ${missingLabel}</div>` : ''}
                     </div>
                 </label>`;
             }).join('');
@@ -5579,9 +5622,13 @@
             // Remove da seleção os que ficaram ocultos
             autoTocaMailingSelection = autoTocaMailingSelection.filter(id => visibleIds.has(id));
 
-            // Adiciona automaticamente os recém-exibidos que têm e-mail
+            // Adiciona automaticamente os recém-exibidos que têm a info de contato do canal
+            const isWppRender = _autoTocaMailingChannel === 'whatsapp';
             visible.forEach(c => {
-                if (String(c.email || '').trim() && !autoTocaMailingSelection.includes(c.id)) {
+                const hasContact = isWppRender
+                    ? !!normalizePhoneForWhatsapp(c.phone)
+                    : !!String(c.email || '').trim();
+                if (hasContact && !autoTocaMailingSelection.includes(c.id)) {
                     autoTocaMailingSelection.push(c.id);
                 }
             });
@@ -5592,9 +5639,12 @@
 
         function toggleAutoTocaMailingContact(contactId, checked) {
             const contact = autoTocaMailingClients.find(c => Number(c.id) === Number(contactId));
-            const hasEmail = String(contact?.email || '').trim();
+            const isWpp = _autoTocaMailingChannel === 'whatsapp';
+            const hasContact = isWpp
+                ? !!normalizePhoneForWhatsapp(contact?.phone)
+                : !!String(contact?.email || '').trim();
             if (checked) {
-                if (!hasEmail) return;
+                if (!hasContact) return;
                 if (!autoTocaMailingSelection.includes(contactId)) autoTocaMailingSelection.push(contactId);
                 return;
             }
@@ -5605,31 +5655,82 @@
             document.getElementById('autoTocaMailingPreviewModal')?.remove();
         }
 
+        function _switchAutoTocaMailingChannelInPreview(ch) {
+            _autoTocaMailingChannel = ch;
+
+            // Botões de toggle no preview
+            const emailBtn = document.getElementById('atPreviewChEmail');
+            const wppBtn   = document.getElementById('atPreviewChWpp');
+            if (emailBtn) emailBtn.className = `btn btn-small ${ch === 'email' ? 'btn-primary' : 'btn-secondary'}`;
+            if (wppBtn)   wppBtn.className   = `btn btn-small ${ch === 'whatsapp' ? 'btn-primary' : 'btn-secondary'}`;
+
+            // Nota de canal e label do ocultar
+            const note = document.getElementById('atPreviewChannelNote');
+            if (note) note.textContent = ch === 'email'
+                ? 'Apenas contatos com e-mail poderão ser selecionados.'
+                : 'Apenas contatos com telefone poderão ser selecionados.';
+            const hideLabel = document.getElementById('atMailingHideNoContactLabel');
+            if (hideLabel) hideLabel.textContent = ch === 'email' ? 'Ocultar sem e-mail' : 'Ocultar sem telefone';
+
+            // Redefine a seleção para o novo canal (apenas visíveis com a info necessária)
+            const showArchived = document.getElementById('atMailingShowArchived')?.checked || false;
+            const showCold = document.getElementById('atMailingShowCold')?.checked || false;
+            const visible = _autoTocaMailingPreviewFiltered.filter(c => {
+                if (isArchivedClient(c) && !showArchived) return false;
+                if (Number(c.is_cold_contact) === 1 && !showCold) return false;
+                return true;
+            });
+
+            autoTocaMailingSelection = visible.filter(c => {
+                return ch === 'whatsapp'
+                    ? !!normalizePhoneForWhatsapp(c.phone)
+                    : !!String(c.email || '').trim();
+            }).map(c => c.id);
+
+            const grid = document.getElementById('atMailingPreviewGrid');
+            if (grid) grid.innerHTML = _buildAutoTocaMailingPreviewContactsHTML();
+        }
+
         function openAutoTocaMailingComposer() {
             const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
             if (!selectedContacts.length) return showInfo('Selecione ao menos um contato.');
             closeAutoTocaMailingPreview();
-            _autoTocaMailingChannel = 'email'; // sempre inicia em e-mail
+            // Canal já definido no preview — não resetar aqui
 
-            const emailChips = selectedContacts.map(c => {
-                const missing = !String(c.email || '').trim();
-                return `<span id="chip-destinatario-${c.id}" style="display:inline-flex; gap:6px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${escapeHtml(c.name || '-')} ${missing ? '<i class="fas fa-triangle-exclamation" title="Sem e-mail"></i>' : ''}<button type="button" onclick="removeAutoTocaMailingRecipient(${Number(c.id)})" title="Remover destinatário" aria-label="Remover destinatário ${escapeHtml(c.name || '-')}" style="border:none; background:transparent; color:#ef4444; cursor:pointer; padding:0; font-size:12px; line-height:1;"><i class="fas fa-times"></i></button></span>`;
+            const isWppComposer = _autoTocaMailingChannel === 'whatsapp';
+            const initialChips = selectedContacts.map(c => {
+                const missing = isWppComposer
+                    ? !normalizePhoneForWhatsapp(c.phone)
+                    : !String(c.email || '').trim();
+                const icon = missing
+                    ? `<i class="fas fa-triangle-exclamation" title="${isWppComposer ? 'Sem telefone' : 'Sem e-mail'}"></i>`
+                    : '';
+                const wppIcon = isWppComposer ? `<i class="fab fa-whatsapp" style="color:${missing ? '#b45309' : '#059669'}; font-size:11px;"></i> ` : '';
+                return `<span id="chip-destinatario-${c.id}" style="display:inline-flex; gap:5px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${wppIcon}${escapeHtml(c.name || '-')} ${icon}<button type="button" onclick="removeAutoTocaMailingRecipient(${Number(c.id)})" title="Remover destinatário" aria-label="Remover destinatário ${escapeHtml(c.name || '-')}" style="border:none; background:transparent; color:#ef4444; cursor:pointer; padding:0; font-size:12px; line-height:1;"><i class="fas fa-times"></i></button></span>`;
             }).join('');
 
-            const emailMergeTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
-            const mergeTagsBtns = emailMergeTags.map(tag =>
+            const initialMergeTags = isWppComposer
+                ? ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>']
+                : ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            const mergeTagsBtns = initialMergeTags.map(tag =>
                 `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`
             ).join('');
+
+            const channelBadge = isWppComposer
+                ? `<span class="btn btn-small btn-primary" style="pointer-events:none; background:#25d366; border-color:#25d366;"><i class="fab fa-whatsapp"></i> WhatsApp</span>`
+                : `<span class="btn btn-small btn-primary" style="pointer-events:none;"><i class="fas fa-envelope"></i> E-mail</span>`;
+            const channelNoteText = isWppComposer
+                ? 'Os contatos sem telefone serão ignorados no envio.'
+                : 'Os contatos sem e-mail serão ignorados no envio.';
 
             let html = `<div class="modal active" id="autoTocaMailingComposerModal">`;
             html += `<div class="modal-content" style="max-width:1120px;">`;
             html += `<h2 style="color:#047857; margin-bottom:10px;">Mala Direta — Composição</h2>`;
-            // Toggle de canal
+            // Exibe o canal escolhido (somente leitura — troca no preview)
             html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:9px 14px; background:rgba(243,244,246,.6); border:1px solid #e5e7eb; border-radius:10px; flex-wrap:wrap;">
                 <span style="font-size:13px; font-weight:600; color:#374151;">Canal de envio:</span>
-                <button id="atMailingChEmail" class="btn btn-primary btn-small" onclick="_switchAutoTocaMailingChannel('email')"><i class="fas fa-envelope"></i> E-mail</button>
-                <button id="atMailingChWpp" class="btn btn-secondary btn-small" onclick="_switchAutoTocaMailingChannel('whatsapp')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
-                <span id="atMailingChannelNote" style="font-size:12px; color:#6b7280; margin-left:4px;">Os contatos sem e-mail serão ignorados no envio.</span>
+                ${channelBadge}
+                <span id="atMailingChannelNote" style="font-size:12px; color:#6b7280; margin-left:4px;">${channelNoteText}</span>
             </div>`;
             html += `<div style="display:grid; grid-template-columns:220px 1fr 250px; gap:14px;">`;
             html += `<div style="border:1px solid rgba(16,185,129,.2); border-radius:10px; padding:10px; background:rgba(236,253,245,.55);">
@@ -5637,13 +5738,22 @@
                 <p style="font-size:12px; color:#4b5563; line-height:1.45;">Cada chave será substituída pelo dado real do contato no momento do envio.</p>
                 <div id="atMailingMergeTagsPanel" style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">${mergeTagsBtns}</div>
             </div>`;
+            const initialSubjectDisplay = isWppComposer ? 'none' : '';
+            const initialBodyLabel = isWppComposer ? 'Mensagem WhatsApp' : 'Mensagem';
+            const initialBodyPlaceholder = isWppComposer
+                ? 'Olá <nome do contato>! Tudo bem?\n\nEstamos entrando em contato sobre...'
+                : 'Escreva o corpo do e-mail usando as chaves desejadas.';
+            const initialSendBtnHtml = isWppComposer
+                ? '<i class="fab fa-whatsapp"></i> Disparar via WhatsApp'
+                : '<i class="fas fa-paper-plane"></i> Abrir e-mails no Outlook';
+
             html += `<div>
-                <div class="form-group"><label>Destinatários confirmados</label><div id="autoTocaMailingComposerRecipients" style="display:flex; flex-wrap:wrap; gap:6px; border:1px solid #d1d5db; border-radius:8px; padding:8px; min-height:42px; background:#fff;">${emailChips}</div></div>
-                <div id="atMailingSubjectGroup" class="form-group"><label>Assunto</label><input id="autoTocaMailingSubject" type="text" placeholder="Ex: Olá &lt;nome do contato&gt;, oportunidade para &lt;conta&gt;"></div>
-                <div class="form-group"><label id="atMailingBodyLabel">Mensagem</label><textarea id="autoTocaMailingBody" rows="10" placeholder="Escreva o corpo do e-mail usando as chaves desejadas."></textarea></div>
-                <div style="display:flex; justify-content:flex-end; gap:10px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingComposer()">Cancelar</button><button id="autoTocaMailingSendBtn" class="btn btn-primary" onclick="sendAutoTocaMailingBatch()"><i class="fas fa-paper-plane"></i> Abrir e-mails no Outlook</button></div>
+                <div class="form-group"><label>Destinatários confirmados</label><div id="autoTocaMailingComposerRecipients" style="display:flex; flex-wrap:wrap; gap:6px; border:1px solid #d1d5db; border-radius:8px; padding:8px; min-height:42px; background:#fff;">${initialChips}</div></div>
+                <div id="atMailingSubjectGroup" class="form-group" style="display:${initialSubjectDisplay};"><label>Assunto</label><input id="autoTocaMailingSubject" type="text" placeholder="Ex: Olá &lt;nome do contato&gt;, oportunidade para &lt;conta&gt;"></div>
+                <div class="form-group"><label id="atMailingBodyLabel">${initialBodyLabel}</label><textarea id="autoTocaMailingBody" rows="10" placeholder="${initialBodyPlaceholder}"></textarea></div>
+                <div style="display:flex; justify-content:flex-end; gap:10px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingComposer()">Cancelar</button><button id="autoTocaMailingSendBtn" class="btn btn-primary" onclick="sendAutoTocaMailingBatch()">${initialSendBtnHtml}</button></div>
             </div>`;
-            html += `<div style="border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4><div id="atMailingTemplateDrawer">${renderTemplateDrawer('email','autoTocaMailingBody')}</div></div>`;
+            html += `<div style="border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4><div id="atMailingTemplateDrawer">${renderTemplateDrawer(isWppComposer ? 'whatsapp' : 'email','autoTocaMailingBody')}</div></div>`;
             html += `</div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
             updateAutoTocaMailingComposerSendState();
@@ -5999,13 +6109,12 @@
             });
 
             if (isWpp) {
-                // WhatsApp: abre na aba reutilizável do WhatsApp Web
-                const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
-                const win = openWhatsAppTab(webUrl);
-                if (!win) {
-                    tocaDebug('mala-direta.dispatch-one', 'openWhatsAppTab retornou null (pop-up bloqueado)', { idx });
-                    showError('O navegador bloqueou a janela. Permita pop-ups para este site e tente novamente.');
-                    return;
+                // WhatsApp: respeita preferência desktop/web igual ao dashboard
+                if (getWhatsAppPreference() === 'desktop') {
+                    openWhatsAppDesktopWithFallback(draft.phone, draft.body);
+                } else {
+                    const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
+                    openWhatsAppTab(webUrl);
                 }
             } else {
                 // Email: abre no Outlook Web
@@ -6124,10 +6233,14 @@
             }
 
             if (_autoTocaMailingChannel === 'whatsapp') {
-                // WhatsApp: modo sequencial — abre um por vez na aba reutilizável
+                // WhatsApp: modo sequencial — respeita preferência desktop/web
                 const draft = pending[0];
-                const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
-                openWhatsAppTab(webUrl);
+                if (getWhatsAppPreference() === 'desktop') {
+                    openWhatsAppDesktopWithFallback(draft.phone, draft.body);
+                } else {
+                    const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
+                    openWhatsAppTab(webUrl);
+                }
                 draft.status = 'sent';
                 _updateAutoTocaMailingDispatchRow(draft.idx);
 
@@ -12813,32 +12926,38 @@
                 const { task_id } = await updateResp.json().catch(() => ({}));
                 if (!task_id) { statusMsgEl?.remove(); return; }
 
-                // Polling até concluir ou dar erro
-                await new Promise((resolve) => {
-                    const poll = async () => {
-                        try {
-                            const taskResp = await fetch(`${API_BASE}/tasks/${task_id}`);
-                            const taskData = await taskResp.json().catch(() => ({}));
-                            if (taskData.status === 'done') {
-                                if (statusMsgEl) statusMsgEl.querySelector('.itoca-system-bubble').innerHTML = '✅ Base atualizada! Processando sua pergunta...';
-                                // Atualiza o label de status
-                                const lbl = document.getElementById('itocaBaseUpdatedAt');
-                                if (lbl && taskData.result?.updated_at) {
-                                    const mode = taskData.result.incremental ? ' (incremental)' : '';
-                                    lbl.textContent = `Último update: ${formatDateBr(taskData.result.updated_at)} — ${taskData.result.items_count} registros${mode}`;
+                // Polling até concluir, dar erro ou atingir timeout de 30s
+                await Promise.race([
+                    new Promise((resolve) => {
+                        const poll = async () => {
+                            try {
+                                const taskResp = await fetch(`${API_BASE}/tasks/${task_id}`);
+                                const taskData = await taskResp.json().catch(() => ({}));
+                                if (taskData.status === 'done') {
+                                    if (statusMsgEl) statusMsgEl.querySelector('.itoca-system-bubble').innerHTML = '✅ Base atualizada! Processando sua pergunta...';
+                                    // Atualiza o label de status
+                                    const lbl = document.getElementById('itocaBaseUpdatedAt');
+                                    if (lbl && taskData.result?.updated_at) {
+                                        const mode = taskData.result.incremental ? ' (incremental)' : '';
+                                        lbl.textContent = `Último update: ${formatDateBr(taskData.result.updated_at)} — ${taskData.result.items_count} registros${mode}`;
+                                    }
+                                    setTimeout(() => statusMsgEl?.remove(), 1800);
+                                    resolve();
+                                } else if (taskData.status === 'error') {
+                                    statusMsgEl?.remove();
+                                    resolve();
+                                } else {
+                                    setTimeout(poll, 1500);
                                 }
-                                setTimeout(() => statusMsgEl?.remove(), 1800);
-                                resolve();
-                            } else if (taskData.status === 'error') {
-                                statusMsgEl?.remove();
-                                resolve();
-                            } else {
-                                setTimeout(poll, 1500);
-                            }
-                        } catch (_e) { statusMsgEl?.remove(); resolve(); }
-                    };
-                    poll();
-                });
+                            } catch (_e) { statusMsgEl?.remove(); resolve(); }
+                        };
+                        poll();
+                    }),
+                    new Promise(resolve => setTimeout(() => {
+                        statusMsgEl?.remove();
+                        resolve();
+                    }, 30000)) // timeout de 30s — libera o input mesmo se o update travar
+                ]);
 
             } catch (_e) { /* ignora erros no auto-update, a pergunta segue normalmente */ }
         }
@@ -15197,6 +15316,7 @@
             const fileName = document.getElementById('wikiFileName');
             if (fileName) fileName.textContent = '';
             document.getElementById('wikiUploadBtn')?.classList.remove('wiki-upload-btn-pending');
+            document.getElementById('wikiFileClearBtn')?.style && (document.getElementById('wikiFileClearBtn').style.display = 'none');
             document.getElementById('wikiSearchInput').value = '';
             showSuccess(files.length > 1 ? 'Documentos enviados com sucesso!' : 'Documento enviado com sucesso!');
             await loadWikiTocaData();
@@ -15214,18 +15334,32 @@
         function onWikiFileSelected(event) {
             const fileName = document.getElementById('wikiFileName');
             const uploadBtn = document.getElementById('wikiUploadBtn');
+            const clearBtn = document.getElementById('wikiFileClearBtn');
             const files = Array.from(event?.target?.files || []);
             if (!fileName) return;
             if (!files.length) {
                 fileName.textContent = '';
                 uploadBtn?.classList.remove('wiki-upload-btn-pending');
+                if (clearBtn) clearBtn.style.display = 'none';
             } else if (files.length === 1) {
                 fileName.textContent = files[0].name;
                 uploadBtn?.classList.add('wiki-upload-btn-pending');
+                if (clearBtn) clearBtn.style.display = '';
             } else {
                 fileName.textContent = `${files.length} arquivos selecionados`;
                 uploadBtn?.classList.add('wiki-upload-btn-pending');
+                if (clearBtn) clearBtn.style.display = '';
             }
+        }
+
+        function clearWikiFileSelection() {
+            const fileInput = document.getElementById('wikiDocumentFile');
+            if (fileInput) fileInput.value = '';
+            const fileName = document.getElementById('wikiFileName');
+            if (fileName) fileName.textContent = '';
+            const clearBtn = document.getElementById('wikiFileClearBtn');
+            if (clearBtn) clearBtn.style.display = 'none';
+            document.getElementById('wikiUploadBtn')?.classList.remove('wiki-upload-btn-pending');
         }
 
         function suggestTagsFromKnowledge(title, content) {
