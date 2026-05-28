@@ -13466,55 +13466,80 @@ def serve_static(path):
 
 @app.route('/api/home/cobertura-detail', methods=['GET'])
 def home_cobertura_detail():
-    """Retorna detalhamento conta-a-conta da Cobertura de Relacionamento para popup no dashboard.
-    Mesmos query params do /api/home/overview (period, months).
+    """Detalhamento conta-a-conta da Cobertura de Relacionamento (últimos 30 dias).
+    Considera 3 fontes de atividade por conta:
+      1. account_activities diretamente ligadas à conta
+      2. activities de clientes vinculados via account_main_contacts
+      3. activities de qualquer contato cujo clients.company bate com accounts.name (fallback)
+    Atividades duplicadas nas fontes 2 e 3 são deduplicadas por ID.
     """
     try:
-        period = (request.args.get('period') or 'all').strip().lower()
-        months_arg = (request.args.get('months') or '').strip()
-        months_filter = []
-        if period == 'months' and months_arg:
-            months_filter = [m.strip() for m in months_arg.split(',') if re.match(r'^\d{4}-\d{2}$', m.strip())]
-
-        def _mc(col):
-            """Retorna (fragmento_sql, params) para filtro de mês."""
-            if not months_filter:
-                return '', []
-            ph = ','.join(['?'] * len(months_filter))
-            return f" AND strftime('%Y-%m', {col}) IN ({ph})", list(months_filter)
-
-        mf_aa, mfp_aa = _mc('aa.activity_date')
-        mf_a, mfp_a   = _mc('a.activity_date')
-
         conn = get_db()
         c = conn.cursor()
 
-        # Para cada conta: contagem de atividades (diretas + via contatos vinculados) e data da última
-        c.execute(f"""
+        # Subconsultas correlacionadas garantem deduplicação correta entre os 3 caminhos
+        c.execute("""
             SELECT
                 acc.id,
                 acc.name,
                 COALESCE(acc.is_target, 0) AS is_target,
-                COUNT(DISTINCT aa.id) + COUNT(DISTINCT a.id) AS activity_count,
-                MAX(aa.activity_date)                        AS last_aa,
-                MAX(a.activity_date)                         AS last_a
+                -- Atividades diretas na conta (account_activities)
+                (
+                    SELECT COUNT(DISTINCT aa.id) FROM account_activities aa
+                    WHERE aa.account_id = acc.id
+                    AND aa.activity_date >= date('now', '-30 days')
+                ) AS aa_count,
+                -- Atividades de contatos ligados à conta (via account_main_contacts OU nome da empresa)
+                -- UNION garante que a mesma activity.id não seja contada duas vezes
+                (
+                    SELECT COUNT(*) FROM (
+                        SELECT DISTINCT a.id FROM activities a
+                        WHERE a.activity_date >= date('now', '-30 days')
+                        AND (
+                            a.client_id IN (
+                                SELECT amc.client_id FROM account_main_contacts amc
+                                WHERE amc.account_id = acc.id
+                            )
+                            OR
+                            a.client_id IN (
+                                SELECT cl.id FROM clients cl
+                                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(acc.name))
+                                AND cl.company IS NOT NULL AND TRIM(cl.company) != ''
+                            )
+                        )
+                    )
+                ) AS cl_count,
+                -- Data da atividade mais recente (qualquer fonte)
+                (
+                    SELECT MAX(last_dt) FROM (
+                        SELECT activity_date AS last_dt FROM account_activities
+                        WHERE account_id = acc.id
+                        AND activity_date >= date('now', '-30 days')
+                        UNION ALL
+                        SELECT a2.activity_date AS last_dt FROM activities a2
+                        WHERE a2.activity_date >= date('now', '-30 days')
+                        AND (
+                            a2.client_id IN (
+                                SELECT amc2.client_id FROM account_main_contacts amc2
+                                WHERE amc2.account_id = acc.id
+                            )
+                            OR
+                            a2.client_id IN (
+                                SELECT cl2.id FROM clients cl2
+                                WHERE LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc.name))
+                                AND cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
+                            )
+                        )
+                    )
+                ) AS last_activity
             FROM accounts acc
-            LEFT JOIN account_activities aa
-                ON aa.account_id = acc.id {mf_aa}
-            LEFT JOIN account_main_contacts amc
-                ON amc.account_id = acc.id
-            LEFT JOIN activities a
-                ON a.client_id = amc.client_id {mf_a}
-            GROUP BY acc.id, acc.name, acc.is_target
             ORDER BY acc.name ASC
-        """, mfp_aa + mfp_a)
+        """)
 
         all_rows = []
         for r in c.fetchall():
             rd = dict_from_row(r)
-            last_aa = rd.pop('last_aa', None) or ''
-            last_a  = rd.pop('last_a',  None) or ''
-            rd['last_activity'] = (last_aa if last_aa >= last_a else last_a) or None
+            rd['activity_count'] = (rd.pop('aa_count') or 0) + (rd.pop('cl_count') or 0)
             all_rows.append(rd)
 
         conn.close()
@@ -13524,14 +13549,9 @@ def home_cobertura_detail():
         uncovered = sorted([r for r in all_rows if r['activity_count'] == 0],
                            key=lambda x: (-(x.get('is_target') or 0), (x.get('name') or '').lower()))
 
-        period_label = 'Todo o período'
-        if months_filter:
-            period_label = (f"Mês: {months_filter[0]}" if len(months_filter) == 1
-                            else f"Meses: {months_filter[0]} → {months_filter[-1]}")
-
         total = len(all_rows)
         return jsonify({
-            'period_label': period_label,
+            'period_label':  'Últimos 30 dias',
             'total':         total,
             'covered_count': len(covered),
             'cobertura_pct': round(len(covered) / total * 100) if total > 0 else 0,
@@ -13639,28 +13659,29 @@ def home_overview():
             else:
                 atrasado += 1
 
-        # Cobertura de relacionamento (% contas com >=1 atividade no recorte)
-        # Usa IDs de conta para evitar imprecisões por comparação de texto (clients.company vs accounts.name)
-        # Três caminhos: atividade direta na conta, via account_main_contacts → activities, e fallback por nome
+        # Cobertura de relacionamento — janela FIXA de 30 dias (independente do filtro de período)
+        # 3 caminhos: atividade direta na conta | account_main_contacts → activities | fallback por nome
         mf_a, mfp_a = month_clause('a.activity_date')
         mf_aa, mfp_aa = month_clause('aa.activity_date')
-        mf_a2, mfp_a2 = month_clause('a2.activity_date')
-        c.execute(f"""
+        c.execute("""
             SELECT COUNT(DISTINCT acc_id) AS n FROM (
                 SELECT aa.account_id AS acc_id
-                FROM account_activities aa WHERE 1=1 {mf_aa}
+                FROM account_activities aa
+                WHERE aa.activity_date >= date('now', '-30 days')
                 UNION
                 SELECT amc.account_id AS acc_id
                 FROM account_main_contacts amc
-                JOIN activities a ON a.client_id = amc.client_id WHERE 1=1 {mf_a}
+                JOIN activities a ON a.client_id = amc.client_id
+                WHERE a.activity_date >= date('now', '-30 days')
                 UNION
                 SELECT acc2.id AS acc_id
                 FROM accounts acc2
                 JOIN clients cl2 ON LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc2.name))
                 JOIN activities a2 ON a2.client_id = cl2.id
-                WHERE cl2.company IS NOT NULL AND TRIM(cl2.company) != '' {mf_a2}
+                WHERE cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
+                AND a2.activity_date >= date('now', '-30 days')
             )
-        """, mfp_aa + mfp_a + mfp_a2)
+        """)
         covered_accounts = c.fetchone()['n'] or 0
         cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
 

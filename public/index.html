@@ -2564,7 +2564,7 @@
         .cob-modal-count-lbl { font-size: 11px; color: #6b7280; margin-top: 2px; }
         .cob-modal-count.covered  .cob-modal-count-n { color: #059669; }
         .cob-modal-count.uncovered .cob-modal-count-n { color: #dc2626; }
-        .cob-modal-body { overflow-y: auto; padding: 16px 22px; display: flex; flex-direction: column; gap: 18px; }
+        .cob-modal-body { overflow-y: auto; flex: 1; min-height: 0; padding: 16px 22px; display: flex; flex-direction: column; gap: 18px; }
         .cob-section-title {
             font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
             margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
@@ -3142,11 +3142,11 @@
                             </button>
                             <div class="home-kpi-info-tooltip" role="tooltip">
                                 <strong>Como é calculado</strong>
-                                Percentual de contas que tiveram <b>pelo menos uma interação registrada</b> dentro do período filtrado, sobre o total de contas cadastradas.
+                                Percentual de contas que tiveram <b>pelo menos uma interação nos últimos 30 dias</b>, sobre o total de contas cadastradas.
                                 <br><br>
                                 <code>cobertura = contas com interação ÷ total de contas × 100</code>
                                 <br><br>
-                                Considera registros das tabelas <code>activities</code> (via contato) e <code>account_activities</code> (direto na conta).
+                                Considera: atividades diretas na conta, atividades de contatos vinculados formalmente, e atividades de qualquer contato da mesma empresa. Clique no número para ver o detalhamento por conta.
                             </div>
                         </div>
                         <h2 class="home-insights-title">Insights &amp; Alertas</h2>
@@ -7698,8 +7698,8 @@
             const meta = 80;
             const cob = Number(k.cobertura_pct || 0);
             const diff = cob - meta;
-            const delta = diff === 0 ? `Meta atingida (${meta}%)` : (diff > 0 ? `${diff} p.p. acima da meta (${meta}%)` : `${Math.abs(diff)} p.p. abaixo da meta (${meta}%)`);
-            setFoot('kpiCoberturaFoot', delta, diff < 0 ? 'delta-down' : (diff > 0 ? 'delta-up' : ''));
+            const deltaLabel = diff === 0 ? `Meta atingida (${meta}%)` : (diff > 0 ? `${diff} p.p. acima da meta` : `${Math.abs(diff)} p.p. abaixo da meta`);
+            setFoot('kpiCoberturaFoot', `${deltaLabel} · últimos 30 dias`, diff < 0 ? 'delta-down' : (diff > 0 ? 'delta-up' : ''));
         }
 
         function _renderHomeUserCard() {
@@ -7732,12 +7732,7 @@
         }
 
         async function openCoberturaDetail() {
-            // Monta params iguais aos do loadHome()
-            const params = new URLSearchParams();
-            params.set('period', HOME_STATE.period);
-            if (HOME_STATE.period === 'months' && HOME_STATE.months.length) {
-                params.set('months', HOME_STATE.months.join(','));
-            }
+            // Cobertura usa janela fixa de 30 dias — sem params de período
 
             // Garante que o modal existe no DOM (cria uma vez, reutiliza)
             let modal = document.getElementById('coberturaDetailModal');
@@ -7809,7 +7804,7 @@
             document.addEventListener('keydown', _coberturaDetailEsc);
 
             try {
-                const resp = await fetch(`/api/home/cobertura-detail?${params.toString()}`);
+                const resp = await fetch(`/api/home/cobertura-detail`);
                 if (!resp.ok) throw new Error('Falha ao carregar dados.');
                 const data = await resp.json();
 
