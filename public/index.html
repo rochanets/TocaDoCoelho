@@ -1930,10 +1930,21 @@
         .itoca-history-msg-role.assistant { color:#065f46; }
         .itoca-history-msg-content { font-size:13px; color:#374151; white-space:pre-wrap; }
         .itoca-history-empty { text-align:center; color:#9ca3af; font-size:13px; padding:16px 0; }
+        .itoca-history-resume-btn { display:flex; align-items:center; gap:7px; margin-top:10px; padding:7px 14px; background:linear-gradient(135deg,#065f46,#047857); color:#fff; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+        .itoca-history-resume-btn:hover { opacity:.85; }
+        .itoca-msg.system { justify-content:center; margin:4px 0; }
+        .itoca-msg.system .itoca-system-bubble { background:rgba(236,253,245,.7); border:1px solid rgba(16,185,129,.2); border-radius:20px; padding:5px 14px; font-size:12px; color:#065f46; font-style:italic; }
+        .itoca-msg.replayed { opacity:.75; }
+        .itoca-msg.replayed .itoca-msg-bubble { border-left:3px solid #d1fae5; }
         .wiki-doc-upload-row { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; align-items:flex-start; }
         .wiki-doc-upload-main { display:flex; gap:8px; align-items:center; width:100%; flex-wrap:wrap; }
         .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
         .wiki-upload-actions { display:flex; gap:8px; justify-content:flex-start; width:100%; }
+        @keyframes wikiUploadPulse {
+            0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,.6); transform: scale(1); }
+            50%      { box-shadow: 0 0 0 7px rgba(16,185,129,.0); transform: scale(1.04); }
+        }
+        .wiki-upload-btn-pending { animation: wikiUploadPulse 1.2s ease-in-out infinite !important; }
 
 
         /* Kanban */
@@ -3231,7 +3242,7 @@
                         </div>
                         <span id="wikiFileName" class="wiki-file-name"></span>
                         <div class="wiki-upload-actions">
-                            <button class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
+                            <button id="wikiUploadBtn" class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
                         </div>
                     </div>
                     <div id="wikiDocumentsList"></div>
@@ -12645,7 +12656,7 @@
                     msgsEl.innerHTML = '<div class="itoca-history-empty">Sem mensagens.</div>';
                     return;
                 }
-                msgsEl.innerHTML = messages.map(m => {
+                const msgHtml = messages.map(m => {
                     const roleLabel = m.role === 'user' ? 'Você' : 'iToca';
                     const content = (m.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
                     const time = m.created_at ? formatDateBr(m.created_at) : '';
@@ -12659,6 +12670,8 @@
                         <div class="itoca-history-msg-content">${content}</div>
                     </div>`;
                 }).join('');
+                const safeSessionId = sessionId.replace(/'/g, "\\'");
+                msgsEl.innerHTML = msgHtml + `<button class="itoca-history-resume-btn" onclick="resumeITocaSession('${safeSessionId}')"><i class="fas fa-comments"></i> Continuar esta conversa</button>`;
             } catch (e) {
                 msgsEl.innerHTML = '<div class="itoca-history-empty">Erro ao carregar mensagens.</div>';
             }
@@ -12679,11 +12692,155 @@
             }
         }
 
+        // Retoma uma conversa do histórico: carrega as mensagens no chat e reutiliza o session_id
+        async function resumeITocaSession(sessionId) {
+            try {
+                const response = await fetch(`${API_BASE}/itoca/history/${encodeURIComponent(sessionId)}`);
+                const messages = await response.json().catch(() => []);
+                if (!Array.isArray(messages) || messages.length === 0) {
+                    showError('Não foi possível carregar a conversa.');
+                    return;
+                }
+
+                // Reutiliza o session_id existente — o backend vai usar o histórico do BD como contexto
+                _itocaSessionId = sessionId;
+                _itocaSessionHasMessages = true;
+
+                // Limpa e popula o chat com o histórico
+                const container = document.getElementById('itocaChatMessages');
+                if (!container) return;
+                _itocaHideEmpty();
+                container.innerHTML = '';
+
+                // Marca de separação visual para o contexto retomado
+                const divider = document.createElement('div');
+                divider.className = 'itoca-msg system';
+                divider.innerHTML = `<span class="itoca-system-bubble"><i class="fas fa-history"></i> Conversa retomada do histórico</span>`;
+                container.appendChild(divider);
+
+                messages.forEach(m => {
+                    const div = document.createElement('div');
+                    if (m.role === 'user') {
+                        div.className = 'itoca-msg user replayed';
+                        const escaped = (m.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                        div.innerHTML = `
+                            <div class="itoca-msg-avatar">${_itocaGetUserAvatarHtml()}</div>
+                            <div class="itoca-msg-bubble">${escaped}</div>`;
+                    } else {
+                        div.className = 'itoca-msg assistant replayed';
+                        const htmlContent = _itocaRenderMarkdown(m.content || '');
+                        let confidenceBadge = '';
+                        if (m.confidence_percent != null) {
+                            const cls = _itocaConfidenceClass(m.confidence_percent);
+                            confidenceBadge = `<span class="itoca-confidence ${cls}">${m.confidence_percent}%</span>`;
+                        }
+                        div.innerHTML = `
+                            <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca" onerror="this.style.display='none'"></div>
+                            <div class="itoca-msg-bubble itoca-assistant-bubble">
+                                <div class="itoca-answer-text">${htmlContent}</div>
+                                ${confidenceBadge}
+                            </div>`;
+                    }
+                    container.appendChild(div);
+                });
+
+                // Separador visual indicando onde a nova mensagem será enviada
+                const continueDiv = document.createElement('div');
+                continueDiv.className = 'itoca-msg system';
+                continueDiv.innerHTML = `<span class="itoca-system-bubble"><i class="fas fa-pencil-alt"></i> Continue a conversa abaixo</span>`;
+                container.appendChild(continueDiv);
+
+                _itocaScrollToBottom();
+
+                // Fecha o histórico e sobe para o chat
+                document.getElementById('itocaHistorySection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setTimeout(() => {
+                    document.getElementById('iata')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    document.getElementById('iataText')?.focus();
+                }, 200);
+
+            } catch (e) {
+                showError('Erro ao retomar conversa.');
+            }
+        }
+
+        // Adiciona uma mensagem de sistema (informativa) ao chat do iToca
+        function _itocaAppendSystemMsg(text) {
+            _itocaHideEmpty();
+            const container = document.getElementById('itocaChatMessages');
+            if (!container) return null;
+            const div = document.createElement('div');
+            div.className = 'itoca-msg system';
+            div.innerHTML = `<span class="itoca-system-bubble">${text}</span>`;
+            container.appendChild(div);
+            _itocaScrollToBottom();
+            return div;
+        }
+
         function handleITocaKeydown(event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 askIToca();
             }
+        }
+
+        // Verifica se a base do iToca está desatualizada (> 1 dia). Se sim, faz update
+        // incremental silencioso antes de prosseguir com a pergunta.
+        async function _itocaCheckAndAutoUpdate() {
+            try {
+                const statusResp = await fetch(`${API_BASE}/itoca/base-status`);
+                if (!statusResp.ok) return;
+                const statusData = await statusResp.json().catch(() => ({}));
+
+                if (!statusData.updated_at) return; // base nunca atualizada, não intervém
+
+                const updatedAt = new Date(statusData.updated_at.replace(' ', 'T'));
+                const diffMs = Date.now() - updatedAt.getTime();
+                if (diffMs < 24 * 60 * 60 * 1000) return; // menos de 1 dia → ok
+
+                // Base com mais de 1 dia → update incremental silencioso
+                const statusMsgEl = _itocaAppendSystemMsg('⏳ Base iToca desatualizada. Atualizando antes de responder...');
+
+                const updateResp = await fetch(`${API_BASE}/itoca/base-update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ incremental: true })
+                });
+                if (!updateResp.ok) {
+                    statusMsgEl?.remove();
+                    return;
+                }
+                const { task_id } = await updateResp.json().catch(() => ({}));
+                if (!task_id) { statusMsgEl?.remove(); return; }
+
+                // Polling até concluir ou dar erro
+                await new Promise((resolve) => {
+                    const poll = async () => {
+                        try {
+                            const taskResp = await fetch(`${API_BASE}/tasks/${task_id}`);
+                            const taskData = await taskResp.json().catch(() => ({}));
+                            if (taskData.status === 'done') {
+                                if (statusMsgEl) statusMsgEl.querySelector('.itoca-system-bubble').innerHTML = '✅ Base atualizada! Processando sua pergunta...';
+                                // Atualiza o label de status
+                                const lbl = document.getElementById('itocaBaseUpdatedAt');
+                                if (lbl && taskData.result?.updated_at) {
+                                    const mode = taskData.result.incremental ? ' (incremental)' : '';
+                                    lbl.textContent = `Último update: ${formatDateBr(taskData.result.updated_at)} — ${taskData.result.items_count} registros${mode}`;
+                                }
+                                setTimeout(() => statusMsgEl?.remove(), 1800);
+                                resolve();
+                            } else if (taskData.status === 'error') {
+                                statusMsgEl?.remove();
+                                resolve();
+                            } else {
+                                setTimeout(poll, 1500);
+                            }
+                        } catch (_e) { statusMsgEl?.remove(); resolve(); }
+                    };
+                    poll();
+                });
+
+            } catch (_e) { /* ignora erros no auto-update, a pergunta segue normalmente */ }
         }
 
         async function askIToca() {
@@ -12698,6 +12855,9 @@
             const askBtn = document.getElementById('iataAskBtn');
             if (askBtn) askBtn.disabled = true;
             if (textarea) textarea.disabled = true;
+
+            // Verifica e atualiza a base se estiver desatualizada (> 1 dia)
+            await _itocaCheckAndAutoUpdate();
 
             _itocaAppendUserMsg(question);
             if (textarea) textarea.value = '';
@@ -15036,6 +15196,7 @@
             if (fileInput) fileInput.value = '';
             const fileName = document.getElementById('wikiFileName');
             if (fileName) fileName.textContent = '';
+            document.getElementById('wikiUploadBtn')?.classList.remove('wiki-upload-btn-pending');
             document.getElementById('wikiSearchInput').value = '';
             showSuccess(files.length > 1 ? 'Documentos enviados com sucesso!' : 'Documento enviado com sucesso!');
             await loadWikiTocaData();
@@ -15052,14 +15213,18 @@
 
         function onWikiFileSelected(event) {
             const fileName = document.getElementById('wikiFileName');
+            const uploadBtn = document.getElementById('wikiUploadBtn');
             const files = Array.from(event?.target?.files || []);
             if (!fileName) return;
             if (!files.length) {
                 fileName.textContent = '';
+                uploadBtn?.classList.remove('wiki-upload-btn-pending');
             } else if (files.length === 1) {
                 fileName.textContent = files[0].name;
+                uploadBtn?.classList.add('wiki-upload-btn-pending');
             } else {
                 fileName.textContent = `${files.length} arquivos selecionados`;
+                uploadBtn?.classList.add('wiki-upload-btn-pending');
             }
         }
 
