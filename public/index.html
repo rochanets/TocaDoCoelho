@@ -1907,10 +1907,12 @@
         .itoca-sources-list { margin-top:6px; font-size:11px; color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 10px; display:none; }
         .itoca-sources-list.open { display:block; }
         .itoca-sources-list li { list-style:disc; margin-left:14px; margin-bottom:2px; }
-        .itoca-typing { display:flex; align-items:center; gap:5px; padding:10px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; border-bottom-left-radius:4px; }
-        .itoca-typing span { width:7px; height:7px; background:#10b981; border-radius:50%; animation:itocaBounce 1.2s infinite; }
-        .itoca-typing span:nth-child(2) { animation-delay:.2s; }
-        .itoca-typing span:nth-child(3) { animation-delay:.4s; }
+        .itoca-typing { display:flex; flex-direction:column; gap:5px; padding:10px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; border-bottom-left-radius:4px; }
+        .itoca-typing-dots { display:flex; align-items:center; gap:5px; }
+        .itoca-typing-dots span { width:7px; height:7px; background:#10b981; border-radius:50%; animation:itocaBounce 1.2s infinite; }
+        .itoca-typing-dots span:nth-child(2) { animation-delay:.2s; }
+        .itoca-typing-dots span:nth-child(3) { animation-delay:.4s; }
+        .itoca-typing-step { font-size:11px; color:#059669; font-style:italic; min-height:14px; line-height:1.3; }
         @keyframes itocaBounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
         @keyframes itocaFadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
         .itoca-chat-empty { text-align:center; color:#9ca3af; font-size:13px; padding:10px 0 4px; margin-top:auto; }
@@ -12376,7 +12378,7 @@
             _itocaScrollToBottom();
         }
 
-        function _itocaAppendTyping() {
+        function _itocaAppendTyping(stepText) {
             _itocaHideEmpty();
             const container = document.getElementById('itocaChatMessages');
             if (!container) return null;
@@ -12385,7 +12387,10 @@
             div.id = 'itocaTypingIndicator';
             div.innerHTML = `
                 <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca"></div>
-                <div class="itoca-typing"><span></span><span></span><span></span></div>
+                <div class="itoca-typing">
+                    <div class="itoca-typing-dots"><span></span><span></span><span></span></div>
+                    <div class="itoca-typing-step" id="itocaTypingStep">${stepText || ''}</div>
+                </div>
             `;
             container.appendChild(div);
             _itocaScrollToBottom();
@@ -12395,6 +12400,11 @@
         function _itocaRemoveTyping() {
             const el = document.getElementById('itocaTypingIndicator');
             if (el) el.remove();
+        }
+
+        function _itocaUpdateTypingStep(stepText) {
+            const el = document.getElementById('itocaTypingStep');
+            if (el) { el.textContent = stepText || ''; _itocaScrollToBottom(); }
         }
 
         function _itocaConfidenceClass(pct) {
@@ -12980,7 +12990,7 @@
 
             _itocaAppendUserMsg(question);
             if (textarea) textarea.value = '';
-            const typingEl = _itocaAppendTyping();
+            _itocaAppendTyping('🔍 Iniciando busca...');
 
             try {
                 _itocaSessionHasMessages = true;
@@ -12990,9 +13000,9 @@
                     body: JSON.stringify({ question, session_id: _itocaSessionId })
                 });
                 const payload = await response.json().catch(() => ({}));
-                _itocaRemoveTyping();
 
                 if (!response.ok) {
+                    _itocaRemoveTyping();
                     const errMsg = payload.error || 'Não foi possível consultar o iToca.';
                     if (payload.base_ready === false) {
                         _itocaAppendErrorMsg('⚠️ ' + errMsg);
@@ -13000,13 +13010,67 @@
                         _itocaAppendErrorMsg(errMsg);
                     }
                     showError(errMsg);
-                } else {
-                    _itocaAppendAssistantMsg(payload);
-                    if (payload.base_updated_at) {
-                        const label = document.getElementById('itocaBaseUpdatedAt');
-                        if (label) label.textContent = `Último update: ${formatDateBr(payload.base_updated_at)}`;
-                    }
+                    return;
                 }
+
+                // Async path: backend returned 202 + task_id
+                const taskId = payload.task_id;
+                if (!taskId) {
+                    // Fallback: sync response (base not ready or legacy)
+                    _itocaRemoveTyping();
+                    _itocaAppendAssistantMsg(payload);
+                    return;
+                }
+
+                // Poll task until done or error (max ~90s, then slow-poll)
+                let pollCount = 0;
+                const MAX_POLLS = 112; // ~90s at 800ms
+                await new Promise((resolve) => {
+                    const poll = async () => {
+                        try {
+                            const taskResp = await fetch(`${API_BASE}/tasks/${taskId}`);
+                            const taskData = await taskResp.json().catch(() => ({}));
+
+                            if (taskData.step) _itocaUpdateTypingStep(taskData.step);
+
+                            if (taskData.status === 'done') {
+                                _itocaRemoveTyping();
+                                _itocaAppendAssistantMsg(taskData.result || {});
+                                const updatedAt = taskData.result?.base_updated_at;
+                                if (updatedAt) {
+                                    const label = document.getElementById('itocaBaseUpdatedAt');
+                                    if (label) label.textContent = `Último update: ${formatDateBr(updatedAt)}`;
+                                }
+                                resolve();
+                                return;
+                            }
+
+                            if (taskData.status === 'error') {
+                                _itocaRemoveTyping();
+                                const errMsg = taskData.error || 'Erro ao processar resposta.';
+                                _itocaAppendErrorMsg(errMsg);
+                                showError(errMsg);
+                                resolve();
+                                return;
+                            }
+
+                            // Still processing — continue polling
+                            if (++pollCount >= MAX_POLLS) {
+                                _itocaUpdateTypingStep('⏱️ Aguardando resposta da IA...');
+                                setTimeout(poll, 2000);
+                            } else {
+                                setTimeout(poll, 800);
+                            }
+                        } catch (e) {
+                            _itocaRemoveTyping();
+                            _itocaAppendErrorMsg(e.message || 'Falha ao consultar iToca.');
+                            showError(e.message || 'Falha ao consultar iToca.');
+                            resolve();
+                        }
+                    };
+                    poll();
+                });
+
             } catch (error) {
                 _itocaRemoveTyping();
                 _itocaAppendErrorMsg(error.message || 'Falha ao consultar iToca.');

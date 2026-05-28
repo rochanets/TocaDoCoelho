@@ -71,6 +71,14 @@ except ImportError:
     pdfplumber = None
     PDFPLUMBER_AVAILABLE = False
 
+# Suprime logs verbosos do pdfminer (usado internamente pelo pdfplumber) —
+# por padrão, o pdfminer emite DEBUG para cada token/objeto do PDF, poluindo o terminal.
+import logging as _logging
+_logging.getLogger('pdfminer').setLevel(_logging.WARNING)
+_logging.getLogger('pdfminer.psparser').setLevel(_logging.WARNING)
+_logging.getLogger('pdfminer.pdfdocument').setLevel(_logging.WARNING)
+_logging.getLogger('pdfminer.pdfinterp').setLevel(_logging.WARNING)
+
 try:
     import docx as python_docx
     PYTHON_DOCX_AVAILABLE = True
@@ -7276,40 +7284,30 @@ def itoca_base_update():
     return jsonify({'task_id': task_id}), 202
 
 
-@app.route('/api/itoca/ask', methods=['POST'])
-def itoca_ask():
+def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, history_rows):
+    """Processa a pergunta do iToca em background. Atualiza _bg_tasks com progresso em tempo real."""
     try:
-        data = request.get_json() or {}
-        question = (data.get('question') or '').strip()
-        session_id = (data.get('session_id') or '').strip()
-        if not question:
-            return jsonify({'error': 'Pergunta obrigatória.'}), 400
-
-        snapshot_items, updated_at = _itoca_get_cached_base()
-        if not snapshot_items:
-            return jsonify({
-                'error': 'Base iToca ainda não foi atualizada. Clique em "Base Update" antes da primeira pergunta.',
-                'base_ready': False
-            }), 409
-
-        # Detecta se é uma query analítica/ampla (resumos, panorama, todas as contas target, etc.)
         _q_lower = question.lower()
         _analytical_kws = {'target', 'todas', 'todos', 'resumo', 'resumir', 'panorama', 'geral',
                            'visao geral', 'visão geral', 'analise', 'análise', 'situação', 'situacao',
                            'relacionamento', 'evolucao', 'evolução', 'overview', 'mapa', 'balanço', 'balanco'}
         is_analytical = any(kw in _q_lower for kw in _analytical_kws)
-
         snapshot_limit = 30 if is_analytical else 15
         live_limit = 15 if is_analytical else 8
         context_max = 45 if is_analytical else 25
 
-        # Busca híbrida: snapshot em cache + busca direta no banco para agenda e wiki
+        # 1. Busca na base de conhecimento Wiki (rápido — já indexado)
+        _bg_task_set(task_id, {'step': '📚 Consultando base de conhecimento...', 'progress': 20})
         snapshot_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=snapshot_limit)
+
+        # 2. Busca ao vivo no banco de dados (contatos, atividades, agenda...)
+        _bg_task_set(task_id, {'step': '📊 Buscando no banco de dados...', 'progress': 35})
         live_rows = _itoca_search_context(question, limit=live_limit)
 
-        # Para queries analíticas/target: força inclusão de todas as contas target do banco
+        # 3. Para queries analíticas/target: força inclusão de todas as contas target
         target_rows = []
         if is_analytical and 'target' in _q_lower:
+            _bg_task_set(task_id, {'step': '🎯 Carregando contas target...', 'progress': 45})
             try:
                 _conn_t = get_db()
                 _cur_t = _conn_t.cursor()
@@ -7330,10 +7328,8 @@ def itoca_ask():
                 for _row in _cur_t.fetchall():
                     _rd = dict_from_row(_row)
                     _parts = ['classificacao: conta-alvo (target)']
-                    if _rd.get('name'):
-                        _parts.append(f'empresa: {_rd["name"]}')
-                    if _rd.get('sector'):
-                        _parts.append(f'setor: {_rd["sector"]}')
+                    if _rd.get('name'): _parts.append(f'empresa: {_rd["name"]}')
+                    if _rd.get('sector'): _parts.append(f'setor: {_rd["sector"]}')
                     if _rd.get('last_activity'):
                         try:
                             _dt = datetime.strptime(_rd['last_activity'][:10], '%Y-%m-%d')
@@ -7342,12 +7338,9 @@ def itoca_ask():
                             _parts.append(f'ultimo_contato: {_rd["last_activity"]}')
                     else:
                         _parts.append('ultimo_contato: sem registros')
-                    if _rd.get('total_activities'):
-                        _parts.append(f'total_interacoes: {_rd["total_activities"]}')
-                    if _rd.get('total_services'):
-                        _parts.append(f'servicos_stefanini_cadastrados: {_rd["total_services"]}')
-                    if _rd.get('total_contacts'):
-                        _parts.append(f'total_contatos_mapeados: {_rd["total_contacts"]}')
+                    if _rd.get('total_activities'): _parts.append(f'total_interacoes: {_rd["total_activities"]}')
+                    if _rd.get('total_services'): _parts.append(f'servicos_stefanini_cadastrados: {_rd["total_services"]}')
+                    if _rd.get('total_contacts'): _parts.append(f'total_contatos_mapeados: {_rd["total_contacts"]}')
                     _snip = ' | '.join(_parts)
                     if _snip:
                         target_rows.append({'table': 'accounts', 'id': _rd.get('id'), 'snippet': _snip, 'search_text': _snip.lower()})
@@ -7355,7 +7348,7 @@ def itoca_ask():
             except Exception as _te:
                 logger.warning(f'[iToca] Erro ao buscar contas target: {_te}')
 
-        # Para queries analíticas gerais: adiciona painel de stats do banco
+        # 4. Para queries analíticas gerais: painel de stats do banco
         stats_rows = []
         if is_analytical:
             try:
@@ -7383,7 +7376,7 @@ def itoca_ask():
             except Exception as _se:
                 logger.warning(f'[iToca] Erro ao calcular stats analíticos: {_se}')
 
-        # Mescla resultados: prioriza target_rows > stats > live_rows > snapshot, evita duplicatas
+        # Mescla: prioriza target > stats > live (banco) > snapshot, sem duplicatas
         seen_keys = set()
         context_rows = []
         for item in (target_rows + stats_rows + live_rows):
@@ -7398,7 +7391,106 @@ def itoca_ask():
                 context_rows.append(item)
         context_rows = context_rows[:context_max]
 
-        # Busca histórico da sessão atual para enviar como contexto de conversa
+        # 5. Chamada ao LLM (parte mais demorada)
+        _bg_task_set(task_id, {'step': '🤖 Integrando com IA...', 'progress': 60})
+        llm_result = _itoca_call_sai_llm(question, context_rows, history_rows=history_rows)
+
+        _bg_task_set(task_id, {'step': '💬 Processando resposta...', 'progress': 85})
+        answer = llm_result.get('answer', '')
+        confidence = llm_result.get('confidence_percent', 0)
+        needs_ref = llm_result.get('needs_refinement', False)
+        ref_hint = llm_result.get('refinement_hint', '')
+
+        # 6. Salva resposta da IA no histórico (usuário já foi salvo antes de iniciar a task)
+        if session_id:
+            try:
+                conn_h = get_db()
+                c_h = conn_h.cursor()
+                c_h.execute(
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, ?, ?, ?)',
+                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint)
+                )
+                conn_h.commit()
+                conn_h.close()
+            except Exception as he:
+                logger.warning(f'[iToca] Erro ao salvar resposta no histórico: {he}')
+
+        # 7. Detecção de intenção de ação (não bloqueia a resposta)
+        suggested_action = None
+        if llm_result.get('llm_used') and not needs_ref:
+            try:
+                import queue as _queue
+                result_queue = _queue.Queue()
+                def _run_detector():
+                    try:
+                        result_queue.put(_itoca_detect_action_intent(question, answer))
+                    except Exception as _e:
+                        result_queue.put(None)
+                t = threading.Thread(target=_run_detector, daemon=True)
+                t.start()
+                t.join(timeout=12)
+                if not result_queue.empty():
+                    det = result_queue.get_nowait()
+                    if det and det.get('action_type') and float(det.get('confidence', 0)) >= 0.75:
+                        action_type = det['action_type']
+                        fields = det.get('fields') or {}
+                        _REQUIRED_FIELDS = {
+                            'kanban_card': ['title'], 'activity': ['contact_name', 'description'],
+                            'new_contact': ['name', 'company'], 'environment_mapping': ['company', 'information'],
+                            'wiki_entry': ['title', 'content'], 'commitment': ['title', 'due_date'],
+                        }
+                        required = _REQUIRED_FIELDS.get(action_type, [])
+                        has_minimum = all(fields.get(f) and str(fields[f]).strip() for f in required)
+                        desc_field = (fields.get('description') or fields.get('information') or '').strip().lower()
+                        question_lower = question.strip().lower()
+                        is_echo = desc_field and (desc_field == question_lower or (len(desc_field) > 20 and question_lower.startswith(desc_field[:40])))
+                        if has_minimum and not is_echo:
+                            suggested_action = {'action_type': action_type, 'label': det['label'], 'confidence': det['confidence'], 'fields': fields}
+                        else:
+                            logger.debug(f'[iToca][ActionDetector] Ação {action_type!r} descartada: has_minimum={has_minimum}, is_echo={is_echo}')
+            except Exception as det_err:
+                logger.warning(f'[iToca] Erro no detector de intenção: {det_err}')
+
+        _bg_task_set(task_id, {
+            'status': 'done', 'step': '✅ Concluído!', 'progress': 100,
+            'result': {
+                'answer': answer, 'confidence_percent': confidence,
+                'needs_refinement': needs_ref, 'refinement_hint': ref_hint,
+                'llm_used': llm_result.get('llm_used', False),
+                'items_found': len(context_rows), 'sources': context_rows,
+                'base_updated_at': updated_at, 'base_ready': True,
+                'suggested_action': suggested_action,
+            }
+        })
+        _bg_task_cleanup(task_id, delay=300)
+
+    except Exception as e:
+        logger.exception(f'[iToca][Ask][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+        _bg_task_cleanup(task_id, delay=300)
+
+
+@app.route('/api/itoca/ask', methods=['POST'])
+def itoca_ask():
+    """Inicia o processamento da pergunta de forma assíncrona.
+    Salva a mensagem do usuário imediatamente (antes do LLM) para garantir persistência.
+    Retorna {task_id} para polling via /api/tasks/<task_id>.
+    """
+    try:
+        data = request.get_json() or {}
+        question = (data.get('question') or '').strip()
+        session_id = (data.get('session_id') or '').strip()
+        if not question:
+            return jsonify({'error': 'Pergunta obrigatória.'}), 400
+
+        snapshot_items, updated_at = _itoca_get_cached_base()
+        if not snapshot_items:
+            return jsonify({
+                'error': 'Base iToca ainda não foi atualizada. Clique em "Base Update" antes da primeira pergunta.',
+                'base_ready': False
+            }), 409
+
+        # Busca histórico ANTES de salvar a mensagem do usuário (para não incluir a pergunta atual no contexto)
         history_rows = []
         if session_id:
             try:
@@ -7413,105 +7505,31 @@ def itoca_ask():
             except Exception as he:
                 logger.warning(f'[iToca] Erro ao buscar histórico: {he}')
 
-        llm_result = _itoca_call_sai_llm(question, context_rows, history_rows=history_rows)
-        answer = llm_result.get('answer', '')
-        confidence = llm_result.get('confidence_percent', 0)
-        needs_ref = llm_result.get('needs_refinement', False)
-        ref_hint = llm_result.get('refinement_hint', '')
-
-        # Salvar no histórico se session_id fornecido
+        # Salva a pergunta do usuário IMEDIATAMENTE — garante que esteja no histórico
+        # mesmo que o usuário navegue para outra tela antes da resposta chegar.
         if session_id:
             try:
                 conn_h = get_db()
                 c_h = conn_h.cursor()
                 c_h.execute(
-                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)' ,
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)',
                     (session_id, 'user', question, '')
-                )
-                c_h.execute(
-                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, ?, ?, ?)',
-                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint)
                 )
                 conn_h.commit()
                 conn_h.close()
             except Exception as he:
-                logger.warning(f'[iToca] Erro ao salvar histórico: {he}')
+                logger.warning(f'[iToca] Erro ao salvar pergunta no histórico: {he}')
 
-        # Detectar intenção de ação em thread separada (não bloqueia a resposta)
-        # Apenas executa quando o LLM principal foi usado (API configurada)
-        suggested_action = None
-        if llm_result.get('llm_used') and not needs_ref:
-            try:
-                import threading as _threading
-                import queue as _queue
-                result_queue = _queue.Queue()
+        # Inicia processamento LLM em background com etapas visíveis ao frontend
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': '🔍 Iniciando busca...', 'progress': 5})
+        threading.Thread(
+            target=_itoca_ask_async,
+            args=(task_id, question, session_id, snapshot_items, updated_at, history_rows),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id, 'base_ready': True}), 202
 
-                def _run_detector():
-                    try:
-                        result_queue.put(_itoca_detect_action_intent(question, answer))
-                    except Exception as _e:
-                        result_queue.put(None)
-
-                t = _threading.Thread(target=_run_detector, daemon=True)
-                t.start()
-                t.join(timeout=12)  # aguarda até 12s para não atrasar demais a resposta
-
-                if not result_queue.empty():
-                    det = result_queue.get_nowait()
-                    # Só sugere ação se confiante o suficiente (>= 0.75) E tiver campos mínimos
-                    if det and det.get('action_type') and float(det.get('confidence', 0)) >= 0.75:
-                        action_type = det['action_type']
-                        fields = det.get('fields') or {}
-
-                        # Valida campos mínimos por tipo — evita sugestões vazias ou genéricas
-                        _REQUIRED_FIELDS = {
-                            'kanban_card':         ['title'],
-                            'activity':            ['contact_name', 'description'],
-                            'new_contact':         ['name', 'company'],
-                            'environment_mapping': ['company', 'information'],
-                            'wiki_entry':          ['title', 'content'],
-                            'commitment':          ['title', 'due_date'],
-                        }
-                        required = _REQUIRED_FIELDS.get(action_type, [])
-                        has_minimum = all(
-                            fields.get(f) and str(fields[f]).strip()
-                            for f in required
-                        )
-
-                        # Rejeita se a descrição for idêntica ou muito similar à pergunta
-                        # (sinal de que o LLM apenas repetiu a pergunta como ação)
-                        desc_field = (fields.get('description') or fields.get('information') or '').strip().lower()
-                        question_lower = question.strip().lower()
-                        is_echo = desc_field and (
-                            desc_field == question_lower or
-                            (len(desc_field) > 20 and question_lower.startswith(desc_field[:40]))
-                        )
-
-                        if has_minimum and not is_echo:
-                            suggested_action = {
-                                'action_type': action_type,
-                                'label': det['label'],
-                                'confidence': det['confidence'],
-                                'fields': fields
-                            }
-                        else:
-                            logger.debug(f'[iToca][ActionDetector] Ação {action_type!r} descartada: '
-                                         f'has_minimum={has_minimum}, is_echo={is_echo}')
-            except Exception as det_err:
-                logger.warning(f'[iToca] Erro no detector de intenção: {det_err}')
-
-        return jsonify({
-            'answer': answer,
-            'confidence_percent': confidence,
-            'needs_refinement': needs_ref,
-            'refinement_hint': ref_hint,
-            'llm_used': llm_result.get('llm_used', False),
-            'items_found': len(context_rows),
-            'sources': context_rows,
-            'base_updated_at': updated_at,
-            'base_ready': True,
-            'suggested_action': suggested_action  # None ou dict com action_type, label, confidence, fields
-        })
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
         return jsonify({'error': f'Erro ao consultar iToca: {e}'}), 500
