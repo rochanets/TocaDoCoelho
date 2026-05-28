@@ -6987,7 +6987,7 @@
             let html = '<div class="filters-bar">';
             html += '<div class="filters-row">';
             if (prefix === 'Dashboard') {
-                html += `<div class="filter-group"><label class="filter-label">Pesquisa</label><input class="filter-input" type="text" placeholder="Pesquisar contato" value="${escapeHtml(dashboardSearch)}" oninput="setDashboardContactSearch(this.value)"></div>`;
+                html += `<div class="filter-group"><label class="filter-label">Pesquisa</label><input id="dashboardSearchInput" class="filter-input" type="text" placeholder="Pesquisar contato" value="${escapeHtml(dashboardSearch)}" oninput="setDashboardContactSearch(this.value)"></div>`;
             }
             html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
             if (prefix === 'Clients') {
@@ -7009,19 +7009,23 @@
             dashboardPositionFilter = '';
             dashboardTargetFilter = '';
             dashboardContactSearch = '';
-            loadDashboard();
+            // Re-renderiza a barra de filtros (reseta dropdowns e campo de busca) sem buscar no servidor
+            _renderDashboardFilters();
+            _renderDashboardTable();
         }
 
         function setDashboardFilter(type, value) {
             if (type === 'company') dashboardCompanyFilter = value;
             if (type === 'position') dashboardPositionFilter = value;
             if (type === 'target') dashboardTargetFilter = value;
-            loadDashboard();
+            // Só re-renderiza a tabela — a barra de filtros não é destruída (sem perda de foco)
+            _renderDashboardTable();
         }
 
         function setDashboardContactSearch(value) {
             dashboardContactSearch = (value || '').trimStart();
-            loadDashboard();
+            // Só re-renderiza a tabela — o input de busca não é destruído (sem perda de foco)
+            _renderDashboardTable();
         }
 
 
@@ -7844,6 +7848,89 @@
             }
         }
 
+        // Renderiza apenas a barra de filtros no container dedicado.
+        // Chamada por loadDashboard() e clearDashboardFilters().
+        function _renderDashboardFilters() {
+            const container = document.getElementById('dashboardFiltersContainer');
+            if (!container) return;
+            container.innerHTML = renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
+        }
+
+        // Renderiza apenas a tabela de contatos no container dedicado, usando os dados já
+        // em memória. Não faz fetch — é chamada diretamente por filtros e busca para que o
+        // input de pesquisa nunca seja destruído (evita perda de foco durante a digitação).
+        function _renderDashboardTable() {
+            const container = document.getElementById('dashboardTableContainer');
+            if (!container) return;
+
+            if (!clients || clients.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                return;
+            }
+
+            const contactSearchTerm = (dashboardContactSearch || '').trim().toLocaleLowerCase('pt-BR');
+            let filteredClients = clients.filter(client => {
+                const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
+                const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
+                const byTarget = !dashboardTargetFilter || (dashboardTargetFilter === 'target' ? Number(client.is_target) === 1 : Number(client.is_target) !== 1);
+                const byContact = !contactSearchTerm || String(client.name || '').toLocaleLowerCase('pt-BR').includes(contactSearchTerm);
+                return byCompany && byPosition && byTarget && byContact;
+            });
+
+            const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
+            const activeClients = sortedClients.filter(client => !isArchivedClient(client));
+            const archivedClients = sortedClients.filter(client => isArchivedClient(client));
+
+            let html = '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
+            html += '<th style="min-width:50px;"></th>';
+            html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Conta <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 140px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 120px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; min-width: 100px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
+            html += '</tr></thead><tbody>';
+
+            const renderRow = (client, { isArchived = false } = {}) => {
+                const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
+                const statusClass = `status-${status}`;
+                const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
+                const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
+                const companyCell = isArchived
+                    ? '<span style="color:#9ca3af;">(Arquivado)</span>'
+                    : `<button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button>`;
+                html += `<tr class="${isArchived ? 'archived-contact-row' : ''}">
+                    <td>${avatar}</td>
+                    <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
+                    <td style="min-width:142px;">${companyCell}</td>
+                    <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
+                    <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
+                    <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
+                    <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
+                    <td style="white-space: nowrap;">${isArchived ? '<span style="color:#9ca3af;">Arquivado</span>' : `<span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span>`}</td>
+                    <td style="text-align: center;">
+                        <div class="action-buttons">
+                            <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
+                            <button class="btn-icon-action" onclick="openWhatsAppMessageModal(${client.id})" title="Enviar mensagem no WhatsApp"><i class="fab fa-whatsapp"></i></button>
+                            <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>
+                        </div>
+                    </td>
+                </tr>`;
+            };
+
+            activeClients.forEach(client => renderRow(client));
+            html += `<tr class="dashboard-archived-header" onclick="toggleDashboardArchivedSection()"><td colspan="9"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Contatos Arquivados (${archivedClients.length})</span><span>${dashboardArchivedExpanded ? '▾' : '▸'}</span></div></td></tr>`;
+            if (dashboardArchivedExpanded) {
+                archivedClients.forEach(client => renderRow(client, { isArchived: true }));
+            }
+            html += '</tbody></table></div></div>';
+
+            container.innerHTML = html;
+        }
+
         async function loadDashboard() {
             try {
                 const response = await fetch(`${API_BASE}/clientes`);
@@ -7852,72 +7939,17 @@
                 await renderDashboardGreeting();
                 await updateWeekCommitmentsBell();
 
-                let html = '';
-                if (clients.length === 0) {
-                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
-                } else {
-                    const contactSearchTerm = (dashboardContactSearch || '').trim().toLocaleLowerCase('pt-BR');
-                    let filteredClients = clients.filter(client => {
-                        const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
-                        const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
-                        const byTarget = !dashboardTargetFilter || (dashboardTargetFilter === 'target' ? Number(client.is_target) === 1 : Number(client.is_target) !== 1);
-                        const byContact = !contactSearchTerm || String(client.name || '').toLocaleLowerCase('pt-BR').includes(contactSearchTerm);
-                        return byCompany && byPosition && byTarget && byContact;
-                    });
-
-                    const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
-                    const activeClients = sortedClients.filter(client => !isArchivedClient(client));
-                    const archivedClients = sortedClients.filter(client => isArchivedClient(client));
-
-                    html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
-                    html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
-                                        html += '<th style="min-width:50px;"></th>';
-                    html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Conta <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 140px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 120px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; min-width: 100px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
-                    html += '</tr></thead><tbody>';
-
-                    const renderDashboardContactRow = (client, { isArchived = false } = {}) => {
-                        const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
-                        const statusClass = `status-${status}`;
-                        const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
-                        const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
-                        const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
-                        const companyCell = isArchived
-                            ? '<span style="color:#9ca3af;">(Arquivado)</span>'
-                            : `<button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button>`;
-                        html += `<tr class="${isArchived ? 'archived-contact-row' : ''}">
-                            <td>${avatar}</td>
-                            <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td style="min-width:142px;">${companyCell}</td>
-                            <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
-                            <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
-                            <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
-                            <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
-                            <td style="white-space: nowrap;">${isArchived ? '<span style="color:#9ca3af;">Arquivado</span>' : `<span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span>`}</td>
-                            <td style="text-align: center;">
-                                <div class="action-buttons">
-                                    <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
-                                    <button class="btn-icon-action" onclick="openWhatsAppMessageModal(${client.id})" title="Enviar mensagem no WhatsApp"><i class="fab fa-whatsapp"></i></button>
-                                    <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>
-                                </div>
-                            </td>
-                        </tr>`;
-                    };
-                    activeClients.forEach(client => renderDashboardContactRow(client));
-                    html += `<tr class="dashboard-archived-header" onclick="toggleDashboardArchivedSection()"><td colspan="9"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Contatos Arquivados (${archivedClients.length})</span><span>${dashboardArchivedExpanded ? '▾' : '▸'}</span></div></td></tr>`;
-                    if (dashboardArchivedExpanded) {
-                        archivedClients.forEach(client => renderDashboardContactRow(client, { isArchived: true }));
-                    }
-                    html += '</tbody></table></div></div>';
+                // Inicializa os dois containers separados na primeira carga.
+                // A barra de filtros (#dashboardFiltersContainer) persiste entre re-renders
+                // de tabela, garantindo que o input de pesquisa nunca perca o foco.
+                const content = document.getElementById('dashboardContent');
+                if (!document.getElementById('dashboardFiltersContainer')) {
+                    content.innerHTML = '<div id="dashboardFiltersContainer"></div><div id="dashboardTableContainer"></div>';
                 }
 
-                document.getElementById('dashboardContent').innerHTML = html;
+                _renderDashboardFilters();
+                _renderDashboardTable();
+
                 await updateWeekCommitmentsBell();
             } catch (error) {
                 showError('Erro ao carregar dashboard');
@@ -11465,12 +11497,12 @@
                 dashboardSortField = field;
                 dashboardSortOrder = 'asc';
             }
-            loadDashboard();
+            _renderDashboardTable();
         }
 
         function toggleDashboardArchivedSection() {
             dashboardArchivedExpanded = !dashboardArchivedExpanded;
-            loadDashboard();
+            _renderDashboardTable();
         }
 
         function toggleClientsSort(field) {
