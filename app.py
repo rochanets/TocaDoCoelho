@@ -13464,6 +13464,85 @@ def serve_static(path):
     return send_from_directory(app.static_folder, path)
 
 
+@app.route('/api/home/cobertura-detail', methods=['GET'])
+def home_cobertura_detail():
+    """Retorna detalhamento conta-a-conta da Cobertura de Relacionamento para popup no dashboard.
+    Mesmos query params do /api/home/overview (period, months).
+    """
+    try:
+        period = (request.args.get('period') or 'all').strip().lower()
+        months_arg = (request.args.get('months') or '').strip()
+        months_filter = []
+        if period == 'months' and months_arg:
+            months_filter = [m.strip() for m in months_arg.split(',') if re.match(r'^\d{4}-\d{2}$', m.strip())]
+
+        def _mc(col):
+            """Retorna (fragmento_sql, params) para filtro de mês."""
+            if not months_filter:
+                return '', []
+            ph = ','.join(['?'] * len(months_filter))
+            return f" AND strftime('%Y-%m', {col}) IN ({ph})", list(months_filter)
+
+        mf_aa, mfp_aa = _mc('aa.activity_date')
+        mf_a, mfp_a   = _mc('a.activity_date')
+
+        conn = get_db()
+        c = conn.cursor()
+
+        # Para cada conta: contagem de atividades (diretas + via contatos vinculados) e data da última
+        c.execute(f"""
+            SELECT
+                acc.id,
+                acc.name,
+                COALESCE(acc.is_target, 0) AS is_target,
+                COUNT(DISTINCT aa.id) + COUNT(DISTINCT a.id) AS activity_count,
+                MAX(aa.activity_date)                        AS last_aa,
+                MAX(a.activity_date)                         AS last_a
+            FROM accounts acc
+            LEFT JOIN account_activities aa
+                ON aa.account_id = acc.id {mf_aa}
+            LEFT JOIN account_main_contacts amc
+                ON amc.account_id = acc.id
+            LEFT JOIN activities a
+                ON a.client_id = amc.client_id {mf_a}
+            GROUP BY acc.id, acc.name, acc.is_target
+            ORDER BY acc.name ASC
+        """, mfp_aa + mfp_a)
+
+        all_rows = []
+        for r in c.fetchall():
+            rd = dict_from_row(r)
+            last_aa = rd.pop('last_aa', None) or ''
+            last_a  = rd.pop('last_a',  None) or ''
+            rd['last_activity'] = (last_aa if last_aa >= last_a else last_a) or None
+            all_rows.append(rd)
+
+        conn.close()
+
+        covered   = sorted([r for r in all_rows if r['activity_count'] > 0],
+                           key=lambda x: -x['activity_count'])
+        uncovered = sorted([r for r in all_rows if r['activity_count'] == 0],
+                           key=lambda x: (-(x.get('is_target') or 0), (x.get('name') or '').lower()))
+
+        period_label = 'Todo o período'
+        if months_filter:
+            period_label = (f"Mês: {months_filter[0]}" if len(months_filter) == 1
+                            else f"Meses: {months_filter[0]} → {months_filter[-1]}")
+
+        total = len(all_rows)
+        return jsonify({
+            'period_label': period_label,
+            'total':         total,
+            'covered_count': len(covered),
+            'cobertura_pct': round(len(covered) / total * 100) if total > 0 else 0,
+            'covered':   covered,
+            'uncovered': uncovered,
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/home/cobertura-detail: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/home/overview', methods=['GET'])
 def home_overview():
     """Agregados do módulo Home (dashboard executivo).
@@ -13561,19 +13640,27 @@ def home_overview():
                 atrasado += 1
 
         # Cobertura de relacionamento (% contas com >=1 atividade no recorte)
+        # Usa IDs de conta para evitar imprecisões por comparação de texto (clients.company vs accounts.name)
+        # Três caminhos: atividade direta na conta, via account_main_contacts → activities, e fallback por nome
         mf_a, mfp_a = month_clause('a.activity_date')
         mf_aa, mfp_aa = month_clause('aa.activity_date')
+        mf_a2, mfp_a2 = month_clause('a2.activity_date')
         c.execute(f"""
-            SELECT COUNT(DISTINCT acc_name) AS n FROM (
-                SELECT cl.company AS acc_name
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}
+            SELECT COUNT(DISTINCT acc_id) AS n FROM (
+                SELECT aa.account_id AS acc_id
+                FROM account_activities aa WHERE 1=1 {mf_aa}
                 UNION
-                SELECT acc.name AS acc_name
-                FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
-                WHERE 1=1 {mf_aa}
+                SELECT amc.account_id AS acc_id
+                FROM account_main_contacts amc
+                JOIN activities a ON a.client_id = amc.client_id WHERE 1=1 {mf_a}
+                UNION
+                SELECT acc2.id AS acc_id
+                FROM accounts acc2
+                JOIN clients cl2 ON LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc2.name))
+                JOIN activities a2 ON a2.client_id = cl2.id
+                WHERE cl2.company IS NOT NULL AND TRIM(cl2.company) != '' {mf_a2}
             )
-        """, mfp_a + mfp_aa)
+        """, mfp_aa + mfp_a + mfp_a2)
         covered_accounts = c.fetchone()['n'] or 0
         cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
 
