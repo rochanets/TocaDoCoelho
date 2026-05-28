@@ -2530,16 +2530,18 @@
         /* Modal de detalhamento da Cobertura */
         #coberturaDetailModal {
             display: none; position: fixed; inset: 0; z-index: 9999;
-            background: rgba(0,0,0,0.55); align-items: flex-start; justify-content: center;
-            padding: 40px 16px;
-            overflow-y: auto;
+            background: rgba(0,0,0,0.55);
+            align-items: center; justify-content: center;
+            overflow: hidden; /* backdrop NÃO rola — só o body interno rola */
+            padding: 20px;
+            box-sizing: border-box;
         }
         #coberturaDetailModal.open { display: flex; }
         .cob-modal-box {
             background: #fff; border-radius: 16px; width: 100%; max-width: 680px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             display: flex; flex-direction: column; overflow: hidden;
-            max-height: calc(100vh - 80px);
+            max-height: calc(100vh - 40px); /* 20px padding em cima + 20px embaixo */
         }
         .cob-modal-header {
             padding: 18px 22px 14px;
@@ -7791,14 +7793,6 @@
                 </div>`;
 
             modal.style.display = 'flex';
-            modal.style.alignItems = 'flex-start';
-            modal.style.justifyContent = 'center';
-            modal.style.position = 'fixed';
-            modal.style.inset = '0';
-            modal.style.zIndex = '9999';
-            modal.style.background = 'rgba(0,0,0,0.55)';
-            modal.style.padding = '40px 16px';
-            modal.style.overflowY = 'auto';
             document.body.style.overflow = 'hidden';
             document.removeEventListener('keydown', _coberturaDetailEsc); // evita duplicação
             document.addEventListener('keydown', _coberturaDetailEsc);
