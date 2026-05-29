@@ -71,6 +71,14 @@ except ImportError:
     pdfplumber = None
     PDFPLUMBER_AVAILABLE = False
 
+# Suprime logs verbosos do pdfminer (usado internamente pelo pdfplumber) —
+# por padrão, o pdfminer emite DEBUG para cada token/objeto do PDF, poluindo o terminal.
+import logging as _logging
+_logging.getLogger('pdfminer').setLevel(_logging.WARNING)
+_logging.getLogger('pdfminer.psparser').setLevel(_logging.WARNING)
+_logging.getLogger('pdfminer.pdfdocument').setLevel(_logging.WARNING)
+_logging.getLogger('pdfminer.pdfinterp').setLevel(_logging.WARNING)
+
 try:
     import docx as python_docx
     PYTHON_DOCX_AVAILABLE = True
@@ -7276,40 +7284,30 @@ def itoca_base_update():
     return jsonify({'task_id': task_id}), 202
 
 
-@app.route('/api/itoca/ask', methods=['POST'])
-def itoca_ask():
+def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, history_rows):
+    """Processa a pergunta do iToca em background. Atualiza _bg_tasks com progresso em tempo real."""
     try:
-        data = request.get_json() or {}
-        question = (data.get('question') or '').strip()
-        session_id = (data.get('session_id') or '').strip()
-        if not question:
-            return jsonify({'error': 'Pergunta obrigatória.'}), 400
-
-        snapshot_items, updated_at = _itoca_get_cached_base()
-        if not snapshot_items:
-            return jsonify({
-                'error': 'Base iToca ainda não foi atualizada. Clique em "Base Update" antes da primeira pergunta.',
-                'base_ready': False
-            }), 409
-
-        # Detecta se é uma query analítica/ampla (resumos, panorama, todas as contas target, etc.)
         _q_lower = question.lower()
         _analytical_kws = {'target', 'todas', 'todos', 'resumo', 'resumir', 'panorama', 'geral',
                            'visao geral', 'visão geral', 'analise', 'análise', 'situação', 'situacao',
                            'relacionamento', 'evolucao', 'evolução', 'overview', 'mapa', 'balanço', 'balanco'}
         is_analytical = any(kw in _q_lower for kw in _analytical_kws)
-
         snapshot_limit = 30 if is_analytical else 15
         live_limit = 15 if is_analytical else 8
         context_max = 45 if is_analytical else 25
 
-        # Busca híbrida: snapshot em cache + busca direta no banco para agenda e wiki
+        # 1. Busca na base de conhecimento Wiki (rápido — já indexado)
+        _bg_task_set(task_id, {'step': '📚 Consultando base de conhecimento...', 'progress': 20})
         snapshot_rows = _itoca_search_in_cached_snapshot(question, snapshot_items, limit=snapshot_limit)
+
+        # 2. Busca ao vivo no banco de dados (contatos, atividades, agenda...)
+        _bg_task_set(task_id, {'step': '📊 Buscando no banco de dados...', 'progress': 35})
         live_rows = _itoca_search_context(question, limit=live_limit)
 
-        # Para queries analíticas/target: força inclusão de todas as contas target do banco
+        # 3. Para queries analíticas/target: força inclusão de todas as contas target
         target_rows = []
         if is_analytical and 'target' in _q_lower:
+            _bg_task_set(task_id, {'step': '🎯 Carregando contas target...', 'progress': 45})
             try:
                 _conn_t = get_db()
                 _cur_t = _conn_t.cursor()
@@ -7330,10 +7328,8 @@ def itoca_ask():
                 for _row in _cur_t.fetchall():
                     _rd = dict_from_row(_row)
                     _parts = ['classificacao: conta-alvo (target)']
-                    if _rd.get('name'):
-                        _parts.append(f'empresa: {_rd["name"]}')
-                    if _rd.get('sector'):
-                        _parts.append(f'setor: {_rd["sector"]}')
+                    if _rd.get('name'): _parts.append(f'empresa: {_rd["name"]}')
+                    if _rd.get('sector'): _parts.append(f'setor: {_rd["sector"]}')
                     if _rd.get('last_activity'):
                         try:
                             _dt = datetime.strptime(_rd['last_activity'][:10], '%Y-%m-%d')
@@ -7342,12 +7338,9 @@ def itoca_ask():
                             _parts.append(f'ultimo_contato: {_rd["last_activity"]}')
                     else:
                         _parts.append('ultimo_contato: sem registros')
-                    if _rd.get('total_activities'):
-                        _parts.append(f'total_interacoes: {_rd["total_activities"]}')
-                    if _rd.get('total_services'):
-                        _parts.append(f'servicos_stefanini_cadastrados: {_rd["total_services"]}')
-                    if _rd.get('total_contacts'):
-                        _parts.append(f'total_contatos_mapeados: {_rd["total_contacts"]}')
+                    if _rd.get('total_activities'): _parts.append(f'total_interacoes: {_rd["total_activities"]}')
+                    if _rd.get('total_services'): _parts.append(f'servicos_stefanini_cadastrados: {_rd["total_services"]}')
+                    if _rd.get('total_contacts'): _parts.append(f'total_contatos_mapeados: {_rd["total_contacts"]}')
                     _snip = ' | '.join(_parts)
                     if _snip:
                         target_rows.append({'table': 'accounts', 'id': _rd.get('id'), 'snippet': _snip, 'search_text': _snip.lower()})
@@ -7355,7 +7348,7 @@ def itoca_ask():
             except Exception as _te:
                 logger.warning(f'[iToca] Erro ao buscar contas target: {_te}')
 
-        # Para queries analíticas gerais: adiciona painel de stats do banco
+        # 4. Para queries analíticas gerais: painel de stats do banco
         stats_rows = []
         if is_analytical:
             try:
@@ -7383,7 +7376,7 @@ def itoca_ask():
             except Exception as _se:
                 logger.warning(f'[iToca] Erro ao calcular stats analíticos: {_se}')
 
-        # Mescla resultados: prioriza target_rows > stats > live_rows > snapshot, evita duplicatas
+        # Mescla: prioriza target > stats > live (banco) > snapshot, sem duplicatas
         seen_keys = set()
         context_rows = []
         for item in (target_rows + stats_rows + live_rows):
@@ -7398,7 +7391,106 @@ def itoca_ask():
                 context_rows.append(item)
         context_rows = context_rows[:context_max]
 
-        # Busca histórico da sessão atual para enviar como contexto de conversa
+        # 5. Chamada ao LLM (parte mais demorada)
+        _bg_task_set(task_id, {'step': '🤖 Integrando com IA...', 'progress': 60})
+        llm_result = _itoca_call_sai_llm(question, context_rows, history_rows=history_rows)
+
+        _bg_task_set(task_id, {'step': '💬 Processando resposta...', 'progress': 85})
+        answer = llm_result.get('answer', '')
+        confidence = llm_result.get('confidence_percent', 0)
+        needs_ref = llm_result.get('needs_refinement', False)
+        ref_hint = llm_result.get('refinement_hint', '')
+
+        # 6. Salva resposta da IA no histórico (usuário já foi salvo antes de iniciar a task)
+        if session_id:
+            try:
+                conn_h = get_db()
+                c_h = conn_h.cursor()
+                c_h.execute(
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, ?, ?, ?)',
+                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint)
+                )
+                conn_h.commit()
+                conn_h.close()
+            except Exception as he:
+                logger.warning(f'[iToca] Erro ao salvar resposta no histórico: {he}')
+
+        # 7. Detecção de intenção de ação (não bloqueia a resposta)
+        suggested_action = None
+        if llm_result.get('llm_used') and not needs_ref:
+            try:
+                import queue as _queue
+                result_queue = _queue.Queue()
+                def _run_detector():
+                    try:
+                        result_queue.put(_itoca_detect_action_intent(question, answer))
+                    except Exception as _e:
+                        result_queue.put(None)
+                t = threading.Thread(target=_run_detector, daemon=True)
+                t.start()
+                t.join(timeout=12)
+                if not result_queue.empty():
+                    det = result_queue.get_nowait()
+                    if det and det.get('action_type') and float(det.get('confidence', 0)) >= 0.75:
+                        action_type = det['action_type']
+                        fields = det.get('fields') or {}
+                        _REQUIRED_FIELDS = {
+                            'kanban_card': ['title'], 'activity': ['contact_name', 'description'],
+                            'new_contact': ['name', 'company'], 'environment_mapping': ['company', 'information'],
+                            'wiki_entry': ['title', 'content'], 'commitment': ['title', 'due_date'],
+                        }
+                        required = _REQUIRED_FIELDS.get(action_type, [])
+                        has_minimum = all(fields.get(f) and str(fields[f]).strip() for f in required)
+                        desc_field = (fields.get('description') or fields.get('information') or '').strip().lower()
+                        question_lower = question.strip().lower()
+                        is_echo = desc_field and (desc_field == question_lower or (len(desc_field) > 20 and question_lower.startswith(desc_field[:40])))
+                        if has_minimum and not is_echo:
+                            suggested_action = {'action_type': action_type, 'label': det['label'], 'confidence': det['confidence'], 'fields': fields}
+                        else:
+                            logger.debug(f'[iToca][ActionDetector] Ação {action_type!r} descartada: has_minimum={has_minimum}, is_echo={is_echo}')
+            except Exception as det_err:
+                logger.warning(f'[iToca] Erro no detector de intenção: {det_err}')
+
+        _bg_task_set(task_id, {
+            'status': 'done', 'step': '✅ Concluído!', 'progress': 100,
+            'result': {
+                'answer': answer, 'confidence_percent': confidence,
+                'needs_refinement': needs_ref, 'refinement_hint': ref_hint,
+                'llm_used': llm_result.get('llm_used', False),
+                'items_found': len(context_rows), 'sources': context_rows,
+                'base_updated_at': updated_at, 'base_ready': True,
+                'suggested_action': suggested_action,
+            }
+        })
+        _bg_task_cleanup(task_id, delay=300)
+
+    except Exception as e:
+        logger.exception(f'[iToca][Ask][Task:{task_id}] Erro: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+        _bg_task_cleanup(task_id, delay=300)
+
+
+@app.route('/api/itoca/ask', methods=['POST'])
+def itoca_ask():
+    """Inicia o processamento da pergunta de forma assíncrona.
+    Salva a mensagem do usuário imediatamente (antes do LLM) para garantir persistência.
+    Retorna {task_id} para polling via /api/tasks/<task_id>.
+    """
+    try:
+        data = request.get_json() or {}
+        question = (data.get('question') or '').strip()
+        session_id = (data.get('session_id') or '').strip()
+        if not question:
+            return jsonify({'error': 'Pergunta obrigatória.'}), 400
+
+        snapshot_items, updated_at = _itoca_get_cached_base()
+        if not snapshot_items:
+            return jsonify({
+                'error': 'Base iToca ainda não foi atualizada. Clique em "Base Update" antes da primeira pergunta.',
+                'base_ready': False
+            }), 409
+
+        # Busca histórico ANTES de salvar a mensagem do usuário (para não incluir a pergunta atual no contexto)
         history_rows = []
         if session_id:
             try:
@@ -7413,105 +7505,31 @@ def itoca_ask():
             except Exception as he:
                 logger.warning(f'[iToca] Erro ao buscar histórico: {he}')
 
-        llm_result = _itoca_call_sai_llm(question, context_rows, history_rows=history_rows)
-        answer = llm_result.get('answer', '')
-        confidence = llm_result.get('confidence_percent', 0)
-        needs_ref = llm_result.get('needs_refinement', False)
-        ref_hint = llm_result.get('refinement_hint', '')
-
-        # Salvar no histórico se session_id fornecido
+        # Salva a pergunta do usuário IMEDIATAMENTE — garante que esteja no histórico
+        # mesmo que o usuário navegue para outra tela antes da resposta chegar.
         if session_id:
             try:
                 conn_h = get_db()
                 c_h = conn_h.cursor()
                 c_h.execute(
-                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)' ,
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)',
                     (session_id, 'user', question, '')
-                )
-                c_h.execute(
-                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, ?, ?, ?)',
-                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint)
                 )
                 conn_h.commit()
                 conn_h.close()
             except Exception as he:
-                logger.warning(f'[iToca] Erro ao salvar histórico: {he}')
+                logger.warning(f'[iToca] Erro ao salvar pergunta no histórico: {he}')
 
-        # Detectar intenção de ação em thread separada (não bloqueia a resposta)
-        # Apenas executa quando o LLM principal foi usado (API configurada)
-        suggested_action = None
-        if llm_result.get('llm_used') and not needs_ref:
-            try:
-                import threading as _threading
-                import queue as _queue
-                result_queue = _queue.Queue()
+        # Inicia processamento LLM em background com etapas visíveis ao frontend
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': '🔍 Iniciando busca...', 'progress': 5})
+        threading.Thread(
+            target=_itoca_ask_async,
+            args=(task_id, question, session_id, snapshot_items, updated_at, history_rows),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id, 'base_ready': True}), 202
 
-                def _run_detector():
-                    try:
-                        result_queue.put(_itoca_detect_action_intent(question, answer))
-                    except Exception as _e:
-                        result_queue.put(None)
-
-                t = _threading.Thread(target=_run_detector, daemon=True)
-                t.start()
-                t.join(timeout=12)  # aguarda até 12s para não atrasar demais a resposta
-
-                if not result_queue.empty():
-                    det = result_queue.get_nowait()
-                    # Só sugere ação se confiante o suficiente (>= 0.75) E tiver campos mínimos
-                    if det and det.get('action_type') and float(det.get('confidence', 0)) >= 0.75:
-                        action_type = det['action_type']
-                        fields = det.get('fields') or {}
-
-                        # Valida campos mínimos por tipo — evita sugestões vazias ou genéricas
-                        _REQUIRED_FIELDS = {
-                            'kanban_card':         ['title'],
-                            'activity':            ['contact_name', 'description'],
-                            'new_contact':         ['name', 'company'],
-                            'environment_mapping': ['company', 'information'],
-                            'wiki_entry':          ['title', 'content'],
-                            'commitment':          ['title', 'due_date'],
-                        }
-                        required = _REQUIRED_FIELDS.get(action_type, [])
-                        has_minimum = all(
-                            fields.get(f) and str(fields[f]).strip()
-                            for f in required
-                        )
-
-                        # Rejeita se a descrição for idêntica ou muito similar à pergunta
-                        # (sinal de que o LLM apenas repetiu a pergunta como ação)
-                        desc_field = (fields.get('description') or fields.get('information') or '').strip().lower()
-                        question_lower = question.strip().lower()
-                        is_echo = desc_field and (
-                            desc_field == question_lower or
-                            (len(desc_field) > 20 and question_lower.startswith(desc_field[:40]))
-                        )
-
-                        if has_minimum and not is_echo:
-                            suggested_action = {
-                                'action_type': action_type,
-                                'label': det['label'],
-                                'confidence': det['confidence'],
-                                'fields': fields
-                            }
-                        else:
-                            logger.debug(f'[iToca][ActionDetector] Ação {action_type!r} descartada: '
-                                         f'has_minimum={has_minimum}, is_echo={is_echo}')
-            except Exception as det_err:
-                logger.warning(f'[iToca] Erro no detector de intenção: {det_err}')
-
-        return jsonify({
-            'answer': answer,
-            'confidence_percent': confidence,
-            'needs_refinement': needs_ref,
-            'refinement_hint': ref_hint,
-            'llm_used': llm_result.get('llm_used', False),
-            'items_found': len(context_rows),
-            'sources': context_rows,
-            'base_updated_at': updated_at,
-            'base_ready': True,
-            'suggested_action': suggested_action  # None ou dict com action_type, label, confidence, fields
-        })
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
         return jsonify({'error': f'Erro ao consultar iToca: {e}'}), 500
@@ -13446,6 +13464,105 @@ def serve_static(path):
     return send_from_directory(app.static_folder, path)
 
 
+@app.route('/api/home/cobertura-detail', methods=['GET'])
+def home_cobertura_detail():
+    """Detalhamento conta-a-conta da Cobertura de Relacionamento (últimos 30 dias).
+    Considera 3 fontes de atividade por conta:
+      1. account_activities diretamente ligadas à conta
+      2. activities de clientes vinculados via account_main_contacts
+      3. activities de qualquer contato cujo clients.company bate com accounts.name (fallback)
+    Atividades duplicadas nas fontes 2 e 3 são deduplicadas por ID.
+    """
+    try:
+        conn = get_db()
+        c = conn.cursor()
+
+        # Subconsultas correlacionadas garantem deduplicação correta entre os 3 caminhos
+        c.execute("""
+            SELECT
+                acc.id,
+                acc.name,
+                COALESCE(acc.is_target, 0) AS is_target,
+                -- Atividades diretas na conta (account_activities)
+                (
+                    SELECT COUNT(DISTINCT aa.id) FROM account_activities aa
+                    WHERE aa.account_id = acc.id
+                    AND aa.activity_date >= date('now', '-30 days')
+                ) AS aa_count,
+                -- Atividades de contatos ligados à conta (via account_main_contacts OU nome da empresa)
+                -- UNION garante que a mesma activity.id não seja contada duas vezes
+                (
+                    SELECT COUNT(*) FROM (
+                        SELECT DISTINCT a.id FROM activities a
+                        WHERE a.activity_date >= date('now', '-30 days')
+                        AND (
+                            a.client_id IN (
+                                SELECT amc.client_id FROM account_main_contacts amc
+                                WHERE amc.account_id = acc.id
+                            )
+                            OR
+                            a.client_id IN (
+                                SELECT cl.id FROM clients cl
+                                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(acc.name))
+                                AND cl.company IS NOT NULL AND TRIM(cl.company) != ''
+                            )
+                        )
+                    )
+                ) AS cl_count,
+                -- Data da atividade mais recente (qualquer fonte)
+                (
+                    SELECT MAX(last_dt) FROM (
+                        SELECT activity_date AS last_dt FROM account_activities
+                        WHERE account_id = acc.id
+                        AND activity_date >= date('now', '-30 days')
+                        UNION ALL
+                        SELECT a2.activity_date AS last_dt FROM activities a2
+                        WHERE a2.activity_date >= date('now', '-30 days')
+                        AND (
+                            a2.client_id IN (
+                                SELECT amc2.client_id FROM account_main_contacts amc2
+                                WHERE amc2.account_id = acc.id
+                            )
+                            OR
+                            a2.client_id IN (
+                                SELECT cl2.id FROM clients cl2
+                                WHERE LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc.name))
+                                AND cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
+                            )
+                        )
+                    )
+                ) AS last_activity
+            FROM accounts acc
+            ORDER BY acc.name ASC
+        """)
+
+        all_rows = []
+        for r in c.fetchall():
+            rd = dict_from_row(r)
+            rd['activity_count'] = (rd.pop('aa_count') or 0) + (rd.pop('cl_count') or 0)
+            all_rows.append(rd)
+
+        conn.close()
+
+        covered   = sorted([r for r in all_rows if r['activity_count'] > 0],
+                           key=lambda x: -x['activity_count'])
+        uncovered = sorted([r for r in all_rows if r['activity_count'] == 0],
+                           key=lambda x: (-(x.get('is_target') or 0), (x.get('name') or '').lower()))
+
+        total = len(all_rows)
+        return jsonify({
+            'period_label':  'Últimos 30 dias',
+            'total':         total,
+            'covered_count': len(covered),
+            'cobertura_pct': round(len(covered) / total * 100) if total > 0 else 0,
+            'covered':   covered,
+            'uncovered': uncovered,
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/home/cobertura-detail: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/home/overview', methods=['GET'])
 def home_overview():
     """Agregados do módulo Home (dashboard executivo).
@@ -13460,10 +13577,22 @@ def home_overview():
         if period == 'months' and months_arg:
             months_filter = [m.strip() for m in months_arg.split(',') if re.match(r'^\d{4}-\d{2}$', m.strip())]
 
+        include_archived = request.args.get('include_archived') == '1'
+        include_cold = request.args.get('include_cold') == '1'
+
+        def client_filter(alias='c'):
+            """Retorna fragmento AND para filtrar clientes arquivados/frios conforme flags."""
+            clauses = []
+            if not include_archived:
+                clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
+            if not include_cold:
+                clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
+            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
+
         conn = get_db()
         c = conn.cursor()
 
-        # Thresholds de status (rule universal)
+        # Thresholds de status — universal + regras por cargo
         c.execute("SELECT key, value FROM app_settings WHERE key IN ('status_green_days', 'status_yellow_days')")
         s_map = {row['key']: row['value'] for row in c.fetchall()}
         try:
@@ -13475,6 +13604,19 @@ def home_overview():
         except Exception:
             yellow_days = 14
 
+        # Regras por cargo (espelha exatamente o que o frontend usa)
+        c.execute('SELECT position, green_days, yellow_days FROM status_rules')
+        _rules_map = {
+            (row['position'] or '').strip().lower(): (int(row['green_days']), int(row['yellow_days']))
+            for row in c.fetchall()
+            if row['position']
+        }
+
+        def _get_thresholds(position):
+            """Retorna (green_days, yellow_days) para o cargo dado, igual à lógica do frontend."""
+            key = (position or '').strip().lower()
+            return _rules_map.get(key, (green_days, yellow_days))
+
         def month_clause(col):
             if not months_filter:
                 return '', []
@@ -13485,19 +13627,20 @@ def home_overview():
         c.execute("SELECT COUNT(*) AS n FROM accounts")
         total_accounts = c.fetchone()['n']
 
-        c.execute("SELECT COUNT(*) AS n FROM clients WHERE COALESCE(is_archived,0)=0")
+        c.execute(f"SELECT COUNT(*) AS n FROM clients c WHERE 1=1{client_filter()}")
         total_contacts = c.fetchone()['n']
 
-        # Status snapshot
-        c.execute("""
-            SELECT c.id,
-                   (SELECT MAX(activity_date) FROM activities WHERE client_id=c.id) AS last_date
+        # Status snapshot — usa clients.last_activity_date (igual ao frontend)
+        # e aplica regras por cargo (igual ao getStatus() do frontend)
+        c.execute(f"""
+            SELECT c.id, c.position, c.last_activity_date AS last_date
             FROM clients c
-            WHERE COALESCE(c.is_archived,0)=0
+            WHERE 1=1{client_filter()}
         """)
         em_dia = atencao = atrasado = 0
         now_dt = datetime.now()
         for row in c.fetchall():
+            g, y = _get_thresholds(row['position'])
             last = row['last_date']
             if not last:
                 atrasado += 1
@@ -13509,27 +13652,36 @@ def home_overview():
             except Exception:
                 atrasado += 1
                 continue
-            if days < green_days:
+            if days < g:
                 em_dia += 1
-            elif days < yellow_days:
+            elif days < y:
                 atencao += 1
             else:
                 atrasado += 1
 
-        # Cobertura de relacionamento (% contas com >=1 atividade no recorte)
+        # Cobertura de relacionamento — janela FIXA de 30 dias (independente do filtro de período)
+        # 3 caminhos: atividade direta na conta | account_main_contacts → activities | fallback por nome
         mf_a, mfp_a = month_clause('a.activity_date')
         mf_aa, mfp_aa = month_clause('aa.activity_date')
-        c.execute(f"""
-            SELECT COUNT(DISTINCT acc_name) AS n FROM (
-                SELECT cl.company AS acc_name
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}
+        c.execute("""
+            SELECT COUNT(DISTINCT acc_id) AS n FROM (
+                SELECT aa.account_id AS acc_id
+                FROM account_activities aa
+                WHERE aa.activity_date >= date('now', '-30 days')
                 UNION
-                SELECT acc.name AS acc_name
-                FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
-                WHERE 1=1 {mf_aa}
+                SELECT amc.account_id AS acc_id
+                FROM account_main_contacts amc
+                JOIN activities a ON a.client_id = amc.client_id
+                WHERE a.activity_date >= date('now', '-30 days')
+                UNION
+                SELECT acc2.id AS acc_id
+                FROM accounts acc2
+                JOIN clients cl2 ON LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc2.name))
+                JOIN activities a2 ON a2.client_id = cl2.id
+                WHERE cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
+                AND a2.activity_date >= date('now', '-30 days')
             )
-        """, mfp_a + mfp_aa)
+        """)
         covered_accounts = c.fetchone()['n'] or 0
         cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
 
@@ -13550,7 +13702,7 @@ def home_overview():
             WITH client_acts AS (
                 SELECT cl.company AS acc, COUNT(*) AS n
                 FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}
+                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}{client_filter('cl')}
                 GROUP BY cl.company
             ),
             acc_acts AS (
@@ -13595,7 +13747,7 @@ def home_overview():
         c.execute(f"""
             SELECT cl.position AS cargo, COUNT(*) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE cl.position IS NOT NULL AND TRIM(cl.position) != '' {mf_a}
+            WHERE cl.position IS NOT NULL AND TRIM(cl.position) != '' {mf_a}{client_filter('cl')}
             GROUP BY cl.position
             ORDER BY n DESC
             LIMIT 8
@@ -13634,7 +13786,7 @@ def home_overview():
         c.execute(f"""
             SELECT COALESCE(NULLIF(TRIM(a.contact_type), ''), 'Outro') AS canal, COUNT(*) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE 1=1 {mf_a}
+            WHERE 1=1 {mf_a}{client_filter('cl')}
             GROUP BY canal
             ORDER BY n DESC
         """, mfp_a)
@@ -13647,8 +13799,8 @@ def home_overview():
             SELECT strftime('%w', a.activity_date) AS dow,
                    CAST(strftime('%H', a.activity_date) AS INTEGER) AS hr,
                    COUNT(*) AS n
-            FROM activities a
-            WHERE a.activity_date IS NOT NULL {mf_a}
+            FROM activities a JOIN clients cl ON cl.id = a.client_id
+            WHERE a.activity_date IS NOT NULL {mf_a}{client_filter('cl')}
             GROUP BY dow, hr
         """, mfp_a)
         heatmap = {}
@@ -13666,23 +13818,23 @@ def home_overview():
         heatmap_list = [{'dow': k[0], 'periodo': k[1], 'count': v} for k, v in heatmap.items()]
 
         # --- Funil de Engajamento ---
-        ativas = total_contacts  # já considera não-arquivados
+        ativas = total_contacts  # já respeita os filtros de arquivado/frio
         c.execute(f"""
             SELECT COUNT(DISTINCT a.client_id) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE COALESCE(cl.is_archived,0)=0 AND a.activity_date >= date('now', '-30 day')
+            WHERE a.activity_date >= date('now', '-30 day'){client_filter('cl')}
         """)
         com_contato_mes = c.fetchone()['n'] or 0
         c.execute(f"""
             SELECT COUNT(DISTINCT a.client_id) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE COALESCE(cl.is_archived,0)=0
+            WHERE 1=1{client_filter('cl')}
         """)
         com_interacao = c.fetchone()['n'] or 0
         c.execute(f"""
             SELECT a.client_id, COUNT(*) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE COALESCE(cl.is_archived,0)=0
+            WHERE 1=1{client_filter('cl')}
             GROUP BY a.client_id
             HAVING n >= 3
         """)
@@ -13698,10 +13850,11 @@ def home_overview():
         ]
 
         # --- Tempo médio sem contato (buckets) ---
-        c.execute("""
-            SELECT (SELECT MAX(activity_date) FROM activities WHERE client_id=c.id) AS last_date
+        # Usa clients.last_activity_date para consistência com o frontend
+        c.execute(f"""
+            SELECT c.last_activity_date AS last_date
             FROM clients c
-            WHERE COALESCE(c.is_archived,0)=0
+            WHERE 1=1{client_filter()}
         """)
         buckets = {'0-7': 0, '8-14': 0, '15-30': 0, '+30': 0}
         for row in c.fetchall():
@@ -13727,9 +13880,10 @@ def home_overview():
         tempo_sem_contato = [{'bucket': k, 'count': v} for k, v in buckets.items()]
 
         # --- Novos contatos por mês (últimos 12 meses) ---
-        c.execute("""
+        c.execute(f"""
             SELECT strftime('%Y-%m', created_at) AS ym, COUNT(*) AS n
-            FROM clients
+            FROM clients c
+            WHERE 1=1{client_filter()}
             GROUP BY ym
             ORDER BY ym ASC
         """)
