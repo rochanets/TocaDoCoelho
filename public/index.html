@@ -3964,12 +3964,25 @@
                     <form onsubmit="saveMessageTemplate(event)">
                         <input type="hidden" id="templateId">
                         <div class="form-group"><label>Título</label><input type="text" id="templateTitle" required></div>
-                        <div class="form-group"><label>Descritivo</label><textarea id="templateDescription" rows="3" required></textarea></div>
+                        <div class="form-group">
+                            <label>Descritivo</label>
+                            <textarea id="templateDescription" rows="3" required></textarea>
+                            <div style="margin-top:6px;">
+                                <div style="font-size:11px; color:#6b7280; margin-bottom:5px;">Variáveis disponíveis (clique para inserir):</div>
+                                <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;conta&gt;')">&lt;conta&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;nome do contato&gt;')">&lt;nome do contato&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;cargo&gt;')">&lt;cargo&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;setor&gt;')">&lt;setor&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;data&gt;')">&lt;data&gt;</button>
+                                </div>
+                            </div>
+                        </div>
                         <div class="form-group" style="display:flex; gap:16px; align-items:center;">
                             <label><input type="checkbox" id="templateWhatsapp" checked> <i class="fab fa-whatsapp"></i> WhatsApp</label>
                             <label><input type="checkbox" id="templateEmail" checked> <i class="fas fa-envelope"></i> Email</label>
                         </div>
-                        <button class="btn btn-secondary btn-small" type="submit"><i class="fas fa-save"></i> Salvar MSG</button>
+                        <button class="btn btn-primary" type="submit" style="margin-top:4px;"><i class="fas fa-save"></i> Salvar MSG Padrão</button>
                     </form>
                     <div id="templateList" style="margin-top:12px;"></div>
                 </section>
@@ -13952,6 +13965,16 @@
             showSuccess('MSG padrão removida');
         }
 
+        function insertTemplateVar(varText) {
+            const ta = document.getElementById('templateDescription');
+            if (!ta) return;
+            const start = ta.selectionStart, end = ta.selectionEnd;
+            const val = ta.value;
+            ta.value = val.slice(0, start) + varText + val.slice(end);
+            ta.selectionStart = ta.selectionEnd = start + varText.length;
+            ta.focus();
+        }
+
         function renderTemplateDrawer(channel, targetId) {
             const filtered = messageTemplates.filter(t => channel === 'whatsapp' ? Number(t.available_whatsapp) === 1 : Number(t.available_email) === 1);
             if (!filtered.length) return '<div style="font-size:12px;color:#6b7280;">Nenhum conteúdo padrão para este canal.</div>';
@@ -14105,8 +14128,12 @@
             let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:860px;">`;
             html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
-            const totalMonthlyCents = (account.presences || []).reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
-            html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMonthlyCents)}</strong></div>${(account.presences||[]).length?`<div style='display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;'>${(account.presences||[]).map(p=>`<button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`).join('')}</div>`:'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
+            const mensalPresences = (account.presences || []).filter(p => (p.billing_type || 'Mensal') === 'Mensal');
+            const unicoPresences = (account.presences || []).filter(p => p.billing_type === 'Unico');
+            const totalMonthlyCents = mensalPresences.reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
+            const totalUnicoCents = unicoPresences.reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
+            const presenceButtons = (account.presences||[]).map(p=>`<button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`).join('');
+            html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4><div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMonthlyCents)}</strong></div><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(99,102,241,.12);'><strong style="color:#4338ca;">Faturamento Pontual</strong><strong style="color:#4338ca;">${formatCompactCurrencyFromCents(totalUnicoCents)}</strong></div></div>${(account.presences||[]).length?`<div style='display:flex; flex-wrap:wrap; gap:8px;'>${presenceButtons}</div>`:'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
             html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div><div style='display:flex; align-items:center; gap:8px; margin-top:5px;'>${c.email ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-envelope' style='margin-right:4px;'></i>${escapeHtml(c.email)}</span>` : ''}${c.phone ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-phone' style='margin-right:4px;'></i>${escapeHtml(c.phone)}</span>` : ''}${c.linkedin ? `<a href='${escapeHtml(c.linkedin)}' target='_blank' rel='noopener noreferrer' title='LinkedIn' onclick='event.stopPropagation()' style='font-size:13px; color:#0a66c2;'><i class='fab fa-linkedin'></i></a>` : ''}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><h4 style="color:#065f46; margin:0;">Histórico de Atividades</h4><button class="btn btn-primary btn-small" style="padding:2px 10px; border-radius:999px; font-size:18px; line-height:1; font-weight:700;" onclick="openAccountActivityModal(${account.id})" title="Registrar atividade da conta">+</button></div><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -14419,19 +14446,44 @@
             if (!accountId) return showError('Salve a conta antes de adicionar presença.');
             const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
             const presence = (account.presences||[]).find(p => Number(p.id)===Number(presenceId));
-            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 14px;"><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div><div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div><div class="form-group"><label>Faturamento Mensal</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group" style="grid-column:1 / -1;"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div></div><div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
+            const billingType = presence?.billing_type || '';
+            const hasRevenue = !!billingType;
+            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 14px;"><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div><div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div><div class="form-group"><label>Tipo de Faturamento</label><select id="presenceBillingType" onchange="onPresenceBillingTypeChange(this.value)"><option value="">Selecione</option><option value="Mensal" ${billingType==='Mensal'?'selected':''}>Mensal</option><option value="Unico" ${billingType==='Unico'?'selected':''}>Único</option></select></div><div class="form-group"><label id="presenceRevenueLabel">Faturamento</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}" placeholder="R$ 0,00" ${hasRevenue?'':'disabled style="background:#f3f4f6; color:#9ca3af; cursor:not-allowed;"'}></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group" style="grid-column:1 / -1;"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div></div><div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
         function closePresenceModal(){ const m=document.getElementById('presenceModal'); if(m)m.remove(); }
+
+        function onPresenceBillingTypeChange(value) {
+            const input = document.getElementById('presenceRevenue');
+            const label = document.getElementById('presenceRevenueLabel');
+            if (!input) return;
+            if (value) {
+                input.disabled = false;
+                input.style.background = '';
+                input.style.color = '';
+                input.style.cursor = '';
+                if (label) label.textContent = value === 'Unico' ? 'Faturamento Único' : 'Faturamento Mensal';
+            } else {
+                input.disabled = true;
+                input.style.background = '#f3f4f6';
+                input.style.color = '#9ca3af';
+                input.style.cursor = 'not-allowed';
+                if (label) label.textContent = 'Faturamento';
+            }
+        }
 
         async function refreshAccountPresencePanels(accountId) {
             try {
                 const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
                 const list = document.getElementById('accountPresenceList');
                 if (list) {
-                    const total = (account?.presences||[]).reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
-                    list.innerHTML = `<div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(total)}</strong></div><div style='display:flex; flex-wrap:wrap; gap:8px;'>` + (account?.presences||[]).map(p=>`<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`).join('') + '</div>';
+                    const mensalP = (account?.presences||[]).filter(p=>(p.billing_type||'Mensal')==='Mensal');
+                    const unicoP = (account?.presences||[]).filter(p=>p.billing_type==='Unico');
+                    const totalMensal = mensalP.reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
+                    const totalUnico = unicoP.reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
+                    const btns = (account?.presences||[]).map(p=>`<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`).join('');
+                    list.innerHTML = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMensal)}</strong></div><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(99,102,241,.12);'><strong style="color:#4338ca;">Faturamento Pontual</strong><strong style="color:#4338ca;">${formatCompactCurrencyFromCents(totalUnico)}</strong></div></div><div style='display:flex; flex-wrap:wrap; gap:8px;'>${btns}</div>`;
                 }
                 const view = document.getElementById('accountViewModal');
                 if (view) {
@@ -14448,6 +14500,7 @@
                 stf_owner: document.getElementById('presenceOwner').value,
                 delivery_cell: document.getElementById('presenceDeliveryCell').value,
                 service_id: document.getElementById('presenceServiceId').value,
+                billing_type: document.getElementById('presenceBillingType').value,
                 current_revenue: document.getElementById('presenceRevenue').value,
                 validity_month: document.getElementById('presenceValidity').value,
                 focal_client_id: document.getElementById('presenceFocal').value
