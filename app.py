@@ -852,6 +852,8 @@ def init_db():
         c.execute('ALTER TABLE account_presences ADD COLUMN delivery_cell TEXT')
     if 'service_id' not in account_presence_columns:
         c.execute('ALTER TABLE account_presences ADD COLUMN service_id TEXT')
+    if 'billing_type' not in account_presence_columns:
+        c.execute("ALTER TABLE account_presences ADD COLUMN billing_type TEXT DEFAULT 'Mensal'")
 
     # Configuracoes padrao da faixa de status
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_green_days', '7'))
@@ -12351,6 +12353,7 @@ def create_account_presence(account_id):
         stf_owner = (data.get('stf_owner') or '').strip() or None
         delivery_cell = (data.get('delivery_cell') or '').strip() or None
         service_id = (data.get('service_id') or '').strip() or None
+        billing_type = (data.get('billing_type') or 'Mensal').strip()
         current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
         validity_month = (data.get('validity_month') or '').strip() or None
         focal_client_id = data.get('focal_client_id')
@@ -12360,9 +12363,9 @@ def create_account_presence(account_id):
         account = c.fetchone()
         if not account:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, current_revenue_cents, validity_month, focal_client_id, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                  (account_id, delivery_name, stf_owner, delivery_cell, service_id, current_revenue_cents, validity_month, focal_client_id))
+        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, current_revenue_cents, validity_month, focal_client_id, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                  (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, current_revenue_cents, validity_month, focal_client_id))
         presence_id = c.lastrowid
         c.execute('SELECT * FROM account_presences WHERE id = ?', (presence_id,))
         presence = dict_from_row(c.fetchone())
@@ -12384,6 +12387,7 @@ def update_account_presence(account_id, presence_id):
         stf_owner = (data.get('stf_owner') or '').strip() or None
         delivery_cell = (data.get('delivery_cell') or '').strip() or None
         service_id = (data.get('service_id') or '').strip() or None
+        billing_type = (data.get('billing_type') or 'Mensal').strip()
         current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
         validity_month = (data.get('validity_month') or '').strip() or None
         focal_client_id = data.get('focal_client_id')
@@ -12394,9 +12398,9 @@ def update_account_presence(account_id, presence_id):
         if not account:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
         c.execute('''UPDATE account_presences
-                     SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, current_revenue_cents=?, validity_month=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
+                     SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, billing_type=?, current_revenue_cents=?, validity_month=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
                      WHERE id=? AND account_id=?''',
-                  (delivery_name, stf_owner, delivery_cell, service_id, current_revenue_cents, validity_month, focal_client_id, presence_id, account_id))
+                  (delivery_name, stf_owner, delivery_cell, service_id, billing_type, current_revenue_cents, validity_month, focal_client_id, presence_id, account_id))
         c.execute('SELECT * FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
         presence = dict_from_row(c.fetchone())
         if presence:
