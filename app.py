@@ -854,6 +854,8 @@ def init_db():
         c.execute('ALTER TABLE account_presences ADD COLUMN service_id TEXT')
     if 'billing_type' not in account_presence_columns:
         c.execute("ALTER TABLE account_presences ADD COLUMN billing_type TEXT DEFAULT 'Mensal'")
+    if 'contract_end_date' not in account_presence_columns:
+        c.execute("ALTER TABLE account_presences ADD COLUMN contract_end_date TEXT")
 
     # Configuracoes padrao da faixa de status
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_green_days', '7'))
@@ -12354,6 +12356,7 @@ def create_account_presence(account_id):
         delivery_cell = (data.get('delivery_cell') or '').strip() or None
         service_id = (data.get('service_id') or '').strip() or None
         billing_type = (data.get('billing_type') or 'Mensal').strip()
+        contract_end_date = (data.get('contract_end_date') or '').strip() or None
         current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
         validity_month = (data.get('validity_month') or '').strip() or None
         focal_client_id = data.get('focal_client_id')
@@ -12363,9 +12366,9 @@ def create_account_presence(account_id):
         account = c.fetchone()
         if not account:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, current_revenue_cents, validity_month, focal_client_id, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                  (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, current_revenue_cents, validity_month, focal_client_id))
+        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, contract_end_date, current_revenue_cents, validity_month, focal_client_id, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                  (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, contract_end_date, current_revenue_cents, validity_month, focal_client_id))
         presence_id = c.lastrowid
         c.execute('SELECT * FROM account_presences WHERE id = ?', (presence_id,))
         presence = dict_from_row(c.fetchone())
@@ -12388,6 +12391,7 @@ def update_account_presence(account_id, presence_id):
         delivery_cell = (data.get('delivery_cell') or '').strip() or None
         service_id = (data.get('service_id') or '').strip() or None
         billing_type = (data.get('billing_type') or 'Mensal').strip()
+        contract_end_date = (data.get('contract_end_date') or '').strip() or None
         current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
         validity_month = (data.get('validity_month') or '').strip() or None
         focal_client_id = data.get('focal_client_id')
@@ -12398,9 +12402,9 @@ def update_account_presence(account_id, presence_id):
         if not account:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
         c.execute('''UPDATE account_presences
-                     SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, billing_type=?, current_revenue_cents=?, validity_month=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
+                     SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, billing_type=?, contract_end_date=?, current_revenue_cents=?, validity_month=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
                      WHERE id=? AND account_id=?''',
-                  (delivery_name, stf_owner, delivery_cell, service_id, billing_type, current_revenue_cents, validity_month, focal_client_id, presence_id, account_id))
+                  (delivery_name, stf_owner, delivery_cell, service_id, billing_type, contract_end_date, current_revenue_cents, validity_month, focal_client_id, presence_id, account_id))
         c.execute('SELECT * FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
         presence = dict_from_row(c.fetchone())
         if presence:
@@ -13690,15 +13694,24 @@ def home_overview():
         cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
 
         # --- Top 10 contas por faturamento (soma das presenças STF) ---
-        c.execute("""
+        # Se houver filtro de período, exclui serviços mensais encerrados antes do início do período
+        fat_params = []
+        fat_contract_clause = ""
+        if months_filter:
+            min_month = min(months_filter)
+            fat_contract_clause = "AND (p.contract_end_date IS NULL OR p.contract_end_date >= ?)"
+            fat_params.append(min_month)
+        c.execute(f"""
             SELECT a.name, COALESCE(SUM(p.current_revenue_cents), 0) AS receita
             FROM accounts a
             LEFT JOIN account_presences p ON p.account_id = a.id
+                AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
+                {fat_contract_clause}
             GROUP BY a.id, a.name
             HAVING receita > 0
             ORDER BY receita DESC
             LIMIT 10
-        """)
+        """, fat_params)
         top_faturamento = [{'name': r['name'], 'revenue_cents': r['receita']} for r in c.fetchall()]
 
         # --- Top 10 contas com mais interações no período ---
