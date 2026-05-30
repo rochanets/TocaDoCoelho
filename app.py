@@ -856,6 +856,10 @@ def init_db():
         c.execute("ALTER TABLE account_presences ADD COLUMN billing_type TEXT DEFAULT 'Mensal'")
     if 'contract_end_date' not in account_presence_columns:
         c.execute("ALTER TABLE account_presences ADD COLUMN contract_end_date TEXT")
+    if 'contract_duration_months' not in account_presence_columns:
+        c.execute("ALTER TABLE account_presences ADD COLUMN contract_duration_months INTEGER")
+    if 'early_terminated' not in account_presence_columns:
+        c.execute("ALTER TABLE account_presences ADD COLUMN early_terminated INTEGER DEFAULT 0")
 
     # Configuracoes padrao da faixa de status
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('status_green_days', '7'))
@@ -12356,9 +12360,30 @@ def create_account_presence(account_id):
         delivery_cell = (data.get('delivery_cell') or '').strip() or None
         service_id = (data.get('service_id') or '').strip() or None
         billing_type = (data.get('billing_type') or 'Mensal').strip()
-        contract_end_date = (data.get('contract_end_date') or '').strip() or None
+        validity_month = (data.get('validity_month') or '').strip() or None  # agora = início do contrato
+        contract_duration_months_raw = data.get('contract_duration_months')
+        try:
+            contract_duration_months = int(contract_duration_months_raw) if contract_duration_months_raw not in (None, '') else None
+        except (ValueError, TypeError):
+            contract_duration_months = None
+        early_terminated = 1 if str(data.get('early_terminated', '0')) in ('1', 'true', 'sim', 'Sim') else 0
+        # Calcula data de encerramento automaticamente
+        contract_end_date = None
+        if validity_month and contract_duration_months:
+            try:
+                from dateutil.relativedelta import relativedelta
+                start_dt = datetime.strptime(validity_month + '-01', '%Y-%m-%d')
+                end_dt = start_dt + relativedelta(months=contract_duration_months)
+                contract_end_date = end_dt.strftime('%Y-%m')
+            except Exception:
+                try:
+                    import calendar
+                    y, m = int(validity_month[:4]), int(validity_month[5:7])
+                    total = (y * 12 + m - 1) + contract_duration_months
+                    contract_end_date = f"{total // 12:04d}-{total % 12 + 1:02d}"
+                except Exception:
+                    contract_end_date = None
         current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
-        validity_month = (data.get('validity_month') or '').strip() or None
         focal_client_id = data.get('focal_client_id')
         focal_client_id = int(focal_client_id) if str(focal_client_id).isdigit() else None
         conn = get_db(); c = conn.cursor()
@@ -12366,9 +12391,9 @@ def create_account_presence(account_id):
         account = c.fetchone()
         if not account:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, contract_end_date, current_revenue_cents, validity_month, focal_client_id, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                  (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, contract_end_date, current_revenue_cents, validity_month, focal_client_id))
+        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                  (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id))
         presence_id = c.lastrowid
         c.execute('SELECT * FROM account_presences WHERE id = ?', (presence_id,))
         presence = dict_from_row(c.fetchone())
@@ -12391,9 +12416,28 @@ def update_account_presence(account_id, presence_id):
         delivery_cell = (data.get('delivery_cell') or '').strip() or None
         service_id = (data.get('service_id') or '').strip() or None
         billing_type = (data.get('billing_type') or 'Mensal').strip()
-        contract_end_date = (data.get('contract_end_date') or '').strip() or None
-        current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
         validity_month = (data.get('validity_month') or '').strip() or None
+        contract_duration_months_raw = data.get('contract_duration_months')
+        try:
+            contract_duration_months = int(contract_duration_months_raw) if contract_duration_months_raw not in (None, '') else None
+        except (ValueError, TypeError):
+            contract_duration_months = None
+        early_terminated = 1 if str(data.get('early_terminated', '0')) in ('1', 'true', 'sim', 'Sim') else 0
+        contract_end_date = None
+        if validity_month and contract_duration_months:
+            try:
+                from dateutil.relativedelta import relativedelta
+                start_dt = datetime.strptime(validity_month + '-01', '%Y-%m-%d')
+                end_dt = start_dt + relativedelta(months=contract_duration_months)
+                contract_end_date = end_dt.strftime('%Y-%m')
+            except Exception:
+                try:
+                    y, m = int(validity_month[:4]), int(validity_month[5:7])
+                    total = (y * 12 + m - 1) + contract_duration_months
+                    contract_end_date = f"{total // 12:04d}-{total % 12 + 1:02d}"
+                except Exception:
+                    contract_end_date = None
+        current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
         focal_client_id = data.get('focal_client_id')
         focal_client_id = int(focal_client_id) if str(focal_client_id).isdigit() else None
         conn = get_db(); c = conn.cursor()
@@ -12402,9 +12446,9 @@ def update_account_presence(account_id, presence_id):
         if not account:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
         c.execute('''UPDATE account_presences
-                     SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, billing_type=?, contract_end_date=?, current_revenue_cents=?, validity_month=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
+                     SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, billing_type=?, validity_month=?, contract_duration_months=?, contract_end_date=?, early_terminated=?, current_revenue_cents=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
                      WHERE id=? AND account_id=?''',
-                  (delivery_name, stf_owner, delivery_cell, service_id, billing_type, contract_end_date, current_revenue_cents, validity_month, focal_client_id, presence_id, account_id))
+                  (delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, presence_id, account_id))
         c.execute('SELECT * FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
         presence = dict_from_row(c.fetchone())
         if presence:
@@ -13694,12 +13738,13 @@ def home_overview():
         cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
 
         # --- Top 10 contas por faturamento (soma das presenças STF) ---
-        # Se houver filtro de período, exclui serviços mensais encerrados antes do início do período
+        # Exclui serviços encerrados antecipadamente (early_terminated=1)
+        # Se houver filtro de período, também exclui serviços cujo contrato já encerrou antes do início do período
         fat_params = []
-        fat_contract_clause = ""
+        fat_contract_clause = "AND COALESCE(p.early_terminated, 0) = 0"
         if months_filter:
             min_month = min(months_filter)
-            fat_contract_clause = "AND (p.contract_end_date IS NULL OR p.contract_end_date >= ?)"
+            fat_contract_clause += " AND (p.contract_end_date IS NULL OR p.contract_end_date >= ?)"
             fat_params.append(min_month)
         c.execute(f"""
             SELECT a.name, COALESCE(SUM(p.current_revenue_cents), 0) AS receita
