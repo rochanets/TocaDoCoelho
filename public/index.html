@@ -2419,6 +2419,110 @@
             transition: transform 200ms var(--ease-out), border-color 200ms var(--ease-out);
         }
         .home-kpi-card:hover { transform: translateY(-2px); border-color: var(--hm-border-strong); }
+        .home-kpi-clickable { cursor: pointer; }
+        .home-kpi-clickable:hover { box-shadow: 0 8px 28px rgba(0,0,0,0.35); }
+        .home-kpi-clickable:active { transform: translateY(0); }
+
+        /* ===== Drill-down modal (genérico do Dashboard Executivo) ===== */
+        .hd-modal {
+            display: none; position: fixed; inset: 0; z-index: 4000;
+            background: rgba(3, 8, 18, 0.72); backdrop-filter: blur(6px);
+            align-items: center; justify-content: center; padding: 24px;
+        }
+        .hd-box {
+            background: linear-gradient(160deg, #0f2138 0%, #0a1626 100%);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 18px;
+            width: min(920px, 96vw); max-height: 88vh; display: flex; flex-direction: column;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.55); overflow: hidden;
+            animation: hdIn 220ms cubic-bezier(.16,1,.3,1);
+        }
+        @keyframes hdIn { from { opacity: 0; transform: translateY(16px) scale(.98); } to { opacity: 1; transform: none; } }
+        .hd-header {
+            display: flex; align-items: center; gap: 14px; padding: 18px 22px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .hd-logo {
+            width: 46px; height: 46px; border-radius: 11px; object-fit: contain;
+            background: #fff; padding: 4px; flex-shrink: 0;
+            border: 1px solid rgba(255,255,255,0.12);
+        }
+        .hd-logo-fallback {
+            width: 46px; height: 46px; border-radius: 11px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 800; font-size: 18px; color: #fff;
+            background: linear-gradient(135deg, #3b82f6, #22d3ee);
+        }
+        .hd-title { font-size: 18px; font-weight: 700; color: #fff; line-height: 1.2; }
+        .hd-sub { font-size: 12.5px; color: #8aa0b8; margin-top: 2px; }
+        .hd-close {
+            margin-left: auto; background: rgba(255,255,255,0.06); border: none; color: #cbd5e1;
+            width: 34px; height: 34px; border-radius: 9px; cursor: pointer; font-size: 15px;
+            transition: background 150ms;
+        }
+        .hd-close:hover { background: rgba(255,255,255,0.14); color: #fff; }
+        .hd-body { padding: 18px 22px; overflow-y: auto; }
+        .hd-loading { padding: 48px; text-align: center; color: #8aa0b8; font-size: 14px; }
+        .hd-section-title {
+            font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+            color: #7c93ad; margin: 18px 0 10px; font-weight: 700;
+        }
+        .hd-section-title:first-child { margin-top: 0; }
+        .hd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+        .hd-card {
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 11px; padding: 11px 13px; display: flex; align-items: center; gap: 11px;
+            transition: background 150ms, border-color 150ms; cursor: default;
+        }
+        .hd-card.clickable { cursor: pointer; }
+        .hd-card.clickable:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.18); }
+        .hd-avatar {
+            width: 38px; height: 38px; border-radius: 9px; object-fit: cover; flex-shrink: 0;
+            background: #fff; border: 1px solid rgba(255,255,255,0.12);
+        }
+        .hd-avatar-fb {
+            width: 38px; height: 38px; border-radius: 9px; flex-shrink: 0; color: #fff;
+            display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px;
+        }
+        .hd-card-name { font-size: 13.5px; font-weight: 600; color: #e6edf5; line-height: 1.25; }
+        .hd-card-meta { font-size: 11.5px; color: #8aa0b8; margin-top: 1px; }
+        .hd-card-num { margin-left: auto; font-weight: 700; color: #cbd5e1; font-size: 13px; text-align: right; }
+        .hd-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+        .hd-dot.green { background: #22c55e; } .hd-dot.yellow { background: #facc15; } .hd-dot.red { background: #ef4444; }
+        .hd-target { color: #facc15; font-size: 10.5px; font-weight: 700; }
+        .hd-empty { padding: 28px; text-align: center; color: #6b8099; font-size: 13px; }
+        .hd-stats { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+        .hd-stat {
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 11px; padding: 10px 16px; min-width: 110px;
+        }
+        .hd-stat-n { font-size: 22px; font-weight: 800; color: #fff; line-height: 1; }
+        .hd-stat-l { font-size: 11px; color: #8aa0b8; margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+        .hd-svc-row {
+            display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); margin-bottom: 7px;
+        }
+        .hd-svc-row.terminated { opacity: .55; }
+        .hd-svc-name { font-size: 13px; color: #e6edf5; font-weight: 600; }
+        .hd-svc-meta { font-size: 11px; color: #8aa0b8; margin-top: 1px; }
+        .hd-svc-val { margin-left: auto; font-weight: 700; color: #22d3ee; font-size: 13px; }
+        .hd-tl-row {
+            display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .hd-tl-row:last-child { border-bottom: none; }
+        .hd-tl-chip {
+            font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+            background: rgba(59,130,246,0.18); color: #93c5fd; height: fit-content; white-space: nowrap;
+        }
+        .hd-tl-info { font-size: 12.5px; color: #cbd5e1; line-height: 1.4; }
+        .hd-tl-date { font-size: 11px; color: #7c93ad; margin-top: 2px; }
+        .hd-pill {
+            display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+            background: rgba(255,255,255,0.06); font-size: 12px; color: #cbd5e1; margin: 0 6px 6px 0;
+        }
+        .hd-pill b { color: #fff; }
+        .hd-delta-up { color: #22c55e; } .hd-delta-down { color: #ef4444; }
+        .hd-two { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+        @media (max-width: 680px) { .hd-two { grid-template-columns: 1fr; } }
         .home-kpi-icon {
             width: 44px; height: 44px;
             border-radius: 12px;
@@ -3025,7 +3129,7 @@
                 </div>
 
                 <div class="home-kpi-row">
-                    <div class="home-kpi-card kpi-accent-cyan">
+                    <div class="home-kpi-card kpi-accent-cyan home-kpi-clickable" onclick="openHomeDrill('accounts')" title="Ver todas as contas">
                         <div class="home-kpi-icon"><i class="fas fa-people-group"></i></div>
                         <div class="home-kpi-body">
                             <div class="home-kpi-label">Total de Contas</div>
@@ -3033,7 +3137,7 @@
                             <div class="home-kpi-foot" id="kpiTotalAccountsFoot"></div>
                         </div>
                     </div>
-                    <div class="home-kpi-card kpi-accent-blue">
+                    <div class="home-kpi-card kpi-accent-blue home-kpi-clickable" onclick="openHomeDrill('contacts')" title="Ver todos os contatos">
                         <div class="home-kpi-icon"><i class="fas fa-id-card"></i></div>
                         <div class="home-kpi-body">
                             <div class="home-kpi-label">Total de Contatos</div>
@@ -3041,7 +3145,7 @@
                             <div class="home-kpi-foot" id="kpiTotalContactsFoot"></div>
                         </div>
                     </div>
-                    <div class="home-kpi-card kpi-accent-green">
+                    <div class="home-kpi-card kpi-accent-green home-kpi-clickable" onclick="openHomeDrill('status','em_dia')" title="Ver contatos em dia">
                         <div class="home-kpi-icon"><i class="fas fa-circle-check"></i></div>
                         <div class="home-kpi-body">
                             <div class="home-kpi-label">Em Dia</div>
@@ -3049,7 +3153,7 @@
                             <div class="home-kpi-foot" id="kpiEmDiaFoot"></div>
                         </div>
                     </div>
-                    <div class="home-kpi-card kpi-accent-yellow">
+                    <div class="home-kpi-card kpi-accent-yellow home-kpi-clickable" onclick="openHomeDrill('status','atencao')" title="Ver contatos em atenção">
                         <div class="home-kpi-icon"><i class="fas fa-circle-exclamation"></i></div>
                         <div class="home-kpi-body">
                             <div class="home-kpi-label">Atenção</div>
@@ -3057,7 +3161,7 @@
                             <div class="home-kpi-foot" id="kpiAtencaoFoot"></div>
                         </div>
                     </div>
-                    <div class="home-kpi-card kpi-accent-red">
+                    <div class="home-kpi-card kpi-accent-red home-kpi-clickable" onclick="openHomeDrill('status','atrasado')" title="Ver contatos atrasados">
                         <div class="home-kpi-icon"><i class="fas fa-triangle-exclamation"></i></div>
                         <div class="home-kpi-body">
                             <div class="home-kpi-label">Atrasado</div>
@@ -7889,6 +7993,261 @@
         }
         function _coberturaDetailEsc(e) { if (e.key === 'Escape') closeCoberturaDetail(); }
 
+        // =========================================================
+        // HOME — Drill-down genérico (modais de detalhe)
+        // =========================================================
+        const HD_AVATAR_COLORS = ['#3b82f6','#22d3ee','#a855f7','#ec4899','#f97316','#14b8a6','#22c55e','#eab308'];
+        function _hdColor(str) {
+            let h = 0; const s = String(str || '?');
+            for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+            return HD_AVATAR_COLORS[h % HD_AVATAR_COLORS.length];
+        }
+        function _hdInitial(name) { return (String(name || '?').trim()[0] || '?').toUpperCase(); }
+        function _hdFallbackHtml(name, cls) {
+            const fbCls = cls === 'hd-logo' ? 'hd-logo-fallback' : 'hd-avatar-fb';
+            return `<div class="${fbCls}" style="background:${_hdColor(name)}">${_hdInitial(name)}</div>`;
+        }
+        window._hdImgErr = function(img) {
+            const name = img.getAttribute('data-name') || '';
+            const cls = img.getAttribute('data-cls') || 'hd-avatar';
+            img.outerHTML = _hdFallbackHtml(name, cls);
+        };
+        function _hdLogo(name, url, cls = 'hd-logo') {
+            if (url) return `<img class="${cls}" src="${escapeHtml(url)}" alt="" data-name="${escapeHtml(name || '')}" data-cls="${cls}" onerror="_hdImgErr(this)">`;
+            return _hdFallbackHtml(name, cls);
+        }
+        function _hdStatusDot(st) {
+            const map = { em_dia: 'green', atencao: 'yellow', atrasado: 'red' };
+            return `<span class="hd-dot ${map[st] || 'red'}"></span>`;
+        }
+        function _hdDays(days) {
+            if (days === null || days === undefined) return 'sem contato registrado';
+            if (days === 0) return 'hoje';
+            return `${days} dia${days === 1 ? '' : 's'} sem contato`;
+        }
+        function _hdDate(v) { return v ? (typeof formatDateBr === 'function' ? formatDateBr(v) : String(v).slice(0, 10)) : '—'; }
+
+        function _homeChartCursor(id) {
+            const el = document.getElementById(id);
+            if (el) el.style.cursor = 'pointer';
+        }
+        function _homeBindBarClick(chart, rows, type) {
+            if (!chart) return;
+            chart.off('click');
+            chart.on('click', p => {
+                const r = rows[p.dataIndex];
+                if (!r) return;
+                if (type === 'account') openHomeDrill('account', r.name);
+            });
+            _homeChartCursor(chart.getDom().id);
+        }
+
+        function _hdEnsureModal() {
+            let modal = document.getElementById('hdModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'hdModal';
+                modal.className = 'hd-modal';
+                modal.setAttribute('role', 'dialog');
+                modal.setAttribute('aria-modal', 'true');
+                modal.onclick = (e) => { if (e.target === modal) closeHomeDrill(); };
+                document.body.appendChild(modal);
+            }
+            return modal;
+        }
+        function closeHomeDrill() {
+            const modal = document.getElementById('hdModal');
+            if (modal) modal.style.display = 'none';
+            document.body.style.overflow = '';
+            document.removeEventListener('keydown', _hdEsc);
+        }
+        function _hdEsc(e) { if (e.key === 'Escape') closeHomeDrill(); }
+
+        async function openHomeDrill(type, arg) {
+            const modal = _hdEnsureModal();
+            modal.innerHTML = `<div class="hd-box"><div class="hd-loading"><i class="fas fa-spinner fa-spin"></i> Carregando…</div></div>`;
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+            document.removeEventListener('keydown', _hdEsc);
+            document.addEventListener('keydown', _hdEsc);
+
+            // monta querystring conforme tipo
+            const params = new URLSearchParams({ type });
+            if (HOME_STATE.includeArchived) params.set('include_archived', '1');
+            if (HOME_STATE.includeCold) params.set('include_cold', '1');
+            if (type === 'status') params.set('status', arg);
+            else if (type === 'account') params.set('account_name', arg);
+            else if (type === 'cargo') params.set('cargo', arg);
+            else if (type === 'canal') params.set('canal', arg);
+            else if (type === 'evolucao') params.set('ym', arg);
+
+            try {
+                const resp = await fetch(`/api/home/drilldown?${params.toString()}`);
+                if (!resp.ok) throw new Error('Falha ao carregar dados.');
+                const data = await resp.json();
+                let html = '';
+                if (type === 'accounts') html = _hdRenderAccounts(data);
+                else if (type === 'contacts') html = _hdRenderContacts(data);
+                else if (type === 'status') html = _hdRenderContacts(data);
+                else if (type === 'account') html = _hdRenderAccount(data);
+                else if (type === 'cargo') html = _hdRenderCargo(data);
+                else if (type === 'canal') html = _hdRenderCanal(data);
+                else if (type === 'evolucao') html = _hdRenderEvolucao(data);
+                modal.querySelector('.hd-box').innerHTML = html;
+            } catch (e) {
+                modal.querySelector('.hd-box').innerHTML =
+                    `<div class="hd-loading"><i class="fas fa-circle-exclamation" style="color:#ef4444"></i> Erro: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function _hdHeader(iconOrLogo, title, sub) {
+            return `<div class="hd-header">
+                ${iconOrLogo}
+                <div><div class="hd-title">${title}</div><div class="hd-sub">${sub || ''}</div></div>
+                <button class="hd-close" onclick="closeHomeDrill()" title="Fechar">✕</button>
+            </div>`;
+        }
+
+        function _hdRenderAccounts(data) {
+            const items = data.items || [];
+            const cards = items.map(a => `
+                <div class="hd-card clickable" onclick="openHomeDrill('account', ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">
+                    ${_hdLogo(a.name, a.logo_url, 'hd-avatar')}
+                    <div style="min-width:0;flex:1">
+                        <div class="hd-card-name">${escapeHtml(a.name)} ${a.is_target ? '<span class="hd-target">⭐</span>' : ''}</div>
+                        <div class="hd-card-meta">${a.contacts} contato${a.contacts === 1 ? '' : 's'}${a.sector ? ' · ' + escapeHtml(a.sector) : ''}</div>
+                    </div>
+                    <div class="hd-card-num">${a.revenue_cents > 0 ? _homeFmtBRL(a.revenue_cents) : '—'}</div>
+                </div>`).join('');
+            return _hdHeader(`<div class="hd-logo-fallback" style="background:linear-gradient(135deg,#22d3ee,#3b82f6)"><i class="fas fa-people-group"></i></div>`,
+                'Todas as Contas', `${data.count} contas cadastradas`) +
+                `<div class="hd-body">${items.length ? `<div class="hd-grid">${cards}</div>` : '<div class="hd-empty">Nenhuma conta cadastrada.</div>'}</div>`;
+        }
+
+        function _hdContactCard(c, showCompany = true) {
+            const meta = [c.position, showCompany ? c.company : null].filter(Boolean).map(escapeHtml).join(' · ');
+            const statusLine = c.status ? `${_hdStatusDot(c.status)}${_hdDays(c.days)}` : '';
+            return `<div class="hd-card">
+                ${_hdLogo(c.name, c.photo_url, 'hd-avatar')}
+                <div style="min-width:0;flex:1">
+                    <div class="hd-card-name">${escapeHtml(c.name)} ${c.is_target ? '<span class="hd-target">⭐</span>' : ''}</div>
+                    <div class="hd-card-meta">${meta || '—'}</div>
+                    ${statusLine ? `<div class="hd-card-meta" style="margin-top:3px">${statusLine}</div>` : ''}
+                </div>
+                ${c.count !== undefined ? `<div class="hd-card-num">${c.count}<div style="font-size:10px;color:#7c93ad;font-weight:400">interações</div></div>` : ''}
+            </div>`;
+        }
+
+        function _hdRenderContacts(data) {
+            const items = data.items || [];
+            const icon = data.status
+                ? `<div class="hd-logo-fallback" style="background:${data.status === 'em_dia' ? '#16a34a' : data.status === 'atencao' ? '#ca8a04' : '#dc2626'}"><i class="fas fa-${data.status === 'em_dia' ? 'circle-check' : data.status === 'atencao' ? 'circle-exclamation' : 'triangle-exclamation'}"></i></div>`
+                : `<div class="hd-logo-fallback" style="background:linear-gradient(135deg,#3b82f6,#6366f1)"><i class="fas fa-id-card"></i></div>`;
+            return _hdHeader(icon, data.title, `${data.count} contato${data.count === 1 ? '' : 's'}`) +
+                `<div class="hd-body">${items.length ? `<div class="hd-grid">${items.map(c => _hdContactCard(c)).join('')}</div>` : '<div class="hd-empty">Nenhum contato nesta categoria.</div>'}</div>`;
+        }
+
+        function _hdRenderAccount(data) {
+            const acc = data.account || {};
+            const services = data.services || [];
+            const contacts = data.contacts || [];
+            const timeline = data.timeline || [];
+
+            const svcHtml = services.length ? services.map(s => `
+                <div class="hd-svc-row${s.early_terminated ? ' terminated' : ''}">
+                    <div style="min-width:0;flex:1">
+                        <div class="hd-svc-name">${escapeHtml(s.name || 'Serviço')}${s.early_terminated ? ' <span style="color:#ef4444;font-size:10px">(encerrado)</span>' : ''}</div>
+                        <div class="hd-svc-meta">${[s.owner, s.cell].filter(Boolean).map(escapeHtml).join(' · ') || '—'}</div>
+                    </div>
+                    <div class="hd-svc-val">${s.revenue_cents ? _homeFmtBRL(s.revenue_cents) : '—'}</div>
+                </div>`).join('') : '<div class="hd-empty">Nenhum serviço Stefanini cadastrado.</div>';
+
+            const contactsHtml = contacts.length
+                ? `<div class="hd-grid">${contacts.map(c => _hdContactCard(c, false)).join('')}</div>`
+                : '<div class="hd-empty">Nenhum contato vinculado.</div>';
+
+            const tlHtml = timeline.length ? timeline.map(t => `
+                <div class="hd-tl-row">
+                    <span class="hd-tl-chip">${escapeHtml(t.canal || 'Outro')}</span>
+                    <div style="min-width:0;flex:1">
+                        <div class="hd-tl-info">${escapeHtml(t.info || '(sem descrição)')}</div>
+                        <div class="hd-tl-date">${_hdDate(t.dt)}${t.contato ? ' · ' + escapeHtml(t.contato) : ''}</div>
+                    </div>
+                </div>`).join('') : '<div class="hd-empty">Sem interações registradas.</div>';
+
+            return _hdHeader(_hdLogo(acc.name, acc.logo_url, 'hd-logo'),
+                escapeHtml(acc.name) + (acc.is_target ? ' <span class="hd-target">⭐ target</span>' : ''),
+                acc.sector || 'Conta') +
+                `<div class="hd-body">
+                    <div class="hd-stats">
+                        <div class="hd-stat"><div class="hd-stat-n">${_homeFmtBRL(data.revenue_active_cents || 0)}</div><div class="hd-stat-l">Receita ativa/mês</div></div>
+                        <div class="hd-stat"><div class="hd-stat-n">${services.filter(s => !s.early_terminated).length}</div><div class="hd-stat-l">Serviços ativos</div></div>
+                        <div class="hd-stat"><div class="hd-stat-n">${contacts.length}</div><div class="hd-stat-l">Contatos</div></div>
+                    </div>
+                    <div class="hd-section-title">Serviços Stefanini</div>${svcHtml}
+                    <div class="hd-section-title">Contatos da conta</div>${contactsHtml}
+                    <div class="hd-section-title">Últimas interações</div>${tlHtml}
+                </div>`;
+        }
+
+        function _hdRenderCargo(data) {
+            const contacts = data.contacts || [];
+            const canal = data.canal_breakdown || [];
+            const canalPills = canal.map(c => `<span class="hd-pill">${escapeHtml(c.name)} <b>${c.count}</b></span>`).join('') || '<span class="hd-sub">Sem interações.</span>';
+            return _hdHeader(`<div class="hd-logo-fallback" style="background:linear-gradient(135deg,#a855f7,#ec4899)"><i class="fas fa-user-tie"></i></div>`,
+                data.title, `${data.total_interacoes} interações · ${contacts.length} contatos`) +
+                `<div class="hd-body">
+                    <div class="hd-section-title">Por canal</div><div>${canalPills}</div>
+                    <div class="hd-section-title">Contatos com este cargo</div>
+                    ${contacts.length ? `<div class="hd-grid">${contacts.map(c => _hdContactCard(c)).join('')}</div>` : '<div class="hd-empty">Nenhum contato.</div>'}
+                </div>`;
+        }
+
+        function _hdRenderCanal(data) {
+            const accounts = data.accounts || [];
+            const contacts = data.contacts || [];
+            const accHtml = accounts.length ? accounts.map(a => `
+                <div class="hd-card clickable" onclick="openHomeDrill('account', ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">
+                    ${_hdLogo(a.name, null, 'hd-avatar')}
+                    <div style="min-width:0;flex:1"><div class="hd-card-name">${escapeHtml(a.name)}</div></div>
+                    <div class="hd-card-num">${a.count}</div>
+                </div>`).join('') : '<div class="hd-empty">—</div>';
+            return _hdHeader(`<div class="hd-logo-fallback" style="background:linear-gradient(135deg,#3b82f6,#22d3ee)"><i class="fas fa-comments"></i></div>`,
+                data.title, `${data.total} interações por este canal`) +
+                `<div class="hd-body">
+                    <div class="hd-two">
+                        <div><div class="hd-section-title">Top contas por este canal</div>${accHtml}</div>
+                        <div><div class="hd-section-title">Contatos alcançados</div>
+                            ${contacts.length ? `<div style="display:flex;flex-direction:column;gap:8px">${contacts.map(c => _hdContactCard(c)).join('')}</div>` : '<div class="hd-empty">—</div>'}</div>
+                    </div>
+                </div>`;
+        }
+
+        function _hdRenderEvolucao(data) {
+            const accounts = data.accounts || [];
+            const canal = data.canal_breakdown || [];
+            const delta = data.delta || 0;
+            const deltaCls = delta > 0 ? 'hd-delta-up' : (delta < 0 ? 'hd-delta-down' : '');
+            const deltaTxt = delta === 0 ? 'sem variação' : `${delta > 0 ? '▲' : '▼'} ${Math.abs(delta)} vs. mês anterior`;
+            const canalPills = canal.map(c => `<span class="hd-pill">${escapeHtml(c.name)} <b>${c.count}</b></span>`).join('') || '<span class="hd-sub">—</span>';
+            const accHtml = accounts.length ? accounts.map(a => `
+                <div class="hd-card clickable" onclick="openHomeDrill('account', ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">
+                    ${_hdLogo(a.name, null, 'hd-avatar')}
+                    <div style="min-width:0;flex:1"><div class="hd-card-name">${escapeHtml(a.name)}</div></div>
+                    <div class="hd-card-num">${a.count}</div>
+                </div>`).join('') : '<div class="hd-empty">Nenhuma conta contatada neste mês.</div>';
+            return _hdHeader(`<div class="hd-logo-fallback" style="background:linear-gradient(135deg,#22d3ee,#0e7490)"><i class="fas fa-chart-line"></i></div>`,
+                data.title, `${_homeFmtMonthLong(data.ym)}`) +
+                `<div class="hd-body">
+                    <div class="hd-stats">
+                        <div class="hd-stat"><div class="hd-stat-n">${data.total}</div><div class="hd-stat-l">Interações no mês</div></div>
+                        <div class="hd-stat"><div class="hd-stat-n ${deltaCls}">${deltaTxt}</div><div class="hd-stat-l">Comparativo</div></div>
+                    </div>
+                    <div class="hd-section-title">Por canal</div><div>${canalPills}</div>
+                    <div class="hd-section-title">Contas contatadas</div><div class="hd-grid">${accHtml}</div>
+                </div>`;
+        }
+
         async function exportHomeDashboard() {
             const btn = document.getElementById('homeExportBtn');
             const shell = document.querySelector('#home .home-shell');
@@ -7951,6 +8310,7 @@
                     label: { show: true, position: 'right', color: '#cbd5e1', fontSize: 10, formatter: p => _homeFmtBRL(p.value) },
                 }],
             });
+            _homeBindBarClick(chart, reversed, 'account');
         }
 
         function _renderHomeInteracoes(rows) {
@@ -7970,6 +8330,7 @@
                     label: { show: true, position: 'top', color: '#cbd5e1', fontSize: 10 },
                 }],
             });
+            _homeBindBarClick(chart, rows, 'account');
         }
 
         function _renderHomeTargetMenor(rows) {
@@ -7996,6 +8357,7 @@
                     },
                 }],
             });
+            _homeBindBarClick(chart, rows.slice().reverse(), 'account');
         }
 
         function _renderHomeCargo(rows) {
@@ -8029,6 +8391,9 @@
                     style: { text: 'Total', fill: '#8aa0b8', fontSize: 11, textAlign: 'center' },
                 }],
             });
+            chart.off('click');
+            chart.on('click', p => { if (p.name) openHomeDrill('cargo', p.name); });
+            _homeChartCursor('chartCargo');
         }
 
         function _renderHomeEvolucao(rows) {
@@ -8052,6 +8417,9 @@
                     data: rows.map(r => r.count),
                 }],
             });
+            chart.off('click');
+            chart.on('click', p => { const r = rows[p.dataIndex]; if (r) openHomeDrill('evolucao', r.ym); });
+            _homeChartCursor('chartEvolucao');
         }
 
         function _renderHomeCanal(rows) {
@@ -8078,6 +8446,9 @@
                     style: { text: '💬', fontSize: 20, textAlign: 'center' },
                 }],
             });
+            chart.off('click');
+            chart.on('click', p => { if (p.name) openHomeDrill('canal', p.name); });
+            _homeChartCursor('chartCanal');
         }
 
         function _renderHomeHeatmap(rows) {

@@ -14112,6 +14112,338 @@ def home_overview():
         return jsonify({'error': str(e)}), 500
 
 
+def _home_status_thresholds(c):
+    """Carrega thresholds universais + regras por cargo (igual ao home_overview)."""
+    c.execute("SELECT key, value FROM app_settings WHERE key IN ('status_green_days', 'status_yellow_days')")
+    s_map = {row['key']: row['value'] for row in c.fetchall()}
+    try:
+        green_days = int(s_map.get('status_green_days') or 7)
+    except Exception:
+        green_days = 7
+    try:
+        yellow_days = int(s_map.get('status_yellow_days') or 14)
+    except Exception:
+        yellow_days = 14
+    c.execute('SELECT position, green_days, yellow_days FROM status_rules')
+    rules_map = {
+        (row['position'] or '').strip().lower(): (int(row['green_days']), int(row['yellow_days']))
+        for row in c.fetchall() if row['position']
+    }
+    def get_thresholds(position):
+        return rules_map.get((position or '').strip().lower(), (green_days, yellow_days))
+    return get_thresholds
+
+
+def _home_status_for(last_date, green, yellow, now_dt):
+    """Retorna ('em_dia'|'atencao'|'atrasado', dias_sem_contato|None)."""
+    if not last_date:
+        return ('atrasado', None)
+    try:
+        base = str(last_date).replace('T', ' ').split('.')[0].split('+')[0].strip()
+        d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+        days = (now_dt - d).days
+    except Exception:
+        return ('atrasado', None)
+    if days < green:
+        return ('em_dia', days)
+    elif days < yellow:
+        return ('atencao', days)
+    return ('atrasado', days)
+
+
+@app.route('/api/home/drilldown', methods=['GET'])
+def home_drilldown():
+    """Drill-down detalhado para os elementos do Dashboard Executivo.
+    Query params:
+      type: accounts | contacts | status | account | cargo | canal | evolucao
+      status: em_dia | atencao | atrasado    (quando type=status)
+      account_id / account_name              (quando type=account)
+      cargo / canal / ym                      (filtros específicos)
+      include_archived, include_cold: '1'
+    """
+    try:
+        dtype = (request.args.get('type') or '').strip().lower()
+        include_archived = request.args.get('include_archived') == '1'
+        include_cold = request.args.get('include_cold') == '1'
+
+        conn = get_db()
+        c = conn.cursor()
+        now_dt = datetime.now()
+        get_thresholds = _home_status_thresholds(c)
+
+        def client_filter(alias='c'):
+            clauses = []
+            if not include_archived:
+                clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
+            if not include_cold:
+                clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
+            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
+
+        # -------- TYPE: accounts (Total de Contas) --------
+        if dtype == 'accounts':
+            c.execute(f"""
+                SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
+                       (SELECT COUNT(*) FROM account_main_contacts amc WHERE amc.account_id = a.id) AS contacts,
+                       COALESCE((SELECT SUM(p.current_revenue_cents) FROM account_presences p
+                                 WHERE p.account_id = a.id
+                                   AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
+                                   AND COALESCE(p.early_terminated, 0) = 0), 0) AS revenue_cents,
+                       (SELECT MAX(aa.activity_date) FROM account_activities aa WHERE aa.account_id = a.id) AS last_activity
+                FROM accounts a
+                ORDER BY revenue_cents DESC, a.name ASC
+            """)
+            items = [{
+                'id': r['id'], 'name': r['name'], 'logo_url': r['logo_url'],
+                'is_target': bool(r['is_target']), 'sector': r['sector'],
+                'contacts': r['contacts'], 'revenue_cents': r['revenue_cents'],
+                'last_activity': r['last_activity'],
+            } for r in c.fetchall()]
+            return jsonify({'type': dtype, 'title': 'Todas as Contas', 'count': len(items), 'items': items})
+
+        # -------- TYPE: contacts (Total de Contatos) --------
+        if dtype == 'contacts':
+            c.execute(f"""
+                SELECT c.id, c.name, c.company, c.position, c.photo_url, c.is_target,
+                       c.last_activity_date AS last_activity
+                FROM clients c
+                WHERE 1=1{client_filter()}
+                ORDER BY c.company ASC, c.name ASC
+            """)
+            items = []
+            for r in c.fetchall():
+                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
+                items.append({
+                    'id': r['id'], 'name': r['name'], 'company': r['company'],
+                    'position': r['position'], 'photo_url': r['photo_url'],
+                    'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
+                    'status': st, 'days': days,
+                })
+            return jsonify({'type': dtype, 'title': 'Todos os Contatos', 'count': len(items), 'items': items})
+
+        # -------- TYPE: status (Em Dia / Atenção / Atrasado) --------
+        if dtype == 'status':
+            wanted = (request.args.get('status') or '').strip().lower()
+            labels = {'em_dia': 'Em Dia', 'atencao': 'Atenção', 'atrasado': 'Atrasado'}
+            if wanted not in labels:
+                return jsonify({'error': 'status inválido'}), 400
+            c.execute(f"""
+                SELECT c.id, c.name, c.company, c.position, c.photo_url, c.is_target,
+                       c.last_activity_date AS last_activity
+                FROM clients c
+                WHERE 1=1{client_filter()}
+                ORDER BY c.company ASC, c.name ASC
+            """)
+            items = []
+            for r in c.fetchall():
+                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
+                if st != wanted:
+                    continue
+                items.append({
+                    'id': r['id'], 'name': r['name'], 'company': r['company'],
+                    'position': r['position'], 'photo_url': r['photo_url'],
+                    'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
+                    'status': st, 'days': days,
+                })
+            # ordena atrasados/atenção por dias desc (mais críticos primeiro)
+            items.sort(key=lambda x: (x['days'] is None, -(x['days'] or 0)))
+            return jsonify({'type': dtype, 'status': wanted, 'title': f'Contatos — {labels[wanted]}',
+                            'count': len(items), 'items': items})
+
+        # -------- TYPE: account (clique numa conta: faturamento/interações/target) --------
+        if dtype == 'account':
+            acc_id = request.args.get('account_id')
+            acc_name = (request.args.get('account_name') or '').strip()
+            if acc_id:
+                c.execute("SELECT * FROM accounts WHERE id = ?", (acc_id,))
+            elif acc_name:
+                c.execute("SELECT * FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))", (acc_name,))
+            else:
+                return jsonify({'error': 'account_id ou account_name obrigatório'}), 400
+            acc = c.fetchone()
+            if not acc:
+                return jsonify({'error': 'conta não encontrada'}), 404
+            acc = dict(acc)
+
+            # Serviços Stefanini (presences)
+            c.execute("""
+                SELECT p.delivery_name, p.stf_owner, p.delivery_cell, p.service_id,
+                       p.current_revenue_cents, p.billing_type, p.validity_month,
+                       p.contract_end_date, COALESCE(p.early_terminated, 0) AS early_terminated
+                FROM account_presences p
+                WHERE p.account_id = ?
+                ORDER BY COALESCE(p.early_terminated,0) ASC, p.current_revenue_cents DESC
+            """, (acc['id'],))
+            services = [{
+                'name': r['delivery_name'], 'owner': r['stf_owner'], 'cell': r['delivery_cell'],
+                'service_id': r['service_id'], 'revenue_cents': r['current_revenue_cents'],
+                'billing_type': r['billing_type'], 'validity_month': r['validity_month'],
+                'contract_end_date': r['contract_end_date'], 'early_terminated': bool(r['early_terminated']),
+            } for r in c.fetchall()]
+            total_active = sum((s['revenue_cents'] or 0) for s in services
+                               if not s['early_terminated'] and (s['billing_type'] in (None, 'Mensal')))
+
+            # Contatos vinculados
+            c.execute("""
+                SELECT cl.id, cl.name, cl.position, cl.photo_url, cl.last_activity_date AS last_activity
+                FROM account_main_contacts amc JOIN clients cl ON cl.id = amc.client_id
+                WHERE amc.account_id = ?
+                ORDER BY cl.name ASC
+            """, (acc['id'],))
+            contacts = []
+            for r in c.fetchall():
+                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
+                contacts.append({
+                    'id': r['id'], 'name': r['name'], 'position': r['position'],
+                    'photo_url': r['photo_url'], 'last_activity': r['last_activity'],
+                    'status': st, 'days': days,
+                })
+
+            # Últimas interações (account_activities + activities dos contatos da conta)
+            c.execute("""
+                SELECT * FROM (
+                    SELECT aa.description AS info, 'Conta' AS canal, aa.activity_date AS dt, NULL AS contato
+                    FROM account_activities aa WHERE aa.account_id = ?
+                    UNION ALL
+                    SELECT COALESCE(a.information, a.description) AS info,
+                           COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal,
+                           a.activity_date AS dt, cl.name AS contato
+                    FROM activities a JOIN clients cl ON cl.id = a.client_id
+                    WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
+                )
+                ORDER BY dt DESC LIMIT 12
+            """, (acc['id'], acc['name']))
+            timeline = [{
+                'info': r['info'], 'canal': r['canal'], 'dt': r['dt'], 'contato': r['contato'],
+            } for r in c.fetchall()]
+
+            # Canal breakdown da conta
+            c.execute("""
+                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
+                GROUP BY canal ORDER BY n DESC
+            """, (acc['name'],))
+            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
+
+            return jsonify({
+                'type': dtype,
+                'account': {
+                    'id': acc['id'], 'name': acc['name'], 'logo_url': acc.get('logo_url'),
+                    'is_target': bool(acc.get('is_target')), 'sector': acc.get('sector'),
+                },
+                'revenue_active_cents': total_active,
+                'services': services,
+                'contacts': contacts,
+                'timeline': timeline,
+                'canal_breakdown': canal_breakdown,
+            })
+
+        # -------- TYPE: cargo (fatia da pizza "Interações por Cargo") --------
+        if dtype == 'cargo':
+            cargo = (request.args.get('cargo') or '').strip()
+            if not cargo:
+                return jsonify({'error': 'cargo obrigatório'}), 400
+            c.execute(f"""
+                SELECT cl.id, cl.name, cl.company, cl.photo_url, cl.last_activity_date AS last_activity,
+                       COUNT(a.id) AS n
+                FROM clients cl LEFT JOIN activities a ON a.client_id = cl.id
+                WHERE LOWER(TRIM(cl.position)) = LOWER(TRIM(?)){client_filter('cl')}
+                GROUP BY cl.id ORDER BY n DESC, cl.name ASC
+            """, (cargo,))
+            contacts = []
+            total = 0
+            for r in c.fetchall():
+                total += r['n']
+                contacts.append({
+                    'id': r['id'], 'name': r['name'], 'company': r['company'],
+                    'photo_url': r['photo_url'], 'count': r['n'], 'last_activity': r['last_activity'],
+                })
+            c.execute(f"""
+                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE LOWER(TRIM(cl.position)) = LOWER(TRIM(?)){client_filter('cl')}
+                GROUP BY canal ORDER BY n DESC
+            """, (cargo,))
+            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
+            return jsonify({'type': dtype, 'cargo': cargo, 'title': f'Cargo — {cargo}',
+                            'total_interacoes': total, 'contacts': contacts, 'canal_breakdown': canal_breakdown})
+
+        # -------- TYPE: canal (fatia da pizza "Canal de Relacionamento") --------
+        if dtype == 'canal':
+            canal = (request.args.get('canal') or '').strip()
+            if not canal:
+                return jsonify({'error': 'canal obrigatório'}), 400
+            c.execute(f"""
+                SELECT cl.company AS acc, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') = ?
+                  AND cl.company IS NOT NULL AND TRIM(cl.company) != ''{client_filter('cl')}
+                GROUP BY cl.company ORDER BY n DESC LIMIT 15
+            """, (canal,))
+            accounts = [{'name': r['acc'], 'count': r['n']} for r in c.fetchall()]
+            c.execute(f"""
+                SELECT cl.name, cl.company, cl.position, cl.photo_url, COUNT(*) AS n,
+                       MAX(a.activity_date) AS last_activity
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') = ?{client_filter('cl')}
+                GROUP BY cl.id ORDER BY n DESC LIMIT 30
+            """, (canal,))
+            contacts = [{
+                'name': r['name'], 'company': r['company'], 'position': r['position'],
+                'photo_url': r['photo_url'], 'count': r['n'], 'last_activity': r['last_activity'],
+            } for r in c.fetchall()]
+            total = sum(x['count'] for x in accounts)
+            return jsonify({'type': dtype, 'canal': canal, 'title': f'Canal — {canal}',
+                            'total': total, 'accounts': accounts, 'contacts': contacts})
+
+        # -------- TYPE: evolucao (clique num mês da Evolução Mensal) --------
+        if dtype == 'evolucao':
+            ym = (request.args.get('ym') or '').strip()
+            if not re.match(r'^\d{4}-\d{2}$', ym):
+                return jsonify({'error': 'ym inválido (YYYY-MM)'}), 400
+            # contas contatadas no mês
+            c.execute(f"""
+                SELECT cl.company AS acc, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE strftime('%Y-%m', a.activity_date) = ?
+                  AND cl.company IS NOT NULL AND TRIM(cl.company) != ''{client_filter('cl')}
+                GROUP BY cl.company ORDER BY n DESC
+            """, (ym,))
+            accounts = [{'name': r['acc'], 'count': r['n']} for r in c.fetchall()]
+            # canal breakdown do mês
+            c.execute(f"""
+                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE strftime('%Y-%m', a.activity_date) = ?{client_filter('cl')}
+                GROUP BY canal ORDER BY n DESC
+            """, (ym,))
+            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
+            # total do mês (client + account activities)
+            c.execute("""
+                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
+                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
+            """, (ym, ym))
+            total = c.fetchone()['n'] or 0
+            # mês anterior para delta
+            y, m = [int(x) for x in ym.split('-')]
+            pm = (y - 1, 12) if m == 1 else (y, m - 1)
+            prev_ym = f'{pm[0]:04d}-{pm[1]:02d}'
+            c.execute("""
+                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
+                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
+            """, (prev_ym, prev_ym))
+            prev_total = c.fetchone()['n'] or 0
+            return jsonify({'type': dtype, 'ym': ym, 'title': f'Interações — {ym}',
+                            'total': total, 'prev_total': prev_total, 'delta': total - prev_total,
+                            'accounts': accounts, 'canal_breakdown': canal_breakdown})
+
+        return jsonify({'error': f'type desconhecido: {dtype}'}), 400
+    except Exception as e:
+        print(f'[ERROR] GET /api/home/drilldown: {e}')
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.errorhandler(Exception)
 def handle_unexpected_exception(error):
     if isinstance(error, HTTPException):
