@@ -3972,6 +3972,7 @@
                                 <div style="display:flex; flex-wrap:wrap; gap:6px;">
                                     <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;conta&gt;')">&lt;conta&gt;</button>
                                     <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;nome do contato&gt;')">&lt;nome do contato&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;sobrenome&gt;')">&lt;sobrenome&gt;</button>
                                     <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;cargo&gt;')">&lt;cargo&gt;</button>
                                     <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;setor&gt;')">&lt;setor&gt;</button>
                                     <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;data&gt;')">&lt;data&gt;</button>
@@ -5793,8 +5794,8 @@
             }).join('');
 
             const initialMergeTags = isWppComposer
-                ? ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>']
-                : ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+                ? ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>']
+                : ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
             const mergeTagsBtns = initialMergeTags.map(tag =>
                 `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`
             ).join('');
@@ -5873,8 +5874,8 @@
             const mergePanel = document.getElementById('atMailingMergeTagsPanel');
             if (mergePanel) {
                 const tags = ch === 'email'
-                    ? ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>']
-                    : ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>'];
+                    ? ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<email>']
+                    : ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>'];
                 mergePanel.innerHTML = tags.map(tag =>
                     `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`
                 ).join('');
@@ -5953,9 +5954,15 @@
             return String(name || '').trim().split(/\s+/)[0] || '';
         }
 
+        function getAutoTocaContactLastName(name) {
+            const parts = String(name || '').trim().split(/\s+/);
+            return parts.length > 1 ? parts[parts.length - 1] : '';
+        }
+
         function applyMergeFields(template, contact) {
             return String(template || '')
                 .replaceAll('<nome do contato>', getAutoTocaContactFirstName(contact.name))
+                .replaceAll('<sobrenome>', getAutoTocaContactLastName(contact.name))
                 .replaceAll('<conta>', contact.company || '')
                 .replaceAll('<cargo>', contact.position || '')
                 .replaceAll('<area de atuacao>', contact.area_of_activity || '')
@@ -13992,7 +13999,7 @@
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.phone) return openMissingContactModal();
             const prefDesktop = getWhatsAppPreference() === 'desktop';
-            const wppTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>'];
+            const wppTags = ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>'];
             const tagsBar = `<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; padding:7px 10px; background:rgba(236,253,245,.6); border:1px solid rgba(16,185,129,.25); border-radius:8px; align-items:center;">
                 <span style="font-size:11px; font-weight:700; color:#065f46; white-space:nowrap; margin-right:2px; text-transform:uppercase; letter-spacing:.04em;">Chaves:</span>
                 ${wppTags.map(t => `<button type="button" class="btn btn-secondary btn-small" onclick="insertMergeTagInto('whatsMessageText','${t.replace(/'/g, "\\'")}')" style="font-size:11px;">${escapeHtml(t)}</button>`).join('')}
@@ -14448,7 +14455,9 @@
             const presence = (account.presences||[]).find(p => Number(p.id)===Number(presenceId));
             const billingType = presence?.billing_type || '';
             const hasRevenue = !!billingType;
-            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 14px;"><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div><div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div><div class="form-group"><label>Tipo de Faturamento</label><select id="presenceBillingType" onchange="onPresenceBillingTypeChange(this.value)"><option value="">Selecione</option><option value="Mensal" ${billingType==='Mensal'?'selected':''}>Mensal</option><option value="Unico" ${billingType==='Unico'?'selected':''}>Único</option></select></div><div class="form-group"><label id="presenceRevenueLabel">Faturamento</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}" placeholder="R$ 0,00" ${hasRevenue?'':'disabled style="background:#f3f4f6; color:#9ca3af; cursor:not-allowed;"'}></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group" style="grid-column:1 / -1;"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div></div><div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
+            const isMensal = billingType === 'Mensal';
+            const contractEndDisplay = isMensal ? '' : 'none';
+            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 14px;"><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div><div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div><div class="form-group"><label>Tipo de Faturamento</label><select id="presenceBillingType" onchange="onPresenceBillingTypeChange(this.value)"><option value="">Selecione</option><option value="Mensal" ${billingType==='Mensal'?'selected':''}>Mensal</option><option value="Unico" ${billingType==='Unico'?'selected':''}>Único</option></select></div><div class="form-group"><label id="presenceRevenueLabel">Faturamento</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}" placeholder="R$ 0,00" ${hasRevenue?'':'disabled style="background:#f3f4f6; color:#9ca3af; cursor:not-allowed;"'}></div><div class="form-group" id="presenceContractEndGroup" style="display:${contractEndDisplay};"><label>Encerramento de Contrato</label><input id="presenceContractEnd" type="month" value="${escapeHtml(presence?.contract_end_date||'')}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group" style="grid-column:1 / -1;"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div></div><div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
@@ -14457,6 +14466,7 @@
         function onPresenceBillingTypeChange(value) {
             const input = document.getElementById('presenceRevenue');
             const label = document.getElementById('presenceRevenueLabel');
+            const contractGroup = document.getElementById('presenceContractEndGroup');
             if (!input) return;
             if (value) {
                 input.disabled = false;
@@ -14471,6 +14481,7 @@
                 input.style.cursor = 'not-allowed';
                 if (label) label.textContent = 'Faturamento';
             }
+            if (contractGroup) contractGroup.style.display = value === 'Mensal' ? '' : 'none';
         }
 
         async function refreshAccountPresencePanels(accountId) {
@@ -14501,6 +14512,7 @@
                 delivery_cell: document.getElementById('presenceDeliveryCell').value,
                 service_id: document.getElementById('presenceServiceId').value,
                 billing_type: document.getElementById('presenceBillingType').value,
+                contract_end_date: document.getElementById('presenceContractEnd')?.value || '',
                 current_revenue: document.getElementById('presenceRevenue').value,
                 validity_month: document.getElementById('presenceValidity').value,
                 focal_client_id: document.getElementById('presenceFocal').value
