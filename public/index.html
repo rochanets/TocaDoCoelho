@@ -2552,11 +2552,15 @@
         .cob-modal-period { font-size: 12px; color: #6b7280; }
         .cob-modal-close { background: none; border: none; cursor: pointer; color: #6b7280; font-size: 18px; line-height: 1; padding: 2px 4px; }
         .cob-modal-close:hover { color: #111; }
+        /* Wrapper do conteúdo: precisa ser flex-column e flexível dentro do box,
+           senão o .cob-modal-body não recebe altura limitada e o scroll não funciona. */
+        #cobModalContent { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
         .cob-modal-summary {
             padding: 12px 22px;
             background: #f9fafb;
             border-bottom: 1px solid #e5e7eb;
             display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+            flex-shrink: 0;
         }
         .cob-modal-pct { font-size: 32px; font-weight: 800; color: #7c3aed; line-height: 1; }
         .cob-modal-pct-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
