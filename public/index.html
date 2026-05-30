@@ -3281,7 +3281,7 @@
                             <div class="home-insight-body">
                                 <div class="home-insight-title">Risco de perda de proximidade em contas target</div>
                                 <div class="home-insight-big"><strong id="insRiscoCount">0</strong><span>Contas em atenção</span></div>
-                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); switchTab(event, 'gestao-conta')">Ver detalhes <i class="fas fa-arrow-right"></i></a>
+                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); openHomeDrill('target_risk')">Ver detalhes <i class="fas fa-arrow-right"></i></a>
                             </div>
                         </div>
                         <div class="home-insight home-insight-info" id="insightCobertura">
@@ -8031,13 +8031,24 @@
             const el = document.getElementById(id);
             if (el) el.style.cursor = 'pointer';
         }
-        function _homeBindBarClick(chart, rows, type) {
+        function _homeBindBarClick(chart, rows, type, maxlen) {
             if (!chart) return;
+            // mapa rótulo-encurtado → nome real (para cliques no rótulo do eixo)
+            const labelMap = {};
+            if (maxlen) rows.forEach(r => { labelMap[_homeShortName(r.name, maxlen)] = r.name; });
+            const fire = (name) => { if (name && type === 'account') openHomeDrill('account', name); };
             chart.off('click');
             chart.on('click', p => {
-                const r = rows[p.dataIndex];
-                if (!r) return;
-                if (type === 'account') openHomeDrill('account', r.name);
+                // clique numa barra (série)
+                if (p.componentType === 'series') {
+                    const r = rows[p.dataIndex];
+                    if (r) fire(r.name);
+                    return;
+                }
+                // clique no rótulo do eixo (nome da conta)
+                if (p.componentType === 'xAxis' || p.componentType === 'yAxis') {
+                    fire(labelMap[p.value] || p.value);
+                }
             });
             _homeChartCursor(chart.getDom().id);
         }
@@ -8093,6 +8104,7 @@
                 else if (type === 'cargo') html = _hdRenderCargo(data);
                 else if (type === 'canal') html = _hdRenderCanal(data);
                 else if (type === 'evolucao') html = _hdRenderEvolucao(data);
+                else if (type === 'target_risk') html = _hdRenderTargetRisk(data);
                 modal.querySelector('.hd-box').innerHTML = html;
             } catch (e) {
                 modal.querySelector('.hd-box').innerHTML =
@@ -8127,11 +8139,13 @@
         function _hdContactCard(c, showCompany = true) {
             const meta = [c.position, showCompany ? c.company : null].filter(Boolean).map(escapeHtml).join(' · ');
             const statusLine = c.status ? `${_hdStatusDot(c.status)}${_hdDays(c.days)}` : '';
+            const emailLine = c.email ? `<div class="hd-card-meta" style="margin-top:2px"><i class="fas fa-envelope" style="font-size:10px;opacity:.7"></i> ${escapeHtml(c.email)}</div>` : '';
             return `<div class="hd-card">
                 ${_hdLogo(c.name, c.photo_url, 'hd-avatar')}
                 <div style="min-width:0;flex:1">
                     <div class="hd-card-name">${escapeHtml(c.name)} ${c.is_target ? '<span class="hd-target">⭐</span>' : ''}</div>
                     <div class="hd-card-meta">${meta || '—'}</div>
+                    ${emailLine}
                     ${statusLine ? `<div class="hd-card-meta" style="margin-top:3px">${statusLine}</div>` : ''}
                 </div>
                 ${c.count !== undefined ? `<div class="hd-card-num">${c.count}<div style="font-size:10px;color:#7c93ad;font-weight:400">interações</div></div>` : ''}
@@ -8248,6 +8262,26 @@
                 </div>`;
         }
 
+        function _hdRenderTargetRisk(data) {
+            const items = data.items || [];
+            const cards = items.map(a => {
+                const risco = a.days === null ? 'sem contato registrado' : `${a.days} dias sem contato`;
+                return `<div class="hd-card clickable" onclick="openHomeDrill('account', ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">
+                    ${_hdLogo(a.name, a.logo_url, 'hd-avatar')}
+                    <div style="min-width:0;flex:1">
+                        <div class="hd-card-name">${escapeHtml(a.name)} <span class="hd-target">⭐</span></div>
+                        <div class="hd-card-meta">${a.contacts} contato${a.contacts === 1 ? '' : 's'}${a.sector ? ' · ' + escapeHtml(a.sector) : ''}</div>
+                        <div class="hd-card-meta" style="margin-top:3px"><span class="hd-dot yellow"></span>${risco}</div>
+                    </div>
+                </div>`;
+            }).join('');
+            return _hdHeader(`<div class="hd-logo-fallback" style="background:linear-gradient(135deg,#f59e0b,#dc2626)"><i class="fas fa-circle-exclamation"></i></div>`,
+                data.title, `${data.count} conta${data.count === 1 ? '' : 's'} target precisando de atenção`) +
+                `<div class="hd-body">${items.length
+                    ? `<div class="hd-grid">${cards}</div>`
+                    : '<div class="hd-empty">🎉 Nenhuma conta target em risco de proximidade.</div>'}</div>`;
+        }
+
         async function exportHomeDashboard() {
             const btn = document.getElementById('homeExportBtn');
             const shell = document.querySelector('#home .home-shell');
@@ -8301,7 +8335,7 @@
                 tooltip: { ..._homeBaseTooltip(), formatter: (p) => `<b>${p[0].name}</b><br>${_homeFmtBRL(p[0].value)}` },
                 grid: { left: 8, right: 36, top: 8, bottom: 8, containLabel: true },
                 xAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10, formatter: v => _homeFmtBRL(v) }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
-                yAxis: { type: 'category', data: reversed.map(r => _homeShortName(r.name, 14)), axisLabel: { color: '#cbd5e1', fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+                yAxis: { type: 'category', data: reversed.map(r => _homeShortName(r.name, 14)), axisLabel: { color: '#cbd5e1', fontSize: 11, triggerEvent: true }, axisLine: { show: false }, axisTick: { show: false } },
                 series: [{
                     type: 'bar',
                     data: reversed.map(r => r.revenue_cents),
@@ -8310,7 +8344,7 @@
                     label: { show: true, position: 'right', color: '#cbd5e1', fontSize: 10, formatter: p => _homeFmtBRL(p.value) },
                 }],
             });
-            _homeBindBarClick(chart, reversed, 'account');
+            _homeBindBarClick(chart, reversed, 'account', 14);
         }
 
         function _renderHomeInteracoes(rows) {
@@ -8320,7 +8354,7 @@
             chart.setOption({
                 tooltip: { ..._homeBaseTooltip(), trigger: 'axis', axisPointer: { type: 'shadow' } },
                 grid: { left: 8, right: 8, top: 28, bottom: 32, containLabel: true },
-                xAxis: { type: 'category', data: rows.map(r => _homeShortName(r.name, 9)), axisLabel: { color: '#cbd5e1', fontSize: 10, interval: 0, rotate: 35 }, axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } }, axisTick: { show: false } },
+                xAxis: { type: 'category', data: rows.map(r => _homeShortName(r.name, 9)), axisLabel: { color: '#cbd5e1', fontSize: 10, interval: 0, rotate: 35, triggerEvent: true }, axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } }, axisTick: { show: false } },
                 yAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10 }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
                 series: [{
                     type: 'bar',
@@ -8330,7 +8364,7 @@
                     label: { show: true, position: 'top', color: '#cbd5e1', fontSize: 10 },
                 }],
             });
-            _homeBindBarClick(chart, rows, 'account');
+            _homeBindBarClick(chart, rows, 'account', 9);
         }
 
         function _renderHomeTargetMenor(rows) {
@@ -8341,7 +8375,7 @@
                 tooltip: _homeBaseTooltip(),
                 grid: { left: 8, right: 70, top: 8, bottom: 8, containLabel: true },
                 xAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10 }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
-                yAxis: { type: 'category', data: rows.map(r => _homeShortName(r.name, 16)).reverse(), axisLabel: { color: '#fca5a5', fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+                yAxis: { type: 'category', data: rows.map(r => _homeShortName(r.name, 16)).reverse(), axisLabel: { color: '#fca5a5', fontSize: 11, triggerEvent: true }, axisLine: { show: false }, axisTick: { show: false } },
                 series: [{
                     type: 'bar',
                     data: rows.slice().reverse().map(r => r.count),
@@ -8357,7 +8391,7 @@
                     },
                 }],
             });
-            _homeBindBarClick(chart, rows.slice().reverse(), 'account');
+            _homeBindBarClick(chart, rows.slice().reverse(), 'account', 16);
         }
 
         function _renderHomeCargo(rows) {

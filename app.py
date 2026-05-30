@@ -8,6 +8,7 @@ import sqlite3
 import webbrowser
 import logging
 import re
+import unicodedata
 import zipfile
 import tempfile
 import threading
@@ -14134,6 +14135,12 @@ def _home_status_thresholds(c):
     return get_thresholds
 
 
+def _home_sort_key(name):
+    """Chave de ordenação alfabética insensível a maiúsculas e acentos (pt-BR)."""
+    s = unicodedata.normalize('NFKD', str(name or ''))
+    return ''.join(ch for ch in s if not unicodedata.combining(ch)).casefold()
+
+
 def _home_status_for(last_date, green, yellow, now_dt):
     """Retorna ('em_dia'|'atencao'|'atrasado', dias_sem_contato|None)."""
     if not last_date:
@@ -14183,7 +14190,8 @@ def home_drilldown():
         if dtype == 'accounts':
             c.execute(f"""
                 SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
-                       (SELECT COUNT(*) FROM account_main_contacts amc WHERE amc.account_id = a.id) AS contacts,
+                       (SELECT COUNT(*) FROM clients cl
+                        WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(a.name)){client_filter('cl')}) AS contacts,
                        COALESCE((SELECT SUM(p.current_revenue_cents) FROM account_presences p
                                  WHERE p.account_id = a.id
                                    AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
@@ -14207,7 +14215,7 @@ def home_drilldown():
                        c.last_activity_date AS last_activity
                 FROM clients c
                 WHERE 1=1{client_filter()}
-                ORDER BY c.company ASC, c.name ASC
+                ORDER BY c.name COLLATE NOCASE ASC
             """)
             items = []
             for r in c.fetchall():
@@ -14218,6 +14226,7 @@ def home_drilldown():
                     'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
                     'status': st, 'days': days,
                 })
+            items.sort(key=lambda x: _home_sort_key(x['name']))
             return jsonify({'type': dtype, 'title': 'Todos os Contatos', 'count': len(items), 'items': items})
 
         # -------- TYPE: status (Em Dia / Atenção / Atrasado) --------
@@ -14231,7 +14240,7 @@ def home_drilldown():
                        c.last_activity_date AS last_activity
                 FROM clients c
                 WHERE 1=1{client_filter()}
-                ORDER BY c.company ASC, c.name ASC
+                ORDER BY c.name COLLATE NOCASE ASC
             """)
             items = []
             for r in c.fetchall():
@@ -14244,8 +14253,7 @@ def home_drilldown():
                     'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
                     'status': st, 'days': days,
                 })
-            # ordena atrasados/atenção por dias desc (mais críticos primeiro)
-            items.sort(key=lambda x: (x['days'] is None, -(x['days'] or 0)))
+            items.sort(key=lambda x: _home_sort_key(x['name']))
             return jsonify({'type': dtype, 'status': wanted, 'title': f'Contatos — {labels[wanted]}',
                             'count': len(items), 'items': items})
 
@@ -14282,21 +14290,24 @@ def home_drilldown():
             total_active = sum((s['revenue_cents'] or 0) for s in services
                                if not s['early_terminated'] and (s['billing_type'] in (None, 'Mensal')))
 
-            # Contatos vinculados
-            c.execute("""
-                SELECT cl.id, cl.name, cl.position, cl.photo_url, cl.last_activity_date AS last_activity
-                FROM account_main_contacts amc JOIN clients cl ON cl.id = amc.client_id
-                WHERE amc.account_id = ?
-                ORDER BY cl.name ASC
-            """, (acc['id'],))
+            # Contatos vinculados — por nome da empresa (igual à página da conta),
+            # incluindo arquivados/frios conforme flags, ordem alfabética
+            c.execute(f"""
+                SELECT cl.id, cl.name, cl.position, cl.photo_url, cl.email,
+                       cl.last_activity_date AS last_activity
+                FROM clients cl
+                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?)){client_filter('cl')}
+                ORDER BY cl.name COLLATE NOCASE ASC
+            """, (acc['name'],))
             contacts = []
             for r in c.fetchall():
                 st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
                 contacts.append({
                     'id': r['id'], 'name': r['name'], 'position': r['position'],
-                    'photo_url': r['photo_url'], 'last_activity': r['last_activity'],
+                    'photo_url': r['photo_url'], 'email': r['email'], 'last_activity': r['last_activity'],
                     'status': st, 'days': days,
                 })
+            contacts.sort(key=lambda x: _home_sort_key(x['name']))
 
             # Últimas interações (account_activities + activities dos contatos da conta)
             c.execute("""
@@ -14436,6 +14447,47 @@ def home_drilldown():
             return jsonify({'type': dtype, 'ym': ym, 'title': f'Interações — {ym}',
                             'total': total, 'prev_total': prev_total, 'delta': total - prev_total,
                             'accounts': accounts, 'canal_breakdown': canal_breakdown})
+
+        # -------- TYPE: target_risk (insight "Risco de perda de proximidade") --------
+        if dtype == 'target_risk':
+            # Espelha exatamente a lógica de target_risco_atencao do overview:
+            # contas target sem contato OU na janela de atenção (green <= dias < yellow)
+            g_uni, y_uni = get_thresholds(None)
+            c.execute("""
+                SELECT a.id, a.name, a.logo_url, a.sector,
+                       (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE LOWER(TRIM(cl2.company))=LOWER(TRIM(a.name))) AS la_cli,
+                       (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id) AS la_acc
+                FROM accounts a
+                WHERE COALESCE(a.is_target,0)=1
+            """)
+            items = []
+            for r in c.fetchall():
+                last = r['la_cli'] or r['la_acc']
+                em_risco = False
+                days = None
+                if not last:
+                    em_risco = True
+                else:
+                    try:
+                        base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
+                        d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+                        days = (now_dt - d).days
+                        if g_uni <= days < y_uni:
+                            em_risco = True
+                    except Exception:
+                        em_risco = True
+                if not em_risco:
+                    continue
+                # contagem de contatos por nome da empresa
+                c.execute(f"SELECT COUNT(*) AS n FROM clients cl WHERE LOWER(TRIM(cl.company))=LOWER(TRIM(?)){client_filter('cl')}", (r['name'],))
+                ncont = c.fetchone()['n']
+                items.append({
+                    'id': r['id'], 'name': r['name'], 'logo_url': r['logo_url'], 'sector': r['sector'],
+                    'last_activity': last, 'days': days, 'contacts': ncont,
+                })
+            items.sort(key=lambda x: (x['days'] is None, -(x['days'] or 0), x['name'].lower()))
+            return jsonify({'type': dtype, 'title': 'Contas Target em Risco de Proximidade',
+                            'count': len(items), 'items': items})
 
         return jsonify({'error': f'type desconhecido: {dtype}'}), 400
     except Exception as e:
