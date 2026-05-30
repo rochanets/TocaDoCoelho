@@ -3427,7 +3427,14 @@
                 <button id="gestaoContaSubBtn_org" class="btn btn-secondary" onclick="switchGestaoContaSubmodule('org')">Mapeamento Organizacional</button>
             </div>
             <div id="gestaoContaSubPanel_accounts" data-subtab="accounts">
-                <div style="margin-bottom:12px;"><button class="btn btn-primary" onclick="openAccountModal()"><i class="fas fa-plus"></i> Nova Conta</button></div>
+                <div style="margin-bottom:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="openAccountModal()"><i class="fas fa-plus"></i> Nova Conta</button>
+                    <label style="display:flex; align-items:center; gap:7px; font-size:13px; color:#fff; cursor:pointer; user-select:none;">
+                        <input type="checkbox" id="showTerminatedPresences" onchange="loadAccounts()" style="accent-color:#f97316; width:14px; height:14px;">
+                        <i class="fas fa-circle-xmark" style="color:#f97316; font-size:13px;"></i>
+                        Serviços Encerrados
+                    </label>
+                </div>
                 <div id="accountsContent"></div>
             </div>
             <div id="gestaoContaSubPanel_environment" data-subtab="environment" style="display:none;">
@@ -14101,7 +14108,12 @@
             const el = document.getElementById('accountsContent');
             if (!el) return;
             if (!accounts.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta cadastrada.</p></div>'; return; }
-            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#e2dfd5;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:rgba(226,223,213,0.7);">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${(a.presences||[]).map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="display:inline-flex; width:auto; max-width:100%; padding:4px 9px; border-radius:999px; background:linear-gradient(135deg,#bbf7d0 0%,#4ade80 100%); color:#064e3b; border:1px solid rgba(255,255,255,0.2); box-shadow:0 4px 15px rgba(74,222,128,0.3); font-size:12px; font-weight:700;">${escapeHtml(p.delivery_name)}</span>`).join('')}</div></div>`).join('')}</div>`;
+            const showTerminated = document.getElementById('showTerminatedPresences')?.checked ?? false;
+            el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => {
+                const visiblePresences = (a.presences||[]).filter(p => showTerminated || !isPresenceTerminated(p));
+                const badges = visiblePresences.map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="${presenceBadgeStyle(p)}">${escapeHtml(p.delivery_name)}</span>`).join('');
+                return `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#e2dfd5;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:rgba(226,223,213,0.7);">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${badges}</div></div>`;
+            }).join('')}</div>`;
         }
 
         function formatIntegerPtBr(value) {
@@ -14139,11 +14151,11 @@
             let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:860px;">`;
             html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
-            const mensalPresences = (account.presences || []).filter(p => (p.billing_type || 'Mensal') === 'Mensal');
-            const unicoPresences = (account.presences || []).filter(p => p.billing_type === 'Unico');
+            const mensalPresences = (account.presences || []).filter(p => (p.billing_type || 'Mensal') === 'Mensal' && !isPresenceTerminated(p));
+            const unicoPresences = (account.presences || []).filter(p => p.billing_type === 'Unico' && !isPresenceTerminated(p));
             const totalMonthlyCents = mensalPresences.reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
             const totalUnicoCents = unicoPresences.reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
-            const presenceButtons = (account.presences||[]).map(p=>`<button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`).join('');
+            const presenceButtons = (account.presences||[]).map(p=>{const terminated=isPresenceTerminated(p);const btnStyle=terminated?'border-radius:999px;font-weight:700;background:linear-gradient(135deg,#fed7aa,#fb923c);color:#7c2d12;border:1px solid rgba(255,255,255,0.25);box-shadow:0 4px 12px rgba(251,146,60,0.3);':'border-radius:999px;font-weight:700;';return `<button class='btn ${terminated?'':'btn-secondary'} btn-small' style='${btnStyle}' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`;}).join('');
             html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4><div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMonthlyCents)}</strong></div><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(99,102,241,.12);'><strong style="color:#4338ca;">Faturamento Pontual</strong><strong style="color:#4338ca;">${formatCompactCurrencyFromCents(totalUnicoCents)}</strong></div></div>${(account.presences||[]).length?`<div style='display:flex; flex-wrap:wrap; gap:8px;'>${presenceButtons}</div>`:'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
             html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div><div style='display:flex; align-items:center; gap:8px; margin-top:5px;'>${c.email ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-envelope' style='margin-right:4px;'></i>${escapeHtml(c.email)}</span>` : ''}${c.phone ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-phone' style='margin-right:4px;'></i>${escapeHtml(c.phone)}</span>` : ''}${c.linkedin ? `<a href='${escapeHtml(c.linkedin)}' target='_blank' rel='noopener noreferrer' title='LinkedIn' onclick='event.stopPropagation()' style='font-size:13px; color:#0a66c2;'><i class='fab fa-linkedin'></i></a>` : ''}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><h4 style="color:#065f46; margin:0;">Histórico de Atividades</h4><button class="btn btn-primary btn-small" style="padding:2px 10px; border-radius:999px; font-size:18px; line-height:1; font-weight:700;" onclick="openAccountActivityModal(${account.id})" title="Registrar atividade da conta">+</button></div><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
             html += '</div></div>';
@@ -14460,17 +14472,83 @@
             const billingType = presence?.billing_type || '';
             const hasRevenue = !!billingType;
             const isMensal = billingType === 'Mensal';
-            const contractEndDisplay = isMensal ? '' : 'none';
-            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 14px;"><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div><div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div><div class="form-group"><label>Tipo de Faturamento</label><select id="presenceBillingType" onchange="onPresenceBillingTypeChange(this.value)"><option value="">Selecione</option><option value="Mensal" ${billingType==='Mensal'?'selected':''}>Mensal</option><option value="Unico" ${billingType==='Unico'?'selected':''}>Único</option></select></div><div class="form-group"><label id="presenceRevenueLabel">Faturamento</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}" placeholder="R$ 0,00" ${hasRevenue?'':'disabled style="background:#f3f4f6; color:#9ca3af; cursor:not-allowed;"'}></div><div class="form-group" id="presenceContractEndGroup" style="display:${contractEndDisplay};"><label>Encerramento de Contrato</label><input id="presenceContractEnd" type="month" value="${escapeHtml(presence?.contract_end_date||'')}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group" style="grid-column:1 / -1;"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div></div><div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
+            const contractFieldsDisplay = isMensal ? '' : 'none';
+            const earlyTerm = Number(presence?.early_terminated || 0);
+            // Calcula encerramento previsto para exibição
+            let contractEndPreview = '';
+            if (presence?.validity_month && presence?.contract_duration_months) {
+                const [y, m] = presence.validity_month.split('-').map(Number);
+                const total = (y * 12 + m - 1) + Number(presence.contract_duration_months);
+                contractEndPreview = `${String(Math.floor(total / 12)).padStart(4,'0')}-${String(total % 12 + 1).padStart(2,'0')}`;
+            }
+            const contractEndInfo = contractEndPreview
+                ? `<div style="font-size:11px; color:#6b7280; margin-top:4px;"><i class="fas fa-calendar-check" style="margin-right:3px;"></i>Encerramento previsto: <strong>${contractEndPreview}</strong></div>`
+                : '';
+            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:780px;">
+<h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2>
+<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px 14px;">
+  <div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div>
+  <div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div>
+  <div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div>
+  <div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div>
+  <div class="form-group"><label>Tipo de Faturamento</label><select id="presenceBillingType" onchange="onPresenceBillingTypeChange(this.value)"><option value="">Selecione</option><option value="Mensal" ${billingType==='Mensal'?'selected':''}>Mensal</option><option value="Unico" ${billingType==='Unico'?'selected':''}>Único</option></select></div>
+  <div class="form-group"><label id="presenceRevenueLabel">Faturamento</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}" placeholder="R$ 0,00" ${hasRevenue?'':'disabled style="background:#f3f4f6; color:#9ca3af; cursor:not-allowed;"'}></div>
+</div>
+<div id="presenceContractFieldsGroup" style="display:${contractFieldsDisplay}; margin-top:4px;">
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px 14px; align-items:end;">
+    <div class="form-group" style="margin-bottom:0;">
+      <label>Início do Contrato (mês/ano)</label>
+      <input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}" oninput="updateContractEndPreview()">
+    </div>
+    <div class="form-group" style="margin-bottom:0;">
+      <label>Total de Meses</label>
+      <input id="presenceContractDuration" type="number" min="1" step="1" value="${presence?.contract_duration_months||''}" placeholder="Ex: 12" oninput="updateContractEndPreview()">
+      <div id="contractEndPreview" style="font-size:11px; color:#6b7280; margin-top:4px;">${contractEndInfo}</div>
+    </div>
+    <div class="form-group" style="margin-bottom:0;">
+      <label>Encerrado Antecipado?</label>
+      <select id="presenceEarlyTerminated">
+        <option value="0" ${earlyTerm===0?'selected':''}>Não</option>
+        <option value="1" ${earlyTerm===1?'selected':''}>Sim</option>
+      </select>
+    </div>
+  </div>
+</div>
+<div style="display:grid; grid-template-columns:1fr; gap:12px 14px; margin-top:12px;">
+  <div class="form-group"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
+</div>
+<div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div>
+</div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
         function closePresenceModal(){ const m=document.getElementById('presenceModal'); if(m)m.remove(); }
 
+        /** Retorna true se o serviço está encerrado (antecipado ou prazo expirado) */
+        function isPresenceTerminated(p) {
+            if (Number(p.early_terminated) === 1) return true;
+            if (p.contract_end_date) {
+                const now = new Date();
+                const curMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+                if (p.contract_end_date < curMonth) return true;
+            }
+            return false;
+        }
+
+        /** Estilo glass para badge de serviço Stefanini */
+        function presenceBadgeStyle(p) {
+            if (isPresenceTerminated(p)) {
+                // Vermelho-alaranjado glass
+                return 'display:inline-flex;width:auto;max-width:100%;padding:4px 9px;border-radius:999px;background:linear-gradient(135deg,#fed7aa 0%,#fb923c 100%);color:#7c2d12;border:1px solid rgba(255,255,255,0.25);box-shadow:0 4px 15px rgba(251,146,60,0.35);font-size:12px;font-weight:700;';
+            }
+            // Verde glass (padrão)
+            return 'display:inline-flex;width:auto;max-width:100%;padding:4px 9px;border-radius:999px;background:linear-gradient(135deg,#bbf7d0 0%,#4ade80 100%);color:#064e3b;border:1px solid rgba(255,255,255,0.2);box-shadow:0 4px 15px rgba(74,222,128,0.3);font-size:12px;font-weight:700;'
+        }
+
         function onPresenceBillingTypeChange(value) {
             const input = document.getElementById('presenceRevenue');
             const label = document.getElementById('presenceRevenueLabel');
-            const contractGroup = document.getElementById('presenceContractEndGroup');
+            const contractGroup = document.getElementById('presenceContractFieldsGroup');
             if (!input) return;
             if (value) {
                 input.disabled = false;
@@ -14488,16 +14566,35 @@
             if (contractGroup) contractGroup.style.display = value === 'Mensal' ? '' : 'none';
         }
 
+        function updateContractEndPreview() {
+            const startVal = document.getElementById('presenceValidity')?.value;
+            const durVal = document.getElementById('presenceContractDuration')?.value;
+            const preview = document.getElementById('contractEndPreview');
+            if (!preview) return;
+            if (startVal && durVal && Number(durVal) > 0) {
+                const [y, m] = startVal.split('-').map(Number);
+                const total = (y * 12 + m - 1) + Number(durVal);
+                const endStr = `${String(Math.floor(total / 12)).padStart(4,'0')}-${String(total % 12 + 1).padStart(2,'0')}`;
+                // Formatar como mês/ano legível
+                const months = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+                const endM = total % 12;
+                const endY = Math.floor(total / 12);
+                preview.innerHTML = `<i class="fas fa-calendar-check" style="margin-right:3px; color:#059669;"></i>Encerramento previsto: <strong style="color:#065f46;">${months[endM]}/${endY}</strong>`;
+            } else {
+                preview.innerHTML = '';
+            }
+        }
+
         async function refreshAccountPresencePanels(accountId) {
             try {
                 const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
                 const list = document.getElementById('accountPresenceList');
                 if (list) {
-                    const mensalP = (account?.presences||[]).filter(p=>(p.billing_type||'Mensal')==='Mensal');
-                    const unicoP = (account?.presences||[]).filter(p=>p.billing_type==='Unico');
+                    const mensalP = (account?.presences||[]).filter(p=>(p.billing_type||'Mensal')==='Mensal' && !isPresenceTerminated(p));
+                    const unicoP = (account?.presences||[]).filter(p=>p.billing_type==='Unico' && !isPresenceTerminated(p));
                     const totalMensal = mensalP.reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
                     const totalUnico = unicoP.reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
-                    const btns = (account?.presences||[]).map(p=>`<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`).join('');
+                    const btns = (account?.presences||[]).map(p=>{const terminated=isPresenceTerminated(p);const btnStyle=terminated?'border-radius:999px;font-weight:700;background:linear-gradient(135deg,#fed7aa,#fb923c);color:#7c2d12;border:1px solid rgba(255,255,255,0.25);box-shadow:0 4px 12px rgba(251,146,60,0.3);':'border-radius:999px;font-weight:700;';return `<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn ${terminated?'':'btn-secondary'} btn-small' style='${btnStyle}' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`;}).join('');
                     list.innerHTML = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMensal)}</strong></div><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(99,102,241,.12);'><strong style="color:#4338ca;">Faturamento Pontual</strong><strong style="color:#4338ca;">${formatCompactCurrencyFromCents(totalUnico)}</strong></div></div><div style='display:flex; flex-wrap:wrap; gap:8px;'>${btns}</div>`;
                 }
                 const view = document.getElementById('accountViewModal');
@@ -14516,9 +14613,10 @@
                 delivery_cell: document.getElementById('presenceDeliveryCell').value,
                 service_id: document.getElementById('presenceServiceId').value,
                 billing_type: document.getElementById('presenceBillingType').value,
-                contract_end_date: document.getElementById('presenceContractEnd')?.value || '',
+                validity_month: document.getElementById('presenceValidity')?.value || '',
+                contract_duration_months: document.getElementById('presenceContractDuration')?.value || '',
+                early_terminated: document.getElementById('presenceEarlyTerminated')?.value || '0',
                 current_revenue: document.getElementById('presenceRevenue').value,
-                validity_month: document.getElementById('presenceValidity').value,
                 focal_client_id: document.getElementById('presenceFocal').value
             };
             const url = presenceId ? `${API_BASE}/accounts/${accountId}/presences/${presenceId}` : `${API_BASE}/accounts/${accountId}/presences`;
