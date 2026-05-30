@@ -8031,26 +8031,33 @@
             const el = document.getElementById(id);
             if (el) el.style.cursor = 'pointer';
         }
-        function _homeBindBarClick(chart, rows, type, maxlen) {
+        function _homeBindBarClick(chart, rows, type, maxlen, axis = 'y') {
             if (!chart) return;
-            // mapa rótulo-encurtado → nome real (para cliques no rótulo do eixo)
+            const fire = (name) => { if (name && type === 'account') openHomeDrill('account', name); };
+
+            // 1) Handlers nativos do ECharts (barra e rótulo do eixo)
             const labelMap = {};
             if (maxlen) rows.forEach(r => { labelMap[_homeShortName(r.name, maxlen)] = r.name; });
-            const fire = (name) => { if (name && type === 'account') openHomeDrill('account', name); };
             chart.off('click');
             chart.on('click', p => {
-                // clique numa barra (série)
-                if (p.componentType === 'series') {
-                    const r = rows[p.dataIndex];
-                    if (r) fire(r.name);
-                    return;
-                }
-                // clique no rótulo do eixo (nome da conta)
-                if (p.componentType === 'xAxis' || p.componentType === 'yAxis') {
-                    fire(labelMap[p.value] || p.value);
-                }
+                if (p.componentType === 'series') { const r = rows[p.dataIndex]; if (r) fire(r.name); return; }
+                if (p.componentType === 'xAxis' || p.componentType === 'yAxis') fire(labelMap[p.value] || p.value);
             });
-            _homeChartCursor(chart.getDom().id);
+
+            // 2) Fallback à prova de falhas: clique em QUALQUER ponto da linha/coluna.
+            //    Mapeia o pixel clicado para o índice da categoria via convertFromPixel.
+            //    Resolve o problema de barras horizontais finas e cliques no nome.
+            const dom = chart.getDom();
+            dom.style.cursor = 'pointer';
+            dom.onclick = (e) => {
+                const rect = dom.getBoundingClientRect();
+                const offset = axis === 'y' ? (e.clientY - rect.top) : (e.clientX - rect.left);
+                let idx = chart.convertFromPixel({ [axis + 'AxisIndex']: 0 }, offset);
+                if (idx === null || idx === undefined || idx < 0) return;
+                idx = Math.round(idx);
+                const r = rows[idx];
+                if (r) fire(r.name);
+            };
         }
 
         function _hdEnsureModal() {
@@ -8344,7 +8351,7 @@
                     label: { show: true, position: 'right', color: '#cbd5e1', fontSize: 10, formatter: p => _homeFmtBRL(p.value) },
                 }],
             });
-            _homeBindBarClick(chart, reversed, 'account', 14);
+            _homeBindBarClick(chart, reversed, 'account', 14, 'y');
         }
 
         function _renderHomeInteracoes(rows) {
@@ -8364,7 +8371,7 @@
                     label: { show: true, position: 'top', color: '#cbd5e1', fontSize: 10 },
                 }],
             });
-            _homeBindBarClick(chart, rows, 'account', 9);
+            _homeBindBarClick(chart, rows, 'account', 9, 'x');
         }
 
         function _renderHomeTargetMenor(rows) {
@@ -8391,7 +8398,7 @@
                     },
                 }],
             });
-            _homeBindBarClick(chart, rows.slice().reverse(), 'account', 16);
+            _homeBindBarClick(chart, rows.slice().reverse(), 'account', 16, 'y');
         }
 
         function _renderHomeCargo(rows) {
