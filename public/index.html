@@ -148,8 +148,8 @@
         .settings-grid {
             display: grid;
             gap: 14px;
-            grid-template-columns: repeat(2, minmax(260px, 1fr));
-            max-width: 920px;
+            grid-template-columns: repeat(3, minmax(260px, 1fr));
+            max-width: 1280px;
             align-items: start;
         }
 
@@ -1550,6 +1550,12 @@
         /* Responsive */
         @media (max-width: 980px) {
             .settings-grid {
+                grid-template-columns: repeat(2, 1fr);
+                max-width: 100%;
+            }
+        }
+        @media (max-width: 640px) {
+            .settings-grid {
                 grid-template-columns: 1fr;
                 max-width: 100%;
             }
@@ -1901,10 +1907,12 @@
         .itoca-sources-list { margin-top:6px; font-size:11px; color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 10px; display:none; }
         .itoca-sources-list.open { display:block; }
         .itoca-sources-list li { list-style:disc; margin-left:14px; margin-bottom:2px; }
-        .itoca-typing { display:flex; align-items:center; gap:5px; padding:10px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; border-bottom-left-radius:4px; }
-        .itoca-typing span { width:7px; height:7px; background:#10b981; border-radius:50%; animation:itocaBounce 1.2s infinite; }
-        .itoca-typing span:nth-child(2) { animation-delay:.2s; }
-        .itoca-typing span:nth-child(3) { animation-delay:.4s; }
+        .itoca-typing { display:flex; flex-direction:column; gap:5px; padding:10px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; border-bottom-left-radius:4px; }
+        .itoca-typing-dots { display:flex; align-items:center; gap:5px; }
+        .itoca-typing-dots span { width:7px; height:7px; background:#10b981; border-radius:50%; animation:itocaBounce 1.2s infinite; }
+        .itoca-typing-dots span:nth-child(2) { animation-delay:.2s; }
+        .itoca-typing-dots span:nth-child(3) { animation-delay:.4s; }
+        .itoca-typing-step { font-size:11px; color:#059669; font-style:italic; min-height:14px; line-height:1.3; }
         @keyframes itocaBounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
         @keyframes itocaFadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
         .itoca-chat-empty { text-align:center; color:#9ca3af; font-size:13px; padding:10px 0 4px; margin-top:auto; }
@@ -1930,10 +1938,21 @@
         .itoca-history-msg-role.assistant { color:#065f46; }
         .itoca-history-msg-content { font-size:13px; color:#374151; white-space:pre-wrap; }
         .itoca-history-empty { text-align:center; color:#9ca3af; font-size:13px; padding:16px 0; }
+        .itoca-history-resume-btn { display:flex; align-items:center; gap:7px; margin-top:10px; padding:7px 14px; background:linear-gradient(135deg,#065f46,#047857); color:#fff; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+        .itoca-history-resume-btn:hover { opacity:.85; }
+        .itoca-msg.system { justify-content:center; margin:4px 0; }
+        .itoca-msg.system .itoca-system-bubble { background:rgba(236,253,245,.7); border:1px solid rgba(16,185,129,.2); border-radius:20px; padding:5px 14px; font-size:12px; color:#065f46; font-style:italic; }
+        .itoca-msg.replayed { opacity:.75; }
+        .itoca-msg.replayed .itoca-msg-bubble { border-left:3px solid #d1fae5; }
         .wiki-doc-upload-row { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; align-items:flex-start; }
         .wiki-doc-upload-main { display:flex; gap:8px; align-items:center; width:100%; flex-wrap:wrap; }
         .wiki-file-name { font-size:12px; color:#4b5563; min-width:140px; }
         .wiki-upload-actions { display:flex; gap:8px; justify-content:flex-start; width:100%; }
+        @keyframes wikiUploadPulse {
+            0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,.6); transform: scale(1); }
+            50%      { box-shadow: 0 0 0 7px rgba(16,185,129,.0); transform: scale(1.04); }
+        }
+        .wiki-upload-btn-pending { animation: wikiUploadPulse 1.2s ease-in-out infinite !important; }
 
 
         /* Kanban */
@@ -2239,6 +2258,36 @@
         }
         .home-period-wrapper { position: relative; display: flex; flex-direction: column; gap: 4px; }
         .home-period-label { font-size: 11px; color: var(--hm-text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+        .home-contact-filters {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .home-contact-filters-title {
+            font-size: 11px;
+            color: var(--hm-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 600;
+        }
+        .home-contact-filter-opt {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 12px;
+            color: var(--hm-text-muted);
+            cursor: pointer;
+            user-select: none;
+            transition: color 120ms;
+        }
+        .home-contact-filter-opt:hover { color: var(--hm-text); }
+        .home-contact-filter-opt input[type="checkbox"] {
+            accent-color: var(--hm-cyan);
+            cursor: pointer;
+            width: 13px;
+            height: 13px;
+        }
+        .home-contact-filter-opt i { font-size: 11px; }
         .home-period-trigger {
             background: rgba(20, 33, 50, 0.85);
             border: 1px solid var(--hm-border-strong);
@@ -2470,6 +2519,78 @@
             border-top-color: transparent;
             border-left-color: #07121f;
         }
+        .home-cobertura-value-btn {
+            background: none; border: none; padding: 0; margin: 0;
+            color: inherit; font: inherit; line-height: inherit; letter-spacing: inherit;
+            cursor: pointer; text-decoration: underline dotted rgba(255,255,255,0.35);
+            text-underline-offset: 3px;
+        }
+        .home-cobertura-value-btn:hover { text-decoration-color: rgba(255,255,255,0.7); }
+
+        /* Modal de detalhamento da Cobertura */
+        #coberturaDetailModal {
+            display: none; position: fixed; inset: 0; z-index: 9999;
+            background: rgba(0,0,0,0.55);
+            align-items: center; justify-content: center;
+            overflow: hidden; /* backdrop NÃO rola — só o body interno rola */
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #coberturaDetailModal.open { display: flex; }
+        .cob-modal-box {
+            background: #fff; border-radius: 16px; width: 100%; max-width: 680px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            display: flex; flex-direction: column; overflow: hidden;
+            max-height: calc(100vh - 40px); /* 20px padding em cima + 20px embaixo */
+        }
+        .cob-modal-header {
+            padding: 18px 22px 14px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+        }
+        .cob-modal-title { font-size: 16px; font-weight: 700; color: #111; margin-bottom: 2px; }
+        .cob-modal-period { font-size: 12px; color: #6b7280; }
+        .cob-modal-close { background: none; border: none; cursor: pointer; color: #6b7280; font-size: 18px; line-height: 1; padding: 2px 4px; }
+        .cob-modal-close:hover { color: #111; }
+        /* Wrapper do conteúdo: precisa ser flex-column e flexível dentro do box,
+           senão o .cob-modal-body não recebe altura limitada e o scroll não funciona. */
+        #cobModalContent { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+        .cob-modal-summary {
+            padding: 12px 22px;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+            flex-shrink: 0;
+        }
+        .cob-modal-pct { font-size: 32px; font-weight: 800; color: #7c3aed; line-height: 1; }
+        .cob-modal-pct-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
+        .cob-modal-counts { display: flex; gap: 18px; }
+        .cob-modal-count { text-align: center; }
+        .cob-modal-count-n { font-size: 22px; font-weight: 700; color: #111; line-height: 1; }
+        .cob-modal-count-lbl { font-size: 11px; color: #6b7280; margin-top: 2px; }
+        .cob-modal-count.covered  .cob-modal-count-n { color: #059669; }
+        .cob-modal-count.uncovered .cob-modal-count-n { color: #dc2626; }
+        .cob-modal-body { overflow-y: auto; flex: 1; min-height: 0; padding: 16px 22px; }
+        .cob-modal-body > div { margin-bottom: 18px; flex-shrink: 0; }
+        .cob-section-title {
+            font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
+        }
+        .cob-section-title.covered  { color: #059669; }
+        .cob-section-title.uncovered { color: #dc2626; }
+        .cob-account-list { display: flex; flex-direction: column; gap: 4px; }
+        .cob-account-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            padding: 7px 10px; border-radius: 8px; font-size: 13px;
+        }
+        .cob-account-row:nth-child(odd) { background: #f9fafb; }
+        .cob-account-row.is-target { border-left: 3px solid #f59e0b; padding-left: 8px; }
+        .cob-account-name { font-weight: 600; color: #1f2937; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cob-account-target-badge { font-size: 10px; color: #92400e; background: #fef3c7; border-radius: 4px; padding: 1px 5px; font-weight: 600; flex-shrink: 0; }
+        .cob-account-meta { font-size: 11px; color: #6b7280; text-align: right; flex-shrink: 0; }
+        .cob-account-count { font-size: 12px; font-weight: 700; color: #059669; background: #d1fae5; border-radius: 20px; padding: 1px 8px; flex-shrink: 0; }
+        .cob-empty { font-size: 13px; color: #9ca3af; text-align: center; padding: 10px 0; }
+        .cob-modal-loading { text-align: center; padding: 40px; color: #6b7280; font-size: 14px; }
 
         /* Main grid */
         .home-main-grid {
@@ -2872,6 +2993,19 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="home-contact-filters">
+                            <span class="home-contact-filters-title">Considerar</span>
+                            <label class="home-contact-filter-opt" title="Incluir contatos arquivados nos cálculos do dashboard">
+                                <input type="checkbox" id="homeIncludeArchived" onchange="onHomeFilterChange()">
+                                <i class="fas fa-box-archive"></i>
+                                Arquivados
+                            </label>
+                            <label class="home-contact-filter-opt" title="Incluir contatos frios nos cálculos do dashboard">
+                                <input type="checkbox" id="homeIncludeCold" onchange="onHomeFilterChange()">
+                                <i class="fas fa-snowflake"></i>
+                                Frios
+                            </label>
+                        </div>
                         <div class="home-update-block">
                             <div class="home-update-stamp">
                                 <div class="home-update-text">
@@ -3005,7 +3139,7 @@
                             <div class="home-cobertura-head">
                                 <div>
                                     <div class="home-cobertura-label">Cobertura de Relacionamento</div>
-                                    <div class="home-cobertura-value" id="kpiCobertura">—</div>
+                                    <button type="button" class="home-cobertura-value home-cobertura-value-btn" id="kpiCobertura" onclick="openCoberturaDetail()" title="Ver detalhes da cobertura">—</button>
                                     <div class="home-cobertura-foot" id="kpiCoberturaFoot"></div>
                                 </div>
                                 <div class="home-cobertura-icon"><i class="fas fa-bullseye"></i></div>
@@ -3015,11 +3149,11 @@
                             </button>
                             <div class="home-kpi-info-tooltip" role="tooltip">
                                 <strong>Como é calculado</strong>
-                                Percentual de contas que tiveram <b>pelo menos uma interação registrada</b> dentro do período filtrado, sobre o total de contas cadastradas.
+                                Percentual de contas que tiveram <b>pelo menos uma interação nos últimos 30 dias</b>, sobre o total de contas cadastradas.
                                 <br><br>
                                 <code>cobertura = contas com interação ÷ total de contas × 100</code>
                                 <br><br>
-                                Considera registros das tabelas <code>activities</code> (via contato) e <code>account_activities</code> (direto na conta).
+                                Considera: atividades diretas na conta, atividades de contatos vinculados formalmente, e atividades de qualquer contato da mesma empresa. Clique no número para ver o detalhamento por conta.
                             </div>
                         </div>
                         <h2 class="home-insights-title">Insights &amp; Alertas</h2>
@@ -3187,8 +3321,9 @@
                             <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
                         </div>
                         <span id="wikiFileName" class="wiki-file-name"></span>
+                        <button id="wikiFileClearBtn" type="button" onclick="clearWikiFileSelection()" title="Cancelar seleção" style="display:none; background:none; border:none; cursor:pointer; color:#ef4444; font-size:15px; padding:0 2px; line-height:1; vertical-align:middle;"><i class="fas fa-times-circle"></i></button>
                         <div class="wiki-upload-actions">
-                            <button class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
+                            <button id="wikiUploadBtn" class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
                         </div>
                     </div>
                     <div id="wikiDocumentsList"></div>
@@ -3600,6 +3735,7 @@
                             <option value="position">Por Cargo</option>
                             <option value="area">Por Área de Atuação</option>
                             <option value="company">Por Conta</option>
+                            <option value="status">Por Status</option>
                             <option value="manual">Manual</option>
                         </select>
                     </div>
@@ -3620,8 +3756,104 @@
                 <p>Parametrizações do sistema e cadastro do usuário</p>
             </div>
             <div class="settings-grid">
+
+                <!-- 1. Agrupamento de Cargos -->
                 <section class="settings-card">
-                    <h3>Faixa de Status</h3>
+                    <h3><i class="fas fa-layer-group" style="margin-right:8px; color:#059669;"></i>Agrupamento de Cargos</h3>
+                    <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
+                    <div class="form-group"><label>Cargos (separados por vírgula)</label><input type="text" id="groupingPositions" placeholder="Diretor, Head, Gerente Executivo"></div>
+                    <button class="btn btn-secondary btn-small" onclick="savePositionGrouping()"><i class="fas fa-plus"></i> Criar agrupamento</button>
+                    <div id="positionGroupingList" style="margin-top:12px;"></div>
+                </section>
+
+                <!-- 2. Ajuda e Atualizações -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-rotate" style="margin-right:8px; color:#059669;"></i>Ajuda e Atualizações</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
+                    <form id="updateSourceForm" onsubmit="saveUpdateSourceConfig(event)">
+                        <div class="form-group">
+                            <label>GitHub Owner</label>
+                            <input type="text" id="updateGithubOwner" placeholder="seu-usuario-ou-org" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>GitHub Repositório</label>
+                            <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>GitHub Token <span style="color:#9ca3af; font-weight:normal;">(opcional — evita o limite de verificações)</span></label>
+                            <input type="password" id="updateGithubToken" placeholder="ghp_..." autocomplete="off">
+                            <small id="updateGithubTokenStatus" style="color:#6b7280; display:block; margin-top:4px;"></small>
+                        </div>
+                        <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
+                            <button type="button" class="btn btn-primary btn-small" onclick="checkForUpdates()"><i class="fas fa-cloud-download-alt"></i> Verificar atualizações</button>
+                        </div>
+                    </form>
+                    <div id="updateCheckResult" style="margin-top:12px; color:#4b5563; font-size:13px;"></div>
+                </section>
+
+                <!-- 3. Backup do Banco de Dados -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-database" style="margin-right:8px; color:#059669;"></i>Backup do Banco de Dados</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Faça backup completo ou restaure o banco de dados.</p>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+                        <div>
+                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Exportar Banco</h4>
+                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Baixe uma cópia completa do banco de dados (com opção de incluir imagens)</p>
+                            <button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>
+                        </div>
+                        <div>
+                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Importar Banco</h4>
+                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Restaure um backup .db ou pacote .zip (cria backup automático antes)</p>
+                            <input type="file" id="restoreDbInput" accept=".db,.zip" style="display:none;" onchange="restoreDatabase(event)">
+                            <button class="btn btn-secondary" onclick="document.getElementById('restoreDbInput').click()"><i class="fas fa-upload"></i> Importar Banco</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. Cadastro do Usuário -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-id-card" style="margin-right:8px; color:#059669;"></i>Cadastro do Usuário</h3>
+                    <form id="userProfileForm" onsubmit="saveUserProfile(event)">
+                        <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
+                        <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
+                        <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
+                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
+                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
+                        <div class="form-group"><label>Boss (opcional)</label><input type="text" name="boss_name"></div>
+                        <div class="form-group"><label>Email do Boss (opcional)</label><input type="email" name="boss_email"></div>
+                        <div class="form-group">
+                            <label>Foto *</label>
+                            <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
+                            <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
+                            <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- 5. Exportar Atividades -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-file-export" style="margin-right:8px; color:#059669;"></i>Exportar Atividades</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Exporte atividades com filtro de período.</p>
+                    <div class="form-group"><label>Data Inicial</label><input type="date" id="startDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
+                    <div class="form-group"><label>Data Final</label><input type="date" id="endDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
+                    <button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>
+                </section>
+
+                <!-- 6. Exportar Base de Clientes -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-users" style="margin-right:8px; color:#059669;"></i>Exportar Base de Clientes</h3>
+                    <p style="margin-bottom:12px; color:#4b5563;">Exporte todos os dados cadastrais dos clientes em CSV.</p>
+                    <button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>
+                </section>
+
+                <!-- 7. Faixa de Status -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-gauge-high" style="margin-right:8px; color:#059669;"></i>Faixa de Status</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Regra A (universal) será aplicada quando não houver regra específica por cargo (Regra B).</p>
                     <form id="universalStatusForm" onsubmit="saveUniversalStatus(event)">
                         <div style="display:grid; grid-template-columns: repeat(2,minmax(160px,1fr)); gap:12px;">
@@ -3651,7 +3883,7 @@
                             <button class="btn btn-secondary btn-small" onclick="saveTargetStatus()"><i class="fas fa-save"></i> Salvar Regra C</button>
                         </div>
                     </div>
-                                    <div style="margin-top:14px; border-top:1px solid rgba(52,211,153,0.2); padding-top:12px;">
+                    <div style="margin-top:14px; border-top:1px solid rgba(52,211,153,0.2); padding-top:12px;">
                         <h4 style="color:#065f46; font-weight:400; margin-bottom:8px;">Regra D Contato Frio</h4>
                         <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
                             <div class="form-group" style="margin:0;"><label>Dias Em dia</label><input type="number" id="coldGreen" min="0" style="width:110px;"></div>
@@ -3661,16 +3893,9 @@
                     </div>
                 </section>
 
+                <!-- 8. Integrações de API -->
                 <section class="settings-card">
-                    <h3>Agrupamento de Cargos</h3>
-                    <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
-                    <div class="form-group"><label>Cargos (separados por vírgula)</label><input type="text" id="groupingPositions" placeholder="Diretor, Head, Gerente Executivo"></div>
-                    <button class="btn btn-secondary btn-small" onclick="savePositionGrouping()"><i class="fas fa-plus"></i> Criar agrupamento</button>
-                    <div id="positionGroupingList" style="margin-top:12px;"></div>
-                </section>
-
-                <section class="settings-card">
-                    <h3>Integrações de API</h3>
+                    <h3><i class="fas fa-plug" style="margin-right:8px; color:#059669;"></i>Integrações de API</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Configure as chaves do usuário final para busca (Tavily), LLM (OpenRouter) e o assistente iToca (SAI).</p>
                     <form id="integrationConfigForm" onsubmit="saveIntegrationConfig(event)">
                         <div class="form-group">
@@ -3714,50 +3939,9 @@
                     </form>
                 </section>
 
-                <section class="settings-card">
-                    <h3>Ajuda e Atualizações</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
-                    <form id="updateSourceForm" onsubmit="saveUpdateSourceConfig(event)">
-                        <div class="form-group">
-                            <label>GitHub Owner</label>
-                            <input type="text" id="updateGithubOwner" placeholder="seu-usuario-ou-org" autocomplete="off">
-                        </div>
-                        <div class="form-group">
-                            <label>GitHub Repositório</label>
-                            <input type="text" id="updateGithubRepo" placeholder="TocaDoCoelho" autocomplete="off">
-                        </div>
-                        <div class="form-group">
-                            <label>GitHub Token <span style="color:#9ca3af; font-weight:normal;">(opcional — evita o limite de verificações)</span></label>
-                            <input type="password" id="updateGithubToken" placeholder="ghp_..." autocomplete="off">
-                            <small id="updateGithubTokenStatus" style="color:#6b7280; display:block; margin-top:4px;"></small>
-                        </div>
-                        <small id="currentVersionLabel" style="color:#6b7280; display:block; margin-bottom:10px;"></small>
-                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                            <button type="submit" class="btn btn-secondary btn-small"><i class="fas fa-save"></i> Salvar Fonte</button>
-                            <button type="button" class="btn btn-primary btn-small" onclick="checkForUpdates()"><i class="fas fa-cloud-download-alt"></i> Verificar atualizações</button>
-                        </div>
-                    </form>
-                    <div id="updateCheckResult" style="margin-top:12px; color:#4b5563; font-size:13px;"></div>
-                </section>
-
-
-                <section class="settings-card" id="startupSettingsCard">
-                    <h3>Sistema</h3>
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
-                        <div>
-                            <strong>Iniciar com o Windows</strong>
-                            <p style="margin:4px 0 0; color:#6b7280; font-size:13px;">Iniciar o Toca do Coelho automaticamente quando o Windows ligar.</p>
-                        </div>
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;">
-                            <input type="checkbox" id="startupToggle" onchange="setStartupConfig(this.checked)" disabled style="width:18px; height:18px; cursor:pointer; accent-color:#10b981;">
-                            <span id="startupToggleLabel" style="font-size:13px; color:#6b7280;">Carregando...</span>
-                        </label>
-                    </div>
-                    <small id="startupSettingStatus" style="color:#6b7280; display:block; margin-top:8px;"></small>
-                </section>
-
+                <!-- 9. Logs de Depuração -->
                 <section class="settings-card" id="debugLogsSettingsCard">
-                    <h3>Logs de Depuração</h3>
+                    <h3><i class="fas fa-bug" style="margin-right:8px; color:#059669;"></i>Logs de Depuração</h3>
                     <p style="margin-bottom:10px; color:#4b5563;">Habilite para capturar eventos detalhados do cliente (janelas abertas, chamadas à API, erros) e sincronizá-los com o log do servidor. Útil para diagnosticar falhas intermitentes — como pop-ups bloqueados na Mala Direta.</p>
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:10px;">
                         <div>
@@ -3778,74 +3962,52 @@
                     <pre id="debugLogsViewer" style="max-height:340px; min-height:140px; overflow:auto; background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px; font-size:11px; font-family:'Courier New',monospace; white-space:pre-wrap; margin:0;">Clique em "Atualizar" para carregar os logs do servidor.</pre>
                 </section>
 
+                <!-- 10. MSG Padrão -->
                 <section class="settings-card">
-                    <h3>MSG Padrão</h3>
+                    <h3><i class="fas fa-comment-dots" style="margin-right:8px; color:#059669;"></i>MSG Padrão</h3>
                     <form onsubmit="saveMessageTemplate(event)">
                         <input type="hidden" id="templateId">
                         <div class="form-group"><label>Título</label><input type="text" id="templateTitle" required></div>
-                        <div class="form-group"><label>Descritivo</label><textarea id="templateDescription" rows="3" required></textarea></div>
+                        <div class="form-group">
+                            <label>Descritivo</label>
+                            <textarea id="templateDescription" rows="3" required></textarea>
+                            <div style="margin-top:6px;">
+                                <div style="font-size:11px; color:#6b7280; margin-bottom:5px;">Variáveis disponíveis (clique para inserir):</div>
+                                <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;conta&gt;')">&lt;conta&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;nome do contato&gt;')">&lt;nome do contato&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;sobrenome&gt;')">&lt;sobrenome&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;cargo&gt;')">&lt;cargo&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;setor&gt;')">&lt;setor&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;data&gt;')">&lt;data&gt;</button>
+                                </div>
+                            </div>
+                        </div>
                         <div class="form-group" style="display:flex; gap:16px; align-items:center;">
                             <label><input type="checkbox" id="templateWhatsapp" checked> <i class="fab fa-whatsapp"></i> WhatsApp</label>
                             <label><input type="checkbox" id="templateEmail" checked> <i class="fas fa-envelope"></i> Email</label>
                         </div>
-                        <button class="btn btn-secondary btn-small" type="submit"><i class="fas fa-save"></i> Salvar MSG</button>
+                        <button class="btn btn-primary" type="submit" style="margin-top:4px;"><i class="fas fa-save"></i> Salvar MSG Padrão</button>
                     </form>
                     <div id="templateList" style="margin-top:12px;"></div>
                 </section>
 
-                <section class="settings-card">
-                    <h3>Cadastro do Usuário</h3>
-                    <form id="userProfileForm" onsubmit="saveUserProfile(event)">
-                        <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
-                        <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
-                        <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
-                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
-                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
-                        <div class="form-group"><label>Boss (opcional)</label><input type="text" name="boss_name"></div>
-                        <div class="form-group"><label>Email do Boss (opcional)</label><input type="email" name="boss_email"></div>
-                        <div class="form-group">
-                            <label>Foto *</label>
-                            <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
-                            <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
-                        </div>
-                        <div style="display: flex; gap: 10px; align-items: center;">
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
-                            <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
-                        </div>
-                    </form>
-                </section>
-
-                <section class="settings-card">
-                    <h3><i class="fas fa-download"></i> Exportar Base de Clientes</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Exporte todos os dados cadastrais dos clientes em CSV.</p>
-                    <button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>
-                </section>
-
-                <section class="settings-card">
-                    <h3><i class="fas fa-download"></i> Exportar Atividades</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Exporte atividades com filtro de período.</p>
-                    <div class="form-group"><label>Data Inicial</label><input type="date" id="startDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
-                    <div class="form-group"><label>Data Final</label><input type="date" id="endDate" style="border:2px solid #e5e7eb; padding:10px; border-radius:8px; width:100%;"></div>
-                    <button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>
-                </section>
-
-                <section class="settings-card">
-                    <h3><i class="fas fa-database"></i> Backup do Banco de Dados</h3>
-                    <p style="margin-bottom:12px; color:#4b5563;">Faça backup completo ou restaure o banco de dados.</p>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+                <!-- 11. Sistema -->
+                <section class="settings-card" id="startupSettingsCard">
+                    <h3><i class="fas fa-gear" style="margin-right:8px; color:#059669;"></i>Sistema</h3>
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
                         <div>
-                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Exportar Banco</h4>
-                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Baixe uma cópia completa do banco de dados (com opção de incluir imagens)</p>
-                            <button class="btn btn-primary" onclick="backupDatabase()"><i class="fas fa-download"></i> Exportar Banco</button>
+                            <strong>Iniciar com o Windows</strong>
+                            <p style="margin:4px 0 0; color:#6b7280; font-size:13px;">Iniciar o Toca do Coelho automaticamente quando o Windows ligar.</p>
                         </div>
-                        <div>
-                            <h4 style="color:#065f46; margin-bottom:8px; font-size:14px;">Importar Banco</h4>
-                            <p style="color:#6b7280; font-size:13px; margin-bottom:10px;">Restaure um backup .db ou pacote .zip (cria backup automático antes)</p>
-                            <input type="file" id="restoreDbInput" accept=".db,.zip" style="display:none;" onchange="restoreDatabase(event)">
-                            <button class="btn btn-secondary" onclick="document.getElementById('restoreDbInput').click()"><i class="fas fa-upload"></i> Importar Banco</button>
-                        </div>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;">
+                            <input type="checkbox" id="startupToggle" onchange="setStartupConfig(this.checked)" disabled style="width:18px; height:18px; cursor:pointer; accent-color:#10b981;">
+                            <span id="startupToggleLabel" style="font-size:13px; color:#6b7280;">Carregando...</span>
+                        </label>
                     </div>
+                    <small id="startupSettingStatus" style="color:#6b7280; display:block; margin-top:8px;"></small>
                 </section>
+
             </div>
         </div>
 
@@ -4535,6 +4697,7 @@
         let autoTocaMailingPositions = [];
         let autoTocaMailingAreas = [];
         let autoTocaMailingSelection = [];
+        let _autoTocaMailingPreviewFiltered = [];
 
         // Tab switching
         // Rastreia a aba ativa anterior para detectar saída do iToca
@@ -4641,6 +4804,11 @@
             if (tabName === 'home') loadHome();
             else if (tabName === 'dashboard') loadDashboard();
             else if (tabName === 'iata') {
+                // Reativa input caso tenha ficado travado por um processo anterior
+                const iataEl = document.getElementById('iataText');
+                const iataBtn = document.getElementById('iataAskBtn');
+                if (iataEl) { iataEl.disabled = false; }
+                if (iataBtn) { iataBtn.disabled = false; }
                 clearITocaChat();
                 loadITocaHistory();
                 loadITocaBaseStatus();
@@ -5006,15 +5174,7 @@
             const grid = document.querySelector('#configuracoes .settings-grid');
             if (!grid) return;
 
-            const userCard = Array.from(grid.querySelectorAll('.settings-card')).find(card => {
-                const title = card.querySelector('h3');
-                return title && title.textContent.trim() === 'Cadastro do Usuário';
-            });
-            if (userCard && grid.firstElementChild !== userCard) {
-                grid.insertBefore(userCard, grid.firstElementChild);
-            }
-
-            grid.querySelectorAll('.settings-card').forEach((card, index) => {
+            grid.querySelectorAll('.settings-card').forEach((card) => {
                 if (card.dataset.collapsibleReady === '1') return;
                 const title = card.querySelector('h3');
                 if (!title) return;
@@ -5029,7 +5189,8 @@
                 }
                 card.appendChild(body);
 
-                if (index !== 0) card.classList.add('settings-collapsed');
+                // Todas as seções iniciam fechadas
+                card.classList.add('settings-collapsed');
                 title.addEventListener('click', () => {
                     const shouldOpen = card.classList.contains('settings-collapsed');
                     grid.querySelectorAll('.settings-collapsible').forEach(otherCard => {
@@ -5286,6 +5447,35 @@
                 return;
             }
 
+            if (mode === 'status') {
+                wrap.innerHTML = `
+                    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; width:100%;">
+                        <div class="form-group" style="margin:0; min-width:180px;">
+                            <label>Status</label>
+                            <select id="atMailingFilterValue" onchange="onAutoTocaMailingStatusSubModeChange()">
+                                <option value="red">Atrasado</option>
+                                <option value="yellow">Atenção</option>
+                                <option value="green">Em dia</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; min-width:200px;">
+                            <label>Subfiltro (opcional)</label>
+                            <select id="atMailingStatusSubMode" onchange="onAutoTocaMailingStatusSubModeChange()">
+                                <option value="">Nenhum</option>
+                                <option value="position">Cargo</option>
+                                <option value="area">Área de Atuação</option>
+                                <option value="company">Conta</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; min-width:220px; flex:1; display:none;" id="atMailingStatusSubValueWrap">
+                            <label id="atMailingStatusSubValueLabel">Cargo</label>
+                            <select id="atMailingStatusSubValue"></select>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
             wrap.innerHTML = `
                 <label id="atMailingFilterLabel"></label>
                 <select id="atMailingFilterValue"></select>
@@ -5303,6 +5493,43 @@
             filterEl.innerHTML = options.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
         }
 
+        function onAutoTocaMailingStatusSubModeChange() {
+            const subModeEl = document.getElementById('atMailingStatusSubMode');
+            const wrap = document.getElementById('atMailingStatusSubValueWrap');
+            const label = document.getElementById('atMailingStatusSubValueLabel');
+            const valueEl = document.getElementById('atMailingStatusSubValue');
+            if (!subModeEl || !wrap || !label || !valueEl) return;
+
+            const subMode = subModeEl.value;
+            if (!subMode) {
+                wrap.style.display = 'none';
+                valueEl.innerHTML = '';
+                return;
+            }
+
+            const status = (document.getElementById('atMailingFilterValue')?.value || 'red').trim();
+            const pool = (autoTocaMailingClients || []).filter(c =>
+                getStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact) === status
+            );
+
+            let options;
+            if (subMode === 'position') {
+                label.textContent = 'Cargo';
+                options = Array.from(new Set(pool.map(c => (c.position || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            } else if (subMode === 'area') {
+                label.textContent = 'Área de Atuação';
+                options = Array.from(new Set(pool.map(c => (c.area_of_activity || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            } else {
+                label.textContent = 'Conta';
+                options = Array.from(new Set(pool.map(c => (c.company || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            }
+
+            wrap.style.display = '';
+            valueEl.innerHTML = options.length
+                ? options.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')
+                : '<option value="">Nenhum contato neste status</option>';
+        }
+
         function _getAutoTocaFilteredMailingClients() {
             const mode = document.getElementById('atMailingMode')?.value || 'position';
             if (mode === 'manual') {
@@ -5310,6 +5537,22 @@
                 const terms = q.split(',').map(s => s.trim()).filter(Boolean);
                 if (!terms.length) return [];
                 return autoTocaMailingClients.filter(c => terms.some(term => String(c.name || '').toLowerCase().includes(term)));
+            }
+
+            if (mode === 'status') {
+                const status = (document.getElementById('atMailingFilterValue')?.value || '').trim();
+                if (!status) return [];
+                let pool = (autoTocaMailingClients || []).filter(c =>
+                    getStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact) === status
+                );
+                const subMode = (document.getElementById('atMailingStatusSubMode')?.value || '').trim();
+                const subValue = (document.getElementById('atMailingStatusSubValue')?.value || '').trim();
+                if (subMode && subValue) {
+                    if (subMode === 'position') pool = pool.filter(c => (c.position || '') === subValue);
+                    else if (subMode === 'area') pool = pool.filter(c => (c.area_of_activity || '') === subValue);
+                    else if (subMode === 'company') pool = pool.filter(c => (c.company || '') === subValue);
+                }
+                return pool;
             }
 
             const selected = (document.getElementById('atMailingFilterValue')?.value || '').trim();
@@ -5342,15 +5585,90 @@
         function openAutoTocaMailingPreview() {
             const filtered = _getAutoTocaFilteredMailingClients();
             if (!filtered.length) return showInfo('Nenhum contato encontrado para esse filtro.');
-            autoTocaMailingSelection = filtered.filter(c => String(c.email || '').trim()).map(c => c.id);
+            _autoTocaMailingPreviewFiltered = filtered;
+
+            // Reseta canal para e-mail ao abrir o preview
+            _autoTocaMailingChannel = 'email';
+
+            // Seleção inicial: apenas contatos visíveis (não arquivados e não frios) com e-mail
+            autoTocaMailingSelection = filtered
+                .filter(c => !isArchivedClient(c) && !Number(c.is_cold_contact))
+                .filter(c => String(c.email || '').trim())
+                .map(c => c.id);
+
+            const hasArchived = filtered.some(c => isArchivedClient(c));
+            const hasCold = filtered.some(c => Number(c.is_cold_contact) === 1);
 
             let html = `<div class="modal active" id="autoTocaMailingPreviewModal" onclick="if(event.target===this) closeAutoTocaMailingPreview()">`;
             html += `<div class="modal-content" style="max-width:920px;">`;
             html += `<h2 style="color:#047857;">Mala Direta — Seleção de Contatos</h2>`;
-            html += `<p style="color:#6b7280; margin-bottom:12px;">Desmarque quem não deve receber. Contatos sem e-mail serão ignorados no envio.</p>`;
-            html += `<div style="max-height:420px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(250px,1fr)); gap:10px;">`;
-            html += filtered.map(c => {
-                const noEmail = !String(c.email || '').trim();
+
+            // Toggle de canal — fica AQUI, no preview, onde o usuário vê quem tem o dado de contato
+            html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; padding:9px 14px; background:rgba(243,244,246,.6); border:1px solid #e5e7eb; border-radius:10px; flex-wrap:wrap;">
+                <span style="font-size:13px; font-weight:600; color:#374151;">Canal de envio:</span>
+                <button id="atPreviewChEmail" class="btn btn-primary btn-small" onclick="_switchAutoTocaMailingChannelInPreview('email')"><i class="fas fa-envelope"></i> E-mail</button>
+                <button id="atPreviewChWpp" class="btn btn-secondary btn-small" onclick="_switchAutoTocaMailingChannelInPreview('whatsapp')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+                <span id="atPreviewChannelNote" style="font-size:12px; color:#6b7280; margin-left:4px;">Apenas contatos com e-mail poderão ser selecionados.</span>
+            </div>`;
+
+            // Barra de filtros internos do modal
+            html += `<div style="display:flex; align-items:center; gap:16px; padding:9px 14px; background:rgba(243,244,246,.85); border:1px solid #e5e7eb; border-radius:10px; margin-bottom:14px; flex-wrap:wrap;">
+                <span style="font-size:12px; font-weight:700; color:#374151; text-transform:uppercase; letter-spacing:.04em;">Exibir também:</span>
+                <label style="display:flex; align-items:center; gap:7px; cursor:pointer; font-size:13px; color:#4b5563; ${!hasArchived ? 'opacity:.4; pointer-events:none;' : ''}">
+                    <input type="checkbox" id="atMailingShowArchived" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#6b7280;" ${!hasArchived ? 'disabled' : ''}>
+                    <i class="fas fa-box-archive" style="color:#6b7280; font-size:12px;"></i>
+                    Arquivados${hasArchived ? '' : ' <em style="font-size:11px;">(nenhum neste filtro)</em>'}
+                </label>
+                <label style="display:flex; align-items:center; gap:7px; cursor:pointer; font-size:13px; color:#4b5563; ${!hasCold ? 'opacity:.4; pointer-events:none;' : ''}">
+                    <input type="checkbox" id="atMailingShowCold" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#0e7490;" ${!hasCold ? 'disabled' : ''}>
+                    <i class="fas fa-snowflake" style="color:#0e7490; font-size:12px;"></i>
+                    Frios${hasCold ? '' : ' <em style="font-size:11px;">(nenhum neste filtro)</em>'}
+                </label>
+                <label style="display:flex; align-items:center; gap:7px; cursor:pointer; font-size:13px; color:#4b5563; margin-left:auto;">
+                    <input type="checkbox" id="atMailingHideNoContact" onchange="_renderAutoTocaMailingPreviewContacts()" style="cursor:pointer; accent-color:#dc2626;" checked>
+                    <i class="fas fa-eye-slash" style="color:#dc2626; font-size:12px;"></i>
+                    <span id="atMailingHideNoContactLabel">Ocultar sem e-mail</span>
+                </label>
+            </div>`;
+
+            html += `<div id="atMailingPreviewGrid" style="max-height:420px; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(250px,1fr)); gap:10px;">`;
+            html += _buildAutoTocaMailingPreviewContactsHTML();
+            html += `</div>`;
+            html += `<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingPreview()">Cancelar</button><button class="btn btn-primary" onclick="openAutoTocaMailingComposer()">Próximo →</button></div>`;
+            html += `</div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function _buildAutoTocaMailingPreviewContactsHTML() {
+            const showArchived = document.getElementById('atMailingShowArchived')?.checked || false;
+            const showCold = document.getElementById('atMailingShowCold')?.checked || false;
+            const hideNoContact = document.getElementById('atMailingHideNoContact')?.checked ?? true;
+            const isWpp = _autoTocaMailingChannel === 'whatsapp';
+
+            const visible = _autoTocaMailingPreviewFiltered.filter(c => {
+                if (isArchivedClient(c) && !showArchived) return false;
+                if (Number(c.is_cold_contact) === 1 && !showCold) return false;
+                if (hideNoContact) {
+                    const hasContact = isWpp
+                        ? !!normalizePhoneForWhatsapp(c.phone)
+                        : !!String(c.email || '').trim();
+                    if (!hasContact) return false;
+                }
+                return true;
+            });
+
+            if (!visible.length) {
+                return `<div style="grid-column:1/-1; text-align:center; color:#6b7280; padding:30px 0; font-size:14px;">
+                    <i class="fas fa-filter" style="margin-bottom:8px; font-size:22px; opacity:.4; display:block;"></i>
+                    Nenhum contato a exibir com os filtros selecionados.
+                </div>`;
+            }
+
+            return visible.map(c => {
+                const noContact = isWpp
+                    ? !normalizePhoneForWhatsapp(c.phone)
+                    : !String(c.email || '').trim();
+                const missingLabel = isWpp ? 'Sem telefone' : 'Sem e-mail';
                 const status = getAutoTocaMailingStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact);
                 const isCold = Number(c.is_cold_contact) === 1;
                 const isArchived = isArchivedClient(c);
@@ -5358,8 +5676,9 @@
                 if (isCold) badges.push('<span title="Contato marcado como frio" style="display:inline-flex; align-items:center; gap:4px; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(8,145,178,.12); color:#0e7490; border:1px solid rgba(8,145,178,.3); font-weight:600;"><i class="fas fa-snowflake"></i> Frio</span>');
                 if (isArchived) badges.push('<span title="Contato arquivado" style="display:inline-flex; align-items:center; gap:4px; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(107,114,128,.15); color:#374151; border:1px solid rgba(107,114,128,.3); font-weight:600;"><i class="fas fa-box-archive"></i> Arquivado</span>');
                 const badgesHtml = badges.length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">${badges.join('')}</div>` : '';
-                return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noEmail ? 'rgba(156,163,175,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noEmail ? 'rgba(243,244,246,.7)' : 'rgba(236,253,245,.5)'}; ${noEmail ? 'opacity:.6; cursor:not-allowed;' : 'cursor:pointer;'}">
-                    <input type="checkbox" ${noEmail ? 'disabled' : 'checked'} onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
+                const isSelected = autoTocaMailingSelection.includes(c.id);
+                return `<label style="display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid ${noContact ? 'rgba(156,163,175,.45)' : 'rgba(16,185,129,.25)'}; border-radius:10px; background:${noContact ? 'rgba(243,244,246,.7)' : 'rgba(236,253,245,.5)'}; ${noContact ? 'opacity:.6; cursor:not-allowed;' : 'cursor:pointer;'}">
+                    <input type="checkbox" ${noContact ? 'disabled' : (isSelected ? 'checked' : '')} onchange="toggleAutoTocaMailingContact(${Number(c.id)}, this.checked)" style="margin-top:4px;">
                     <img src="${c.photo_url || '/logo-coelho.png'}" style="width:40px;height:40px;border-radius:999px;object-fit:cover;">
                     <div style="min-width:0;">
                         <div style="font-weight:700; color:#065f46; display:flex; align-items:center; gap:6px;">
@@ -5370,21 +5689,50 @@
                         <div style="font-size:12px;color:#9ca3af;">${escapeHtml(c.position || '-')}</div>
                         <div style="font-size:12px;color:#9ca3af;">${escapeHtml(c.area_of_activity || '-')}</div>
                         ${badgesHtml}
-                        ${noEmail ? '<div style="font-size:12px;color:#b45309; margin-top:4px;"><i class="fas fa-triangle-exclamation"></i> Sem e-mail</div>' : ''}
+                        ${noContact ? `<div style="font-size:12px;color:#b45309; margin-top:4px;"><i class="fas fa-triangle-exclamation"></i> ${missingLabel}</div>` : ''}
                     </div>
                 </label>`;
             }).join('');
-            html += `</div>`;
-            html += `<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingPreview()">Cancelar</button><button class="btn btn-primary" onclick="openAutoTocaMailingComposer()">Próximo →</button></div>`;
-            html += `</div></div>`;
-            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function _renderAutoTocaMailingPreviewContacts() {
+            const showArchived = document.getElementById('atMailingShowArchived')?.checked || false;
+            const showCold = document.getElementById('atMailingShowCold')?.checked || false;
+
+            // Calcula quais ficam visíveis após a mudança
+            const visible = _autoTocaMailingPreviewFiltered.filter(c => {
+                if (isArchivedClient(c) && !showArchived) return false;
+                if (Number(c.is_cold_contact) === 1 && !showCold) return false;
+                return true;
+            });
+            const visibleIds = new Set(visible.map(c => c.id));
+
+            // Remove da seleção os que ficaram ocultos
+            autoTocaMailingSelection = autoTocaMailingSelection.filter(id => visibleIds.has(id));
+
+            // Adiciona automaticamente os recém-exibidos que têm a info de contato do canal
+            const isWppRender = _autoTocaMailingChannel === 'whatsapp';
+            visible.forEach(c => {
+                const hasContact = isWppRender
+                    ? !!normalizePhoneForWhatsapp(c.phone)
+                    : !!String(c.email || '').trim();
+                if (hasContact && !autoTocaMailingSelection.includes(c.id)) {
+                    autoTocaMailingSelection.push(c.id);
+                }
+            });
+
+            const grid = document.getElementById('atMailingPreviewGrid');
+            if (grid) grid.innerHTML = _buildAutoTocaMailingPreviewContactsHTML();
         }
 
         function toggleAutoTocaMailingContact(contactId, checked) {
             const contact = autoTocaMailingClients.find(c => Number(c.id) === Number(contactId));
-            const hasEmail = String(contact?.email || '').trim();
+            const isWpp = _autoTocaMailingChannel === 'whatsapp';
+            const hasContact = isWpp
+                ? !!normalizePhoneForWhatsapp(contact?.phone)
+                : !!String(contact?.email || '').trim();
             if (checked) {
-                if (!hasEmail) return;
+                if (!hasContact) return;
                 if (!autoTocaMailingSelection.includes(contactId)) autoTocaMailingSelection.push(contactId);
                 return;
             }
@@ -5395,38 +5743,174 @@
             document.getElementById('autoTocaMailingPreviewModal')?.remove();
         }
 
+        function _switchAutoTocaMailingChannelInPreview(ch) {
+            _autoTocaMailingChannel = ch;
+
+            // Botões de toggle no preview
+            const emailBtn = document.getElementById('atPreviewChEmail');
+            const wppBtn   = document.getElementById('atPreviewChWpp');
+            if (emailBtn) emailBtn.className = `btn btn-small ${ch === 'email' ? 'btn-primary' : 'btn-secondary'}`;
+            if (wppBtn)   wppBtn.className   = `btn btn-small ${ch === 'whatsapp' ? 'btn-primary' : 'btn-secondary'}`;
+
+            // Nota de canal e label do ocultar
+            const note = document.getElementById('atPreviewChannelNote');
+            if (note) note.textContent = ch === 'email'
+                ? 'Apenas contatos com e-mail poderão ser selecionados.'
+                : 'Apenas contatos com telefone poderão ser selecionados.';
+            const hideLabel = document.getElementById('atMailingHideNoContactLabel');
+            if (hideLabel) hideLabel.textContent = ch === 'email' ? 'Ocultar sem e-mail' : 'Ocultar sem telefone';
+
+            // Redefine a seleção para o novo canal (apenas visíveis com a info necessária)
+            const showArchived = document.getElementById('atMailingShowArchived')?.checked || false;
+            const showCold = document.getElementById('atMailingShowCold')?.checked || false;
+            const visible = _autoTocaMailingPreviewFiltered.filter(c => {
+                if (isArchivedClient(c) && !showArchived) return false;
+                if (Number(c.is_cold_contact) === 1 && !showCold) return false;
+                return true;
+            });
+
+            autoTocaMailingSelection = visible.filter(c => {
+                return ch === 'whatsapp'
+                    ? !!normalizePhoneForWhatsapp(c.phone)
+                    : !!String(c.email || '').trim();
+            }).map(c => c.id);
+
+            const grid = document.getElementById('atMailingPreviewGrid');
+            if (grid) grid.innerHTML = _buildAutoTocaMailingPreviewContactsHTML();
+        }
+
         function openAutoTocaMailingComposer() {
             const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
             if (!selectedContacts.length) return showInfo('Selecione ao menos um contato.');
             closeAutoTocaMailingPreview();
+            // Canal já definido no preview — não resetar aqui
 
-            const chips = selectedContacts.map(c => {
-                const missing = !String(c.email || '').trim();
-                return `<span id="chip-destinatario-${c.id}" style="display:inline-flex; gap:6px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${escapeHtml(c.name || '-')} ${missing ? '<i class="fas fa-triangle-exclamation" title="Sem e-mail"></i>' : ''}<button type="button" onclick="removeAutoTocaMailingRecipient(${Number(c.id)})" title="Remover destinatário" aria-label="Remover destinatário ${escapeHtml(c.name || '-')}" style="border:none; background:transparent; color:#ef4444; cursor:pointer; padding:0; font-size:12px; line-height:1;"><i class="fas fa-times"></i></button></span>`;
+            const isWppComposer = _autoTocaMailingChannel === 'whatsapp';
+            const initialChips = selectedContacts.map(c => {
+                const missing = isWppComposer
+                    ? !normalizePhoneForWhatsapp(c.phone)
+                    : !String(c.email || '').trim();
+                const icon = missing
+                    ? `<i class="fas fa-triangle-exclamation" title="${isWppComposer ? 'Sem telefone' : 'Sem e-mail'}"></i>`
+                    : '';
+                const wppIcon = isWppComposer ? `<i class="fab fa-whatsapp" style="color:${missing ? '#b45309' : '#059669'}; font-size:11px;"></i> ` : '';
+                return `<span id="chip-destinatario-${c.id}" style="display:inline-flex; gap:5px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${wppIcon}${escapeHtml(c.name || '-')} ${icon}<button type="button" onclick="removeAutoTocaMailingRecipient(${Number(c.id)})" title="Remover destinatário" aria-label="Remover destinatário ${escapeHtml(c.name || '-')}" style="border:none; background:transparent; color:#ef4444; cursor:pointer; padding:0; font-size:12px; line-height:1;"><i class="fas fa-times"></i></button></span>`;
             }).join('');
 
-            const mergeTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            const initialMergeTags = isWppComposer
+                ? ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>']
+                : ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            const mergeTagsBtns = initialMergeTags.map(tag =>
+                `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`
+            ).join('');
+
+            const channelBadge = isWppComposer
+                ? `<span class="btn btn-small btn-primary" style="pointer-events:none; background:#25d366; border-color:#25d366;"><i class="fab fa-whatsapp"></i> WhatsApp</span>`
+                : `<span class="btn btn-small btn-primary" style="pointer-events:none;"><i class="fas fa-envelope"></i> E-mail</span>`;
+            const channelNoteText = isWppComposer
+                ? 'Os contatos sem telefone serão ignorados no envio.'
+                : 'Os contatos sem e-mail serão ignorados no envio.';
+
             let html = `<div class="modal active" id="autoTocaMailingComposerModal">`;
             html += `<div class="modal-content" style="max-width:1120px;">`;
             html += `<h2 style="color:#047857; margin-bottom:10px;">Mala Direta — Composição</h2>`;
+            // Exibe o canal escolhido (somente leitura — troca no preview)
+            html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:9px 14px; background:rgba(243,244,246,.6); border:1px solid #e5e7eb; border-radius:10px; flex-wrap:wrap;">
+                <span style="font-size:13px; font-weight:600; color:#374151;">Canal de envio:</span>
+                ${channelBadge}
+                <span id="atMailingChannelNote" style="font-size:12px; color:#6b7280; margin-left:4px;">${channelNoteText}</span>
+            </div>`;
             html += `<div style="display:grid; grid-template-columns:220px 1fr 250px; gap:14px;">`;
             html += `<div style="border:1px solid rgba(16,185,129,.2); border-radius:10px; padding:10px; background:rgba(236,253,245,.55);">
                 <div style="font-weight:700; color:#065f46; margin-bottom:8px;">Chaves de merge</div>
-                <p style="font-size:12px; color:#4b5563; line-height:1.45;">Use as chaves ao lado para personalizar o texto. Cada chave será substituída automaticamente pelo dado real de cada contato no momento do envio.</p>
-                <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
-                    ${mergeTags.map(tag => `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`).join('')}
-                </div>
+                <p style="font-size:12px; color:#4b5563; line-height:1.45;">Cada chave será substituída pelo dado real do contato no momento do envio.</p>
+                <div id="atMailingMergeTagsPanel" style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">${mergeTagsBtns}</div>
             </div>`;
+            const initialSubjectDisplay = isWppComposer ? 'none' : '';
+            const initialBodyLabel = isWppComposer ? 'Mensagem WhatsApp' : 'Mensagem';
+            const initialBodyPlaceholder = isWppComposer
+                ? 'Olá <nome do contato>! Tudo bem?\n\nEstamos entrando em contato sobre...'
+                : 'Escreva o corpo do e-mail usando as chaves desejadas.';
+            const initialSendBtnHtml = isWppComposer
+                ? '<i class="fab fa-whatsapp"></i> Disparar via WhatsApp'
+                : '<i class="fas fa-paper-plane"></i> Abrir e-mails no Outlook';
+
             html += `<div>
-                <div class="form-group"><label>Destinatários confirmados</label><div id="autoTocaMailingComposerRecipients" style="display:flex; flex-wrap:wrap; gap:6px; border:1px solid #d1d5db; border-radius:8px; padding:8px; min-height:42px; background:#fff;">${chips}</div></div>
-                <div class="form-group"><label>Assunto</label><input id="autoTocaMailingSubject" type="text" placeholder="Ex: Olá <nome do contato>, oportunidade para <conta>"></div>
-                <div class="form-group"><label>Mensagem</label><textarea id="autoTocaMailingBody" rows="10" placeholder="Escreva o corpo do e-mail usando as chaves desejadas."></textarea></div>
-                <div style="display:flex; justify-content:flex-end; gap:10px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingComposer()">Cancelar</button><button id="autoTocaMailingSendBtn" class="btn btn-primary" onclick="sendAutoTocaMailingBatch()">Abrir e-mails no Outlook</button></div>
+                <div class="form-group"><label>Destinatários confirmados</label><div id="autoTocaMailingComposerRecipients" style="display:flex; flex-wrap:wrap; gap:6px; border:1px solid #d1d5db; border-radius:8px; padding:8px; min-height:42px; background:#fff;">${initialChips}</div></div>
+                <div id="atMailingSubjectGroup" class="form-group" style="display:${initialSubjectDisplay};"><label>Assunto</label><input id="autoTocaMailingSubject" type="text" placeholder="Ex: Olá &lt;nome do contato&gt;, oportunidade para &lt;conta&gt;"></div>
+                <div class="form-group"><label id="atMailingBodyLabel">${initialBodyLabel}</label><textarea id="autoTocaMailingBody" rows="10" placeholder="${initialBodyPlaceholder}"></textarea></div>
+                <div style="display:flex; justify-content:flex-end; gap:10px;"><button class="btn btn-secondary" onclick="closeAutoTocaMailingComposer()">Cancelar</button><button id="autoTocaMailingSendBtn" class="btn btn-primary" onclick="sendAutoTocaMailingBatch()">${initialSendBtnHtml}</button></div>
             </div>`;
-            html += `<div style="border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','autoTocaMailingBody')}</div>`;
+            html += `<div style="border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4><div id="atMailingTemplateDrawer">${renderTemplateDrawer(isWppComposer ? 'whatsapp' : 'email','autoTocaMailingBody')}</div></div>`;
             html += `</div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
             updateAutoTocaMailingComposerSendState();
+        }
+
+        function _switchAutoTocaMailingChannel(ch) {
+            _autoTocaMailingChannel = ch;
+
+            // Botões de toggle
+            const emailBtn = document.getElementById('atMailingChEmail');
+            const wppBtn   = document.getElementById('atMailingChWpp');
+            if (emailBtn) emailBtn.className = `btn btn-small ${ch === 'email' ? 'btn-primary' : 'btn-secondary'}`;
+            if (wppBtn)   wppBtn.className   = `btn btn-small ${ch === 'whatsapp' ? 'btn-primary' : 'btn-secondary'}`;
+
+            // Nota de canal
+            const note = document.getElementById('atMailingChannelNote');
+            if (note) note.textContent = ch === 'email'
+                ? 'Os contatos sem e-mail serão ignorados no envio.'
+                : 'Os contatos sem telefone serão ignorados no envio.';
+
+            // Assunto (só e-mail tem assunto)
+            const subjectGroup = document.getElementById('atMailingSubjectGroup');
+            if (subjectGroup) subjectGroup.style.display = ch === 'email' ? '' : 'none';
+
+            // Label e placeholder do corpo
+            const bodyLabel = document.getElementById('atMailingBodyLabel');
+            const bodyEl    = document.getElementById('autoTocaMailingBody');
+            if (bodyLabel) bodyLabel.textContent = ch === 'email' ? 'Mensagem' : 'Mensagem WhatsApp';
+            if (bodyEl) bodyEl.placeholder = ch === 'email'
+                ? 'Escreva o corpo do e-mail usando as chaves desejadas.'
+                : 'Olá <nome do contato>! Tudo bem?\n\nEstamos entrando em contato sobre...';
+
+            // Painel de chaves de merge
+            const mergePanel = document.getElementById('atMailingMergeTagsPanel');
+            if (mergePanel) {
+                const tags = ch === 'email'
+                    ? ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<email>']
+                    : ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<telefone>'];
+                mergePanel.innerHTML = tags.map(tag =>
+                    `<button type="button" class="btn btn-secondary btn-small" onclick="insertAutoTocaMergeTag('${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`
+                ).join('');
+            }
+
+            // Chips de destinatários
+            const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
+            const recipientsEl = document.getElementById('autoTocaMailingComposerRecipients');
+            if (recipientsEl) {
+                const chips = selectedContacts.map(c => {
+                    const missing = ch === 'whatsapp'
+                        ? !normalizePhoneForWhatsapp(c.phone)
+                        : !String(c.email || '').trim();
+                    const icon = missing
+                        ? (ch === 'whatsapp' ? '<i class="fas fa-triangle-exclamation" title="Sem telefone"></i>' : '<i class="fas fa-triangle-exclamation" title="Sem e-mail"></i>')
+                        : '';
+                    const wppIcon = ch === 'whatsapp' ? `<i class="fab fa-whatsapp" style="color:${missing ? '#b45309' : '#059669'}; font-size:11px;"></i> ` : '';
+                    return `<span id="chip-destinatario-${c.id}" style="display:inline-flex; gap:5px; align-items:center; padding:4px 10px; border-radius:999px; border:1px solid ${missing ? 'rgba(245,158,11,.4)' : 'rgba(16,185,129,.35)'}; background:${missing ? 'rgba(255,251,235,.8)' : 'rgba(236,253,245,.8)'}; font-size:12px;">${wppIcon}${escapeHtml(c.name || '-')} ${icon}<button type="button" onclick="removeAutoTocaMailingRecipient(${Number(c.id)})" title="Remover" style="border:none; background:transparent; color:#ef4444; cursor:pointer; padding:0; font-size:12px; line-height:1; margin-left:2px;"><i class="fas fa-times"></i></button></span>`;
+                }).join('') || '<span style="font-size:12px; color:#6b7280;">Nenhum destinatário.</span>';
+                recipientsEl.innerHTML = chips;
+            }
+
+            // Botão de envio
+            const sendBtn = document.getElementById('autoTocaMailingSendBtn');
+            if (sendBtn) sendBtn.innerHTML = ch === 'email'
+                ? '<i class="fas fa-paper-plane"></i> Abrir e-mails no Outlook'
+                : '<i class="fab fa-whatsapp"></i> Disparar via WhatsApp';
+
+            // Gaveta de templates
+            const drawerEl = document.getElementById('atMailingTemplateDrawer');
+            if (drawerEl) drawerEl.innerHTML = renderTemplateDrawer(ch === 'email' ? 'email' : 'whatsapp', 'autoTocaMailingBody');
         }
 
         function updateAutoTocaMailingComposerSendState() {
@@ -5474,19 +5958,55 @@
             return String(name || '').trim().split(/\s+/)[0] || '';
         }
 
+        function getAutoTocaContactLastName(name) {
+            const parts = String(name || '').trim().split(/\s+/);
+            return parts.length > 1 ? parts[parts.length - 1] : '';
+        }
+
         function applyMergeFields(template, contact) {
             return String(template || '')
                 .replaceAll('<nome do contato>', getAutoTocaContactFirstName(contact.name))
+                .replaceAll('<sobrenome>', getAutoTocaContactLastName(contact.name))
                 .replaceAll('<conta>', contact.company || '')
                 .replaceAll('<cargo>', contact.position || '')
                 .replaceAll('<area de atuacao>', contact.area_of_activity || '')
-                .replaceAll('<email>', contact.email || '');
+                .replaceAll('<email>', contact.email || '')
+                .replaceAll('<telefone>', contact.phone || '');
+        }
+
+        /** Insere uma chave de merge na posição do cursor de qualquer textarea/input pelo id. */
+        function insertMergeTagInto(textareaId, tag) {
+            const el = document.getElementById(textareaId);
+            if (!el) return;
+            el.focus();
+            const start = Number.isFinite(el.selectionStart) ? el.selectionStart : el.value.length;
+            const end   = Number.isFinite(el.selectionEnd)   ? el.selectionEnd   : start;
+            el.value = el.value.slice(0, start) + tag + el.value.slice(end);
+            const pos = start + tag.length;
+            el.setSelectionRange(pos, pos);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        /** Insere chave de merge no campo ativo do modal de e-mail individual (assunto ou corpo). */
+        function insertEmailDraftMergeTag(tag) {
+            const subjectEl = document.getElementById('emailDraftSubject');
+            const bodyEl    = document.getElementById('emailDraftBody');
+            const activeEl  = document.activeElement;
+            const target    = (activeEl === subjectEl || activeEl === bodyEl) ? activeEl : (bodyEl || subjectEl);
+            if (!target) return;
+            insertMergeTagInto(target.id, tag);
         }
 
         // Estado global do despacho da mala direta (uma lista por vez).
         let autoTocaMailingDispatchDrafts = [];
+        let _autoTocaMailingChannel = 'email'; // 'email' | 'whatsapp'
 
         function sendAutoTocaMailingBatch() {
+            if (_autoTocaMailingChannel === 'whatsapp') {
+                _sendAutoTocaWhatsAppBatch();
+                return;
+            }
+
             const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
             const subjectTemplate = document.getElementById('autoTocaMailingSubject')?.value || '';
             const bodyTemplate = document.getElementById('autoTocaMailingBody')?.value || '';
@@ -5509,7 +6029,39 @@
                     contact,
                     subject,
                     body,
+                    channel: 'email',
                     url: `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(contact.email)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+                    status: 'pending'
+                };
+            });
+
+            closeAutoTocaMailingComposer();
+            openAutoTocaMailingDispatchModal(skipped);
+        }
+
+        function _sendAutoTocaWhatsAppBatch() {
+            const selectedContacts = autoTocaMailingClients.filter(c => autoTocaMailingSelection.includes(c.id));
+            const bodyTemplate = document.getElementById('autoTocaMailingBody')?.value || '';
+            const contactsWithPhone = selectedContacts.filter(c => normalizePhoneForWhatsapp(c.phone));
+            const skipped = selectedContacts.length - contactsWithPhone.length;
+
+            if (!contactsWithPhone.length) return showError('Nenhum contato selecionado possui telefone válido para WhatsApp.');
+
+            tocaDebug('mala-direta.send-wpp', 'Iniciando despacho WhatsApp', {
+                selected: selectedContacts.length,
+                withPhone: contactsWithPhone.length,
+                skipped
+            });
+
+            autoTocaMailingDispatchDrafts = contactsWithPhone.map((contact, idx) => {
+                const body = applyMergeFields(bodyTemplate, contact);
+                const phone = normalizePhoneForWhatsapp(contact.phone);
+                return {
+                    idx,
+                    contact,
+                    body,
+                    phone,
+                    channel: 'whatsapp',
                     status: 'pending'
                 };
             });
@@ -5522,30 +6074,48 @@
             const drafts = autoTocaMailingDispatchDrafts;
             if (!drafts.length) return;
 
-            const rowsHtml = drafts.map((d, i) => `
+            const isWpp = drafts[0]?.channel === 'whatsapp';
+
+            const rowsHtml = drafts.map((d, i) => {
+                const subInfo = isWpp
+                    ? `<div style="font-size:12px; color:#6b7280;"><i class="fab fa-whatsapp" style="color:#25d366;"></i> ${escapeHtml(d.phone || '-')}</div>`
+                    : `<div style="font-size:12px; color:#6b7280;">${escapeHtml(d.contact.email || '-')}</div>
+                       <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>`;
+                const btnIcon = isWpp ? '<i class="fab fa-whatsapp"></i>' : '<i class="fas fa-paper-plane"></i>';
+                const btnLabel = isWpp ? 'Abrir no WhatsApp' : 'Abrir no Outlook';
+                return `
                 <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
                     <div style="min-width:0; overflow:hidden;">
                         <div style="font-weight:600; color:#065f46;">${escapeHtml(d.contact.name || '-')}</div>
-                        <div style="font-size:12px; color:#6b7280;">${escapeHtml(d.contact.email)}</div>
-                        <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>
+                        ${subInfo}
                     </div>
                     <span class="mailing-dispatch-status" id="mailingDispatchStatus_${i}" style="font-size:12px; color:#92400e; white-space:nowrap;">Pendente</span>
-                    <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})"><i class="fas fa-paper-plane"></i> Abrir no Outlook</button>
-                </div>
-            `).join('');
+                    <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})">${btnIcon} ${btnLabel}</button>
+                </div>`;
+            }).join('');
+
+            const batchBtnHtml = isWpp
+                ? `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-forward-step"></i> Abrir próximo no WhatsApp</button>`
+                : `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;
+
+            const batchNote = isWpp
+                ? `Cada mensagem WhatsApp deve ser aberta e enviada individualmente — o sistema reutiliza a mesma aba do WhatsApp Web. Use <strong>Abrir próximo no WhatsApp</strong> para ciclar pelos contatos em sequência, ou <strong>Abrir no WhatsApp</strong> em cada linha para enviar um por vez.`
+                : `Para evitar o bloqueador de pop-ups do navegador, cada janela do Outlook é aberta por um clique individual.
+                   Clique em <strong>Abrir no Outlook</strong> em cada linha para disparar a janela correspondente e registrar automaticamente a atividade daquele contato.
+                   Se você já autorizou pop-ups deste site, pode tentar o modo em lote no botão abaixo.`;
+
+            const skippedNote = skipped
+                ? `<p style="color:#92400e; font-size:12px; margin-bottom:10px;">${skipped} contato(s) sem ${isWpp ? 'telefone' : 'e-mail'} foram ignorados.</p>`
+                : '';
 
             const html = `
                 <div class="modal active" id="autoTocaMailingDispatchModal" onclick="if(event.target===this) closeAutoTocaMailingDispatchModal()">
                     <div class="modal-content" style="max-width:900px;">
-                        <h2 style="color:#047857; margin-bottom:8px;">Mala Direta — Despacho</h2>
-                        <p style="color:#4b5563; font-size:13px; margin-bottom:10px; line-height:1.45;">
-                            Para evitar o bloqueador de pop-ups do navegador, cada janela do Outlook é aberta por um clique individual.
-                            Clique em <strong>Abrir no Outlook</strong> em cada linha para disparar a janela correspondente e registrar automaticamente a atividade daquele contato.
-                            Se você já autorizou pop-ups deste site, pode tentar o modo em lote no botão abaixo.
-                        </p>
-                        ${skipped ? `<p style="color:#92400e; font-size:12px; margin-bottom:10px;">${skipped} contato(s) sem e-mail foram ignorados.</p>` : ''}
+                        <h2 style="color:#047857; margin-bottom:8px;">Mala Direta — Despacho ${isWpp ? '<i class="fab fa-whatsapp" style="color:#25d366; font-size:20px;"></i>' : '<i class="fas fa-envelope"></i>'}</h2>
+                        <p style="color:#4b5563; font-size:13px; margin-bottom:10px; line-height:1.45;">${batchNote}</p>
+                        ${skippedNote}
                         <div style="display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap;">
-                            <button class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>
+                            ${batchBtnHtml}
                             <span id="mailingDispatchCounter" style="font-size:12px; color:#6b7280;">0 de ${drafts.length} enviados</span>
                         </div>
                         <div style="display:flex; flex-direction:column; gap:8px; max-height:55vh; overflow:auto; padding-right:4px;">
@@ -5558,7 +6128,7 @@
                 </div>
             `;
             document.body.insertAdjacentHTML('beforeend', html);
-            tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length });
+            tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length, channel: drafts[0]?.channel });
         }
 
         function closeAutoTocaMailingDispatchModal() {
@@ -5593,8 +6163,8 @@
             try {
                 const formData = new FormData();
                 formData.set('client_id', draft.contact.id);
-                formData.set('contact_type', 'Email');
-                formData.set('information', draft.body || 'Email enviado.');
+                formData.set('contact_type', draft.channel === 'whatsapp' ? 'WhatsApp' : 'Email');
+                formData.set('information', draft.body || (draft.channel === 'whatsapp' ? 'Mensagem WhatsApp enviada.' : 'Email enviado.'));
                 const response = await fetch(`${API_BASE}/atividades`, { method: 'POST', body: formData });
                 if (!response.ok) {
                     tocaDebug('mala-direta.activity', 'Falha HTTP ao registrar atividade', {
@@ -5623,20 +6193,34 @@
             const draft = autoTocaMailingDispatchDrafts[idx];
             if (!draft || draft.status === 'sent') return;
 
+            const isWpp = draft.channel === 'whatsapp';
+
             tocaDebug('mala-direta.dispatch-one', 'Abrindo janela individual', {
                 idx,
                 contact_id: draft.contact.id,
-                email: draft.contact.email
+                channel: draft.channel,
+                contact: isWpp ? draft.phone : draft.contact.email
             });
 
-            const win = window.open(draft.url, '_blank');
-            if (!win) {
-                tocaDebug('mala-direta.dispatch-one', 'window.open retornou null (pop-up bloqueado)', {
-                    idx,
-                    contact_id: draft.contact.id
-                });
-                showError('O navegador bloqueou a janela. Permita pop-ups para este site e tente novamente.');
-                return;
+            if (isWpp) {
+                // WhatsApp: respeita preferência desktop/web igual ao dashboard
+                if (getWhatsAppPreference() === 'desktop') {
+                    openWhatsAppDesktopWithFallback(draft.phone, draft.body);
+                } else {
+                    const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
+                    openWhatsAppTab(webUrl);
+                }
+            } else {
+                // Email: abre no Outlook Web
+                const win = window.open(draft.url, '_blank');
+                if (!win) {
+                    tocaDebug('mala-direta.dispatch-one', 'window.open retornou null (pop-up bloqueado)', {
+                        idx,
+                        contact_id: draft.contact.id
+                    });
+                    showError('O navegador bloqueou a janela. Permita pop-ups para este site e tente novamente.');
+                    return;
+                }
             }
 
             draft.status = 'sent';
@@ -5645,9 +6229,10 @@
             // Pergunta UMA vez, por contato, se deseja registrar a atividade.
             // O modal de despacho garante que este fluxo é serial (um clique por vez),
             // então não há o problema de concorrência do resolve global do openSystemDialog.
-            const contactName = draft.contact.name || draft.contact.email;
+            const contactName = draft.contact.name || (isWpp ? draft.phone : draft.contact.email);
+            const channelLabel = isWpp ? 'WhatsApp' : 'Email';
             const shouldRegister = await uiConfirm(
-                `Deseja registrar essa interação de Email como atividade em "${contactName}"?`
+                `Deseja registrar essa interação de ${channelLabel} como atividade em "${contactName}"?`
             );
             tocaDebug('mala-direta.dispatch-one', 'Decisão sobre registro da atividade', {
                 idx,
@@ -5737,10 +6322,49 @@
         function sendAutoTocaMailingDispatchAll() {
             const pending = autoTocaMailingDispatchDrafts.filter(d => d.status === 'pending');
             if (!pending.length) {
-                showInfo('Não há e-mails pendentes para abrir.');
+                showInfo('Não há mensagens pendentes para abrir.');
                 return;
             }
 
+            if (_autoTocaMailingChannel === 'whatsapp') {
+                // WhatsApp: modo sequencial — respeita preferência desktop/web
+                const draft = pending[0];
+                if (getWhatsAppPreference() === 'desktop') {
+                    openWhatsAppDesktopWithFallback(draft.phone, draft.body);
+                } else {
+                    const webUrl = `https://web.whatsapp.com/send?phone=${encodeURIComponent(draft.phone)}&text=${encodeURIComponent(draft.body)}`;
+                    openWhatsAppTab(webUrl);
+                }
+                draft.status = 'sent';
+                _updateAutoTocaMailingDispatchRow(draft.idx);
+
+                const remaining = autoTocaMailingDispatchDrafts.filter(d => d.status === 'pending');
+                const batchBtnEl = document.getElementById('mailingDispatchBatchBtn');
+                if (batchBtnEl) {
+                    if (remaining.length > 0) {
+                        batchBtnEl.innerHTML = `<i class="fas fa-forward-step"></i> Próximo (${remaining.length} restantes)`;
+                    } else {
+                        batchBtnEl.innerHTML = `<i class="fas fa-check-double"></i> Todos abertos`;
+                        batchBtnEl.disabled = true;
+                    }
+                }
+
+                (async () => {
+                    const contactName = draft.contact.name || draft.phone;
+                    const shouldRegister = await uiConfirm(
+                        `Deseja registrar essa interação de WhatsApp como atividade em "${contactName}"?`
+                    );
+                    if (shouldRegister) {
+                        const ok = await _registerAutoTocaMailingActivity(draft);
+                        if (ok) {
+                            try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+                        }
+                    }
+                })();
+                return;
+            }
+
+            // Email: verifica permissão de pop-ups e abre todos de uma vez
             if (!_isAutoTocaMailingPopupHelpDismissed()) {
                 _openAutoTocaMailingPopupHelpModal(_doAutoTocaMailingDispatchAll);
                 return;
@@ -6581,7 +7205,7 @@
             let html = '<div class="filters-bar">';
             html += '<div class="filters-row">';
             if (prefix === 'Dashboard') {
-                html += `<div class="filter-group"><label class="filter-label">Pesquisa</label><input class="filter-input" type="text" placeholder="Pesquisar contato" value="${escapeHtml(dashboardSearch)}" oninput="setDashboardContactSearch(this.value)"></div>`;
+                html += `<div class="filter-group"><label class="filter-label">Pesquisa</label><input id="dashboardSearchInput" class="filter-input" type="text" placeholder="Pesquisar contato" value="${escapeHtml(dashboardSearch)}" oninput="setDashboardContactSearch(this.value)"></div>`;
             }
             html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
             if (prefix === 'Clients') {
@@ -6603,19 +7227,23 @@
             dashboardPositionFilter = '';
             dashboardTargetFilter = '';
             dashboardContactSearch = '';
-            loadDashboard();
+            // Re-renderiza a barra de filtros (reseta dropdowns e campo de busca) sem buscar no servidor
+            _renderDashboardFilters();
+            _renderDashboardTable();
         }
 
         function setDashboardFilter(type, value) {
             if (type === 'company') dashboardCompanyFilter = value;
             if (type === 'position') dashboardPositionFilter = value;
             if (type === 'target') dashboardTargetFilter = value;
-            loadDashboard();
+            // Só re-renderiza a tabela — a barra de filtros não é destruída (sem perda de foco)
+            _renderDashboardTable();
         }
 
         function setDashboardContactSearch(value) {
             dashboardContactSearch = (value || '').trimStart();
-            loadDashboard();
+            // Só re-renderiza a tabela — o input de busca não é destruído (sem perda de foco)
+            _renderDashboardTable();
         }
 
 
@@ -6739,6 +7367,8 @@
             firstLoad: true,
             resizeHandlerBound: false,
             cardActionsInjected: false,
+            includeArchived: false,
+            includeCold: false,
         };
 
         const HOME_PALETTE = ['#22d3ee', '#3b82f6', '#a855f7', '#ec4899', '#f97316', '#facc15', '#22c55e', '#14b8a6'];
@@ -7016,6 +7646,12 @@
             });
         }
 
+        function onHomeFilterChange() {
+            HOME_STATE.includeArchived = document.getElementById('homeIncludeArchived')?.checked || false;
+            HOME_STATE.includeCold = document.getElementById('homeIncludeCold')?.checked || false;
+            loadHome(true);
+        }
+
         async function loadHome(force = false) {
             const tab = document.getElementById('home');
             if (!tab) return;
@@ -7025,6 +7661,8 @@
             if (HOME_STATE.period === 'months' && HOME_STATE.months.length) {
                 params.set('months', HOME_STATE.months.join(','));
             }
+            params.set('include_archived', HOME_STATE.includeArchived ? '1' : '0');
+            params.set('include_cold', HOME_STATE.includeCold ? '1' : '0');
 
             try {
                 const resp = await fetch(`/api/home/overview?${params.toString()}`);
@@ -7087,8 +7725,8 @@
             const meta = 80;
             const cob = Number(k.cobertura_pct || 0);
             const diff = cob - meta;
-            const delta = diff === 0 ? `Meta atingida (${meta}%)` : (diff > 0 ? `${diff} p.p. acima da meta (${meta}%)` : `${Math.abs(diff)} p.p. abaixo da meta (${meta}%)`);
-            setFoot('kpiCoberturaFoot', delta, diff < 0 ? 'delta-down' : (diff > 0 ? 'delta-up' : ''));
+            const deltaLabel = diff === 0 ? `Meta atingida (${meta}%)` : (diff > 0 ? `${diff} p.p. acima da meta` : `${Math.abs(diff)} p.p. abaixo da meta`);
+            setFoot('kpiCoberturaFoot', `${deltaLabel} · últimos 30 dias`, diff < 0 ? 'delta-down' : (diff > 0 ? 'delta-up' : ''));
         }
 
         function _renderHomeUserCard() {
@@ -7119,6 +7757,130 @@
                 avatarEl.innerHTML = `<span>${escapeHtml((lastNameDisplay || 'U').charAt(0).toUpperCase())}</span>`;
             }
         }
+
+        async function openCoberturaDetail() {
+            // Cobertura usa janela fixa de 30 dias — sem params de período
+
+            // Garante que o modal existe no DOM (cria uma vez, reutiliza)
+            let modal = document.getElementById('coberturaDetailModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'coberturaDetailModal';
+                modal.className = 'coberturaDetailModal';
+                modal.setAttribute('role', 'dialog');
+                modal.setAttribute('aria-modal', 'true');
+                modal.onclick = (e) => { if (e.target === modal) closeCoberturaDetail(); };
+                document.body.appendChild(modal);
+            }
+
+            modal.innerHTML = `
+                <div class="cob-modal-box">
+                    <div class="cob-modal-header">
+                        <div>
+                            <div class="cob-modal-title"><i class="fas fa-bullseye" style="color:#7c3aed;margin-right:7px;"></i>Cobertura de Relacionamento</div>
+                            <div class="cob-modal-period" id="cobPeriodLabel">Carregando…</div>
+                        </div>
+                        <button class="cob-modal-close" onclick="closeCoberturaDetail()" title="Fechar">✕</button>
+                    </div>
+                    <div class="cob-modal-loading" id="cobModalLoading"><i class="fas fa-spinner fa-spin"></i> Carregando dados…</div>
+                    <div id="cobModalContent" style="display:none;">
+                        <div class="cob-modal-summary">
+                            <div>
+                                <div class="cob-modal-pct" id="cobPct">—</div>
+                                <div class="cob-modal-pct-label">de cobertura</div>
+                            </div>
+                            <div class="cob-modal-counts">
+                                <div class="cob-modal-count covered">
+                                    <div class="cob-modal-count-n" id="cobCoveredCount">—</div>
+                                    <div class="cob-modal-count-lbl">com atividade</div>
+                                </div>
+                                <div class="cob-modal-count" style="color:#9ca3af">
+                                    <div class="cob-modal-count-n" style="color:#9ca3af;font-size:22px;font-weight:700;" id="cobTotalCount">—</div>
+                                    <div class="cob-modal-count-lbl">total de contas</div>
+                                </div>
+                                <div class="cob-modal-count uncovered">
+                                    <div class="cob-modal-count-n" id="cobUncoveredCount">—</div>
+                                    <div class="cob-modal-count-lbl">sem atividade</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="cob-modal-body">
+                            <div>
+                                <div class="cob-section-title covered"><i class="fas fa-circle-check"></i> Com atividade (<span id="cobCoveredCountInner">0</span>)</div>
+                                <div class="cob-account-list" id="cobCoveredList"></div>
+                            </div>
+                            <div>
+                                <div class="cob-section-title uncovered"><i class="fas fa-circle-xmark"></i> Sem atividade (<span id="cobUncoveredCountInner">0</span>)</div>
+                                <div class="cob-account-list" id="cobUncoveredList"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+            document.removeEventListener('keydown', _coberturaDetailEsc); // evita duplicação
+            document.addEventListener('keydown', _coberturaDetailEsc);
+
+            try {
+                const resp = await fetch(`/api/home/cobertura-detail`);
+                if (!resp.ok) throw new Error('Falha ao carregar dados.');
+                const data = await resp.json();
+
+                document.getElementById('cobPeriodLabel').textContent = data.period_label || '';
+                document.getElementById('cobPct').textContent = `${data.cobertura_pct || 0}%`;
+                document.getElementById('cobCoveredCount').textContent = data.covered_count || 0;
+                document.getElementById('cobTotalCount').textContent = data.total || 0;
+                document.getElementById('cobUncoveredCount').textContent = (data.total || 0) - (data.covered_count || 0);
+                document.getElementById('cobCoveredCountInner').textContent = data.covered_count || 0;
+                document.getElementById('cobUncoveredCountInner').textContent = (data.total || 0) - (data.covered_count || 0);
+
+                // Lista de contas COM atividade
+                const covEl = document.getElementById('cobCoveredList');
+                if (!data.covered?.length) {
+                    covEl.innerHTML = '<div class="cob-empty">Nenhuma conta com atividade no período.</div>';
+                } else {
+                    covEl.innerHTML = data.covered.map(acc => {
+                        const lastDt = acc.last_activity ? formatDateBr(acc.last_activity) : '—';
+                        const targetBadge = acc.is_target ? '<span class="cob-account-target-badge">⭐ target</span>' : '';
+                        return `<div class="cob-account-row${acc.is_target ? ' is-target' : ''}">
+                            <span class="cob-account-name" title="${escapeHtml(acc.name || '')}">${escapeHtml(acc.name || '—')}</span>
+                            ${targetBadge}
+                            <span class="cob-account-count">${acc.activity_count} ativ.</span>
+                            <span class="cob-account-meta">último: ${lastDt}</span>
+                        </div>`;
+                    }).join('');
+                }
+
+                // Lista de contas SEM atividade
+                const uncovEl = document.getElementById('cobUncoveredList');
+                if (!data.uncovered?.length) {
+                    uncovEl.innerHTML = '<div class="cob-empty" style="color:#059669;">✅ Todas as contas têm atividade registrada no período!</div>';
+                } else {
+                    uncovEl.innerHTML = data.uncovered.map(acc => {
+                        const targetBadge = acc.is_target ? '<span class="cob-account-target-badge">⭐ target</span>' : '';
+                        return `<div class="cob-account-row${acc.is_target ? ' is-target' : ''}">
+                            <span class="cob-account-name" title="${escapeHtml(acc.name || '')}">${escapeHtml(acc.name || '—')}</span>
+                            ${targetBadge}
+                            <span class="cob-account-meta" style="color:#9ca3af;">sem registro</span>
+                        </div>`;
+                    }).join('');
+                }
+
+                document.getElementById('cobModalLoading').style.display = 'none';
+                document.getElementById('cobModalContent').style.display = '';
+            } catch (e) {
+                document.getElementById('cobModalLoading').innerHTML = `<i class="fas fa-circle-exclamation" style="color:#ef4444;"></i> Erro ao carregar: ${escapeHtml(e.message)}`;
+            }
+        }
+
+        function closeCoberturaDetail() {
+            const modal = document.getElementById('coberturaDetailModal');
+            if (modal) modal.style.display = 'none';
+            document.body.style.overflow = '';
+            document.removeEventListener('keydown', _coberturaDetailEsc);
+        }
+        function _coberturaDetailEsc(e) { if (e.key === 'Escape') closeCoberturaDetail(); }
 
         async function exportHomeDashboard() {
             const btn = document.getElementById('homeExportBtn');
@@ -7428,6 +8190,89 @@
             }
         }
 
+        // Renderiza apenas a barra de filtros no container dedicado.
+        // Chamada por loadDashboard() e clearDashboardFilters().
+        function _renderDashboardFilters() {
+            const container = document.getElementById('dashboardFiltersContainer');
+            if (!container) return;
+            container.innerHTML = renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
+        }
+
+        // Renderiza apenas a tabela de contatos no container dedicado, usando os dados já
+        // em memória. Não faz fetch — é chamada diretamente por filtros e busca para que o
+        // input de pesquisa nunca seja destruído (evita perda de foco durante a digitação).
+        function _renderDashboardTable() {
+            const container = document.getElementById('dashboardTableContainer');
+            if (!container) return;
+
+            if (!clients || clients.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                return;
+            }
+
+            const contactSearchTerm = (dashboardContactSearch || '').trim().toLocaleLowerCase('pt-BR');
+            let filteredClients = clients.filter(client => {
+                const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
+                const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
+                const byTarget = !dashboardTargetFilter || (dashboardTargetFilter === 'target' ? Number(client.is_target) === 1 : Number(client.is_target) !== 1);
+                const byContact = !contactSearchTerm || String(client.name || '').toLocaleLowerCase('pt-BR').includes(contactSearchTerm);
+                return byCompany && byPosition && byTarget && byContact;
+            });
+
+            const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
+            const activeClients = sortedClients.filter(client => !isArchivedClient(client));
+            const archivedClients = sortedClients.filter(client => isArchivedClient(client));
+
+            let html = '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
+            html += '<th style="min-width:50px;"></th>';
+            html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Conta <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 140px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 120px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; min-width: 100px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
+            html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
+            html += '</tr></thead><tbody>';
+
+            const renderRow = (client, { isArchived = false } = {}) => {
+                const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
+                const statusClass = `status-${status}`;
+                const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
+                const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
+                const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
+                const companyCell = isArchived
+                    ? '<span style="color:#9ca3af;">(Arquivado)</span>'
+                    : `<button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button>`;
+                html += `<tr class="${isArchived ? 'archived-contact-row' : ''}">
+                    <td>${avatar}</td>
+                    <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
+                    <td style="min-width:142px;">${companyCell}</td>
+                    <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
+                    <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
+                    <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
+                    <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
+                    <td style="white-space: nowrap;">${isArchived ? '<span style="color:#9ca3af;">Arquivado</span>' : `<span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span>`}</td>
+                    <td style="text-align: center;">
+                        <div class="action-buttons">
+                            <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
+                            <button class="btn-icon-action" onclick="openWhatsAppMessageModal(${client.id})" title="Enviar mensagem no WhatsApp"><i class="fab fa-whatsapp"></i></button>
+                            <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>
+                        </div>
+                    </td>
+                </tr>`;
+            };
+
+            activeClients.forEach(client => renderRow(client));
+            html += `<tr class="dashboard-archived-header" onclick="toggleDashboardArchivedSection()"><td colspan="9"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Contatos Arquivados (${archivedClients.length})</span><span>${dashboardArchivedExpanded ? '▾' : '▸'}</span></div></td></tr>`;
+            if (dashboardArchivedExpanded) {
+                archivedClients.forEach(client => renderRow(client, { isArchived: true }));
+            }
+            html += '</tbody></table></div></div>';
+
+            container.innerHTML = html;
+        }
+
         async function loadDashboard() {
             try {
                 const response = await fetch(`${API_BASE}/clientes`);
@@ -7436,72 +8281,17 @@
                 await renderDashboardGreeting();
                 await updateWeekCommitmentsBell();
 
-                let html = '';
-                if (clients.length === 0) {
-                    html = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
-                } else {
-                    const contactSearchTerm = (dashboardContactSearch || '').trim().toLocaleLowerCase('pt-BR');
-                    let filteredClients = clients.filter(client => {
-                        const byCompany = !dashboardCompanyFilter || (client.company || '') === dashboardCompanyFilter;
-                        const byPosition = !dashboardPositionFilter || (client.position || '') === dashboardPositionFilter;
-                        const byTarget = !dashboardTargetFilter || (dashboardTargetFilter === 'target' ? Number(client.is_target) === 1 : Number(client.is_target) !== 1);
-                        const byContact = !contactSearchTerm || String(client.name || '').toLocaleLowerCase('pt-BR').includes(contactSearchTerm);
-                        return byCompany && byPosition && byTarget && byContact;
-                    });
-
-                    const sortedClients = sortClients(filteredClients, dashboardSortField, dashboardSortOrder);
-                    const activeClients = sortedClients.filter(client => !isArchivedClient(client));
-                    const archivedClients = sortedClients.filter(client => isArchivedClient(client));
-
-                    html += renderFilters('Dashboard', clients, dashboardCompanyFilter, dashboardPositionFilter);
-                    html += '<div class="dashboard-scroll-wrapper"><div class="table-container"><table class="dashboard-table"><thead><tr>';
-                                        html += '<th style="min-width:50px;"></th>';
-                    html += '<th onclick="toggleDashboardSort(\'name\')" style="cursor: pointer; min-width: 120px;">Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'company\')" style="cursor: pointer; min-width: 130px;">Conta <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'position\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Cargo <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'email\')" style="cursor: pointer; min-width: 140px; white-space: nowrap;">Email <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'phone\')" style="cursor: pointer; min-width: 120px; white-space: nowrap;">Telefone <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th class="th-last-contact" onclick="toggleDashboardSort(\'last_activity_date\')" style="cursor: pointer; min-width: 110px; white-space: nowrap;">Último Contato <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th onclick="toggleDashboardSort(\'status\')" style="cursor: pointer; min-width: 100px; white-space: nowrap;">Status <i class="fas fa-sort" style="opacity: 0.5; margin-left: 5px;"></i></th>';
-                    html += '<th style="min-width: 110px; text-align: center; white-space: nowrap;">Ação</th>';
-                    html += '</tr></thead><tbody>';
-
-                    const renderDashboardContactRow = (client, { isArchived = false } = {}) => {
-                        const status = getStatus(client.last_activity_date, client.position, client.is_target, client.is_cold_contact);
-                        const statusClass = `status-${status}`;
-                        const statusText = status === 'green' ? 'Em dia' : status === 'yellow' ? 'Atenção' : 'Atrasado';
-                        const avatarBase = client.photo_url ? `<img src="${client.photo_url}" class="client-avatar with-photo">` : `<div class="client-avatar">${client.name.charAt(0).toUpperCase()}</div>`;
-                        const avatar = `<div style="position:relative; display:inline-block;">${avatarBase}${Number(client.is_cold_contact)===1?'<span class="snowflake-badge">❄</span>':''}</div>`;
-                        const companyCell = isArchived
-                            ? '<span style="color:#9ca3af;">(Arquivado)</span>'
-                            : `<button class="table-link-btn" onclick="openGroupModalFromEncoded('company', '${encodeURIComponent(client.company || '')}')">${client.company}</button>`;
-                        html += `<tr class="${isArchived ? 'archived-contact-row' : ''}">
-                            <td>${avatar}</td>
-                            <td><button class="table-link-btn" onclick="closeGroupModal(); openProfileModal(${client.id})">${client.name}</button></td>
-                            <td style="min-width:142px;">${companyCell}</td>
-                            <td style="white-space: nowrap;"><button class="table-link-btn" onclick="openGroupModalFromEncoded('position', '${encodeURIComponent(client.position || '')}')">${client.position}</button></td>
-                            <td class="small-col-text" style="white-space: nowrap;">${client.email || '-'}</td>
-                            <td class="small-col-text" style="white-space: nowrap;">${formatPhone(client.phone) || '-'}</td>
-                            <td class="last-contact-text">${client.last_activity_date ? new Date(client.last_activity_date).toLocaleDateString('pt-BR') : '-'}</td>
-                            <td style="white-space: nowrap;">${isArchived ? '<span style="color:#9ca3af;">Arquivado</span>' : `<span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span>`}</td>
-                            <td style="text-align: center;">
-                                <div class="action-buttons">
-                                    <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
-                                    <button class="btn-icon-action" onclick="openWhatsAppMessageModal(${client.id})" title="Enviar mensagem no WhatsApp"><i class="fab fa-whatsapp"></i></button>
-                                    <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>
-                                </div>
-                            </td>
-                        </tr>`;
-                    };
-                    activeClients.forEach(client => renderDashboardContactRow(client));
-                    html += `<tr class="dashboard-archived-header" onclick="toggleDashboardArchivedSection()"><td colspan="9"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Contatos Arquivados (${archivedClients.length})</span><span>${dashboardArchivedExpanded ? '▾' : '▸'}</span></div></td></tr>`;
-                    if (dashboardArchivedExpanded) {
-                        archivedClients.forEach(client => renderDashboardContactRow(client, { isArchived: true }));
-                    }
-                    html += '</tbody></table></div></div>';
+                // Inicializa os dois containers separados na primeira carga.
+                // A barra de filtros (#dashboardFiltersContainer) persiste entre re-renders
+                // de tabela, garantindo que o input de pesquisa nunca perca o foco.
+                const content = document.getElementById('dashboardContent');
+                if (!document.getElementById('dashboardFiltersContainer')) {
+                    content.innerHTML = '<div id="dashboardFiltersContainer"></div><div id="dashboardTableContainer"></div>';
                 }
 
-                document.getElementById('dashboardContent').innerHTML = html;
+                _renderDashboardFilters();
+                _renderDashboardTable();
+
                 await updateWeekCommitmentsBell();
             } catch (error) {
                 showError('Erro ao carregar dashboard');
@@ -7914,14 +8704,17 @@
             if (clientSelect) {
                 clientSelect.disabled = false;
             }
-            
+
             // Reabilitar o select de empresa caso tenha sido bloqueado
             const companySelect = document.getElementById('companySelect');
             if (companySelect) {
                 companySelect.disabled = false;
             }
-            
-            document.getElementById('activityModal').classList.remove('active');
+
+            const activityModalEl = document.getElementById('activityModal');
+            activityModalEl.classList.remove('active');
+            // Restaura o z-index padrão caso tenha sido elevado por sobrepor a ficha.
+            activityModalEl.style.zIndex = '';
         }
 
         // Open Quick Activity Modal (from Dashboard)
@@ -7929,24 +8722,29 @@
             currentEditingActivityId = null;
             document.getElementById('activityModalTitle').textContent = `Nova Atividade - ${clientName}`;
             document.getElementById('activityForm').reset();
-            
+
             // Carregar clientes e pré-selecionar empresa
             await loadClientSelect(clientCompany);
-            
+
             // Pré-selecionar o cliente
             const clientSelect = document.getElementById('clientSelect');
             if (clientSelect) {
                 clientSelect.value = clientId;
                 clientSelect.disabled = true; // Bloquear alteração do cliente
             }
-            
+
             // Bloquear também a empresa
             const companySelect = document.getElementById('companySelect');
             if (companySelect) {
                 companySelect.disabled = true;
             }
-            
-            document.getElementById('activityModal').classList.add('active');
+
+            const activityModalEl = document.getElementById('activityModal');
+            // Se aberto por cima da ficha do contato, elevar para ficar acima do profileModal.
+            if (_profileModalOpenClientId) {
+                activityModalEl.style.zIndex = '1100';
+            }
+            activityModalEl.classList.add('active');
         }
 
         // Open Import Modal
@@ -8787,6 +9585,11 @@
                     closeActivityModal();
                     loadActivities();
                     loadDashboard();
+                    if (_profileModalOpenClientId) {
+                        const refreshId = _profileModalOpenClientId;
+                        await loadClients();
+                        await openProfileModal(refreshId);
+                    }
                 } else {
                     showError('Erro ao salvar atividade');
                 }
@@ -10499,7 +11302,8 @@
                 return;
             }
 
-            const message = document.getElementById('whatsMessageText')?.value?.trim() || '';
+            const rawMessage = document.getElementById('whatsMessageText')?.value?.trim() || '';
+            const message = applyMergeFields(rawMessage, client);
             const phone = normalizePhoneForWhatsapp(client.phone);
 
             if (!phone) {
@@ -11035,12 +11839,12 @@
                 dashboardSortField = field;
                 dashboardSortOrder = 'asc';
             }
-            loadDashboard();
+            _renderDashboardTable();
         }
 
         function toggleDashboardArchivedSection() {
             dashboardArchivedExpanded = !dashboardArchivedExpanded;
-            loadDashboard();
+            _renderDashboardTable();
         }
 
         function toggleClientsSort(field) {
@@ -11090,6 +11894,8 @@
             return `<div class="${className}">${initial}</div>`;
         }
 
+        let _profileModalOpenClientId = null;
+
         async function openProfileModal(clientId) {
             try {
                 const client = clients.find(c => c.id === clientId);
@@ -11097,6 +11903,7 @@
                     showError('Cliente não encontrado');
                     return;
                 }
+                _profileModalOpenClientId = clientId;
 
                 const response = await fetch(`${API_BASE}/atividades`);
                 const allActivities = await response.json();
@@ -11126,7 +11933,8 @@
                 }
 
                 const modalBody = `
-                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+                        <button class="btn btn-primary btn-small" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company || '')}')"><i class="fas fa-plus-circle"></i> Registrar Atividade</button>
                         ${archivedContact ? '' : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
                         <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
@@ -11161,6 +11969,7 @@
         }
 
         function closeProfileModal() {
+            _profileModalOpenClientId = null;
             document.getElementById('profileModal').classList.remove('active');
         }
 
@@ -11785,7 +12594,7 @@
             _itocaScrollToBottom();
         }
 
-        function _itocaAppendTyping() {
+        function _itocaAppendTyping(stepText) {
             _itocaHideEmpty();
             const container = document.getElementById('itocaChatMessages');
             if (!container) return null;
@@ -11794,7 +12603,10 @@
             div.id = 'itocaTypingIndicator';
             div.innerHTML = `
                 <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca"></div>
-                <div class="itoca-typing"><span></span><span></span><span></span></div>
+                <div class="itoca-typing">
+                    <div class="itoca-typing-dots"><span></span><span></span><span></span></div>
+                    <div class="itoca-typing-step" id="itocaTypingStep">${stepText || ''}</div>
+                </div>
             `;
             container.appendChild(div);
             _itocaScrollToBottom();
@@ -11804,6 +12616,11 @@
         function _itocaRemoveTyping() {
             const el = document.getElementById('itocaTypingIndicator');
             if (el) el.remove();
+        }
+
+        function _itocaUpdateTypingStep(stepText) {
+            const el = document.getElementById('itocaTypingStep');
+            if (el) { el.textContent = stepText || ''; _itocaScrollToBottom(); }
         }
 
         function _itocaConfidenceClass(pct) {
@@ -12178,7 +12995,7 @@
                     msgsEl.innerHTML = '<div class="itoca-history-empty">Sem mensagens.</div>';
                     return;
                 }
-                msgsEl.innerHTML = messages.map(m => {
+                const msgHtml = messages.map(m => {
                     const roleLabel = m.role === 'user' ? 'Você' : 'iToca';
                     const content = (m.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
                     const time = m.created_at ? formatDateBr(m.created_at) : '';
@@ -12192,6 +13009,8 @@
                         <div class="itoca-history-msg-content">${content}</div>
                     </div>`;
                 }).join('');
+                const safeSessionId = sessionId.replace(/'/g, "\\'");
+                msgsEl.innerHTML = msgHtml + `<button class="itoca-history-resume-btn" onclick="resumeITocaSession('${safeSessionId}')"><i class="fas fa-comments"></i> Continuar esta conversa</button>`;
             } catch (e) {
                 msgsEl.innerHTML = '<div class="itoca-history-empty">Erro ao carregar mensagens.</div>';
             }
@@ -12212,11 +13031,161 @@
             }
         }
 
+        // Retoma uma conversa do histórico: carrega as mensagens no chat e reutiliza o session_id
+        async function resumeITocaSession(sessionId) {
+            try {
+                const response = await fetch(`${API_BASE}/itoca/history/${encodeURIComponent(sessionId)}`);
+                const messages = await response.json().catch(() => []);
+                if (!Array.isArray(messages) || messages.length === 0) {
+                    showError('Não foi possível carregar a conversa.');
+                    return;
+                }
+
+                // Reutiliza o session_id existente — o backend vai usar o histórico do BD como contexto
+                _itocaSessionId = sessionId;
+                _itocaSessionHasMessages = true;
+
+                // Limpa e popula o chat com o histórico
+                const container = document.getElementById('itocaChatMessages');
+                if (!container) return;
+                _itocaHideEmpty();
+                container.innerHTML = '';
+
+                // Marca de separação visual para o contexto retomado
+                const divider = document.createElement('div');
+                divider.className = 'itoca-msg system';
+                divider.innerHTML = `<span class="itoca-system-bubble"><i class="fas fa-history"></i> Conversa retomada do histórico</span>`;
+                container.appendChild(divider);
+
+                messages.forEach(m => {
+                    const div = document.createElement('div');
+                    if (m.role === 'user') {
+                        div.className = 'itoca-msg user replayed';
+                        const escaped = (m.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                        div.innerHTML = `
+                            <div class="itoca-msg-avatar">${_itocaGetUserAvatarHtml()}</div>
+                            <div class="itoca-msg-bubble">${escaped}</div>`;
+                    } else {
+                        div.className = 'itoca-msg assistant replayed';
+                        const htmlContent = _itocaRenderMarkdown(m.content || '');
+                        let confidenceBadge = '';
+                        if (m.confidence_percent != null) {
+                            const cls = _itocaConfidenceClass(m.confidence_percent);
+                            confidenceBadge = `<span class="itoca-confidence ${cls}">${m.confidence_percent}%</span>`;
+                        }
+                        div.innerHTML = `
+                            <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt="iToca" onerror="this.style.display='none'"></div>
+                            <div class="itoca-msg-bubble itoca-assistant-bubble">
+                                <div class="itoca-answer-text">${htmlContent}</div>
+                                ${confidenceBadge}
+                            </div>`;
+                    }
+                    container.appendChild(div);
+                });
+
+                // Separador visual indicando onde a nova mensagem será enviada
+                const continueDiv = document.createElement('div');
+                continueDiv.className = 'itoca-msg system';
+                continueDiv.innerHTML = `<span class="itoca-system-bubble"><i class="fas fa-pencil-alt"></i> Continue a conversa abaixo</span>`;
+                container.appendChild(continueDiv);
+
+                _itocaScrollToBottom();
+
+                // Fecha o histórico e sobe para o chat
+                document.getElementById('itocaHistorySection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setTimeout(() => {
+                    document.getElementById('iata')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    document.getElementById('iataText')?.focus();
+                }, 200);
+
+            } catch (e) {
+                showError('Erro ao retomar conversa.');
+            }
+        }
+
+        // Adiciona uma mensagem de sistema (informativa) ao chat do iToca
+        function _itocaAppendSystemMsg(text) {
+            _itocaHideEmpty();
+            const container = document.getElementById('itocaChatMessages');
+            if (!container) return null;
+            const div = document.createElement('div');
+            div.className = 'itoca-msg system';
+            div.innerHTML = `<span class="itoca-system-bubble">${text}</span>`;
+            container.appendChild(div);
+            _itocaScrollToBottom();
+            return div;
+        }
+
         function handleITocaKeydown(event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 askIToca();
             }
+        }
+
+        // Verifica se a base do iToca está desatualizada (> 1 dia). Se sim, faz update
+        // incremental silencioso antes de prosseguir com a pergunta.
+        async function _itocaCheckAndAutoUpdate() {
+            try {
+                const statusResp = await fetch(`${API_BASE}/itoca/base-status`);
+                if (!statusResp.ok) return;
+                const statusData = await statusResp.json().catch(() => ({}));
+
+                if (!statusData.updated_at) return; // base nunca atualizada, não intervém
+
+                const updatedAt = new Date(statusData.updated_at.replace(' ', 'T'));
+                const diffMs = Date.now() - updatedAt.getTime();
+                if (diffMs < 24 * 60 * 60 * 1000) return; // menos de 1 dia → ok
+
+                // Base com mais de 1 dia → update incremental silencioso
+                const statusMsgEl = _itocaAppendSystemMsg('⏳ Base iToca desatualizada. Atualizando antes de responder...');
+
+                const updateResp = await fetch(`${API_BASE}/itoca/base-update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ incremental: true })
+                });
+                if (!updateResp.ok) {
+                    statusMsgEl?.remove();
+                    return;
+                }
+                const { task_id } = await updateResp.json().catch(() => ({}));
+                if (!task_id) { statusMsgEl?.remove(); return; }
+
+                // Polling até concluir, dar erro ou atingir timeout de 30s
+                await Promise.race([
+                    new Promise((resolve) => {
+                        const poll = async () => {
+                            try {
+                                const taskResp = await fetch(`${API_BASE}/tasks/${task_id}`);
+                                const taskData = await taskResp.json().catch(() => ({}));
+                                if (taskData.status === 'done') {
+                                    if (statusMsgEl) statusMsgEl.querySelector('.itoca-system-bubble').innerHTML = '✅ Base atualizada! Processando sua pergunta...';
+                                    // Atualiza o label de status
+                                    const lbl = document.getElementById('itocaBaseUpdatedAt');
+                                    if (lbl && taskData.result?.updated_at) {
+                                        const mode = taskData.result.incremental ? ' (incremental)' : '';
+                                        lbl.textContent = `Último update: ${formatDateBr(taskData.result.updated_at)} — ${taskData.result.items_count} registros${mode}`;
+                                    }
+                                    setTimeout(() => statusMsgEl?.remove(), 1800);
+                                    resolve();
+                                } else if (taskData.status === 'error') {
+                                    statusMsgEl?.remove();
+                                    resolve();
+                                } else {
+                                    setTimeout(poll, 1500);
+                                }
+                            } catch (_e) { statusMsgEl?.remove(); resolve(); }
+                        };
+                        poll();
+                    }),
+                    new Promise(resolve => setTimeout(() => {
+                        statusMsgEl?.remove();
+                        resolve();
+                    }, 30000)) // timeout de 30s — libera o input mesmo se o update travar
+                ]);
+
+            } catch (_e) { /* ignora erros no auto-update, a pergunta segue normalmente */ }
         }
 
         async function askIToca() {
@@ -12232,9 +13201,12 @@
             if (askBtn) askBtn.disabled = true;
             if (textarea) textarea.disabled = true;
 
+            // Verifica e atualiza a base se estiver desatualizada (> 1 dia)
+            await _itocaCheckAndAutoUpdate();
+
             _itocaAppendUserMsg(question);
             if (textarea) textarea.value = '';
-            const typingEl = _itocaAppendTyping();
+            _itocaAppendTyping('🔍 Iniciando busca...');
 
             try {
                 _itocaSessionHasMessages = true;
@@ -12244,9 +13216,9 @@
                     body: JSON.stringify({ question, session_id: _itocaSessionId })
                 });
                 const payload = await response.json().catch(() => ({}));
-                _itocaRemoveTyping();
 
                 if (!response.ok) {
+                    _itocaRemoveTyping();
                     const errMsg = payload.error || 'Não foi possível consultar o iToca.';
                     if (payload.base_ready === false) {
                         _itocaAppendErrorMsg('⚠️ ' + errMsg);
@@ -12254,13 +13226,67 @@
                         _itocaAppendErrorMsg(errMsg);
                     }
                     showError(errMsg);
-                } else {
-                    _itocaAppendAssistantMsg(payload);
-                    if (payload.base_updated_at) {
-                        const label = document.getElementById('itocaBaseUpdatedAt');
-                        if (label) label.textContent = `Último update: ${formatDateBr(payload.base_updated_at)}`;
-                    }
+                    return;
                 }
+
+                // Async path: backend returned 202 + task_id
+                const taskId = payload.task_id;
+                if (!taskId) {
+                    // Fallback: sync response (base not ready or legacy)
+                    _itocaRemoveTyping();
+                    _itocaAppendAssistantMsg(payload);
+                    return;
+                }
+
+                // Poll task until done or error (max ~90s, then slow-poll)
+                let pollCount = 0;
+                const MAX_POLLS = 112; // ~90s at 800ms
+                await new Promise((resolve) => {
+                    const poll = async () => {
+                        try {
+                            const taskResp = await fetch(`${API_BASE}/tasks/${taskId}`);
+                            const taskData = await taskResp.json().catch(() => ({}));
+
+                            if (taskData.step) _itocaUpdateTypingStep(taskData.step);
+
+                            if (taskData.status === 'done') {
+                                _itocaRemoveTyping();
+                                _itocaAppendAssistantMsg(taskData.result || {});
+                                const updatedAt = taskData.result?.base_updated_at;
+                                if (updatedAt) {
+                                    const label = document.getElementById('itocaBaseUpdatedAt');
+                                    if (label) label.textContent = `Último update: ${formatDateBr(updatedAt)}`;
+                                }
+                                resolve();
+                                return;
+                            }
+
+                            if (taskData.status === 'error') {
+                                _itocaRemoveTyping();
+                                const errMsg = taskData.error || 'Erro ao processar resposta.';
+                                _itocaAppendErrorMsg(errMsg);
+                                showError(errMsg);
+                                resolve();
+                                return;
+                            }
+
+                            // Still processing — continue polling
+                            if (++pollCount >= MAX_POLLS) {
+                                _itocaUpdateTypingStep('⏱️ Aguardando resposta da IA...');
+                                setTimeout(poll, 2000);
+                            } else {
+                                setTimeout(poll, 800);
+                            }
+                        } catch (e) {
+                            _itocaRemoveTyping();
+                            _itocaAppendErrorMsg(e.message || 'Falha ao consultar iToca.');
+                            showError(e.message || 'Falha ao consultar iToca.');
+                            resolve();
+                        }
+                    };
+                    poll();
+                });
+
             } catch (error) {
                 _itocaRemoveTyping();
                 _itocaAppendErrorMsg(error.message || 'Falha ao consultar iToca.');
@@ -12950,6 +13976,16 @@
             showSuccess('MSG padrão removida');
         }
 
+        function insertTemplateVar(varText) {
+            const ta = document.getElementById('templateDescription');
+            if (!ta) return;
+            const start = ta.selectionStart, end = ta.selectionEnd;
+            const val = ta.value;
+            ta.value = val.slice(0, start) + varText + val.slice(end);
+            ta.selectionStart = ta.selectionEnd = start + varText.length;
+            ta.focus();
+        }
+
         function renderTemplateDrawer(channel, targetId) {
             const filtered = messageTemplates.filter(t => channel === 'whatsapp' ? Number(t.available_whatsapp) === 1 : Number(t.available_email) === 1);
             if (!filtered.length) return '<div style="font-size:12px;color:#6b7280;">Nenhum conteúdo padrão para este canal.</div>';
@@ -12967,9 +14003,34 @@
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.phone) return openMissingContactModal();
             const prefDesktop = getWhatsAppPreference() === 'desktop';
+            const wppTags = ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>'];
+            const tagsBar = `<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; padding:7px 10px; background:rgba(236,253,245,.6); border:1px solid rgba(16,185,129,.25); border-radius:8px; align-items:center;">
+                <span style="font-size:11px; font-weight:700; color:#065f46; white-space:nowrap; margin-right:2px; text-transform:uppercase; letter-spacing:.04em;">Chaves:</span>
+                ${wppTags.map(t => `<button type="button" class="btn btn-secondary btn-small" onclick="insertMergeTagInto('whatsMessageText','${t.replace(/'/g, "\\'")}')" style="font-size:11px;">${escapeHtml(t)}</button>`).join('')}
+                <span style="font-size:11px; color:#6b7280; margin-left:4px;">→ substituídas pelo dado real ao enviar</span>
+            </div>`;
             let html = `<div class="modal active" id="whatsAppModal">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Mensagem WhatsApp - ${escapeHtml(client.name || '-')}</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div></div></div><p style="color:#6b7280; margin-bottom: 16px;">Digite a mensagem.</p><div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8"></textarea></div><label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#4b5563; margin-bottom:12px;"><input type="checkbox" id="whatsUseDesktop" ${prefDesktop ? 'checked' : ''}> Abrir no WhatsApp Desktop (sem reload do Web)</label><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button><button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Enviar mensagem</button></div></div>`;
+            html += `<div style="flex:1;">
+                <h2 style="margin-bottom:8px; color:#047857;"><i class="fab fa-whatsapp"></i> Mensagem WhatsApp — ${escapeHtml(client.name || '-')}</h2>
+                <div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);">
+                    <img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);">
+                    <div>
+                        <div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div>
+                        <div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div>
+                        <div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div>
+                    </div>
+                </div>
+                ${tagsBar}
+                <div class="form-group"><label>Mensagem</label><textarea id="whatsMessageText" rows="8" placeholder="Olá &lt;nome do contato&gt;! Tudo bem?"></textarea></div>
+                <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#4b5563; margin-bottom:12px;">
+                    <input type="checkbox" id="whatsUseDesktop" ${prefDesktop ? 'checked' : ''}> Abrir no WhatsApp Desktop (sem reload do Web)
+                </label>
+                <div style="display:flex; gap:10px; justify-content:flex-end;">
+                    <button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button>
+                    <button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Enviar mensagem</button>
+                </div>
+            </div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('whatsapp','whatsMessageText')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -12978,9 +14039,32 @@
         openEmailDraftModal = function(clientId) {
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.email) return openMissingContactModal();
+            const emailTags = ['<nome do contato>', '<conta>', '<cargo>', '<area de atuacao>', '<email>'];
+            const tagsBar = `<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; padding:7px 10px; background:rgba(236,253,245,.6); border:1px solid rgba(16,185,129,.25); border-radius:8px; align-items:center;">
+                <span style="font-size:11px; font-weight:700; color:#065f46; white-space:nowrap; margin-right:2px; text-transform:uppercase; letter-spacing:.04em;">Chaves:</span>
+                ${emailTags.map(t => `<button type="button" class="btn btn-secondary btn-small" onclick="insertEmailDraftMergeTag('${t.replace(/'/g, "\\'")}')" style="font-size:11px;">${escapeHtml(t)}</button>`).join('')}
+                <span style="font-size:11px; color:#6b7280; margin-left:4px;">→ clique no campo antes de inserir</span>
+            </div>`;
             let html = `<div class="modal active" id="emailDraftModal">`;
             html += '<div class="modal-content" style="max-width: 760px; display:flex; gap:16px;">';
-            html += `<div style="flex:1;"><h2 style="margin-bottom: 8px; color: #047857;">Novo e-mail</h2><div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);"><img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);"><div><div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div><div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div><div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div></div></div><div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text"></div><div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div><div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div></div>`;
+            html += `<div style="flex:1;">
+                <h2 style="margin-bottom:8px; color:#047857;"><i class="fas fa-envelope"></i> Novo e-mail — ${escapeHtml(client.name || '-')}</h2>
+                <div style="display:flex; gap:10px; align-items:center; padding:10px; border:1px solid rgba(16,185,129,.2); border-radius:10px; margin-bottom:10px; background:rgba(16,185,129,.06);">
+                    <img src="${client.photo_url || '/logo-coelho.png'}" style="width:44px; height:44px; border-radius:999px; object-fit:cover; border:2px solid rgba(16,185,129,.35);">
+                    <div>
+                        <div style="font-weight:700; color:#065f46;">${escapeHtml(client.name || '-')}</div>
+                        <div style="font-size:12px; color:#6b7280;">${escapeHtml(client.company || '-')}</div>
+                        <div style="font-size:12px; color:#9ca3af;">${escapeHtml(client.position || '-')}${client.area_of_activity ? ' (' + escapeHtml(client.area_of_activity) + ')' : ''}</div>
+                    </div>
+                </div>
+                ${tagsBar}
+                <div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text" placeholder="Ex: Olá &lt;nome do contato&gt;, oportunidade para &lt;conta&gt;"></div>
+                <div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div>
+                <div style="display:flex; gap:10px; justify-content:flex-end;">
+                    <button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button>
+                    <button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button>
+                </div>
+            </div>`;
             html += `<div style="width:240px; border-left:1px solid rgba(16,185,129,.2); padding-left:12px;"><h4 style="color:#047857; margin-bottom:8px;">Conteúdo Padrão</h4>${renderTemplateDrawer('email','emailDraftBody')}</div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -12990,8 +14074,11 @@
             const client = clients.find(c => c.id === clientId);
             if (!client || !client.email) return openMissingContactModal();
 
-            const subject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
-            const body = document.getElementById('emailDraftBody')?.value?.trim() || '';
+            const rawSubject = document.getElementById('emailDraftSubject')?.value?.trim() || '';
+            const rawBody    = document.getElementById('emailDraftBody')?.value?.trim() || '';
+            // Substitui chaves de merge pelos dados reais do contato antes de abrir o Outlook
+            const subject = applyMergeFields(rawSubject, client);
+            const body    = applyMergeFields(rawBody, client);
             const cc = '';
 
             const queryParts = [
@@ -12999,10 +14086,7 @@
                 `subject=${encodeURIComponent(subject)}`,
                 `body=${encodeURIComponent(body)}`
             ];
-
-            if (cc) {
-                queryParts.push(`cc=${encodeURIComponent(cc)}`);
-            }
+            if (cc) queryParts.push(`cc=${encodeURIComponent(cc)}`);
 
             const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?${queryParts.join('&')}`;
             emailWindowRef = window.open(outlookUrl, '_blank');
@@ -13055,8 +14139,12 @@
             let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:860px;">`;
             html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
-            const totalMonthlyCents = (account.presences || []).reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
-            html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMonthlyCents)}</strong></div>${(account.presences||[]).length?`<div style='display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;'>${(account.presences||[]).map(p=>`<button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`).join('')}</div>`:'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
+            const mensalPresences = (account.presences || []).filter(p => (p.billing_type || 'Mensal') === 'Mensal');
+            const unicoPresences = (account.presences || []).filter(p => p.billing_type === 'Unico');
+            const totalMonthlyCents = mensalPresences.reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
+            const totalUnicoCents = unicoPresences.reduce((acc, p) => acc + Number(p.current_revenue_cents || 0), 0);
+            const presenceButtons = (account.presences||[]).map(p=>`<button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button>`).join('');
+            html += `<div style="margin-top:14px;"><h4 style="color:#065f46; margin-bottom:8px;">Serviços Stefanini</h4><div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMonthlyCents)}</strong></div><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(99,102,241,.12);'><strong style="color:#4338ca;">Faturamento Pontual</strong><strong style="color:#4338ca;">${formatCompactCurrencyFromCents(totalUnicoCents)}</strong></div></div>${(account.presences||[]).length?`<div style='display:flex; flex-wrap:wrap; gap:8px;'>${presenceButtons}</div>`:'<div style="color:#6b7280;">Nenhum serviço cadastrado.</div>'}</div>`;
             html += `<div style="margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:10px;"><div><h4 style="color:#065f46; margin-bottom:8px;">Contatos da Conta</h4>${sortedContacts.length?`<div style='display:grid; grid-template-columns:1fr 1fr; gap:8px;'>${sortedContacts.map(c=>`<div class='history-item' style='margin-bottom:0; cursor:pointer;' onclick='closeAccountViewModal(); openProfileModal(${c.id})'><div class='history-meta'>${escapeHtml(c.name)}</div><div style='font-size:12px;color:#6b7280;'>${escapeHtml(c.position || '-')}</div><div style='display:flex; align-items:center; gap:8px; margin-top:5px;'>${c.email ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-envelope' style='margin-right:4px;'></i>${escapeHtml(c.email)}</span>` : ''}${c.phone ? `<span style='font-size:11px; color:#6b7280;'><i class='fas fa-phone' style='margin-right:4px;'></i>${escapeHtml(c.phone)}</span>` : ''}${c.linkedin ? `<a href='${escapeHtml(c.linkedin)}' target='_blank' rel='noopener noreferrer' title='LinkedIn' onclick='event.stopPropagation()' style='font-size:13px; color:#0a66c2;'><i class='fab fa-linkedin'></i></a>` : ''}</div></div>`).join('')}</div>`:'<div style="color:#6b7280;">Sem contatos.</div>'}</div><div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><h4 style="color:#065f46; margin:0;">Histórico de Atividades</h4><button class="btn btn-primary btn-small" style="padding:2px 10px; border-radius:999px; font-size:18px; line-height:1; font-weight:700;" onclick="openAccountActivityModal(${account.id})" title="Registrar atividade da conta">+</button></div><div id="accountActivitiesWrap" style="max-height:230px; overflow:auto;"><div style="color:#6b7280;">Carregando...</div></div></div></div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
@@ -13369,19 +14457,48 @@
             if (!accountId) return showError('Salve a conta antes de adicionar presença.');
             const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
             const presence = (account.presences||[]).find(p => Number(p.id)===Number(presenceId));
-            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 14px;"><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div><div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div><div class="form-group"><label>Faturamento Mensal</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group" style="grid-column:1 / -1;"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div></div><div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
+            const billingType = presence?.billing_type || '';
+            const hasRevenue = !!billingType;
+            const isMensal = billingType === 'Mensal';
+            const contractEndDisplay = isMensal ? '' : 'none';
+            let html = `<div class="modal active" id="presenceModal" onclick="if(event.target===this) closePresenceModal()"><div class="modal-content" style="max-width:760px;"><h2 style="color:#047857;">${presence?'Editar Serviço Stefanini':'Serviço Stefanini'}</h2><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px 14px;"><div class="form-group"><label>Nome da Entrega *</label><input id="presenceDelivery" value="${escapeHtml(presence?.delivery_name||'')}"></div><div class="form-group"><label>Responsável STF</label><input id="presenceOwner" value="${escapeHtml(presence?.stf_owner||'')}"></div><div class="form-group"><label>Célula Delivery</label><input id="presenceDeliveryCell" value="${escapeHtml(presence?.delivery_cell||'')}"></div><div class="form-group"><label>ID Serviço</label><input id="presenceServiceId" value="${escapeHtml(presence?.service_id||'')}"></div><div class="form-group"><label>Tipo de Faturamento</label><select id="presenceBillingType" onchange="onPresenceBillingTypeChange(this.value)"><option value="">Selecione</option><option value="Mensal" ${billingType==='Mensal'?'selected':''}>Mensal</option><option value="Unico" ${billingType==='Unico'?'selected':''}>Único</option></select></div><div class="form-group"><label id="presenceRevenueLabel">Faturamento</label><input id="presenceRevenue" value="${presence?.current_revenue_cents?formatMoneyFromCents(presence.current_revenue_cents):''}" placeholder="R$ 0,00" ${hasRevenue?'':'disabled style="background:#f3f4f6; color:#9ca3af; cursor:not-allowed;"'}></div><div class="form-group" id="presenceContractEndGroup" style="display:${contractEndDisplay};"><label>Encerramento de Contrato</label><input id="presenceContractEnd" type="month" value="${escapeHtml(presence?.contract_end_date||'')}"></div><div class="form-group"><label>Vigência (mês/ano)</label><input id="presenceValidity" type="month" value="${escapeHtml(presence?.validity_month||'')}"></div><div class="form-group" style="grid-column:1 / -1;"><label>Ponto Focal</label><select id="presenceFocal"><option value="">Selecione</option>${sortAccountContactsByRole(account.contacts||[]).map(c=>`<option value='${c.id}' ${Number(presence?.focal_client_id)===Number(c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div></div><div style="display:flex; gap:8px; margin-top:12px;"><button class="btn btn-secondary" onclick="closePresenceModal()">Cancelar</button><button class="btn btn-primary" onclick="savePresence(${accountId}, ${presenceId||'null'})">Salvar</button></div></div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
         }
 
         function closePresenceModal(){ const m=document.getElementById('presenceModal'); if(m)m.remove(); }
+
+        function onPresenceBillingTypeChange(value) {
+            const input = document.getElementById('presenceRevenue');
+            const label = document.getElementById('presenceRevenueLabel');
+            const contractGroup = document.getElementById('presenceContractEndGroup');
+            if (!input) return;
+            if (value) {
+                input.disabled = false;
+                input.style.background = '';
+                input.style.color = '';
+                input.style.cursor = '';
+                if (label) label.textContent = value === 'Unico' ? 'Faturamento Único' : 'Faturamento Mensal';
+            } else {
+                input.disabled = true;
+                input.style.background = '#f3f4f6';
+                input.style.color = '#9ca3af';
+                input.style.cursor = 'not-allowed';
+                if (label) label.textContent = 'Faturamento';
+            }
+            if (contractGroup) contractGroup.style.display = value === 'Mensal' ? '' : 'none';
+        }
 
         async function refreshAccountPresencePanels(accountId) {
             try {
                 const account = await (await fetch(`${API_BASE}/accounts/${accountId}`)).json();
                 const list = document.getElementById('accountPresenceList');
                 if (list) {
-                    const total = (account?.presences||[]).reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
-                    list.innerHTML = `<div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(total)}</strong></div><div style='display:flex; flex-wrap:wrap; gap:8px;'>` + (account?.presences||[]).map(p=>`<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`).join('') + '</div>';
+                    const mensalP = (account?.presences||[]).filter(p=>(p.billing_type||'Mensal')==='Mensal');
+                    const unicoP = (account?.presences||[]).filter(p=>p.billing_type==='Unico');
+                    const totalMensal = mensalP.reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
+                    const totalUnico = unicoP.reduce((acc,p)=>acc+Number(p.current_revenue_cents||0),0);
+                    const btns = (account?.presences||[]).map(p=>`<div style='display:inline-flex; align-items:center; gap:6px;'><button class='btn btn-secondary btn-small' style='border-radius:999px; font-weight:700;' onclick='openPresenceModal(${account.id}, ${p.id})'>${escapeHtml(p.delivery_name)}</button><button class='btn btn-danger btn-small' onclick='deletePresence(${account.id}, ${p.id})'>Excluir</button></div>`).join('');
+                    list.innerHTML = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px;"><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(16,185,129,.12);'><strong>Total Mensal</strong><strong>${formatCompactCurrencyFromCents(totalMensal)}</strong></div><div class='rule-item' style='display:flex; justify-content:space-between; align-items:center; gap:8px; background:rgba(99,102,241,.12);'><strong style="color:#4338ca;">Faturamento Pontual</strong><strong style="color:#4338ca;">${formatCompactCurrencyFromCents(totalUnico)}</strong></div></div><div style='display:flex; flex-wrap:wrap; gap:8px;'>${btns}</div>`;
                 }
                 const view = document.getElementById('accountViewModal');
                 if (view) {
@@ -13398,6 +14515,8 @@
                 stf_owner: document.getElementById('presenceOwner').value,
                 delivery_cell: document.getElementById('presenceDeliveryCell').value,
                 service_id: document.getElementById('presenceServiceId').value,
+                billing_type: document.getElementById('presenceBillingType').value,
+                contract_end_date: document.getElementById('presenceContractEnd')?.value || '',
                 current_revenue: document.getElementById('presenceRevenue').value,
                 validity_month: document.getElementById('presenceValidity').value,
                 focal_client_id: document.getElementById('presenceFocal').value
@@ -14521,6 +15640,8 @@
             if (fileInput) fileInput.value = '';
             const fileName = document.getElementById('wikiFileName');
             if (fileName) fileName.textContent = '';
+            document.getElementById('wikiUploadBtn')?.classList.remove('wiki-upload-btn-pending');
+            document.getElementById('wikiFileClearBtn')?.style && (document.getElementById('wikiFileClearBtn').style.display = 'none');
             document.getElementById('wikiSearchInput').value = '';
             showSuccess(files.length > 1 ? 'Documentos enviados com sucesso!' : 'Documento enviado com sucesso!');
             await loadWikiTocaData();
@@ -14537,15 +15658,33 @@
 
         function onWikiFileSelected(event) {
             const fileName = document.getElementById('wikiFileName');
+            const uploadBtn = document.getElementById('wikiUploadBtn');
+            const clearBtn = document.getElementById('wikiFileClearBtn');
             const files = Array.from(event?.target?.files || []);
             if (!fileName) return;
             if (!files.length) {
                 fileName.textContent = '';
+                uploadBtn?.classList.remove('wiki-upload-btn-pending');
+                if (clearBtn) clearBtn.style.display = 'none';
             } else if (files.length === 1) {
                 fileName.textContent = files[0].name;
+                uploadBtn?.classList.add('wiki-upload-btn-pending');
+                if (clearBtn) clearBtn.style.display = '';
             } else {
                 fileName.textContent = `${files.length} arquivos selecionados`;
+                uploadBtn?.classList.add('wiki-upload-btn-pending');
+                if (clearBtn) clearBtn.style.display = '';
             }
+        }
+
+        function clearWikiFileSelection() {
+            const fileInput = document.getElementById('wikiDocumentFile');
+            if (fileInput) fileInput.value = '';
+            const fileName = document.getElementById('wikiFileName');
+            if (fileName) fileName.textContent = '';
+            const clearBtn = document.getElementById('wikiFileClearBtn');
+            if (clearBtn) clearBtn.style.display = 'none';
+            document.getElementById('wikiUploadBtn')?.classList.remove('wiki-upload-btn-pending');
         }
 
         function suggestTagsFromKnowledge(title, content) {
