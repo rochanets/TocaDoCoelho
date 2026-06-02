@@ -13795,47 +13795,68 @@ def whatsapp_connect():
         return jsonify({'ok': False, 'error': 'Evolution API não configurada.'}), 400
     headers = {'apikey': api_key, 'Content-Type': 'application/json'}
 
-    # Evolution API v2: POST /instance/create com qrcode:true já retorna o QR na resposta
+    # 1. Verifica o estado atual da instância
+    try:
+        state_resp = requests.get(f'{api_url}/instance/connectionState/{instance}', headers=headers, timeout=5)
+        if state_resp.status_code == 200:
+            state = (state_resp.json().get('instance') or {}).get('state')
+            if state == 'open':
+                return jsonify({'ok': True, 'connected': True})
+            # Instância existe mas não está conectada → remove para gerar um QR limpo
+            try:
+                requests.delete(f'{api_url}/instance/logout/{instance}', headers=headers, timeout=10)
+            except Exception:
+                pass
+            try:
+                requests.delete(f'{api_url}/instance/delete/{instance}', headers=headers, timeout=10)
+            except Exception:
+                pass
+            time.sleep(1.5)
+    except requests.exceptions.ConnectionError:
+        return jsonify({'ok': False, 'error': 'Evolution API não está acessível.'}), 503
+    except Exception as exc:
+        logger.warning(f'[WhatsApp] connectionState error: {exc}')
+
+    # 2. Cria a instância nova com QR
+    qr = None
     try:
         create_resp = requests.post(
             f'{api_url}/instance/create',
             headers=headers,
             json={'instanceName': instance, 'qrcode': True, 'integration': 'WHATSAPP-BAILEYS'},
-            timeout=15
+            timeout=20
         )
-        if create_resp.status_code in (200, 201):
-            create_data = create_resp.json()
-            qr = (create_data.get('qrcode') or {}).get('base64')
-            if qr:
-                return jsonify({'ok': True, 'connected': False, 'qr': qr})
-        # 409 = instância já existe, continua para o /connect
         logger.info(f'[WhatsApp] create status={create_resp.status_code} body={create_resp.text[:300]}')
+        if create_resp.status_code in (200, 201):
+            qr = (create_resp.json().get('qrcode') or {}).get('base64')
     except requests.exceptions.ConnectionError:
         return jsonify({'ok': False, 'error': 'Evolution API não está acessível.'}), 503
     except Exception as exc:
-        logger.warning(f'[WhatsApp] create instance error: {exc}')
+        logger.warning(f'[WhatsApp] create error: {exc}')
 
-    # Aguarda a instância inicializar antes de pedir o QR
-    time.sleep(1)
+    # 3. Se o QR não veio no create, faz polling no /connect (o QR leva alguns segundos)
+    if not qr:
+        for _ in range(6):
+            time.sleep(1.3)
+            try:
+                cr = requests.get(f'{api_url}/instance/connect/{instance}', headers=headers, timeout=10)
+                if cr.status_code == 200:
+                    d = cr.json() if cr.text.strip().startswith('{') else {}
+                    qr = d.get('base64') or (d.get('qrcode') or {}).get('base64')
+                    if qr:
+                        break
+                    st = requests.get(f'{api_url}/instance/connectionState/{instance}', headers=headers, timeout=5)
+                    if st.ok and (st.json().get('instance') or {}).get('state') == 'open':
+                        return jsonify({'ok': True, 'connected': True})
+            except Exception:
+                pass
 
-    try:
-        qr_resp = requests.get(f'{api_url}/instance/connect/{instance}', headers=headers, timeout=15)
-        if qr_resp.status_code == 200:
-            data = qr_resp.json()
-            qr = data.get('base64') or (data.get('qrcode') or {}).get('base64')
-            if qr:
-                return jsonify({'ok': True, 'connected': False, 'qr': qr})
-        # Verifica se já está conectado
-        state_resp = requests.get(f'{api_url}/instance/connectionState/{instance}', headers=headers, timeout=5)
-        if state_resp.ok and state_resp.json().get('instance', {}).get('state') == 'open':
-            return jsonify({'ok': True, 'connected': True})
-        # Repassa detalhes do erro para facilitar debug
-        debug_info = f'create={create_resp.status_code if "create_resp" in dir() else "?"} connect={qr_resp.status_code} body={qr_resp.text[:300]}'
-        return jsonify({'ok': False, 'error': f'QR não disponível. Detalhes: {debug_info}'}), 500
-    except requests.exceptions.ConnectionError:
-        return jsonify({'ok': False, 'error': 'Evolution API não está acessível.'}), 503
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
+    if qr:
+        if not str(qr).startswith('data:'):
+            qr = 'data:image/png;base64,' + qr
+        return jsonify({'ok': True, 'connected': False, 'qr': qr})
+
+    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code após várias tentativas. Verifique se a Evolution API está conectada ao banco e veja os logs do container.'}), 500
 
 
 @app.route('/api/whatsapp/sync', methods=['POST'])
