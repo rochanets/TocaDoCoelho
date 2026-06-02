@@ -7,7 +7,7 @@ services:
     environment:
       SERVER_PORT: "8080"
       AUTHENTICATION_API_KEY: "toca-test-key-2024"
-      DATABASE_PROVIDER: "sqlite"
+      DATABASE_ENABLED: "false"
       DEL_INSTANCE: "false"
     volumes:
       - evolution_instances:/evolution/instances
