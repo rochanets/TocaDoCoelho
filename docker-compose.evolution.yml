@@ -1,13 +1,47 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: toca-evolution-postgres
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution
+      POSTGRES_DB: evolution
+    volumes:
+      - evolution_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   evolution-api:
     image: atendai/evolution-api:v2.2.3
     container_name: toca-evolution-api
     ports:
       - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       SERVER_PORT: "8080"
       AUTHENTICATION_API_KEY: "toca-test-key-2024"
-      DATABASE_ENABLED: "false"
+      # Banco (obrigatório na v2)
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: "postgresql"
+      DATABASE_CONNECTION_URI: "postgresql://evolution:evolution@postgres:5432/evolution?schema=public"
+      DATABASE_CONNECTION_CLIENT_NAME: "toca_evolution"
+      # CRÍTICO: salvar mensagens no banco para o findMessages retornar histórico
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_LABELS: "true"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
+      # Cache local (sem Redis para simplificar o teste)
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
       DEL_INSTANCE: "false"
     volumes:
       - evolution_instances:/evolution/instances
@@ -15,3 +49,4 @@ services:
 
 volumes:
   evolution_instances:
+  evolution_postgres:

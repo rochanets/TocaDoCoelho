@@ -13593,23 +13593,33 @@ def _whatsapp_sync_async(task_id, period_days):
                 continue
 
             try:
+                # Evolution API v2: filtra por remoteJid no where e pagina com page/offset.
+                # O range de timestamp é aplicado no Python (mais robusto que o where do Prisma).
                 msg_resp = requests.post(
                     f'{api_url}/chat/findMessages/{instance}',
                     headers=evo_headers,
                     json={
-                        'where': {
-                            'key': {'remoteJid': jid},
-                            'messageTimestamp': {'gte': since_ts, 'lte': now_ts}
-                        },
-                        'limit': 500
+                        'where': {'key': {'remoteJid': jid}},
+                        'page': 1,
+                        'offset': 500
                     },
-                    timeout=15
+                    timeout=20
                 )
                 if msg_resp.status_code != 200:
                     skipped += 1
                     continue
                 raw = msg_resp.json()
-                messages = raw if isinstance(raw, list) else (raw.get('messages', {}).get('records') or raw.get('records') or [])
+                # v2 retorna {messages: {records: [...]}}; versões antigas retornam lista direta
+                if isinstance(raw, list):
+                    messages = raw
+                else:
+                    msgs_node = raw.get('messages')
+                    if isinstance(msgs_node, dict):
+                        messages = msgs_node.get('records') or []
+                    elif isinstance(msgs_node, list):
+                        messages = msgs_node
+                    else:
+                        messages = raw.get('records') or []
             except Exception:
                 skipped += 1
                 continue
@@ -13618,10 +13628,20 @@ def _whatsapp_sync_async(task_id, period_days):
                 skipped += 1
                 continue
 
+            # Ordena por timestamp e mantém apenas mensagens dentro do período escolhido
+            def _msg_ts(m):
+                try:
+                    return int(m.get('messageTimestamp') or 0)
+                except (TypeError, ValueError):
+                    return 0
+            messages.sort(key=_msg_ts)
+
             texts = []
             last_ts = 0
             for msg in messages:
-                ts = msg.get('messageTimestamp', 0)
+                ts = _msg_ts(msg)
+                if ts and (ts < since_ts or ts > now_ts):
+                    continue
                 if ts > last_ts:
                     last_ts = ts
                 text = _whatsapp_extract_text(msg)
