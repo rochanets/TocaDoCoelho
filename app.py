@@ -13589,6 +13589,7 @@ def _whatsapp_sync_async(task_id, period_days):
         imported = 0
         skipped = 0
         total = len(clients)
+        pending_items = []
         period_label = {1: '1 dia', 3: '3 dias', 7: '1 semana', 15: '15 dias', 30: '30 dias'}.get(period_days, f'{period_days} dias')
 
         for i, (client_id, client_name, phone) in enumerate(clients):
@@ -13702,27 +13703,27 @@ def _whatsapp_sync_async(task_id, period_days):
                 summary = f'Conversa de WhatsApp com {client_name} no período de {period_label}. {len(texts)} mensagem(ns) trocada(s).'
 
             activity_date = datetime.utcfromtimestamp(last_ts).strftime('%Y-%m-%d %H:%M:%S') if last_ts else now_dt.strftime('%Y-%m-%d %H:%M:%S')
-            c.execute(
-                "INSERT INTO activities (client_id, contact_type, information, activity_date) VALUES (?, 'WhatsApp', ?, ?)",
-                (client_id, summary, activity_date)
-            )
-            activity_id = c.lastrowid
-            c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
-            c.execute(
-                "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, activity_id) VALUES (?, ?, ?, ?, ?, ?)",
-                (client_id, phone, period_days, len(texts), content_hash, activity_id)
-            )
-            db.commit()
+            pending_items.append({
+                'client_id': client_id,
+                'client_name': client_name,
+                'phone': phone,
+                'summary': summary,
+                'activity_date': activity_date,
+                'message_count': len(texts),
+                'content_hash': content_hash,
+                'period_days': period_days,
+            })
             imported += 1
 
         _bg_task_set(task_id, {
             'status': 'done', 'progress': 100,
-            'step': '✅ Sincronização concluída!',
+            'step': '✅ Análise concluída — revise os resumos!',
             'result': {
-                'imported': imported,
+                'pending': imported,
                 'skipped': skipped,
                 'total_clients': total,
-                'message': f'{imported} conversa(s) sincronizada(s), {skipped} sem novidade.'
+                'items': pending_items,
+                'message': f'{imported} conversa(s) para revisar, {skipped} sem novidade.'
             }
         })
         _bg_task_cleanup(task_id)
@@ -13852,6 +13853,52 @@ def whatsapp_task_poll(task_id):
     if not task:
         return jsonify({'status': 'not_found'}), 404
     return jsonify(task)
+
+
+@app.route('/api/whatsapp/approve', methods=['POST'])
+def whatsapp_approve():
+    data = request.get_json(force=True) or {}
+    items = data.get('items', [])
+    if not isinstance(items, list):
+        return jsonify({'ok': False, 'error': 'items deve ser uma lista'}), 400
+
+    db = get_db()
+    c = db.cursor()
+    inserted = 0
+    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+    for item in items:
+        client_id = item.get('client_id')
+        summary = (item.get('summary') or '').strip()
+        activity_date = (item.get('activity_date') or now_str).strip()
+        content_hash = (item.get('content_hash') or '').strip()
+        phone = (item.get('phone') or '').strip()
+        period_days = int(item.get('period_days') or 7)
+        message_count = int(item.get('message_count') or 0)
+
+        if not client_id or not summary or not content_hash:
+            continue
+
+        c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
+                  (client_id, content_hash))
+        if c.fetchone():
+            continue
+
+        c.execute(
+            "INSERT INTO activities (client_id, contact_type, information, activity_date) VALUES (?, 'WhatsApp', ?, ?)",
+            (client_id, summary, activity_date)
+        )
+        activity_id = c.lastrowid
+        c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
+        c.execute(
+            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, activity_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (client_id, phone, period_days, message_count, content_hash, activity_id)
+        )
+        inserted += 1
+
+    db.commit()
+    db.close()
+    return jsonify({'ok': True, 'inserted': inserted})
 
 
 # Servir arquivos estaticos
