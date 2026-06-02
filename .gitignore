@@ -28,3 +28,6 @@ tools/
 
 # Instalador gerado
 TocaDoCoelho-*-Setup.exe
+
+# Preview helper local (não versionar)
+.claude/launch.json
