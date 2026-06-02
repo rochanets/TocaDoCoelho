@@ -3663,6 +3663,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
+                <button class="btn btn-auto-mapping" onclick="openWhatsappSyncModal()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
@@ -16531,6 +16532,286 @@
         </div>
       </div>
     </div>
+
+    <!-- Modal: WhatsApp Update -->
+    <div id="whatsappSyncModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9999; overflow-y:auto; padding:24px 16px;">
+      <div style="background:#fff; border-radius:20px; max-width:500px; margin:0 auto; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+
+        <!-- Header -->
+        <div style="background:linear-gradient(135deg,#dcfce7 0%,#d1fae5 60%,#ecfdf5 100%); padding:24px 28px 18px; border-bottom:1px solid #a7f3d0; display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">
+              <span style="font-size:26px; line-height:1;">💬</span>
+              <h2 style="margin:0; color:#065f46; font-size:19px; font-weight:700;">WhatsApp Update</h2>
+            </div>
+            <p style="margin:0; color:#047857; font-size:13px;">Sincroniza conversas com clientes e gera resumos automáticos nos logs de atividade.</p>
+          </div>
+          <button onclick="closeWhatsappSyncModal()" style="background:none; border:none; font-size:22px; color:#6b7280; cursor:pointer; line-height:1; padding:0 4px; margin-top:-2px;">&times;</button>
+        </div>
+
+        <div style="padding:24px 28px;">
+
+          <!-- Área: Carregando -->
+          <div id="waSyncLoading" style="text-align:center; padding:24px 0; color:#6b7280; font-size:14px;">
+            <i class="fas fa-circle-notch fa-spin" style="font-size:22px; color:#34d399; margin-bottom:10px; display:block;"></i>
+            Verificando conexão...
+          </div>
+
+          <!-- Área: Configuração -->
+          <div id="waSyncConfigArea" style="display:none;">
+            <div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:14px 16px; margin-bottom:16px; font-size:13px; color:#9a3412;">
+              <i class="fas fa-info-circle" style="margin-right:6px;"></i>
+              Configure a <strong>Evolution API</strong> para conectar seu WhatsApp. A Evolution API deve estar rodando localmente ou em um servidor acessível.
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              <div>
+                <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">URL da Evolution API</label>
+                <input id="waConfigUrl" type="text" placeholder="http://localhost:8080" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
+              </div>
+              <div>
+                <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">API Key</label>
+                <input id="waConfigKey" type="password" placeholder="Chave de autenticação" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
+              </div>
+              <div>
+                <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">Nome da instância</label>
+                <input id="waConfigInstance" type="text" placeholder="toca-whatsapp" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
+              </div>
+              <button onclick="_waSaveConfig()" class="btn btn-auto-mapping" style="align-self:flex-start; margin-top:4px;">
+                <span class="ai-star-icon">✦</span> Salvar e Conectar
+              </button>
+            </div>
+          </div>
+
+          <!-- Área: Offline / Erro -->
+          <div id="waSyncOfflineArea" style="display:none;">
+            <div style="background:#fef2f2; border:1px solid #fca5a5; border-radius:10px; padding:14px 16px; font-size:13px; color:#991b1b; margin-bottom:16px;">
+              <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
+              <span id="waSyncOfflineMsg">Evolution API não está acessível.</span>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button onclick="_waCheckStatus()" class="btn btn-secondary btn-small"><i class="fas fa-rotate-right"></i> Tentar novamente</button>
+              <button onclick="_waShowConfig()" class="btn btn-secondary btn-small"><i class="fas fa-cog"></i> Reconfigurar</button>
+            </div>
+          </div>
+
+          <!-- Área: QR Code -->
+          <div id="waSyncQrArea" style="display:none; text-align:center;">
+            <p style="color:#374151; font-size:13px; margin-bottom:16px;">Escaneie o QR code com seu WhatsApp para conectar:</p>
+            <div style="display:inline-block; padding:12px; background:#fff; border:2px solid #a7f3d0; border-radius:14px; margin-bottom:16px;">
+              <img id="waSyncQrImg" src="" alt="QR Code" style="width:200px; height:200px; display:block;">
+            </div>
+            <div style="font-size:12px; color:#6b7280; margin-bottom:16px;">
+              <i class="fas fa-mobile-alt" style="margin-right:4px;"></i>
+              WhatsApp → Dispositivos conectados → Conectar dispositivo
+            </div>
+            <div id="waSyncQrStatus" style="font-size:13px; color:#059669;">
+              <i class="fas fa-circle-notch fa-spin" style="margin-right:6px;"></i>Aguardando leitura do QR code...
+            </div>
+          </div>
+
+          <!-- Área: Conectado — Seletor de período -->
+          <div id="waSyncFormArea" style="display:none;">
+            <div style="background:#ecfdf5; border:1px solid #6ee7b7; border-radius:10px; padding:12px 16px; margin-bottom:20px; display:flex; align-items:center; gap:10px; font-size:13px; color:#065f46;">
+              <i class="fas fa-check-circle" style="font-size:16px; color:#059669;"></i>
+              <span>WhatsApp conectado! Selecione o período para sincronizar:</span>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;" id="waPeriodBtns">
+              <button class="btn btn-secondary btn-small wa-period-btn" data-days="1" onclick="selectWaPeriod(1)">1 dia</button>
+              <button class="btn btn-secondary btn-small wa-period-btn" data-days="3" onclick="selectWaPeriod(3)">3 dias</button>
+              <button class="btn btn-auto-mapping btn-small wa-period-btn wa-period-active" data-days="7" onclick="selectWaPeriod(7)">1 semana</button>
+              <button class="btn btn-secondary btn-small wa-period-btn" data-days="15" onclick="selectWaPeriod(15)">15 dias</button>
+              <button class="btn btn-secondary btn-small wa-period-btn" data-days="30" onclick="selectWaPeriod(30)">30 dias</button>
+            </div>
+            <button onclick="startWhatsappSync()" class="btn btn-auto-mapping" id="waSyncStartBtn">
+              <span class="ai-star-icon">✦</span> Iniciar Sincronização
+            </button>
+          </div>
+
+          <!-- Área: Progresso -->
+          <div id="waSyncProgressArea" style="display:none;">
+            <div id="waSyncProgressStep" style="font-size:13px; color:#374151; margin-bottom:12px; font-weight:500;">Iniciando...</div>
+            <div style="background:#d1fae5; border-radius:99px; height:22px; overflow:hidden; position:relative; margin-bottom:8px;">
+              <div id="waSyncProgressBar" style="height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width 0.4s ease; display:flex; align-items:center; justify-content:flex-end; position:relative;">
+                <span id="waSyncBunny" style="position:absolute; right:-4px; top:50%; transform:translateY(-50%); font-size:16px; animation:waBunnyHop 0.5s ease-in-out infinite;">🐇</span>
+              </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:12px; color:#6b7280;">
+                <span class="wa-paw" style="animation-delay:0s;">🐾</span>
+                <span class="wa-paw" style="animation-delay:0.2s;">🐾</span>
+                <span class="wa-paw" style="animation-delay:0.4s;">🐾</span>
+              </span>
+              <span id="waSyncProgressPct" style="font-size:12px; color:#6b7280; font-weight:600;">5%</span>
+            </div>
+          </div>
+
+          <!-- Área: Resultado -->
+          <div id="waSyncResultArea" style="display:none;">
+            <div id="waSyncResultBox" style="border-radius:10px; padding:16px 18px; font-size:14px;"></div>
+            <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap;">
+              <button onclick="_waResetToForm()" class="btn btn-secondary btn-small"><i class="fas fa-rotate-right"></i> Nova sincronização</button>
+              <button onclick="closeWhatsappSyncModal()" class="btn btn-secondary btn-small">Fechar</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script>
+    (function(){
+      const styleId = 'wa-sync-anim-style';
+      if (!document.getElementById(styleId)) {
+        const s = document.createElement('style');
+        s.id = styleId;
+        s.textContent = `
+          @keyframes waBunnyHop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-65%) scaleY(.88)} }
+          @keyframes waPawFade  { 0%,100%{opacity:.25} 50%{opacity:.75} }
+          .wa-paw { display:inline-block; animation:waPawFade 1s ease-in-out infinite; }
+        `;
+        document.head.appendChild(s);
+      }
+    })();
+
+    let _waSelectedPeriod = 7;
+    let _waQrPollInterval = null;
+
+    function openWhatsappSyncModal() {
+      document.getElementById('whatsappSyncModal').style.display = 'block';
+      _waShowSection('loading');
+      _waCheckStatus();
+    }
+
+    function closeWhatsappSyncModal() {
+      document.getElementById('whatsappSyncModal').style.display = 'none';
+      if (_waQrPollInterval) { clearInterval(_waQrPollInterval); _waQrPollInterval = null; }
+    }
+
+    function _waShowSection(name) {
+      const sections = ['waSyncLoading','waSyncConfigArea','waSyncOfflineArea','waSyncQrArea','waSyncFormArea','waSyncProgressArea','waSyncResultArea'];
+      sections.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+      const target = { loading:'waSyncLoading', config:'waSyncConfigArea', offline:'waSyncOfflineArea', qr:'waSyncQrArea', form:'waSyncFormArea', progress:'waSyncProgressArea', result:'waSyncResultArea' }[name];
+      if (target) document.getElementById(target).style.display = '';
+    }
+
+    function _waShowConfig() {
+      fetch('/api/whatsapp/config').then(r=>r.json()).then(d=>{
+        document.getElementById('waConfigUrl').value = d.evolution_api_url || 'http://localhost:8080';
+        document.getElementById('waConfigKey').value = '';
+        document.getElementById('waConfigInstance').value = d.evolution_instance_name || 'toca-whatsapp';
+        _waShowSection('config');
+      }).catch(()=>_waShowSection('config'));
+    }
+
+    function _waCheckStatus() {
+      fetch('/api/whatsapp/status').then(r=>r.json()).then(d=>{
+        if (!d.configured) { _waShowConfig(); return; }
+        if (d.state === 'offline' || d.state === 'error') {
+          document.getElementById('waSyncOfflineMsg').textContent = d.error || 'Evolution API não está acessível.';
+          _waShowSection('offline');
+          return;
+        }
+        if (d.connected) { _waShowSection('form'); return; }
+        // not connected but configured → get QR
+        _waGetQrCode();
+      }).catch(()=>{ _waShowSection('offline'); document.getElementById('waSyncOfflineMsg').textContent = 'Não foi possível contatar o servidor.'; });
+    }
+
+    function _waSaveConfig() {
+      const url = document.getElementById('waConfigUrl').value.trim();
+      const key = document.getElementById('waConfigKey').value.trim();
+      const inst = document.getElementById('waConfigInstance').value.trim();
+      if (!url || !key) { alert('URL e API Key são obrigatórias.'); return; }
+      fetch('/api/whatsapp/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({evolution_api_url:url, evolution_api_key:key, evolution_instance_name:inst||'toca-whatsapp'})})
+        .then(()=>{ _waShowSection('loading'); _waCheckStatus(); })
+        .catch(e=>alert('Erro ao salvar: '+e));
+    }
+
+    function _waGetQrCode() {
+      fetch('/api/whatsapp/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+        .then(r=>r.json()).then(d=>{
+          if (!d.ok) { document.getElementById('waSyncOfflineMsg').textContent = d.error || 'Falha ao obter QR code.'; _waShowSection('offline'); return; }
+          if (d.connected) { _waShowSection('form'); return; }
+          if (d.qr) {
+            document.getElementById('waSyncQrImg').src = d.qr;
+            _waShowSection('qr');
+            if (_waQrPollInterval) clearInterval(_waQrPollInterval);
+            _waQrPollInterval = setInterval(()=>{
+              fetch('/api/whatsapp/status').then(r=>r.json()).then(s=>{
+                if (s.connected) { clearInterval(_waQrPollInterval); _waQrPollInterval = null; _waShowSection('form'); }
+              });
+            }, 3000);
+          } else {
+            document.getElementById('waSyncOfflineMsg').textContent = 'QR code não disponível. Verifique se a instância está criada na Evolution API.';
+            _waShowSection('offline');
+          }
+        })
+        .catch(e=>{ document.getElementById('waSyncOfflineMsg').textContent = 'Erro: '+e; _waShowSection('offline'); });
+    }
+
+    function selectWaPeriod(days) {
+      _waSelectedPeriod = days;
+      document.querySelectorAll('.wa-period-btn').forEach(b=>{
+        const active = parseInt(b.dataset.days) === days;
+        b.className = active ? 'btn btn-auto-mapping btn-small wa-period-btn wa-period-active' : 'btn btn-secondary btn-small wa-period-btn';
+      });
+    }
+
+    function _waSetProgress(pct, step) {
+      const safe = Math.max(5, pct);
+      document.getElementById('waSyncProgressBar').style.width = safe + '%';
+      document.getElementById('waSyncProgressStep').textContent = step;
+      document.getElementById('waSyncProgressPct').textContent = Math.round(safe) + '%';
+    }
+
+    function startWhatsappSync() {
+      _waShowSection('progress');
+      _waSetProgress(5, 'Iniciando sincronização...');
+      fetch('/api/whatsapp/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({period_days:_waSelectedPeriod})})
+        .then(r=>r.json()).then(d=>{
+          if (!d.task_id) { alert('Erro ao iniciar sincronização.'); _waResetToForm(); return; }
+          const poll = setInterval(()=>{
+            fetch('/api/whatsapp/tasks/'+d.task_id).then(r=>r.json()).then(t=>{
+              _waSetProgress(t.progress||5, t.step||'Processando...');
+              if (t.status === 'done') {
+                clearInterval(poll);
+                _waShowResult(t.result);
+              } else if (t.status === 'error') {
+                clearInterval(poll);
+                _waShowResultError(t.error);
+              }
+            });
+          }, 800);
+        })
+        .catch(e=>{ alert('Erro: '+e); _waResetToForm(); });
+    }
+
+    function _waShowResult(result) {
+      _waShowSection('result');
+      const box = document.getElementById('waSyncResultBox');
+      if (result && result.imported > 0) {
+        box.style.background = '#ecfdf5';
+        box.style.border = '1px solid #6ee7b7';
+        box.innerHTML = `<div style="font-weight:700; color:#065f46; margin-bottom:8px;"><i class="fas fa-check-circle" style="margin-right:6px;"></i>Sincronização concluída!</div><div style="color:#374151;">${result.message}</div>`;
+      } else {
+        box.style.background = '#f9fafb';
+        box.style.border = '1px solid #e5e7eb';
+        box.innerHTML = `<div style="font-weight:700; color:#374151; margin-bottom:8px;"><i class="fas fa-check" style="margin-right:6px; color:#6b7280;"></i>Verificação concluída</div><div style="color:#6b7280;">${(result && result.message) || 'Nenhuma novidade encontrada no período.'}</div>`;
+      }
+    }
+
+    function _waShowResultError(error) {
+      _waShowSection('result');
+      const box = document.getElementById('waSyncResultBox');
+      box.style.background = '#fef2f2';
+      box.style.border = '1px solid #fca5a5';
+      box.innerHTML = `<div style="font-weight:700; color:#991b1b; margin-bottom:8px;"><i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>Erro durante sincronização</div><div style="color:#374151; font-size:13px;">${error || 'Erro desconhecido.'}</div>`;
+    }
+
+    function _waResetToForm() {
+      _waShowSection('form');
+    }
+    </script>
 
     <!-- Background Task Indicator -->
     <div id="bgTaskDoneList"></div>
