@@ -3663,7 +3663,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-secondary" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
-                <button class="btn btn-auto-mapping" onclick="openWhatsappSyncModal()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
+                <button class="btn btn-auto-mapping" onclick="openWhatsappUpdateWithWarning()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
@@ -16533,6 +16533,40 @@
       </div>
     </div>
 
+    <!-- Modal: Aviso de uso do WhatsApp Update -->
+    <div id="waBanWarningModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10001; align-items:center; justify-content:center; padding:16px;">
+      <div style="background:#fff; border-radius:20px; max-width:440px; width:100%; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.35);">
+        <div style="background:linear-gradient(135deg,#fff7ed,#fef3c7); padding:24px 28px 18px; border-bottom:1px solid #fcd34d;">
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;">
+            <span style="font-size:28px; line-height:1;">⚠️</span>
+            <h2 style="margin:0; color:#92400e; font-size:18px; font-weight:700;">Use com moderação</h2>
+          </div>
+          <p style="margin:0; color:#78350f; font-size:13px;">Recurso em beta — leia antes de usar.</p>
+        </div>
+        <div style="padding:22px 28px;">
+          <p style="color:#374151; font-size:13px; line-height:1.7; margin:0 0 14px;">
+            O <strong>WhatsApp Update</strong> conecta ao WhatsApp via dispositivo vinculado (como o WhatsApp Web). Para manter sua conta segura:
+          </p>
+          <ul style="color:#374151; font-size:13px; line-height:1.9; margin:0 0 20px; padding-left:20px;">
+            <li>Use <strong>no máximo 1 a 2 vezes por dia</strong></li>
+            <li>Prefira períodos curtos (1–7 dias) nas sincronizações</li>
+            <li>A função faz apenas <strong>leitura</strong> — não envia mensagens</li>
+            <li>Risco de bloqueio pelo WhatsApp é <strong>baixo</strong>, mas não nulo</li>
+          </ul>
+          <label style="display:flex; align-items:center; gap:10px; font-size:13px; color:#6b7280; cursor:pointer; margin-bottom:22px;">
+            <input type="checkbox" id="waBanWarningCheckbox" style="width:16px; height:16px; cursor:pointer; accent-color:#059669; flex-shrink:0;">
+            Entendi os riscos. Não mostrar este aviso novamente.
+          </label>
+          <div style="display:flex; gap:10px; justify-content:flex-end;">
+            <button onclick="closeWaBanWarning()" style="padding:9px 18px; border:1px solid #d1d5db; border-radius:8px; background:#fff; color:#374151; font-size:13px; cursor:pointer; font-weight:500;">Cancelar</button>
+            <button onclick="confirmWaBanWarning()" class="btn btn-auto-mapping" style="padding:9px 22px;">
+              <span class="ai-star-icon">✦</span> Entendi, continuar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: WhatsApp Update -->
     <div id="whatsappSyncModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9999; overflow-y:auto; padding:24px 16px;">
       <div style="background:#fff; border-radius:20px; max-width:500px; margin:0 auto; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
@@ -16675,6 +16709,28 @@
 
     let _waSelectedPeriod = 7;
     let _waQrPollInterval = null;
+
+    function openWhatsappUpdateWithWarning() {
+      if (localStorage.getItem('wa_ban_warning_ok') === '1') {
+        openWhatsappSyncModal();
+        return;
+      }
+      const m = document.getElementById('waBanWarningModal');
+      m.style.display = 'flex';
+      document.getElementById('waBanWarningCheckbox').checked = false;
+    }
+
+    function closeWaBanWarning() {
+      document.getElementById('waBanWarningModal').style.display = 'none';
+    }
+
+    function confirmWaBanWarning() {
+      if (document.getElementById('waBanWarningCheckbox').checked) {
+        localStorage.setItem('wa_ban_warning_ok', '1');
+      }
+      closeWaBanWarning();
+      openWhatsappSyncModal();
+    }
 
     function openWhatsappSyncModal() {
       document.getElementById('whatsappSyncModal').style.display = 'block';

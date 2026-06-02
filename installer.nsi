@@ -41,6 +41,15 @@ Section "Instalar Toca do Coelho" SecApp
     File "README.md"
     File "coelho_icon_transparent.ico"
 
+    ; Evolution API (WhatsApp Update gateway) — copiada se compilada junto ao build
+    IfFileExists "evolution-api\evolution-api.exe" 0 skip_evolution
+        DetailPrint "Instalando Evolution API (WhatsApp Update)..."
+        nsExec::Exec 'taskkill /F /IM evolution-api.exe /T'
+        SetOutPath "$INSTDIR\evolution-api"
+        File /r "evolution-api\*.*"
+        SetOutPath "$INSTDIR"
+    skip_evolution:
+
     CreateDirectory "$APPDATA\toca-do-coelho"
 
     WriteRegStr HKCU "Software\TocaDoCoelho" "InstallPath" "$INSTDIR"
@@ -68,6 +77,8 @@ Section /o "Iniciar com o Windows" SecAutoStart
 SectionEnd
 
 Section "Uninstall"
+    DetailPrint "Encerrando Evolution API..."
+    nsExec::Exec 'taskkill /F /IM evolution-api.exe /T'
     RMDir /r "$INSTDIR"
     !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
     Delete "$SMPROGRAMS\$StartMenuFolder\Toca.lnk"

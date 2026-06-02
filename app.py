@@ -903,6 +903,16 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('evolution_api_url', 'http://localhost:8080'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('evolution_api_key', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('evolution_instance_name', 'toca-whatsapp'))
+    # Auto-configurar a partir de variáveis de ambiente injetadas pelo launcher (build bundled)
+    _evo_url_env = os.environ.get('EVOLUTION_API_URL', '').strip()
+    _evo_key_env = os.environ.get('EVOLUTION_API_KEY', '').strip()
+    _evo_inst_env = os.environ.get('EVOLUTION_INSTANCE_NAME', '').strip()
+    if _evo_url_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='http://localhost:8080'", ('evolution_api_url', _evo_url_env))
+    if _evo_key_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('evolution_api_key', _evo_key_env))
+    if _evo_inst_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='toca-whatsapp'", ('evolution_instance_name', _evo_inst_env))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (

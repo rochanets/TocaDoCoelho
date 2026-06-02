@@ -4,6 +4,7 @@
 import os
 import sys
 import time
+import secrets
 import webbrowser
 import subprocess
 import requests
@@ -191,6 +192,70 @@ class WindowsTrayIcon:
             self._show_menu()
         return 0
 
+EVOLUTION_API_PORT = int(os.environ.get('EVOLUTION_API_PORT', '8080'))
+
+
+def _load_or_create_evolution_key():
+    """Gera e persiste a chave da Evolution API no diretório de dados do usuário."""
+    key_file = DATA_DIR / 'evolution_api.key'
+    if key_file.exists():
+        key = key_file.read_text(encoding='utf-8').strip()
+        if key:
+            return key
+    key = secrets.token_hex(24)
+    key_file.write_text(key, encoding='utf-8')
+    return key
+
+
+def _start_evolution_api():
+    """
+    Inicia a Evolution API bundled se o binário estiver presente na pasta de instalação.
+    Retorna (processo, arquivo_de_log) ou (None, None) se não disponível.
+    """
+    exe_name = 'evolution-api.exe' if sys.platform == 'win32' else 'evolution-api'
+    candidates = [
+        EXE_DIR / 'evolution-api' / exe_name,
+        APP_DIR / 'evolution-api' / exe_name,
+    ]
+    evo_exe = next((p for p in candidates if p.exists()), None)
+    if not evo_exe:
+        print("[INFO] Evolution API não incluída neste build — configure manualmente no WhatsApp Update.")
+        return None, None
+
+    api_key = _load_or_create_evolution_key()
+
+    # Injeta via env para que app.py auto-configure o banco na inicialização
+    os.environ['EVOLUTION_API_URL'] = f'http://localhost:{EVOLUTION_API_PORT}'
+    os.environ['EVOLUTION_API_KEY'] = api_key
+    os.environ['EVOLUTION_INSTANCE_NAME'] = 'toca-whatsapp'
+
+    evo_env = os.environ.copy()
+    evo_env.update({
+        'AUTHENTICATION_API_KEY': api_key,
+        'SERVER_PORT': str(EVOLUTION_API_PORT),
+        'DATABASE_PROVIDER': 'sqlite',
+        'DATABASE_CONNECTION_URI': str(DATA_DIR / 'evolution.db'),
+        'INSTANCE_DIRECTORY': str(DATA_DIR / 'evolution-instances'),
+    })
+
+    (DATA_DIR / 'evolution-instances').mkdir(parents=True, exist_ok=True)
+    evo_log_file = open(DATA_DIR / 'evolution_api.log', 'w', encoding='utf-8')
+    try:
+        proc = subprocess.Popen(
+            [str(evo_exe)],
+            stdout=evo_log_file,
+            stderr=evo_log_file,
+            env=evo_env,
+            cwd=str(evo_exe.parent),
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+        )
+        print(f"[OK] Evolution API iniciada (PID: {proc.pid}) — porta {EVOLUTION_API_PORT}")
+        return proc, evo_log_file
+    except Exception as exc:
+        print(f"[WARN] Falha ao iniciar Evolution API: {exc}")
+        return None, evo_log_file
+
+
 # Modo servidor interno para evitar loop de subprocesso no bundle PyInstaller.
 # No modo frozen, sys.executable aponta para o próprio TocaDoCoelho.exe.
 # Aqui importamos o módulo app diretamente (sem runpy) para que o PyInstaller
@@ -220,6 +285,11 @@ if not APP_PY.exists():
     print("[erro] Verifique se o build foi feito com --add-data \"app.py;.\"")
     input("Pressione ENTER para fechar...")
     sys.exit(1)
+
+# Iniciar Evolution API (WhatsApp Update) se bundled
+print("[INFO] Verificando Evolution API...")
+evolution_process, evolution_log = _start_evolution_api()
+print()
 
 # Iniciar servidor Flask em background
 print("[INFO] Iniciando servidor...")
@@ -324,4 +394,8 @@ finally:
     if server_process.poll() is None:
         server_process.terminate()
         server_process.wait(timeout=5)
+    if evolution_process and evolution_process.poll() is None:
+        print("[INFO] Encerrando Evolution API...")
+        evolution_process.terminate()
+        evolution_process.wait(timeout=5)
     print("[OK] Servidor encerrado!")
