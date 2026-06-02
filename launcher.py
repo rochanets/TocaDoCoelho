@@ -4,7 +4,7 @@
 import os
 import sys
 import time
-import secrets
+import shutil
 import webbrowser
 import subprocess
 import requests
@@ -192,68 +192,67 @@ class WindowsTrayIcon:
             self._show_menu()
         return 0
 
-EVOLUTION_API_PORT = int(os.environ.get('EVOLUTION_API_PORT', '8080'))
+WAHA_PORT = int(os.environ.get('WAHA_PORT', '3001'))
+WAHA_API_KEY_DEFAULT = os.environ.get('WAHA_API_KEY', 'toca-test-key-2024')
+WAHA_COMPOSE_FILE = 'docker-compose.whatsapp.yml'
 
 
-def _load_or_create_evolution_key():
-    """Gera e persiste a chave da Evolution API no diretório de dados do usuário."""
-    key_file = DATA_DIR / 'evolution_api.key'
-    if key_file.exists():
-        key = key_file.read_text(encoding='utf-8').strip()
-        if key:
-            return key
-    key = secrets.token_hex(24)
-    key_file.write_text(key, encoding='utf-8')
-    return key
-
-
-def _start_evolution_api():
-    """
-    Inicia a Evolution API bundled se o binário estiver presente na pasta de instalação.
-    Retorna (processo, arquivo_de_log) ou (None, None) se não disponível.
-    """
-    exe_name = 'evolution-api.exe' if sys.platform == 'win32' else 'evolution-api'
+def _find_docker():
+    """Localiza o executável do Docker no PATH ou em caminhos comuns do Windows."""
+    docker = shutil.which('docker')
+    if docker:
+        return docker
     candidates = [
-        EXE_DIR / 'evolution-api' / exe_name,
-        APP_DIR / 'evolution-api' / exe_name,
+        Path(os.environ.get('PROGRAMFILES', r'C:\Program Files')) / 'Docker' / 'Docker' / 'resources' / 'bin' / 'docker.exe',
+        Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Docker' / 'Docker' / 'resources' / 'bin' / 'docker.exe',
     ]
-    evo_exe = next((p for p in candidates if p.exists()), None)
-    if not evo_exe:
-        print("[INFO] Evolution API não incluída neste build — configure manualmente no WhatsApp Update.")
-        return None, None
+    for p in candidates:
+        if str(p) and p.exists():
+            return str(p)
+    return None
 
-    api_key = _load_or_create_evolution_key()
 
-    # Injeta via env para que app.py auto-configure o banco na inicialização
-    os.environ['EVOLUTION_API_URL'] = f'http://localhost:{EVOLUTION_API_PORT}'
-    os.environ['EVOLUTION_API_KEY'] = api_key
-    os.environ['EVOLUTION_INSTANCE_NAME'] = 'toca-whatsapp'
+def _start_waha():
+    """
+    Sobe o WAHA (gateway do WhatsApp Update) como container Docker, se o Docker
+    estiver disponível e o compose existir. Define as variáveis de ambiente para
+    que o app.py auto-configure o WhatsApp Update na inicialização.
 
-    evo_env = os.environ.copy()
-    evo_env.update({
-        'AUTHENTICATION_API_KEY': api_key,
-        'SERVER_PORT': str(EVOLUTION_API_PORT),
-        'DATABASE_PROVIDER': 'sqlite',
-        'DATABASE_CONNECTION_URI': str(DATA_DIR / 'evolution.db'),
-        'INSTANCE_DIRECTORY': str(DATA_DIR / 'evolution-instances'),
-    })
+    O WAHA roda em container destacado e persiste entre execuções do app (mantém
+    a sessão do WhatsApp ativa, evitando reescanear o QR a cada abertura).
+    """
+    # Aponta o app para o WAHA local independentemente de conseguir subir o container
+    os.environ.setdefault('WAHA_API_URL', f'http://localhost:{WAHA_PORT}')
+    os.environ.setdefault('WAHA_API_KEY', WAHA_API_KEY_DEFAULT)
+    os.environ.setdefault('WAHA_SESSION_NAME', 'default')
 
-    (DATA_DIR / 'evolution-instances').mkdir(parents=True, exist_ok=True)
-    evo_log_file = open(DATA_DIR / 'evolution_api.log', 'w', encoding='utf-8')
+    compose_file = next(
+        (p for p in (EXE_DIR / WAHA_COMPOSE_FILE, APP_DIR / WAHA_COMPOSE_FILE) if p.exists()),
+        None
+    )
+    if not compose_file:
+        print("[INFO] Compose do WAHA não encontrado — configure o WhatsApp Update manualmente.")
+        return False
+
+    docker = _find_docker()
+    if not docker:
+        print("[INFO] Docker não encontrado — WhatsApp Update exige Docker Desktop instalado e em execução.")
+        return False
+
     try:
-        proc = subprocess.Popen(
-            [str(evo_exe)],
-            stdout=evo_log_file,
-            stderr=evo_log_file,
-            env=evo_env,
-            cwd=str(evo_exe.parent),
+        subprocess.run(
+            [docker, 'compose', '-f', str(compose_file), 'up', '-d'],
+            cwd=str(compose_file.parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=180,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
         )
-        print(f"[OK] Evolution API iniciada (PID: {proc.pid}) — porta {EVOLUTION_API_PORT}")
-        return proc, evo_log_file
+        print(f"[OK] WAHA iniciado via Docker — porta {WAHA_PORT}")
+        return True
     except Exception as exc:
-        print(f"[WARN] Falha ao iniciar Evolution API: {exc}")
-        return None, evo_log_file
+        print(f"[WARN] Falha ao iniciar WAHA via Docker (verifique se o Docker Desktop está rodando): {exc}")
+        return False
 
 
 # Modo servidor interno para evitar loop de subprocesso no bundle PyInstaller.
@@ -286,9 +285,9 @@ if not APP_PY.exists():
     input("Pressione ENTER para fechar...")
     sys.exit(1)
 
-# Iniciar Evolution API (WhatsApp Update) se bundled
-print("[INFO] Verificando Evolution API...")
-evolution_process, evolution_log = _start_evolution_api()
+# Iniciar WAHA (gateway do WhatsApp Update) via Docker, se disponível
+print("[INFO] Verificando WAHA (WhatsApp Update)...")
+_start_waha()
 print()
 
 # Iniciar servidor Flask em background
@@ -394,8 +393,6 @@ finally:
     if server_process.poll() is None:
         server_process.terminate()
         server_process.wait(timeout=5)
-    if evolution_process and evolution_process.poll() is None:
-        print("[INFO] Encerrando Evolution API...")
-        evolution_process.terminate()
-        evolution_process.wait(timeout=5)
+    # O WAHA roda em container Docker destacado e é mantido vivo de propósito
+    # (preserva a sessão do WhatsApp entre execuções do app).
     print("[OK] Servidor encerrado!")

@@ -900,19 +900,19 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_simple_template_id', '69bc155d7462bf7c702e9295'))
-    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('evolution_api_url', 'http://localhost:8080'))
-    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('evolution_api_key', ''))
-    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('evolution_instance_name', 'toca-whatsapp'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_url', 'http://localhost:3001'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_session_name', 'default'))
     # Auto-configurar a partir de variáveis de ambiente injetadas pelo launcher (build bundled)
-    _evo_url_env = os.environ.get('EVOLUTION_API_URL', '').strip()
-    _evo_key_env = os.environ.get('EVOLUTION_API_KEY', '').strip()
-    _evo_inst_env = os.environ.get('EVOLUTION_INSTANCE_NAME', '').strip()
-    if _evo_url_env:
-        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='http://localhost:8080'", ('evolution_api_url', _evo_url_env))
-    if _evo_key_env:
-        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('evolution_api_key', _evo_key_env))
-    if _evo_inst_env:
-        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='toca-whatsapp'", ('evolution_instance_name', _evo_inst_env))
+    _waha_url_env = os.environ.get('WAHA_API_URL', '').strip()
+    _waha_key_env = os.environ.get('WAHA_API_KEY', '').strip()
+    _waha_session_env = os.environ.get('WAHA_SESSION_NAME', '').strip()
+    if _waha_url_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='http://localhost:3001'", ('waha_api_url', _waha_url_env))
+    if _waha_key_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
+    if _waha_session_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -13510,11 +13510,11 @@ def autotoca_teste_linkedin():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 # ─────────────────────────────────────────
-#  WhatsApp Update — Evolution API
+#  WhatsApp Update — WAHA (WhatsApp HTTP API)
 # ─────────────────────────────────────────
 
-def _phone_to_whatsapp_jid(phone):
-    """Converte telefone normalizado do projeto para JID do WhatsApp (5511999999999@s.whatsapp.net)."""
+def _phone_to_waha_chatid(phone):
+    """Converte telefone normalizado do projeto para chatId do WAHA (5511999999999@c.us)."""
     if not phone:
         return None
     digits = re.sub(r'\D', '', str(phone))
@@ -13522,38 +13522,49 @@ def _phone_to_whatsapp_jid(phone):
         return None
     if not digits.startswith('55'):
         digits = '55' + digits
-    return f'{digits}@s.whatsapp.net'
+    return f'{digits}@c.us'
 
 
-def _whatsapp_extract_text(msg):
-    """Extrai texto de um objeto de mensagem do Evolution API."""
-    m = msg.get('message') or {}
-    if m.get('conversation'):
-        return m['conversation']
-    if m.get('extendedTextMessage', {}).get('text'):
-        return m['extendedTextMessage']['text']
-    if m.get('imageMessage', {}).get('caption'):
-        return f'[Imagem] {m["imageMessage"]["caption"]}'
-    if m.get('videoMessage', {}).get('caption'):
-        return f'[Vídeo] {m["videoMessage"]["caption"]}'
-    if m.get('audioMessage'):
-        return '[Áudio]'
-    if m.get('documentMessage', {}).get('title'):
-        return f'[Documento: {m["documentMessage"]["title"]}]'
-    if m.get('stickerMessage'):
-        return '[Figurinha]'
-    return ''
+def _waha_settings():
+    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
+    return (
+        (s.get('waha_api_url') or 'http://localhost:3001').strip().rstrip('/'),
+        (s.get('waha_api_key') or '').strip(),
+        (s.get('waha_session_name') or 'default').strip(),
+    )
+
+
+def _waha_headers(api_key):
+    h = {'Content-Type': 'application/json'}
+    if api_key:
+        h['X-Api-Key'] = api_key
+    return h
+
+
+def _waha_extract_text(msg, client_name):
+    """Extrai texto de uma mensagem do WAHA. Retorna (texto, sender_label)."""
+    sender = 'Você' if msg.get('fromMe') else client_name
+    body = (msg.get('body') or '').strip()
+    if body:
+        return f'{sender}: {body}', sender
+    # Sem corpo de texto → rotula por tipo de mídia
+    mtype = (msg.get('type') or '').lower()
+    label_map = {
+        'image': '[Imagem]', 'video': '[Vídeo]', 'ptt': '[Áudio]',
+        'audio': '[Áudio]', 'document': '[Documento]', 'sticker': '[Figurinha]',
+        'location': '[Localização]',
+    }
+    if msg.get('hasMedia') or mtype in label_map:
+        return f'{sender}: {label_map.get(mtype, "[Mídia]")}', sender
+    return None, sender
 
 
 def _whatsapp_sync_async(task_id, period_days):
     try:
         _bg_task_set(task_id, {'step': '📋 Carregando clientes...', 'progress': 5})
 
-        settings = _load_app_settings_map(['evolution_api_url', 'evolution_api_key', 'evolution_instance_name'])
-        api_url = (settings.get('evolution_api_url') or '').strip().rstrip('/')
-        api_key = (settings.get('evolution_api_key') or '').strip()
-        instance = (settings.get('evolution_instance_name') or 'toca-whatsapp').strip()
-        evo_headers = {'apikey': api_key, 'Content-Type': 'application/json'}
+        api_url, api_key, session = _waha_settings()
+        headers = _waha_headers(api_key)
 
         db = get_db()
         c = db.cursor()
@@ -13587,39 +13598,29 @@ def _whatsapp_sync_async(task_id, period_days):
                 'progress': progress
             })
 
-            jid = _phone_to_whatsapp_jid(phone)
-            if not jid:
+            chat_id = _phone_to_waha_chatid(phone)
+            if not chat_id:
                 skipped += 1
                 continue
 
             try:
-                # Evolution API v2: filtra por remoteJid no where e pagina com page/offset.
-                # O range de timestamp é aplicado no Python (mais robusto que o where do Prisma).
-                msg_resp = requests.post(
-                    f'{api_url}/chat/findMessages/{instance}',
-                    headers=evo_headers,
-                    json={
-                        'where': {'key': {'remoteJid': jid}},
-                        'page': 1,
-                        'offset': 500
+                # WAHA: GET /api/{session}/chats/{chatId}/messages com filtro de timestamp server-side
+                msg_resp = requests.get(
+                    f'{api_url}/api/{session}/chats/{chat_id}/messages',
+                    headers=headers,
+                    params={
+                        'limit': 500,
+                        'downloadMedia': 'false',
+                        'filter.timestamp.gte': since_ts,
+                        'filter.timestamp.lte': now_ts,
                     },
-                    timeout=20
+                    timeout=25
                 )
                 if msg_resp.status_code != 200:
                     skipped += 1
                     continue
                 raw = msg_resp.json()
-                # v2 retorna {messages: {records: [...]}}; versões antigas retornam lista direta
-                if isinstance(raw, list):
-                    messages = raw
-                else:
-                    msgs_node = raw.get('messages')
-                    if isinstance(msgs_node, dict):
-                        messages = msgs_node.get('records') or []
-                    elif isinstance(msgs_node, list):
-                        messages = msgs_node
-                    else:
-                        messages = raw.get('records') or []
+                messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
             except Exception:
                 skipped += 1
                 continue
@@ -13628,10 +13629,10 @@ def _whatsapp_sync_async(task_id, period_days):
                 skipped += 1
                 continue
 
-            # Ordena por timestamp e mantém apenas mensagens dentro do período escolhido
+            # Ordena por timestamp (segundos). WAHA já filtra pelo período, mas garantimos o range.
             def _msg_ts(m):
                 try:
-                    return int(m.get('messageTimestamp') or 0)
+                    return int(m.get('timestamp') or 0)
                 except (TypeError, ValueError):
                     return 0
             messages.sort(key=_msg_ts)
@@ -13644,10 +13645,9 @@ def _whatsapp_sync_async(task_id, period_days):
                     continue
                 if ts > last_ts:
                     last_ts = ts
-                text = _whatsapp_extract_text(msg)
+                text, _sender = _waha_extract_text(msg, client_name)
                 if text:
-                    sender = 'Você' if msg.get('key', {}).get('fromMe') else client_name
-                    texts.append(f'{sender}: {text}')
+                    texts.append(text)
 
             if not texts:
                 skipped += 1
@@ -13734,13 +13734,13 @@ def _whatsapp_sync_async(task_id, period_days):
 
 @app.route('/api/whatsapp/config', methods=['GET'])
 def whatsapp_get_config():
-    s = _load_app_settings_map(['evolution_api_url', 'evolution_api_key', 'evolution_instance_name'])
-    has_key = bool((s.get('evolution_api_key') or '').strip())
+    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
+    has_key = bool((s.get('waha_api_key') or '').strip())
     return jsonify({
-        'evolution_api_url': s.get('evolution_api_url') or 'http://localhost:8080',
-        'evolution_api_key': '••••••••' if has_key else '',
-        'evolution_instance_name': s.get('evolution_instance_name') or 'toca-whatsapp',
-        'configured': bool((s.get('evolution_api_url') or '').strip() and has_key),
+        'waha_api_url': s.get('waha_api_url') or 'http://localhost:3001',
+        'waha_api_key': '••••••••' if has_key else '',
+        'waha_session_name': s.get('waha_session_name') or 'default',
+        'configured': bool((s.get('waha_api_url') or '').strip()),
     })
 
 
@@ -13749,7 +13749,7 @@ def whatsapp_save_config():
     data = request.get_json(force=True) or {}
     db = get_db()
     c = db.cursor()
-    for key in ['evolution_api_url', 'evolution_api_key', 'evolution_instance_name']:
+    for key in ['waha_api_url', 'waha_api_key', 'waha_session_name']:
         val = (data.get(key) or '').strip()
         if val and val != '••••••••':
             c.execute(
@@ -13762,101 +13762,76 @@ def whatsapp_save_config():
 
 @app.route('/api/whatsapp/status', methods=['GET'])
 def whatsapp_status():
-    s = _load_app_settings_map(['evolution_api_url', 'evolution_api_key', 'evolution_instance_name'])
-    api_url = (s.get('evolution_api_url') or '').strip().rstrip('/')
-    api_key = (s.get('evolution_api_key') or '').strip()
-    instance = (s.get('evolution_instance_name') or 'toca-whatsapp').strip()
-    if not api_url or not api_key:
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
         return jsonify({'configured': False, 'connected': False, 'state': 'not_configured'})
     try:
-        resp = requests.get(
-            f'{api_url}/instance/connectionState/{instance}',
-            headers={'apikey': api_key},
-            timeout=5
-        )
+        resp = requests.get(f'{api_url}/api/sessions/{session}', headers=_waha_headers(api_key), timeout=5)
         if resp.status_code == 404:
-            return jsonify({'configured': True, 'connected': False, 'state': 'no_instance'})
-        state = resp.json().get('instance', {}).get('state', 'close')
-        return jsonify({'configured': True, 'connected': state == 'open', 'state': state})
+            return jsonify({'configured': True, 'connected': False, 'state': 'no_session'})
+        if resp.status_code == 401:
+            return jsonify({'configured': True, 'connected': False, 'state': 'unauthorized',
+                            'error': 'API Key inválida.'})
+        status = (resp.json() or {}).get('status', 'STOPPED')
+        return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
     except requests.exceptions.ConnectionError:
         return jsonify({'configured': True, 'connected': False, 'state': 'offline',
-                        'error': 'Evolution API offline. Verifique se o serviço está rodando.'})
+                        'error': 'WAHA offline. Verifique se o serviço (container) está rodando.'})
     except Exception as e:
         return jsonify({'configured': True, 'connected': False, 'state': 'error', 'error': str(e)})
 
 
 @app.route('/api/whatsapp/connect', methods=['POST'])
 def whatsapp_connect():
-    s = _load_app_settings_map(['evolution_api_url', 'evolution_api_key', 'evolution_instance_name'])
-    api_url = (s.get('evolution_api_url') or '').strip().rstrip('/')
-    api_key = (s.get('evolution_api_key') or '').strip()
-    instance = (s.get('evolution_instance_name') or 'toca-whatsapp').strip()
-    if not api_url or not api_key:
-        return jsonify({'ok': False, 'error': 'Evolution API não configurada.'}), 400
-    headers = {'apikey': api_key, 'Content-Type': 'application/json'}
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'ok': False, 'error': 'WAHA não configurado.'}), 400
+    headers = _waha_headers(api_key)
 
-    # 1. Verifica o estado atual da instância
+    # 1. Garante que a sessão existe e está iniciada
     try:
-        state_resp = requests.get(f'{api_url}/instance/connectionState/{instance}', headers=headers, timeout=5)
-        if state_resp.status_code == 200:
-            state = (state_resp.json().get('instance') or {}).get('state')
-            if state == 'open':
+        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        if st.status_code == 200:
+            status = (st.json() or {}).get('status')
+            if status == 'WORKING':
                 return jsonify({'ok': True, 'connected': True})
-            # Instância existe mas não está conectada → remove para gerar um QR limpo
-            try:
-                requests.delete(f'{api_url}/instance/logout/{instance}', headers=headers, timeout=10)
-            except Exception:
-                pass
-            try:
-                requests.delete(f'{api_url}/instance/delete/{instance}', headers=headers, timeout=10)
-            except Exception:
-                pass
-            time.sleep(1.5)
+            if status in ('STOPPED', 'FAILED'):
+                requests.post(f'{api_url}/api/sessions/{session}/start', headers=headers, timeout=15)
+        elif st.status_code == 404:
+            # Cria e inicia a sessão
+            requests.post(f'{api_url}/api/sessions/', headers=headers,
+                          json={'name': session, 'start': True}, timeout=20)
+        elif st.status_code == 401:
+            return jsonify({'ok': False, 'error': 'API Key inválida.'}), 401
     except requests.exceptions.ConnectionError:
-        return jsonify({'ok': False, 'error': 'Evolution API não está acessível.'}), 503
+        return jsonify({'ok': False, 'error': 'WAHA não está acessível.'}), 503
     except Exception as exc:
-        logger.warning(f'[WhatsApp] connectionState error: {exc}')
+        logger.warning(f'[WhatsApp] WAHA session check error: {exc}')
 
-    # 2. Cria a instância nova com QR
+    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64)
     qr = None
-    try:
-        create_resp = requests.post(
-            f'{api_url}/instance/create',
-            headers=headers,
-            json={'instanceName': instance, 'qrcode': True, 'integration': 'WHATSAPP-BAILEYS'},
-            timeout=20
-        )
-        logger.info(f'[WhatsApp] create status={create_resp.status_code} body={create_resp.text[:300]}')
-        if create_resp.status_code in (200, 201):
-            qr = (create_resp.json().get('qrcode') or {}).get('base64')
-    except requests.exceptions.ConnectionError:
-        return jsonify({'ok': False, 'error': 'Evolution API não está acessível.'}), 503
-    except Exception as exc:
-        logger.warning(f'[WhatsApp] create error: {exc}')
-
-    # 3. Se o QR não veio no create, faz polling no /connect (o QR leva alguns segundos)
-    if not qr:
-        for _ in range(6):
-            time.sleep(1.3)
-            try:
-                cr = requests.get(f'{api_url}/instance/connect/{instance}', headers=headers, timeout=10)
-                if cr.status_code == 200:
-                    d = cr.json() if cr.text.strip().startswith('{') else {}
-                    qr = d.get('base64') or (d.get('qrcode') or {}).get('base64')
-                    if qr:
-                        break
-                    st = requests.get(f'{api_url}/instance/connectionState/{instance}', headers=headers, timeout=5)
-                    if st.ok and (st.json().get('instance') or {}).get('state') == 'open':
-                        return jsonify({'ok': True, 'connected': True})
-            except Exception:
-                pass
+    for _ in range(10):
+        time.sleep(1.3)
+        try:
+            st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+            status = (st.json() or {}).get('status') if st.ok else None
+            if status == 'WORKING':
+                return jsonify({'ok': True, 'connected': True})
+            if status == 'SCAN_QR_CODE':
+                qr_resp = requests.get(f'{api_url}/api/{session}/auth/qr',
+                                       headers=headers, params={'format': 'image'}, timeout=10)
+                if qr_resp.status_code == 200 and qr_resp.content:
+                    ctype = qr_resp.headers.get('Content-Type', 'image/png')
+                    b64 = base64.b64encode(qr_resp.content).decode('ascii')
+                    qr = f'data:{ctype};base64,{b64}'
+                    break
+        except Exception:
+            pass
 
     if qr:
-        if not str(qr).startswith('data:'):
-            qr = 'data:image/png;base64,' + qr
         return jsonify({'ok': True, 'connected': False, 'qr': qr})
 
-    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code após várias tentativas. Verifique se a Evolution API está conectada ao banco e veja os logs do container.'}), 500
+    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code. Verifique os logs do container WAHA (docker logs toca-waha).'}), 500
 
 
 @app.route('/api/whatsapp/sync', methods=['POST'])

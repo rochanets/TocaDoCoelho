@@ -41,14 +41,11 @@ Section "Instalar Toca do Coelho" SecApp
     File "README.md"
     File "coelho_icon_transparent.ico"
 
-    ; Evolution API (WhatsApp Update gateway) — copiada se compilada junto ao build
-    IfFileExists "evolution-api\evolution-api.exe" 0 skip_evolution
-        DetailPrint "Instalando Evolution API (WhatsApp Update)..."
-        nsExec::Exec 'taskkill /F /IM evolution-api.exe /T'
-        SetOutPath "$INSTDIR\evolution-api"
-        File /r "evolution-api\*.*"
-        SetOutPath "$INSTDIR"
-    skip_evolution:
+    ; WhatsApp Update: o gateway WAHA roda como container Docker, iniciado
+    ; automaticamente pelo launcher (docker-compose.whatsapp.yml). Incluímos
+    ; o arquivo de compose no diretório de instalação.
+    IfFileExists "docker-compose.whatsapp.yml" 0 +2
+        File "docker-compose.whatsapp.yml"
 
     CreateDirectory "$APPDATA\toca-do-coelho"
 
@@ -77,8 +74,8 @@ Section /o "Iniciar com o Windows" SecAutoStart
 SectionEnd
 
 Section "Uninstall"
-    DetailPrint "Encerrando Evolution API..."
-    nsExec::Exec 'taskkill /F /IM evolution-api.exe /T'
+    ; Encerra o container WAHA do WhatsApp Update, se o Docker estiver disponível
+    nsExec::Exec 'docker rm -f toca-waha'
     RMDir /r "$INSTDIR"
     !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
     Delete "$SMPROGRAMS\$StartMenuFolder\Toca.lnk"

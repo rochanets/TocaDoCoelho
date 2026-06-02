@@ -16595,20 +16595,20 @@
           <div id="waSyncConfigArea" style="display:none;">
             <div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:14px 16px; margin-bottom:16px; font-size:13px; color:#9a3412;">
               <i class="fas fa-info-circle" style="margin-right:6px;"></i>
-              Configure a <strong>Evolution API</strong> para conectar seu WhatsApp. A Evolution API deve estar rodando localmente ou em um servidor acessível.
+              Configure o <strong>WAHA</strong> para conectar seu WhatsApp. O serviço WAHA deve estar rodando localmente (container Docker) ou em um servidor acessível.
             </div>
             <div style="display:flex; flex-direction:column; gap:12px;">
               <div>
-                <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">URL da Evolution API</label>
-                <input id="waConfigUrl" type="text" placeholder="http://localhost:8080" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
+                <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">URL do WAHA</label>
+                <input id="waConfigUrl" type="text" placeholder="http://localhost:3001" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
               </div>
               <div>
                 <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">API Key</label>
-                <input id="waConfigKey" type="password" placeholder="Chave de autenticação" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
+                <input id="waConfigKey" type="password" placeholder="Chave de autenticação (X-Api-Key)" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
               </div>
               <div>
-                <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">Nome da instância</label>
-                <input id="waConfigInstance" type="text" placeholder="toca-whatsapp" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
+                <label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px;">Nome da sessão</label>
+                <input id="waConfigInstance" type="text" placeholder="default" style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; box-sizing:border-box;">
               </div>
               <button onclick="_waSaveConfig()" class="btn btn-auto-mapping" style="align-self:flex-start; margin-top:4px;">
                 <span class="ai-star-icon">✦</span> Salvar e Conectar
@@ -16620,7 +16620,7 @@
           <div id="waSyncOfflineArea" style="display:none;">
             <div style="background:#fef2f2; border:1px solid #fca5a5; border-radius:10px; padding:14px 16px; font-size:13px; color:#991b1b; margin-bottom:16px;">
               <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
-              <span id="waSyncOfflineMsg">Evolution API não está acessível.</span>
+              <span id="waSyncOfflineMsg">WAHA não está acessível.</span>
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
               <button onclick="_waCheckStatus()" class="btn btn-secondary btn-small"><i class="fas fa-rotate-right"></i> Tentar novamente</button>
@@ -16752,9 +16752,9 @@
 
     function _waShowConfig() {
       fetch('/api/whatsapp/config').then(r=>r.json()).then(d=>{
-        document.getElementById('waConfigUrl').value = d.evolution_api_url || 'http://localhost:8080';
+        document.getElementById('waConfigUrl').value = d.waha_api_url || 'http://localhost:3001';
         document.getElementById('waConfigKey').value = '';
-        document.getElementById('waConfigInstance').value = d.evolution_instance_name || 'toca-whatsapp';
+        document.getElementById('waConfigInstance').value = d.waha_session_name || 'default';
         _waShowSection('config');
       }).catch(()=>_waShowSection('config'));
     }
@@ -16762,8 +16762,8 @@
     function _waCheckStatus() {
       fetch('/api/whatsapp/status').then(r=>r.json()).then(d=>{
         if (!d.configured) { _waShowConfig(); return; }
-        if (d.state === 'offline' || d.state === 'error') {
-          document.getElementById('waSyncOfflineMsg').textContent = d.error || 'Evolution API não está acessível.';
+        if (d.state === 'offline' || d.state === 'error' || d.state === 'unauthorized') {
+          document.getElementById('waSyncOfflineMsg').textContent = d.error || 'WAHA não está acessível.';
           _waShowSection('offline');
           return;
         }
@@ -16777,8 +16777,8 @@
       const url = document.getElementById('waConfigUrl').value.trim();
       const key = document.getElementById('waConfigKey').value.trim();
       const inst = document.getElementById('waConfigInstance').value.trim();
-      if (!url || !key) { alert('URL e API Key são obrigatórias.'); return; }
-      fetch('/api/whatsapp/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({evolution_api_url:url, evolution_api_key:key, evolution_instance_name:inst||'toca-whatsapp'})})
+      if (!url) { alert('A URL do WAHA é obrigatória.'); return; }
+      fetch('/api/whatsapp/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({waha_api_url:url, waha_api_key:key, waha_session_name:inst||'default'})})
         .then(()=>{ _waShowSection('loading'); _waCheckStatus(); })
         .catch(e=>alert('Erro ao salvar: '+e));
     }
@@ -16798,7 +16798,7 @@
               });
             }, 3000);
           } else {
-            document.getElementById('waSyncOfflineMsg').textContent = 'QR code não disponível. Verifique se a instância está criada na Evolution API.';
+            document.getElementById('waSyncOfflineMsg').textContent = 'QR code não disponível. Verifique se a sessão WAHA foi iniciada.';
             _waShowSection('offline');
           }
         })

@@ -90,31 +90,31 @@ if %errorlevel% neq 0 (
     )
 )
 
-echo [1/2] Iniciando Evolution API (primeira vez pode demorar para baixar a imagem)...
-%COMPOSE_CMD% -f docker-compose.evolution.yml up -d
+echo [1/2] Iniciando WAHA (primeira vez pode demorar para baixar a imagem)...
+%COMPOSE_CMD% -f docker-compose.whatsapp.yml up -d
 
 if %errorlevel% neq 0 (
     echo.
     echo [ERRO] Falha ao iniciar o container.
     echo        Certifique-se de rodar este script a partir da pasta raiz do projeto
-    echo        (onde fica o arquivo docker-compose.evolution.yml).
+    echo        (onde fica o arquivo docker-compose.whatsapp.yml).
     pause
     exit /b 1
 )
 
 echo.
-echo [2/2] Aguardando Evolution API inicializar...
-timeout /t 10 /nobreak > nul
+echo [2/2] Aguardando WAHA inicializar...
+timeout /t 12 /nobreak > nul
 
 echo.
 echo ============================================================
-echo   Evolution API pronta: http://localhost:8080
+echo   WAHA pronto: http://localhost:3001
 echo.
-echo   Configure no WhatsApp Update (AutoToca > botao do lado):
+echo   Configure no WhatsApp Update (AutoToca ^> botao do lado):
 echo.
-echo     URL da API : http://localhost:8080
+echo     URL da API : http://localhost:3001
 echo     API Key    : toca-test-key-2024
-echo     Instancia  : toca-whatsapp
+echo     Sessao     : default
 echo.
 echo   Clique em "Salvar e Conectar", depois escaneie o QR
 echo   com seu WhatsApp (igual ao WhatsApp Web).
@@ -127,7 +127,7 @@ if /i "%ABRIR%" neq "n" (
 )
 
 echo.
-echo Para PARAR a Evolution API depois do teste:
-echo   %COMPOSE_CMD% -f docker-compose.evolution.yml down
+echo Para PARAR o WAHA depois do teste:
+echo   %COMPOSE_CMD% -f docker-compose.whatsapp.yml down
 echo.
 pause
