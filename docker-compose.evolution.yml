@@ -26,6 +26,10 @@ services:
     environment:
       SERVER_PORT: "8080"
       AUTHENTICATION_API_KEY: "toca-test-key-2024"
+      # Fix do loop de reconexão / QR não gerado na v2:
+      # a versão padrão do Baileys (2.3000.1015901307) está quebrada.
+      # Fixar uma versão funcional do WhatsApp Web resolve.
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1020885143"
       # Banco (obrigatório na v2)
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: "postgresql"
