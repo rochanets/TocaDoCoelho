@@ -1,3 +1,6 @@
+# Credenciais locais (não versionar — remover desta lista se quiser versionar com bypass)
+secrets.py
+
 # Ambiente virtual Python
 .venv/
 venv/

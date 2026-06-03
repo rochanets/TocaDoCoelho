@@ -31,7 +31,7 @@ from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 try:
@@ -855,6 +855,8 @@ def init_db():
         c.execute('ALTER TABLE clients ADD COLUMN linkedin TEXT')
     if 'is_archived' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN is_archived INTEGER DEFAULT 0')
+    if 'relationship_stage' not in columns:
+        c.execute('ALTER TABLE clients ADD COLUMN relationship_stage TEXT DEFAULT ""')
 
     c.execute("PRAGMA table_info(commitments)")
     commitment_columns = [col[1] for col in c.fetchall()]
@@ -914,6 +916,8 @@ def init_db():
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
     if _waha_session_env:
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_timeout_seconds', '120'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_days', '30'))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -6644,18 +6648,18 @@ $results | ConvertTo-Json -Depth 5 -Compress
             tmp.write(ps_script)
             tmp_path = tmp.name
 
+        timeout_s = int(_resolve_setting('outlook_sync_timeout_seconds', 'OUTLOOK_SYNC_TIMEOUT') or 120)
         try:
             proc = subprocess.run(
                 ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
                  '-File', tmp_path, '-Days', str(int(days))],
                 capture_output=True, text=True, encoding='utf-8', errors='replace',
-                timeout=300
+                timeout=timeout_s
             )
         except subprocess.TimeoutExpired as timeout_err:
             raise RuntimeError(
-                'A leitura via Outlook COM excedeu 300s sem retorno. '
-                'Não foi possível confirmar processamento parcial; tente reduzir o período '
-                '(ex.: days=7), usar OUTLOOK_CONNECTOR_MODE=graph, ou configurar OAuth Graph.'
+                f'A leitura via Outlook COM excedeu {timeout_s}s. '
+                'Tente reduzir o período (ex.: 7 dias) ou configure o OAuth Graph para acesso sem limite de tempo.'
             ) from timeout_err
         stderr = (proc.stderr or '').strip()
         stdout = (proc.stdout or '').strip()
@@ -6880,6 +6884,121 @@ def _outlook_import_emails(emails_data, conn):
     return imported, skipped_duplicates, skipped_no_match
 
 
+def _outlook_call_llm(prompt):
+    """Chama LLM para análise de email (SAI primeiro, OpenRouter como fallback). Retorna str ou None."""
+    raw = _sai_simple_prompt(prompt)
+    if raw:
+        return raw.strip()
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
+        try:
+            payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um assistente de CRM. Responda de forma objetiva e concisa em português.'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                'temperature': 0.1
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            content = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            return content.strip() if content else None
+        except Exception as e:
+            logger.warning(f'[OutlookLLM][OpenRouter] falha: {e}')
+    return None
+
+
+@app.route('/api/outlook/diagnose', methods=['GET'])
+def outlook_diagnose():
+    """Retorna diagnóstico de configuração e conectividade para o sync do Outlook."""
+    checks = []
+
+    is_win = sys.platform == 'win32'
+    checks.append({
+        'label': 'Windows (COM)',
+        'ok': is_win,
+        'detail': 'ok' if is_win else 'Não é Windows — conector COM indisponível'
+    })
+
+    has_graph_creds = bool(
+        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') and
+        _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET')
+    )
+    checks.append({
+        'label': 'Graph API (credenciais)',
+        'ok': has_graph_creds,
+        'detail': 'Client ID e Secret configurados' if has_graph_creds else 'Configure Tenant ID / Client ID / Client Secret nas Configurações'
+    })
+
+    has_graph_token = False
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM user_integrations WHERE provider = 'outlook_graph' LIMIT 1")
+        has_graph_token = c.fetchone() is not None
+        conn.close()
+    except Exception:
+        pass
+    checks.append({
+        'label': 'OAuth Graph autenticado',
+        'ok': has_graph_token,
+        'detail': 'Token OAuth ativo' if has_graph_token else 'Não autenticado — use "Conectar Outlook via Graph"'
+    })
+
+    total_clients = 0
+    clients_with_email = 0
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) FROM clients')
+        total_clients = (c.fetchone() or [0])[0]
+        c.execute('SELECT COUNT(*) FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+        clients_with_email = (c.fetchone() or [0])[0]
+        conn.close()
+    except Exception:
+        pass
+    email_pct = int(clients_with_email / total_clients * 100) if total_clients else 0
+    checks.append({
+        'label': 'Clientes com email',
+        'ok': clients_with_email > 0,
+        'detail': f'{clients_with_email}/{total_clients} ({email_pct}%) — emails são usados para match com remetentes'
+    })
+
+    has_sai = bool(_resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY'))
+    has_or = bool(_resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY'))
+    has_llm = has_sai or has_or
+    llm_detail = (('SAI' if has_sai else '') + (' + ' if has_sai and has_or else '') + ('OpenRouter' if has_or else '')) if has_llm else 'Nenhum LLM configurado — resumos desativados'
+    checks.append({'label': 'LLM (resumos)', 'ok': has_llm, 'detail': llm_detail})
+
+    can_sync = is_win or has_graph_token
+    connector = 'graph' if has_graph_token else ('com' if is_win else 'none')
+
+    return jsonify({
+        'can_sync': can_sync,
+        'connector': connector,
+        'clients_with_email': clients_with_email,
+        'total_clients': total_clients,
+        'checks': checks
+    })
+
+
 @app.route('/api/outlook/sync', methods=['POST'])
 def sync_outlook_emails():
     """Lê o Outlook via PowerShell e importa os emails como atividades."""
@@ -6955,8 +7074,34 @@ def _outlook_sync_stream_com():
             yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização COM com Outlook disponível somente no Windows.'})}\n\n"
         return Response(stream_with_context(_err()), mimetype='text/event-stream')
 
-    days = max(1, min(int(request.args.get('days', 60)), 365))
+    default_days = int(_resolve_setting('outlook_sync_days', 'OUTLOOK_SYNC_DAYS') or 30)
+    days = max(1, min(int(request.args.get('days', default_days)), 365))
     return _build_outlook_stream_response(days=days, source='com', page_size=100, max_pages=1)
+
+
+try:
+    import graph_credentials as _gc
+    _GRAPH_DEFAULT_TENANT = getattr(_gc, 'GRAPH_TENANT_ID', '')
+    _GRAPH_DEFAULT_CLIENT_ID = getattr(_gc, 'GRAPH_CLIENT_ID', '')
+    _GRAPH_DEFAULT_CLIENT_SECRET = getattr(_gc, 'GRAPH_CLIENT_SECRET', '')
+except ImportError:
+    _GRAPH_DEFAULT_TENANT = ''
+    _GRAPH_DEFAULT_CLIENT_ID = ''
+    _GRAPH_DEFAULT_CLIENT_SECRET = ''
+
+
+def _graph_redirect_uri():
+    return f"{request.scheme}://{request.host}/api/outlook/oauth/callback"
+
+
+def _graph_make_settings(redirect_uri=''):
+    return {
+        'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
+        'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
+        'client_secret': (_resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET).strip(),
+        'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
+        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read User.Read').strip(),
+    }
 
 
 @app.route('/api/outlook/sync-stream-graph', methods=['GET'])
@@ -6969,7 +7114,8 @@ def sync_outlook_stream_graph():
 def outlook_oauth_start():
     try:
         user_id = max(1, int(request.args.get('user_id', 1)))
-        auth_url = outlook_graph_build_authorize_url(user_id=user_id)
+        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+        auth_url = outlook_graph_build_authorize_url(user_id=user_id, settings=settings)
         return jsonify({'auth_url': auth_url, 'provider': 'outlook_graph', 'user_id': user_id})
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha ao iniciar OAuth: {e}')
@@ -6985,35 +7131,110 @@ def outlook_oauth_callback():
         error = (request.args.get('error') or '').strip()
         if error:
             desc = request.args.get('error_description') or error
-            raise OutlookOAuthError(f'Autorização OAuth negada: {desc}')
+            return redirect(f'/?graph_error={urllib.parse.quote(str(desc))}', 302)
 
         code = (request.args.get('code') or '').strip()
         state = (request.args.get('state') or '').strip()
         if not code or not state:
-            raise OutlookOAuthError('Parâmetros OAuth incompletos: code/state são obrigatórios.')
+            return redirect('/?graph_error=Par%C3%A2metros+OAuth+incompletos', 302)
 
         user_id = outlook_graph_parse_state(state)
+        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
         conn = get_db()
-        outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id)
+        outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id, settings=settings)
         conn.close()
-        return jsonify({'ok': True, 'provider': 'outlook_graph', 'user_id': user_id})
+        return redirect('/?graph_connected=1', 302)
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')
-        return jsonify({'error': str(e), 'error_type': 'oauth_authentication'}), 400
+        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/outlook/oauth/callback: {e}')
+        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
+
+
+@app.route('/api/outlook/graph-config', methods=['GET', 'POST'])
+def outlook_graph_config():
+    """Lê ou salva credenciais do Microsoft Graph nas configurações do app."""
+    if request.method == 'GET':
+        tenant = _resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT
+        client_id = _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID
+        client_secret = _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET
+        return jsonify({
+            'tenant_id': tenant,
+            'client_id': client_id,
+            'has_secret': bool(client_secret),
+            'configured': bool(tenant and client_id and client_secret),
+        })
+    data = request.get_json() or {}
+    tenant = (data.get('tenant_id') or '').strip()
+    client_id = (data.get('client_id') or '').strip()
+    client_secret = (data.get('client_secret') or '').strip()
+    conn = get_db()
+    c = conn.cursor()
+    for key, value in [('outlook_graph_tenant_id', tenant), ('outlook_graph_client_id', client_id)]:
+        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', (key, value))
+    if client_secret:
+        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_graph_client_secret', client_secret))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/outlook/graph-status', methods=['GET'])
+def outlook_graph_status_endpoint():
+    """Retorna se o usuário está conectado ao Microsoft Graph e com qual email."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT expires_at FROM user_integrations WHERE provider = 'outlook_graph' AND user_id = 1 LIMIT 1")
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({'connected': False})
+        email = None
+        try:
+            settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+            conn2 = get_db()
+            token = outlook_graph_get_valid_access_token(conn=conn2, user_id=1, settings=settings)
+            conn2.close()
+            req = urllib.request.Request('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', method='GET')
+            req.add_header('Authorization', f'Bearer {token}')
+            req.add_header('Accept', 'application/json')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                me = json.loads(resp.read())
+                email = me.get('mail') or me.get('userPrincipalName')
+        except Exception:
+            pass
+        return jsonify({'connected': True, 'email': email, 'expires_at': row['expires_at']})
+    except Exception as e:
+        return jsonify({'connected': False, 'error': str(e)})
+
+
+@app.route('/api/outlook/graph-disconnect', methods=['DELETE'])
+def outlook_graph_disconnect():
+    """Remove tokens do Microsoft Graph para o usuário."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM user_integrations WHERE provider = 'outlook_graph'")
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 def _outlook_sync_stream_graph():
-    days = max(1, min(int(request.args.get('days', 60)), 365))
+    default_days = int(_resolve_setting('outlook_sync_days', 'OUTLOOK_SYNC_DAYS') or 30)
+    days = max(1, min(int(request.args.get('days', default_days)), 365))
     page_size = max(1, min(int(request.args.get('page_size', 50)), 200))
     max_pages = max(1, min(int(request.args.get('max_pages', 10)), 50))
     user_id = max(1, int(request.args.get('user_id', 1)))
-    return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id)
+    graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+    return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id, graph_settings=graph_settings)
 
 
-def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1):
+def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1, graph_settings=None):
     def generate():
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
@@ -7026,7 +7247,7 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     end_date = datetime.utcnow()
                     start_date = end_date - timedelta(days=days)
                     conn = get_db()
-                    access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id)
+                    access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id, settings=graph_settings)
                     emails = outlook_graph_fetch_messages(
                         access_token=access_token,
                         start_date=start_date,
@@ -7091,12 +7312,26 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
             c = conn.cursor()
             c.execute('SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
             clients_map = {}
+            domain_map = {}
             for row in c.fetchall():
                 norm = (row['email'] or '').strip().lower()
-                if norm:
-                    clients_map[norm] = {'id': row['id'], 'name': row['name'], 'photo_url': row['photo_url'] or ''}
+                if not norm:
+                    continue
+                entry = {'id': row['id'], 'name': row['name'], 'photo_url': row['photo_url'] or ''}
+                clients_map[norm] = entry
+                domain = norm.split('@', 1)[-1] if '@' in norm else ''
+                if domain and '.' in domain:
+                    domain_map.setdefault(domain, []).append(entry)
+
+            all_clients_for_select = []
+            c.execute('SELECT id, name, company FROM clients ORDER BY name COLLATE NOCASE')
+            for row in c.fetchall():
+                all_clients_for_select.append({'id': row['id'], 'name': row['name'], 'company': row['company'] or ''})
 
             activities = []
+            unmatched = []
+            seen_keys = set()
+
             for email_data in emails:
                 subject = (email_data.get('subject') or '').strip()
                 email_date = (email_data.get('date') or '').strip()
@@ -7112,11 +7347,25 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                 else:
                     candidates = [r for r in recipients if r.get('email')]
                     label = 'Para'
+
+                matched_this = False
                 for candidate in candidates:
                     cand_email = (candidate.get('email') or '').strip().lower()
-                    if not cand_email or cand_email not in clients_map:
+                    if not cand_email:
                         continue
-                    client = clients_map[cand_email]
+                    client = clients_map.get(cand_email)
+                    if not client:
+                        domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
+                        domain_clients = domain_map.get(domain, [])
+                        if len(domain_clients) == 1:
+                            client = domain_clients[0]
+                    if not client:
+                        continue
+
+                    dedup_key = (client['id'], email_date[:16], subject[:100])
+                    if dedup_key in seen_keys:
+                        matched_this = True
+                        continue
                     date_minute = email_date[:16]
                     c.execute(
                         '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
@@ -7125,7 +7374,10 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                         (client['id'], date_minute, f'{subject[:100]}%')
                     )
                     if c.fetchone():
+                        matched_this = True
                         continue
+                    seen_keys.add(dedup_key)
+                    matched_this = True
                     activities.append({
                         'client_id': client['id'],
                         'client_name': client['name'],
@@ -7138,13 +7390,31 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                         'counterpart_email': cand_email,
                         'body_preview': body_preview
                     })
+                    break
+
+                if not matched_this and candidates:
+                    first = candidates[0]
+                    unmatched.append({
+                        'subject': subject,
+                        'date': email_date,
+                        'direction': direction,
+                        'counterpart_label': label,
+                        'counterpart_name': (first.get('name') or first.get('email') or '').strip(),
+                        'counterpart_email': (first.get('email') or '').strip().lower(),
+                        'body_preview': body_preview[:180]
+                    })
             conn.close()
 
+            msg = f'{len(activities)} nova(s) atividade(s) encontrada(s) em {total_read} email(s) lidos.'
+            if unmatched:
+                msg += f' {len(unmatched)} email(s) sem cliente correspondente.'
             yield evt({
                 'phase': 'done',
                 'total_read': total_read,
                 'activities': activities,
-                'message': f'{len(activities)} nova(s) atividade(s) encontrada(s) em {total_read} email(s) lidos.'
+                'unmatched': unmatched,
+                'all_clients': all_clients_for_select,
+                'message': msg
             })
         except Exception as e:
             logger.exception(f'[ERROR] SSE /api/outlook/sync-stream ({source}): {e}')
@@ -7162,20 +7432,48 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
     )
 
 
-@app.route('/api/outlook/confirm-import', methods=['POST'])
-def confirm_import_outlook():
-    """Salva as atividades confirmadas pelo usuário, gerando resumo LLM."""
+_outlook_confirm_tasks = {}
+_outlook_confirm_tasks_lock = threading.Lock()
+
+
+def _outlook_confirm_task_set(task_id, update):
+    with _outlook_confirm_tasks_lock:
+        if task_id not in _outlook_confirm_tasks:
+            _outlook_confirm_tasks[task_id] = {}
+        _outlook_confirm_tasks[task_id].update(update)
+
+
+def _outlook_confirm_task_get(task_id):
+    with _outlook_confirm_tasks_lock:
+        return dict(_outlook_confirm_tasks.get(task_id) or {})
+
+
+def _outlook_confirm_task_cleanup(task_id, delay=300):
+    def _do():
+        time.sleep(delay)
+        with _outlook_confirm_tasks_lock:
+            _outlook_confirm_tasks.pop(task_id, None)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _outlook_confirm_async(task_id, activities_to_import):
     try:
-        data = request.get_json() or {}
-        activities = data.get('activities', [])
-        if not activities:
-            return jsonify({'imported': 0, 'message': 'Nenhuma atividade para importar.'})
+        total = len(activities_to_import)
+        imported = 0
+        skipped = 0
+        commitments_created = 0
+        status_suggestions = []
+        kanban_suggestions = []
 
         conn = get_db()
         c = conn.cursor()
-        imported = 0
 
-        for act in activities:
+        for i, act in enumerate(activities_to_import):
+            _outlook_confirm_task_set(task_id, {
+                'step': f'Processando email {i + 1}/{total}...',
+                'progress': 10 + int((i / total) * 75)
+            })
+
             client_id = act.get('client_id')
             subject = (act.get('subject') or '').strip()
             email_date = (act.get('date') or '').strip()
@@ -7183,6 +7481,7 @@ def confirm_import_outlook():
             cname = (act.get('counterpart_name') or '').strip()
             cemail = (act.get('counterpart_email') or '').strip()
             body_preview = (act.get('body_preview') or '').strip()
+
             if not client_id or not email_date:
                 continue
 
@@ -7194,11 +7493,12 @@ def confirm_import_outlook():
                 (client_id, date_minute, f'{subject[:100]}%')
             )
             if c.fetchone():
+                skipped += 1
                 continue
 
             summary = None
             if body_preview:
-                raw = _sai_simple_prompt(
+                raw = _outlook_call_llm(
                     f'Resuma em 1 a 2 frases o conteúdo do email abaixo em português, '
                     f'de forma objetiva, sem mencionar remetente ou destinatário:\n'
                     f'Assunto: {subject}\nTexto: {body_preview[:1000]}\n\n'
@@ -7218,6 +7518,7 @@ def confirm_import_outlook():
                    VALUES (?, 'Email', ?, ?)''',
                 (client_id, '\n'.join(info_parts), email_date)
             )
+            activity_id = c.lastrowid
             c.execute(
                 '''UPDATE clients SET last_activity_date = ?
                    WHERE id = ? AND (last_activity_date IS NULL OR last_activity_date < ?)''',
@@ -7225,12 +7526,471 @@ def confirm_import_outlook():
             )
             imported += 1
 
+            new_commitments = create_commitments_from_activity(c, client_id, activity_id, '\n'.join(info_parts))
+            commitments_created += len(new_commitments)
+
+            if body_preview:
+                stage_raw = _outlook_call_llm(
+                    f'Analise este email e classifique o momento do relacionamento comercial.\n'
+                    f'Assunto: {subject}\nTexto: {body_preview[:500]}\n\n'
+                    'Retorne SOMENTE um destes valores (sem mais texto):\n'
+                    'lead_quente | negociando | pos_venda | sem_mudanca\n'
+                    'lead_quente = cliente demonstrou interesse ativo\n'
+                    'negociando = discussão de proposta, contrato ou condições comerciais\n'
+                    'pos_venda = suporte, onboarding, entrega pós-compra\n'
+                    'sem_mudanca = email de rotina sem impacto comercial'
+                )
+                if stage_raw:
+                    stage = stage_raw.strip().split()[0].lower().replace('-', '_')
+                    if stage in {'lead_quente', 'negociando', 'pos_venda'}:
+                        c.execute('SELECT name, relationship_stage FROM clients WHERE id = ?', (client_id,))
+                        row = c.fetchone()
+                        if row:
+                            current = (row['relationship_stage'] or '').strip()
+                            if current != stage:
+                                stage_labels = {
+                                    'lead_quente': 'Lead Quente',
+                                    'negociando': 'Negociando',
+                                    'pos_venda': 'Pós-venda'
+                                }
+                                status_suggestions.append({
+                                    'client_id': client_id,
+                                    'client_name': row['name'],
+                                    'current_stage': current,
+                                    'suggested_stage': stage,
+                                    'suggested_label': stage_labels[stage],
+                                    'reason': f'Detectado via email: {subject[:60]}'
+                                })
+
+                c.execute(
+                    '''SELECT kc.id, kc.title, kcol.title as col_title, kc.column_id
+                       FROM kanban_cards kc
+                       JOIN kanban_columns kcol ON kcol.id = kc.column_id
+                       WHERE kc.contact_id = ?
+                       ORDER BY kc.updated_at DESC LIMIT 5''',
+                    (client_id,)
+                )
+                cards = [dict_from_row(r) for r in c.fetchall()]
+                if cards:
+                    c.execute('SELECT id, title FROM kanban_columns ORDER BY display_order')
+                    columns = [dict_from_row(r) for r in c.fetchall()]
+                    cards_text = '\n'.join([f'- ID {card["id"]}: "{card["title"]}" (coluna: {card["col_title"]})' for card in cards])
+                    cols_text = ' | '.join([col['title'] for col in columns])
+                    kanban_raw = _outlook_call_llm(
+                        f'Email:\nAssunto: {subject}\nTexto: {body_preview[:400]}\n\n'
+                        f'Cards do Kanban deste cliente:\n{cards_text}\n\n'
+                        f'Colunas disponíveis: {cols_text}\n\n'
+                        'Algum card precisa ser movido com base neste email? '
+                        'Retorne SOMENTE JSON válido: '
+                        '{"card_id": <id inteiro ou null>, "new_column": "<título exato da coluna ou null>", "reason": "<motivo curto>"} '
+                        'Use null se não houver mudança necessária.'
+                    )
+                    if kanban_raw:
+                        try:
+                            raw_str = kanban_raw.strip()
+                            if raw_str.startswith('{'):
+                                kanban_data = json.loads(raw_str)
+                            else:
+                                import re as _re
+                                m = _re.search(r'\{[^}]+\}', raw_str)
+                                kanban_data = json.loads(m.group()) if m else {}
+                            if isinstance(kanban_data, dict) and kanban_data.get('card_id') and kanban_data.get('new_column'):
+                                card_id = int(kanban_data['card_id'])
+                                new_col_title = kanban_data['new_column'].strip()
+                                matching_card = next((card for card in cards if card['id'] == card_id), None)
+                                matching_col = next((col for col in columns if col['title'].lower() == new_col_title.lower()), None)
+                                if matching_card and matching_col and matching_card['column_id'] != matching_col['id']:
+                                    kanban_suggestions.append({
+                                        'card_id': card_id,
+                                        'card_title': matching_card['title'],
+                                        'current_column': matching_card['col_title'],
+                                        'suggested_column': matching_col['title'],
+                                        'suggested_column_id': matching_col['id'],
+                                        'reason': (kanban_data.get('reason') or '')[:120],
+                                        'client_id': client_id
+                                    })
+                        except Exception:
+                            pass
+
         conn.commit()
         conn.close()
-        return jsonify({'imported': imported, 'message': f'{imported} atividade(s) registrada(s) com sucesso.'})
+
+        msg = f'{imported} atividade(s) registrada(s).'
+        if commitments_created:
+            msg += f' {commitments_created} compromisso(s) criado(s) na agenda.'
+        if skipped:
+            msg += f' {skipped} duplicata(s) ignorada(s).'
+
+        _outlook_confirm_task_set(task_id, {
+            'status': 'done',
+            'step': 'Concluído!',
+            'progress': 100,
+            'result': {
+                'imported': imported,
+                'commitments_created': commitments_created,
+                'status_suggestions': status_suggestions,
+                'kanban_suggestions': kanban_suggestions,
+                'message': msg
+            }
+        })
+        _outlook_confirm_task_cleanup(task_id)
+    except Exception as e:
+        logger.exception(f'[ERROR] _outlook_confirm_async task={task_id}: {e}')
+        _outlook_confirm_task_set(task_id, {'status': 'error', 'step': str(e), 'progress': 0})
+        _outlook_confirm_task_cleanup(task_id)
+
+
+@app.route('/api/outlook/confirm-import', methods=['POST'])
+def confirm_import_outlook():
+    """Inicia importação assíncrona das atividades confirmadas, retorna task_id para polling."""
+    try:
+        data = request.get_json() or {}
+        activities = data.get('activities', [])
+        if not activities:
+            return jsonify({'imported': 0, 'message': 'Nenhuma atividade para importar.'})
+
+        task_id = uuid.uuid4().hex
+        _outlook_confirm_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(target=_outlook_confirm_async, args=(task_id, activities), daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/outlook/confirm-import: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/confirm-tasks/<task_id>', methods=['GET'])
+def outlook_confirm_task_status(task_id):
+    """Polling do status da importação assíncrona de emails."""
+    return jsonify(_outlook_confirm_task_get(task_id))
+
+
+@app.route('/api/outlook/apply-suggestions', methods=['POST'])
+def outlook_apply_suggestions():
+    """Aplica sugestões de status e Kanban aprovadas pelo usuário."""
+    try:
+        data = request.get_json() or {}
+        status_updates = data.get('status_updates', [])
+        kanban_moves = data.get('kanban_moves', [])
+
+        conn = get_db()
+        c = conn.cursor()
+        applied = 0
+
+        for upd in status_updates:
+            client_id = upd.get('client_id')
+            stage = (upd.get('stage') or '').strip()
+            if client_id and stage:
+                c.execute('UPDATE clients SET relationship_stage = ? WHERE id = ?', (stage, client_id))
+                applied += 1
+
+        for mv in kanban_moves:
+            card_id = mv.get('card_id')
+            col_id = mv.get('column_id')
+            if card_id and col_id:
+                c.execute(
+                    'UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                    (col_id, card_id)
+                )
+                applied += 1
+
+        conn.commit()
+        conn.close()
+        return jsonify({'applied': applied, 'message': f'{applied} sugestão(ões) aplicada(s).'})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/apply-suggestions: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Outlook Add-in (task pane EWS) ──────────────────────────────────────────
+
+_addin_pending_data = None
+_addin_pending_lock = threading.Lock()
+_addin_pending_expires = 0.0
+
+
+def _addin_set_pending(data):
+    global _addin_pending_data, _addin_pending_expires
+    with _addin_pending_lock:
+        _addin_pending_data = data
+        _addin_pending_expires = time.time() + 600  # 10 min TTL
+
+
+def _addin_get_pending():
+    global _addin_pending_data, _addin_pending_expires
+    with _addin_pending_lock:
+        if _addin_pending_data is None or time.time() > _addin_pending_expires:
+            _addin_pending_data = None
+            return None
+        return dict(_addin_pending_data)
+
+
+def _addin_clear_pending():
+    global _addin_pending_data
+    with _addin_pending_lock:
+        _addin_pending_data = None
+
+
+def _outlook_match_emails(emails_data, conn):
+    """Faz matching de uma lista de emails contra clientes cadastrados.
+    Retorna (activities, unmatched, all_clients_for_select).
+    """
+    c = conn.cursor()
+    c.execute('SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+    clients_map = {}
+    domain_map = {}
+    for row in c.fetchall():
+        norm = (row['email'] or '').strip().lower()
+        if not norm:
+            continue
+        entry = {'id': row['id'], 'name': row['name'], 'photo_url': row['photo_url'] or ''}
+        clients_map[norm] = entry
+        domain = norm.split('@', 1)[-1] if '@' in norm else ''
+        if domain and '.' in domain:
+            domain_map.setdefault(domain, []).append(entry)
+
+    c.execute('SELECT id, name, company FROM clients ORDER BY name COLLATE NOCASE')
+    all_clients = [{'id': r['id'], 'name': r['name'], 'company': r['company'] or ''} for r in c.fetchall()]
+
+    activities = []
+    unmatched = []
+    seen_keys = set()
+
+    for email_data in emails_data:
+        subject = (email_data.get('subject') or '').strip()
+        email_date = (email_data.get('date') or '').strip()
+        direction = email_data.get('direction', 'received')
+        sender = email_data.get('sender') or {}
+        recipients = email_data.get('recipients') or []
+        body_preview = (email_data.get('body_preview') or '').strip()
+        if not email_date:
+            continue
+
+        if direction == 'received':
+            candidates = [sender] if sender.get('email') else []
+            label = 'De'
+        else:
+            candidates = [r for r in recipients if r.get('email')]
+            label = 'Para'
+
+        matched = False
+        for candidate in candidates:
+            cand_email = (candidate.get('email') or '').strip().lower()
+            if not cand_email:
+                continue
+            client = clients_map.get(cand_email)
+            if not client:
+                domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
+                domain_clients = domain_map.get(domain, [])
+                if len(domain_clients) == 1:
+                    client = domain_clients[0]
+            if not client:
+                continue
+
+            dedup_key = (client['id'], email_date[:16], subject[:100])
+            if dedup_key in seen_keys:
+                matched = True
+                continue
+            c.execute(
+                '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
+                   AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
+                   AND information LIKE ? LIMIT 1''',
+                (client['id'], email_date[:16], f'{subject[:100]}%')
+            )
+            if c.fetchone():
+                matched = True
+                continue
+            seen_keys.add(dedup_key)
+            matched = True
+            activities.append({
+                'client_id': client['id'],
+                'client_name': client['name'],
+                'client_photo_url': client['photo_url'],
+                'subject': subject,
+                'date': email_date,
+                'direction': direction,
+                'counterpart_label': label,
+                'counterpart_name': (candidate.get('name') or cand_email).strip(),
+                'counterpart_email': cand_email,
+                'body_preview': body_preview
+            })
+            break
+
+        if not matched and candidates:
+            first = candidates[0]
+            unmatched.append({
+                'subject': subject,
+                'date': email_date,
+                'direction': direction,
+                'counterpart_label': label,
+                'counterpart_name': (first.get('name') or first.get('email') or '').strip(),
+                'counterpart_email': (first.get('email') or '').strip().lower(),
+                'body_preview': body_preview[:180]
+            })
+
+    return activities, unmatched, all_clients
+
+
+@app.route('/api/outlook/addon-preview', methods=['POST'])
+def outlook_addon_preview():
+    """Conta matched/unmatched sem armazenar — usado pela task pane para mostrar estatísticas."""
+    try:
+        data = request.get_json() or {}
+        emails = data.get('emails') or []
+        if not emails:
+            return jsonify({'matched': 0, 'unmatched': 0})
+        conn = get_db()
+        activities, unmatched, _ = _outlook_match_emails(emails, conn)
+        conn.close()
+        return jsonify({'matched': len(activities), 'unmatched': len(unmatched)})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/addon-preview: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/ingest-from-addon', methods=['POST'])
+def outlook_ingest_from_addon():
+    """Recebe emails da task pane do Outlook Add-in, faz matching e armazena como pendente."""
+    try:
+        data = request.get_json() or {}
+        emails = data.get('emails') or []
+        if not emails:
+            return jsonify({'message': 'Nenhum email recebido.', 'matched': 0, 'unmatched': 0})
+
+        conn = get_db()
+        activities, unmatched, all_clients = _outlook_match_emails(emails, conn)
+        conn.close()
+
+        payload = {
+            'total_read': len(emails),
+            'activities': activities,
+            'unmatched': unmatched,
+            'all_clients': all_clients,
+            'message': f'{len(activities)} email(s) com cliente · {len(unmatched)} sem correspondência · {len(emails)} lidos'
+        }
+        _addin_set_pending(payload)
+
+        return jsonify({
+            'message': f'{len(activities)} email(s) prontos para revisão no Toca.',
+            'matched': len(activities),
+            'unmatched': len(unmatched),
+            'total': len(emails)
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/ingest-from-addon: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/addon-pending', methods=['GET'])
+def outlook_addon_pending():
+    """Retorna dados pendentes do add-in (se existirem e não expirarem)."""
+    pending = _addin_get_pending()
+    if pending is None:
+        return jsonify({'has_data': False})
+    return jsonify(dict(has_data=True, **pending))
+
+
+@app.route('/api/outlook/addon-pending', methods=['DELETE'])
+def outlook_addon_pending_clear():
+    """Limpa dados pendentes do add-in."""
+    _addin_clear_pending()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/outlook/manifest.xml')
+def outlook_addin_manifest():
+    """Serve o manifest do Outlook Add-in com a URL base correta para o host atual."""
+    base_url = f"{request.scheme}://{request.host}"
+    addin_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+           xsi:type="MailApp">
+  <Id>{addin_id}</Id>
+  <Version>1.1.0.0</Version>
+  <ProviderName>TocaDoCoelho</ProviderName>
+  <DefaultLocale>pt-BR</DefaultLocale>
+  <DisplayName DefaultValue="Toca do Coelho"/>
+  <Description DefaultValue="Exporta emails do Outlook para atividades no Toca"/>
+  <IconUrl DefaultValue="{base_url}/favicon.png"/>
+  <HighResolutionIconUrl DefaultValue="{base_url}/favicon.png"/>
+  <SupportUrl DefaultValue="{base_url}"/>
+  <AppDomains>
+    <AppDomain>{base_url}</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Mailbox"/>
+  </Hosts>
+  <Requirements>
+    <Sets>
+      <Set Name="MailBox" MinVersion="1.1"/>
+    </Sets>
+  </Requirements>
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="{base_url}/outlook-addin/taskpane.html"/>
+        <RequestedHeight>220</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+  <Permissions>ReadWriteMailbox</Permissions>
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+  </Rule>
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+</OfficeApp>"""
+    resp = Response(xml, mimetype='application/xml')
+    if request.args.get('download'):
+        resp.headers['Content-Disposition'] = 'attachment; filename="toca-manifest.xml"'
+    return resp
+
+
+@app.route('/api/outlook/install-addin.bat')
+def outlook_install_addin_bat():
+    """Gera instalador .bat do suplemento Outlook com a URL base correta."""
+    base_url = f"{request.scheme}://{request.host}"
+    manifest_url = f"{base_url}/api/outlook/manifest.xml"
+    catalog_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+    bat = (
+        "@echo off\r\n"
+        "setlocal enabledelayedexpansion\r\n"
+        "chcp 65001 >nul 2>&1\r\n"
+        "echo ======================================\r\n"
+        "echo  Instalador do Suplemento Toca do Coelho\r\n"
+        "echo ======================================\r\n"
+        "echo.\r\n"
+        "set ADDIN_DIR=%USERPROFILE%\\TocaAddin\r\n"
+        "if not exist \"%ADDIN_DIR%\" mkdir \"%ADDIN_DIR%\"\r\n"
+        "echo Baixando manifest do suplemento...\r\n"
+        f"powershell -Command \"Invoke-WebRequest -Uri '{manifest_url}' -OutFile '%ADDIN_DIR%\\manifest.xml' -UseBasicParsing\"\r\n"
+        "if not exist \"%ADDIN_DIR%\\manifest.xml\" (\r\n"
+        "    echo ERRO: Nao foi possivel baixar o manifest.\r\n"
+        f"    echo Verifique que o Toca esta rodando em {base_url}\r\n"
+        "    pause\r\n"
+        "    exit /b 1\r\n"
+        ")\r\n"
+        "echo Configurando catalogo confiavel do Outlook...\r\n"
+        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v Url /t REG_SZ /d \"%ADDIN_DIR%\\\" /f >nul\r\n"
+        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v Flags /t REG_DWORD /d 1 /f >nul\r\n"
+        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v DisplayName /t REG_SZ /d \"Toca do Coelho\" /f >nul\r\n"
+        "echo.\r\n"
+        "echo Suplemento instalado com sucesso!\r\n"
+        "echo.\r\n"
+        "echo PROXIMOS PASSOS:\r\n"
+        "echo 1. Feche e reabra o Outlook\r\n"
+        "echo 2. No Outlook: Pagina Inicial ^> Obter Suplementos\r\n"
+        "echo 3. Clique em \"Pasta Compartilhada\" e ative \"Toca do Coelho\"\r\n"
+        "echo 4. Ao abrir qualquer email, o painel Toca aparece na ribbon\r\n"
+        "echo 5. Carregue os emails e clique em \"Enviar para Toca\"\r\n"
+        "echo.\r\n"
+        "pause\r\n"
+    )
+    resp = Response(bat, mimetype='application/octet-stream')
+    resp.headers['Content-Disposition'] = 'attachment; filename="instalar-suplemento-toca.bat"'
+    return resp
 
 
 @app.route('/api/outlook/import', methods=['POST'])

@@ -123,16 +123,23 @@ def parse_state(state: str):
         raise OutlookOAuthError(f'state OAuth inválido: {e}') from e
 
 
-def _oauth_config():
-    tenant = (os.environ.get('OUTLOOK_GRAPH_TENANT_ID') or 'common').strip()
-    client_id = (os.environ.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
-    client_secret = (os.environ.get('OUTLOOK_GRAPH_CLIENT_SECRET') or '').strip()
-    redirect_uri = (os.environ.get('OUTLOOK_GRAPH_REDIRECT_URI') or '').strip()
-    scope = (os.environ.get('OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read').strip()
+def _oauth_config(settings=None):
+    if settings:
+        tenant = (settings.get('tenant') or 'common').strip()
+        client_id = (settings.get('client_id') or '').strip()
+        client_secret = (settings.get('client_secret') or '').strip()
+        redirect_uri = (settings.get('redirect_uri') or '').strip()
+        scope = (settings.get('scope') or 'offline_access Mail.Read').strip()
+    else:
+        tenant = (os.environ.get('OUTLOOK_GRAPH_TENANT_ID') or 'common').strip()
+        client_id = (os.environ.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
+        client_secret = (os.environ.get('OUTLOOK_GRAPH_CLIENT_SECRET') or '').strip()
+        redirect_uri = (os.environ.get('OUTLOOK_GRAPH_REDIRECT_URI') or '').strip()
+        scope = (os.environ.get('OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read').strip()
 
     if not client_id or not client_secret or not redirect_uri:
         raise OutlookOAuthError(
-            'Configuração OAuth ausente. Defina OUTLOOK_GRAPH_CLIENT_ID, OUTLOOK_GRAPH_CLIENT_SECRET e OUTLOOK_GRAPH_REDIRECT_URI.'
+            'Configuração OAuth ausente. Configure Tenant ID, Client ID e Client Secret nas Configurações do Toca.'
         )
 
     return {
@@ -146,8 +153,8 @@ def _oauth_config():
     }
 
 
-def build_authorize_url(user_id: int):
-    cfg = _oauth_config()
+def build_authorize_url(user_id: int, settings=None):
+    cfg = _oauth_config(settings)
     params = {
         'client_id': cfg['client_id'],
         'response_type': 'code',
@@ -190,8 +197,8 @@ def _upsert_tokens(conn, user_id, token_payload):
     conn.commit()
 
 
-def exchange_code_and_store(conn, code: str, user_id: int):
-    cfg = _oauth_config()
+def exchange_code_and_store(conn, code: str, user_id: int, settings=None):
+    cfg = _oauth_config(settings)
     body = {
         'client_id': cfg['client_id'],
         'client_secret': cfg['client_secret'],
@@ -226,8 +233,8 @@ def _is_expired(expires_at: str):
         return True
 
 
-def _refresh_tokens(conn, user_id: int, refresh_token: str):
-    cfg = _oauth_config()
+def _refresh_tokens(conn, user_id: int, refresh_token: str, settings=None):
+    cfg = _oauth_config(settings)
     body = {
         'client_id': cfg['client_id'],
         'client_secret': cfg['client_secret'],
@@ -243,7 +250,7 @@ def _refresh_tokens(conn, user_id: int, refresh_token: str):
     return payload
 
 
-def get_valid_access_token(conn, user_id: int):
+def get_valid_access_token(conn, user_id: int, settings=None):
     row = _load_integration(conn, user_id)
     if not row:
         raise OutlookOAuthError('Integração Outlook Graph não conectada para este usuário.')
@@ -258,7 +265,7 @@ def get_valid_access_token(conn, user_id: int):
     if not refresh_token:
         raise OutlookOAuthError('Token expirado e refresh_token indisponível. Refaça a conexão OAuth.')
 
-    payload = _refresh_tokens(conn, user_id, refresh_token)
+    payload = _refresh_tokens(conn, user_id, refresh_token, settings=settings)
     return payload.get('access_token')
 
 
