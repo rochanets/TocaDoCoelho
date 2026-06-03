@@ -6772,15 +6772,23 @@ def _outlook_sync_stream_com():
     return _build_outlook_stream_response(days=days, source='com', page_size=100, max_pages=1)
 
 
+try:
+    from secrets import GRAPH_TENANT_ID as _GRAPH_DEFAULT_TENANT, GRAPH_CLIENT_ID as _GRAPH_DEFAULT_CLIENT_ID, GRAPH_CLIENT_SECRET as _GRAPH_DEFAULT_CLIENT_SECRET
+except ImportError:
+    _GRAPH_DEFAULT_TENANT = ''
+    _GRAPH_DEFAULT_CLIENT_ID = ''
+    _GRAPH_DEFAULT_CLIENT_SECRET = ''
+
+
 def _graph_redirect_uri():
     return f"{request.scheme}://{request.host}/api/outlook/oauth/callback"
 
 
 def _graph_make_settings(redirect_uri=''):
     return {
-        'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or 'common').strip(),
-        'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or '').strip(),
-        'client_secret': (_resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or '').strip(),
+        'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
+        'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
+        'client_secret': (_resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET).strip(),
         'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
         'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read User.Read').strip(),
     }
@@ -6838,9 +6846,9 @@ def outlook_oauth_callback():
 def outlook_graph_config():
     """Lê ou salva credenciais do Microsoft Graph nas configurações do app."""
     if request.method == 'GET':
-        tenant = _resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or ''
-        client_id = _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or ''
-        client_secret = _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or ''
+        tenant = _resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT
+        client_id = _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID
+        client_secret = _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET
         return jsonify({
             'tenant_id': tenant,
             'client_id': client_id,

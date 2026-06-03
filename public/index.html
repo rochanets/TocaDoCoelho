@@ -2614,34 +2614,15 @@
                     <h4 style="margin-bottom:8px; color:#1e40af; font-size:14px;"><i class="fas fa-cloud"></i> Microsoft 365 — Sincronização direta (sem plugin)</h4>
                     <div id="graphStatusArea">
                         <p style="color:#4b5563; font-size:13px; margin-bottom:10px;">Conecte sua conta Microsoft 365 para sincronizar emails diretamente — sem instalar nada no Outlook.</p>
-                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                            <button class="btn btn-auto-mapping btn-small" onclick="connectMicrosoft365()">
-                                <span class="ai-star-icon">✦</span> Conectar Microsoft 365
-                            </button>
-                            <button class="btn btn-secondary btn-small" onclick="showGraphConfigForm()" id="graphConfigBtn">
-                                <i class="fas fa-cog"></i> Configurar credenciais
-                            </button>
-                        </div>
+                        <button class="btn btn-auto-mapping btn-small" onclick="connectMicrosoft365()">
+                            <span class="ai-star-icon">✦</span> Conectar Microsoft 365
+                        </button>
                     </div>
                     <div id="graphConnectedArea" style="display:none;">
                         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                             <span style="color:#1e40af; font-size:13px;"><i class="fas fa-check-circle" style="color:#16a34a;"></i> Conectado como <strong id="graphConnectedEmail">—</strong></span>
                             <button class="btn btn-secondary btn-small" onclick="disconnectMicrosoft365()"><i class="fas fa-unlink"></i> Desconectar</button>
                         </div>
-                    </div>
-                    <!-- Formulário de credenciais (collapsible) -->
-                    <div id="graphConfigForm" style="display:none; margin-top:12px; border-top:1px solid #bfdbfe; padding-top:12px;">
-                        <p style="font-size:12px; color:#4b5563; margin-bottom:10px;">Informe as credenciais registradas no Azure AD:</p>
-                        <div style="display:grid; gap:8px;">
-                            <input id="graphTenantId" type="text" placeholder="Tenant ID (ex: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)" style="padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; font-size:12px; width:100%; box-sizing:border-box;">
-                            <input id="graphClientId" type="text" placeholder="Client ID (Application ID)" style="padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; font-size:12px; width:100%; box-sizing:border-box;">
-                            <input id="graphClientSecret" type="password" placeholder="Client Secret (Value)" style="padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; font-size:12px; width:100%; box-sizing:border-box;">
-                        </div>
-                        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-                            <button class="btn btn-auto-mapping btn-small" onclick="saveGraphConfig()"><i class="fas fa-save"></i> Salvar e Conectar</button>
-                            <button class="btn btn-secondary btn-small" onclick="document.getElementById('graphConfigForm').style.display='none'">Cancelar</button>
-                        </div>
-                        <p id="graphConfigMsg" style="font-size:12px; margin-top:8px;"></p>
                     </div>
                 </div>
 
@@ -3632,43 +3613,6 @@
                     if (graphSyncBtn) graphSyncBtn.style.display = 'none';
                 }
             } catch (e) { /* silently ignore */ }
-        }
-
-        async function showGraphConfigForm() {
-            const form = document.getElementById('graphConfigForm');
-            if (!form) return;
-            form.style.display = form.style.display === 'none' ? '' : 'none';
-            if (form.style.display !== 'none') {
-                const res = await fetch(`${API_BASE}/outlook/graph-config`).catch(() => null);
-                if (res && res.ok) {
-                    const cfg = await res.json();
-                    document.getElementById('graphTenantId').value = cfg.tenant_id || '';
-                    document.getElementById('graphClientId').value = cfg.client_id || '';
-                    document.getElementById('graphClientSecret').placeholder = cfg.has_secret ? 'Client Secret já salvo (deixe em branco para manter)' : 'Client Secret (Value)';
-                }
-            }
-        }
-
-        async function saveGraphConfig() {
-            const tenant_id = (document.getElementById('graphTenantId')?.value || '').trim();
-            const client_id = (document.getElementById('graphClientId')?.value || '').trim();
-            const client_secret = (document.getElementById('graphClientSecret')?.value || '').trim();
-            const msg = document.getElementById('graphConfigMsg');
-            if (!tenant_id || !client_id) {
-                if (msg) { msg.style.color = '#dc2626'; msg.textContent = 'Tenant ID e Client ID são obrigatórios.'; }
-                return;
-            }
-            const res = await fetch(`${API_BASE}/outlook/graph-config`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({tenant_id, client_id, client_secret})
-            });
-            if (!res.ok) {
-                if (msg) { msg.style.color = '#dc2626'; msg.textContent = 'Erro ao salvar.'; }
-                return;
-            }
-            if (msg) { msg.style.color = '#16a34a'; msg.textContent = 'Salvo! Clique em Conectar Microsoft 365 para autenticar.'; }
-            document.getElementById('graphConfigForm').style.display = 'none';
         }
 
         async function connectMicrosoft365() {

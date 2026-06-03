@@ -1,3 +1,6 @@
+# Credenciais locais (não versionar)
+secrets.py
+
 # Ambiente virtual Python
 .venv/
 venv/
