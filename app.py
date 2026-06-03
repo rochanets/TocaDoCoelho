@@ -8,6 +8,7 @@ import sqlite3
 import webbrowser
 import logging
 import re
+import unicodedata
 import zipfile
 import tempfile
 import threading
@@ -24,6 +25,7 @@ import ssl
 import base64
 import mimetypes
 import uuid
+import hashlib
 from datetime import datetime, timedelta
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
@@ -688,6 +690,21 @@ def init_db():
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
     )''')
     
+    # Tabela de log de sincronizacao WhatsApp (deduplicacao)
+    c.execute('''CREATE TABLE IF NOT EXISTS whatsapp_sync_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL,
+        phone TEXT,
+        period_days INTEGER,
+        message_count INTEGER,
+        content_hash TEXT NOT NULL,
+        activity_id INTEGER,
+        imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+        FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_wa_sync_hash ON whatsapp_sync_log(client_id, content_hash)')
+
     # Tabela de cards de mapeamento de ambiente
     c.execute('''CREATE TABLE IF NOT EXISTS environment_cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -884,6 +901,19 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_simple_template_id', '69bc155d7462bf7c702e9295'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_url', 'http://localhost:3001'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_session_name', 'default'))
+    # Auto-configurar a partir de variáveis de ambiente injetadas pelo launcher (build bundled)
+    _waha_url_env = os.environ.get('WAHA_API_URL', '').strip()
+    _waha_key_env = os.environ.get('WAHA_API_KEY', '').strip()
+    _waha_session_env = os.environ.get('WAHA_SESSION_NAME', '').strip()
+    if _waha_url_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='http://localhost:3001'", ('waha_api_url', _waha_url_env))
+    if _waha_key_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
+    if _waha_session_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -13480,6 +13510,398 @@ def autotoca_teste_linkedin():
         logger.exception(f'[AutoToca] POST /api/autotoca/linkedin/teste: {e}')
         return jsonify({'ok': False, 'error': str(e)}), 500
 
+# ─────────────────────────────────────────
+#  WhatsApp Update — WAHA (WhatsApp HTTP API)
+# ─────────────────────────────────────────
+
+def _phone_to_waha_chatid(phone):
+    """Converte telefone normalizado do projeto para chatId do WAHA (5511999999999@c.us)."""
+    if not phone:
+        return None
+    digits = re.sub(r'\D', '', str(phone))
+    if len(digits) < 10:
+        return None
+    if not digits.startswith('55'):
+        digits = '55' + digits
+    return f'{digits}@c.us'
+
+
+def _waha_settings():
+    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
+    return (
+        (s.get('waha_api_url') or 'http://localhost:3001').strip().rstrip('/'),
+        (s.get('waha_api_key') or '').strip(),
+        (s.get('waha_session_name') or 'default').strip(),
+    )
+
+
+def _waha_headers(api_key):
+    h = {'Content-Type': 'application/json'}
+    if api_key:
+        h['X-Api-Key'] = api_key
+    return h
+
+
+def _waha_extract_text(msg, client_name):
+    """Extrai texto de uma mensagem do WAHA. Retorna (texto, sender_label)."""
+    sender = 'Você' if msg.get('fromMe') else client_name
+    body = (msg.get('body') or '').strip()
+    if body:
+        return f'{sender}: {body}', sender
+    # Sem corpo de texto → rotula por tipo de mídia
+    mtype = (msg.get('type') or '').lower()
+    label_map = {
+        'image': '[Imagem]', 'video': '[Vídeo]', 'ptt': '[Áudio]',
+        'audio': '[Áudio]', 'document': '[Documento]', 'sticker': '[Figurinha]',
+        'location': '[Localização]',
+    }
+    if msg.get('hasMedia') or mtype in label_map:
+        return f'{sender}: {label_map.get(mtype, "[Mídia]")}', sender
+    return None, sender
+
+
+def _whatsapp_sync_async(task_id, period_days):
+    try:
+        _bg_task_set(task_id, {'step': '📋 Carregando clientes...', 'progress': 5})
+
+        api_url, api_key, session = _waha_settings()
+        headers = _waha_headers(api_key)
+
+        db = get_db()
+        c = db.cursor()
+        c.execute("SELECT id, name, phone FROM clients WHERE phone IS NOT NULL AND phone != '' AND is_archived = 0")
+        clients = c.fetchall()
+
+        if not clients:
+            _bg_task_set(task_id, {
+                'status': 'done', 'progress': 100,
+                'step': '✅ Concluído',
+                'result': {'imported': 0, 'skipped': 0, 'total_clients': 0,
+                           'message': 'Nenhum cliente com telefone cadastrado.'}
+            })
+            _bg_task_cleanup(task_id)
+            return
+
+        now_dt = datetime.utcnow()
+        since_dt = now_dt - timedelta(days=period_days)
+        since_ts = int(since_dt.timestamp())
+        now_ts = int(now_dt.timestamp())
+
+        imported = 0
+        skipped = 0
+        total = len(clients)
+        pending_items = []
+        period_label = {1: '1 dia', 3: '3 dias', 7: '1 semana', 15: '15 dias', 30: '30 dias'}.get(period_days, f'{period_days} dias')
+
+        for i, (client_id, client_name, phone) in enumerate(clients):
+            progress = 10 + int((i / total) * 78)
+            _bg_task_set(task_id, {
+                'step': f'📱 Verificando {client_name}... ({i + 1}/{total})',
+                'progress': progress
+            })
+
+            chat_id = _phone_to_waha_chatid(phone)
+            if not chat_id:
+                skipped += 1
+                continue
+
+            try:
+                # WAHA: GET /api/{session}/chats/{chatId}/messages com filtro de timestamp server-side
+                msg_resp = requests.get(
+                    f'{api_url}/api/{session}/chats/{chat_id}/messages',
+                    headers=headers,
+                    params={
+                        'limit': 500,
+                        'downloadMedia': 'false',
+                        'filter.timestamp.gte': since_ts,
+                        'filter.timestamp.lte': now_ts,
+                    },
+                    timeout=25
+                )
+                if msg_resp.status_code != 200:
+                    skipped += 1
+                    continue
+                raw = msg_resp.json()
+                messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
+            except Exception:
+                skipped += 1
+                continue
+
+            if not messages:
+                skipped += 1
+                continue
+
+            # Ordena por timestamp (segundos). WAHA já filtra pelo período, mas garantimos o range.
+            def _msg_ts(m):
+                try:
+                    return int(m.get('timestamp') or 0)
+                except (TypeError, ValueError):
+                    return 0
+            messages.sort(key=_msg_ts)
+
+            texts = []
+            last_ts = 0
+            for msg in messages:
+                ts = _msg_ts(msg)
+                if ts and (ts < since_ts or ts > now_ts):
+                    continue
+                if ts > last_ts:
+                    last_ts = ts
+                text, _sender = _waha_extract_text(msg, client_name)
+                if text:
+                    texts.append(text)
+
+            if not texts:
+                skipped += 1
+                continue
+
+            content_hash = hashlib.sha256('|'.join(texts).encode('utf-8', errors='replace')).hexdigest()[:40]
+            c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
+                      (client_id, content_hash))
+            if c.fetchone():
+                skipped += 1
+                continue
+
+            conversation_text = '\n'.join(texts[-60:])
+            prompt = (
+                f"Analise a conversa de WhatsApp entre o usuário e '{client_name}' "
+                f"(período: {period_label}) e escreva um resumo conciso em 2 a 4 frases, "
+                "em português, no formato de log de atividade CRM. "
+                "Mencione tópicos tratados, decisões tomadas ou pendências. "
+                "Não use aspas nem markdown.\n\n"
+                f"Conversa:\n{conversation_text}\n\nResumo:"
+            )
+
+            summary = _sai_simple_prompt(prompt)
+            if not summary:
+                or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+                if or_key:
+                    try:
+                        or_s = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+                        or_resp = requests.post(
+                            'https://openrouter.ai/api/v1/chat/completions',
+                            headers={
+                                'Authorization': f'Bearer {or_key}',
+                                'Content-Type': 'application/json',
+                                'HTTP-Referer': or_s.get('openrouter_site_url') or 'http://localhost',
+                                'X-Title': or_s.get('openrouter_app_name') or 'TocaDoCoelho'
+                            },
+                            json={
+                                'model': (or_s.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip(),
+                                'messages': [
+                                    {'role': 'system', 'content': 'Você é um assistente de CRM especializado em resumos de conversas de WhatsApp.'},
+                                    {'role': 'user', 'content': prompt}
+                                ],
+                                'temperature': 0.1
+                            },
+                            timeout=30
+                        )
+                        summary = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
+                    except Exception:
+                        pass
+
+            if not summary:
+                summary = f'Conversa de WhatsApp com {client_name} no período de {period_label}. {len(texts)} mensagem(ns) trocada(s).'
+
+            activity_date = datetime.utcfromtimestamp(last_ts).strftime('%Y-%m-%d %H:%M:%S') if last_ts else now_dt.strftime('%Y-%m-%d %H:%M:%S')
+            pending_items.append({
+                'client_id': client_id,
+                'client_name': client_name,
+                'phone': phone,
+                'summary': summary,
+                'activity_date': activity_date,
+                'message_count': len(texts),
+                'content_hash': content_hash,
+                'period_days': period_days,
+            })
+            imported += 1
+
+        _bg_task_set(task_id, {
+            'status': 'done', 'progress': 100,
+            'step': '✅ Análise concluída — revise os resumos!',
+            'result': {
+                'pending': imported,
+                'skipped': skipped,
+                'total_clients': total,
+                'items': pending_items,
+                'message': f'{imported} conversa(s) para revisar, {skipped} sem novidade.'
+            }
+        })
+        _bg_task_cleanup(task_id)
+    except Exception as exc:
+        logger.exception(f'[WhatsApp Sync] Erro: {exc}')
+        _bg_task_set(task_id, {'status': 'error', 'progress': 0, 'step': f'Erro: {exc}', 'error': str(exc)})
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/whatsapp/config', methods=['GET'])
+def whatsapp_get_config():
+    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
+    has_key = bool((s.get('waha_api_key') or '').strip())
+    return jsonify({
+        'waha_api_url': s.get('waha_api_url') or 'http://localhost:3001',
+        'waha_api_key': '••••••••' if has_key else '',
+        'waha_session_name': s.get('waha_session_name') or 'default',
+        'configured': bool((s.get('waha_api_url') or '').strip()),
+    })
+
+
+@app.route('/api/whatsapp/config', methods=['PUT'])
+def whatsapp_save_config():
+    data = request.get_json(force=True) or {}
+    db = get_db()
+    c = db.cursor()
+    for key in ['waha_api_url', 'waha_api_key', 'waha_session_name']:
+        val = (data.get(key) or '').strip()
+        if val and val != '••••••••':
+            c.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+                (key, val)
+            )
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/whatsapp/status', methods=['GET'])
+def whatsapp_status():
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'configured': False, 'connected': False, 'state': 'not_configured'})
+    try:
+        resp = requests.get(f'{api_url}/api/sessions/{session}', headers=_waha_headers(api_key), timeout=5)
+        if resp.status_code == 404:
+            return jsonify({'configured': True, 'connected': False, 'state': 'no_session'})
+        if resp.status_code == 401:
+            return jsonify({'configured': True, 'connected': False, 'state': 'unauthorized',
+                            'error': 'API Key inválida.'})
+        status = (resp.json() or {}).get('status', 'STOPPED')
+        return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
+    except requests.exceptions.ConnectionError:
+        return jsonify({'configured': True, 'connected': False, 'state': 'offline',
+                        'error': 'WAHA offline. Verifique se o serviço (container) está rodando.'})
+    except Exception as e:
+        return jsonify({'configured': True, 'connected': False, 'state': 'error', 'error': str(e)})
+
+
+@app.route('/api/whatsapp/connect', methods=['POST'])
+def whatsapp_connect():
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'ok': False, 'error': 'WAHA não configurado.'}), 400
+    headers = _waha_headers(api_key)
+
+    # 1. Garante que a sessão existe e está iniciada
+    try:
+        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        if st.status_code == 200:
+            status = (st.json() or {}).get('status')
+            if status == 'WORKING':
+                return jsonify({'ok': True, 'connected': True})
+            if status in ('STOPPED', 'FAILED'):
+                requests.post(f'{api_url}/api/sessions/{session}/start', headers=headers, timeout=15)
+        elif st.status_code == 404:
+            # Cria e inicia a sessão
+            requests.post(f'{api_url}/api/sessions/', headers=headers,
+                          json={'name': session, 'start': True}, timeout=20)
+        elif st.status_code == 401:
+            return jsonify({'ok': False, 'error': 'API Key inválida.'}), 401
+    except requests.exceptions.ConnectionError:
+        return jsonify({'ok': False, 'error': 'WAHA não está acessível.'}), 503
+    except Exception as exc:
+        logger.warning(f'[WhatsApp] WAHA session check error: {exc}')
+
+    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64)
+    qr = None
+    for _ in range(10):
+        time.sleep(1.3)
+        try:
+            st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+            status = (st.json() or {}).get('status') if st.ok else None
+            if status == 'WORKING':
+                return jsonify({'ok': True, 'connected': True})
+            if status == 'SCAN_QR_CODE':
+                qr_resp = requests.get(f'{api_url}/api/{session}/auth/qr',
+                                       headers=headers, params={'format': 'image'}, timeout=10)
+                if qr_resp.status_code == 200 and qr_resp.content:
+                    ctype = qr_resp.headers.get('Content-Type', 'image/png')
+                    b64 = base64.b64encode(qr_resp.content).decode('ascii')
+                    qr = f'data:{ctype};base64,{b64}'
+                    break
+        except Exception:
+            pass
+
+    if qr:
+        return jsonify({'ok': True, 'connected': False, 'qr': qr})
+
+    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code. Verifique os logs do container WAHA (docker logs toca-waha).'}), 500
+
+
+@app.route('/api/whatsapp/sync', methods=['POST'])
+def whatsapp_sync_start():
+    data = request.get_json(force=True) or {}
+    period_days = int(data.get('period_days', 7))
+    if period_days not in [1, 3, 7, 15, 30]:
+        period_days = 7
+    task_id = uuid.uuid4().hex
+    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando sincronização...', 'progress': 5})
+    threading.Thread(target=_whatsapp_sync_async, args=(task_id, period_days), daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
+
+
+@app.route('/api/whatsapp/tasks/<task_id>', methods=['GET'])
+def whatsapp_task_poll(task_id):
+    task = _bg_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    return jsonify(task)
+
+
+@app.route('/api/whatsapp/approve', methods=['POST'])
+def whatsapp_approve():
+    data = request.get_json(force=True) or {}
+    items = data.get('items', [])
+    if not isinstance(items, list):
+        return jsonify({'ok': False, 'error': 'items deve ser uma lista'}), 400
+
+    db = get_db()
+    c = db.cursor()
+    inserted = 0
+    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+    for item in items:
+        client_id = item.get('client_id')
+        summary = (item.get('summary') or '').strip()
+        activity_date = (item.get('activity_date') or now_str).strip()
+        content_hash = (item.get('content_hash') or '').strip()
+        phone = (item.get('phone') or '').strip()
+        period_days = int(item.get('period_days') or 7)
+        message_count = int(item.get('message_count') or 0)
+
+        if not client_id or not summary or not content_hash:
+            continue
+
+        c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
+                  (client_id, content_hash))
+        if c.fetchone():
+            continue
+
+        c.execute(
+            "INSERT INTO activities (client_id, contact_type, information, activity_date) VALUES (?, 'WhatsApp', ?, ?)",
+            (client_id, summary, activity_date)
+        )
+        activity_id = c.lastrowid
+        c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
+        c.execute(
+            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, activity_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (client_id, phone, period_days, message_count, content_hash, activity_id)
+        )
+        inserted += 1
+
+    db.commit()
+    db.close()
+    return jsonify({'ok': True, 'inserted': inserted})
+
+
 # Servir arquivos estaticos
 
 @app.route('/uploads/accounts/<filename>')
@@ -14108,6 +14530,389 @@ def home_overview():
         })
     except Exception as e:
         print(f'[ERROR] GET /api/home/overview: {e}')
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+def _home_status_thresholds(c):
+    """Carrega thresholds universais + regras por cargo (igual ao home_overview)."""
+    c.execute("SELECT key, value FROM app_settings WHERE key IN ('status_green_days', 'status_yellow_days')")
+    s_map = {row['key']: row['value'] for row in c.fetchall()}
+    try:
+        green_days = int(s_map.get('status_green_days') or 7)
+    except Exception:
+        green_days = 7
+    try:
+        yellow_days = int(s_map.get('status_yellow_days') or 14)
+    except Exception:
+        yellow_days = 14
+    c.execute('SELECT position, green_days, yellow_days FROM status_rules')
+    rules_map = {
+        (row['position'] or '').strip().lower(): (int(row['green_days']), int(row['yellow_days']))
+        for row in c.fetchall() if row['position']
+    }
+    def get_thresholds(position):
+        return rules_map.get((position or '').strip().lower(), (green_days, yellow_days))
+    return get_thresholds
+
+
+def _home_sort_key(name):
+    """Chave de ordenação alfabética insensível a maiúsculas e acentos (pt-BR)."""
+    s = unicodedata.normalize('NFKD', str(name or ''))
+    return ''.join(ch for ch in s if not unicodedata.combining(ch)).casefold()
+
+
+def _home_status_for(last_date, green, yellow, now_dt):
+    """Retorna ('em_dia'|'atencao'|'atrasado', dias_sem_contato|None)."""
+    if not last_date:
+        return ('atrasado', None)
+    try:
+        base = str(last_date).replace('T', ' ').split('.')[0].split('+')[0].strip()
+        d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+        days = (now_dt - d).days
+    except Exception:
+        return ('atrasado', None)
+    if days < green:
+        return ('em_dia', days)
+    elif days < yellow:
+        return ('atencao', days)
+    return ('atrasado', days)
+
+
+@app.route('/api/home/drilldown', methods=['GET'])
+def home_drilldown():
+    """Drill-down detalhado para os elementos do Dashboard Executivo.
+    Query params:
+      type: accounts | contacts | status | account | cargo | canal | evolucao
+      status: em_dia | atencao | atrasado    (quando type=status)
+      account_id / account_name              (quando type=account)
+      cargo / canal / ym                      (filtros específicos)
+      include_archived, include_cold: '1'
+    """
+    try:
+        dtype = (request.args.get('type') or '').strip().lower()
+        include_archived = request.args.get('include_archived') == '1'
+        include_cold = request.args.get('include_cold') == '1'
+
+        conn = get_db()
+        c = conn.cursor()
+        now_dt = datetime.now()
+        get_thresholds = _home_status_thresholds(c)
+
+        def client_filter(alias='c'):
+            clauses = []
+            if not include_archived:
+                clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
+            if not include_cold:
+                clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
+            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
+
+        # -------- TYPE: accounts (Total de Contas) --------
+        if dtype == 'accounts':
+            c.execute(f"""
+                SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
+                       (SELECT COUNT(*) FROM clients cl
+                        WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(a.name)){client_filter('cl')}) AS contacts,
+                       COALESCE((SELECT SUM(p.current_revenue_cents) FROM account_presences p
+                                 WHERE p.account_id = a.id
+                                   AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
+                                   AND COALESCE(p.early_terminated, 0) = 0), 0) AS revenue_cents,
+                       (SELECT MAX(aa.activity_date) FROM account_activities aa WHERE aa.account_id = a.id) AS last_activity
+                FROM accounts a
+                ORDER BY revenue_cents DESC, a.name ASC
+            """)
+            items = [{
+                'id': r['id'], 'name': r['name'], 'logo_url': r['logo_url'],
+                'is_target': bool(r['is_target']), 'sector': r['sector'],
+                'contacts': r['contacts'], 'revenue_cents': r['revenue_cents'],
+                'last_activity': r['last_activity'],
+            } for r in c.fetchall()]
+            return jsonify({'type': dtype, 'title': 'Todas as Contas', 'count': len(items), 'items': items})
+
+        # -------- TYPE: contacts (Total de Contatos) --------
+        if dtype == 'contacts':
+            c.execute(f"""
+                SELECT c.id, c.name, c.company, c.position, c.photo_url, c.is_target,
+                       c.last_activity_date AS last_activity
+                FROM clients c
+                WHERE 1=1{client_filter()}
+                ORDER BY c.name COLLATE NOCASE ASC
+            """)
+            items = []
+            for r in c.fetchall():
+                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
+                items.append({
+                    'id': r['id'], 'name': r['name'], 'company': r['company'],
+                    'position': r['position'], 'photo_url': r['photo_url'],
+                    'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
+                    'status': st, 'days': days,
+                })
+            items.sort(key=lambda x: _home_sort_key(x['name']))
+            return jsonify({'type': dtype, 'title': 'Todos os Contatos', 'count': len(items), 'items': items})
+
+        # -------- TYPE: status (Em Dia / Atenção / Atrasado) --------
+        if dtype == 'status':
+            wanted = (request.args.get('status') or '').strip().lower()
+            labels = {'em_dia': 'Em Dia', 'atencao': 'Atenção', 'atrasado': 'Atrasado'}
+            if wanted not in labels:
+                return jsonify({'error': 'status inválido'}), 400
+            c.execute(f"""
+                SELECT c.id, c.name, c.company, c.position, c.photo_url, c.is_target,
+                       c.last_activity_date AS last_activity
+                FROM clients c
+                WHERE 1=1{client_filter()}
+                ORDER BY c.name COLLATE NOCASE ASC
+            """)
+            items = []
+            for r in c.fetchall():
+                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
+                if st != wanted:
+                    continue
+                items.append({
+                    'id': r['id'], 'name': r['name'], 'company': r['company'],
+                    'position': r['position'], 'photo_url': r['photo_url'],
+                    'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
+                    'status': st, 'days': days,
+                })
+            items.sort(key=lambda x: _home_sort_key(x['name']))
+            return jsonify({'type': dtype, 'status': wanted, 'title': f'Contatos — {labels[wanted]}',
+                            'count': len(items), 'items': items})
+
+        # -------- TYPE: account (clique numa conta: faturamento/interações/target) --------
+        if dtype == 'account':
+            acc_id = request.args.get('account_id')
+            acc_name = (request.args.get('account_name') or '').strip()
+            if acc_id:
+                c.execute("SELECT * FROM accounts WHERE id = ?", (acc_id,))
+            elif acc_name:
+                c.execute("SELECT * FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))", (acc_name,))
+            else:
+                return jsonify({'error': 'account_id ou account_name obrigatório'}), 400
+            acc = c.fetchone()
+            if not acc:
+                return jsonify({'error': 'conta não encontrada'}), 404
+            acc = dict(acc)
+
+            # Serviços Stefanini (presences)
+            c.execute("""
+                SELECT p.delivery_name, p.stf_owner, p.delivery_cell, p.service_id,
+                       p.current_revenue_cents, p.billing_type, p.validity_month,
+                       p.contract_end_date, COALESCE(p.early_terminated, 0) AS early_terminated
+                FROM account_presences p
+                WHERE p.account_id = ?
+                ORDER BY COALESCE(p.early_terminated,0) ASC, p.current_revenue_cents DESC
+            """, (acc['id'],))
+            services = [{
+                'name': r['delivery_name'], 'owner': r['stf_owner'], 'cell': r['delivery_cell'],
+                'service_id': r['service_id'], 'revenue_cents': r['current_revenue_cents'],
+                'billing_type': r['billing_type'], 'validity_month': r['validity_month'],
+                'contract_end_date': r['contract_end_date'], 'early_terminated': bool(r['early_terminated']),
+            } for r in c.fetchall()]
+            total_active = sum((s['revenue_cents'] or 0) for s in services
+                               if not s['early_terminated'] and (s['billing_type'] in (None, 'Mensal')))
+
+            # Contatos vinculados — por nome da empresa (igual à página da conta),
+            # incluindo arquivados/frios conforme flags, ordem alfabética
+            c.execute(f"""
+                SELECT cl.id, cl.name, cl.position, cl.photo_url, cl.email,
+                       cl.last_activity_date AS last_activity
+                FROM clients cl
+                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?)){client_filter('cl')}
+                ORDER BY cl.name COLLATE NOCASE ASC
+            """, (acc['name'],))
+            contacts = []
+            for r in c.fetchall():
+                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
+                contacts.append({
+                    'id': r['id'], 'name': r['name'], 'position': r['position'],
+                    'photo_url': r['photo_url'], 'email': r['email'], 'last_activity': r['last_activity'],
+                    'status': st, 'days': days,
+                })
+            contacts.sort(key=lambda x: _home_sort_key(x['name']))
+
+            # Últimas interações (account_activities + activities dos contatos da conta)
+            c.execute("""
+                SELECT * FROM (
+                    SELECT aa.description AS info, 'Conta' AS canal, aa.activity_date AS dt, NULL AS contato
+                    FROM account_activities aa WHERE aa.account_id = ?
+                    UNION ALL
+                    SELECT COALESCE(a.information, a.description) AS info,
+                           COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal,
+                           a.activity_date AS dt, cl.name AS contato
+                    FROM activities a JOIN clients cl ON cl.id = a.client_id
+                    WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
+                )
+                ORDER BY dt DESC LIMIT 12
+            """, (acc['id'], acc['name']))
+            timeline = [{
+                'info': r['info'], 'canal': r['canal'], 'dt': r['dt'], 'contato': r['contato'],
+            } for r in c.fetchall()]
+
+            # Canal breakdown da conta
+            c.execute("""
+                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
+                GROUP BY canal ORDER BY n DESC
+            """, (acc['name'],))
+            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
+
+            return jsonify({
+                'type': dtype,
+                'account': {
+                    'id': acc['id'], 'name': acc['name'], 'logo_url': acc.get('logo_url'),
+                    'is_target': bool(acc.get('is_target')), 'sector': acc.get('sector'),
+                },
+                'revenue_active_cents': total_active,
+                'services': services,
+                'contacts': contacts,
+                'timeline': timeline,
+                'canal_breakdown': canal_breakdown,
+            })
+
+        # -------- TYPE: cargo (fatia da pizza "Interações por Cargo") --------
+        if dtype == 'cargo':
+            cargo = (request.args.get('cargo') or '').strip()
+            if not cargo:
+                return jsonify({'error': 'cargo obrigatório'}), 400
+            c.execute(f"""
+                SELECT cl.id, cl.name, cl.company, cl.photo_url, cl.last_activity_date AS last_activity,
+                       COUNT(a.id) AS n
+                FROM clients cl LEFT JOIN activities a ON a.client_id = cl.id
+                WHERE LOWER(TRIM(cl.position)) = LOWER(TRIM(?)){client_filter('cl')}
+                GROUP BY cl.id ORDER BY n DESC, cl.name ASC
+            """, (cargo,))
+            contacts = []
+            total = 0
+            for r in c.fetchall():
+                total += r['n']
+                contacts.append({
+                    'id': r['id'], 'name': r['name'], 'company': r['company'],
+                    'photo_url': r['photo_url'], 'count': r['n'], 'last_activity': r['last_activity'],
+                })
+            c.execute(f"""
+                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE LOWER(TRIM(cl.position)) = LOWER(TRIM(?)){client_filter('cl')}
+                GROUP BY canal ORDER BY n DESC
+            """, (cargo,))
+            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
+            return jsonify({'type': dtype, 'cargo': cargo, 'title': f'Cargo — {cargo}',
+                            'total_interacoes': total, 'contacts': contacts, 'canal_breakdown': canal_breakdown})
+
+        # -------- TYPE: canal (fatia da pizza "Canal de Relacionamento") --------
+        if dtype == 'canal':
+            canal = (request.args.get('canal') or '').strip()
+            if not canal:
+                return jsonify({'error': 'canal obrigatório'}), 400
+            c.execute(f"""
+                SELECT cl.company AS acc, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') = ?
+                  AND cl.company IS NOT NULL AND TRIM(cl.company) != ''{client_filter('cl')}
+                GROUP BY cl.company ORDER BY n DESC LIMIT 15
+            """, (canal,))
+            accounts = [{'name': r['acc'], 'count': r['n']} for r in c.fetchall()]
+            c.execute(f"""
+                SELECT cl.name, cl.company, cl.position, cl.photo_url, COUNT(*) AS n,
+                       MAX(a.activity_date) AS last_activity
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') = ?{client_filter('cl')}
+                GROUP BY cl.id ORDER BY n DESC LIMIT 30
+            """, (canal,))
+            contacts = [{
+                'name': r['name'], 'company': r['company'], 'position': r['position'],
+                'photo_url': r['photo_url'], 'count': r['n'], 'last_activity': r['last_activity'],
+            } for r in c.fetchall()]
+            total = sum(x['count'] for x in accounts)
+            return jsonify({'type': dtype, 'canal': canal, 'title': f'Canal — {canal}',
+                            'total': total, 'accounts': accounts, 'contacts': contacts})
+
+        # -------- TYPE: evolucao (clique num mês da Evolução Mensal) --------
+        if dtype == 'evolucao':
+            ym = (request.args.get('ym') or '').strip()
+            if not re.match(r'^\d{4}-\d{2}$', ym):
+                return jsonify({'error': 'ym inválido (YYYY-MM)'}), 400
+            # contas contatadas no mês
+            c.execute(f"""
+                SELECT cl.company AS acc, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE strftime('%Y-%m', a.activity_date) = ?
+                  AND cl.company IS NOT NULL AND TRIM(cl.company) != ''{client_filter('cl')}
+                GROUP BY cl.company ORDER BY n DESC
+            """, (ym,))
+            accounts = [{'name': r['acc'], 'count': r['n']} for r in c.fetchall()]
+            # canal breakdown do mês
+            c.execute(f"""
+                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
+                FROM activities a JOIN clients cl ON cl.id = a.client_id
+                WHERE strftime('%Y-%m', a.activity_date) = ?{client_filter('cl')}
+                GROUP BY canal ORDER BY n DESC
+            """, (ym,))
+            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
+            # total do mês (client + account activities)
+            c.execute("""
+                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
+                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
+            """, (ym, ym))
+            total = c.fetchone()['n'] or 0
+            # mês anterior para delta
+            y, m = [int(x) for x in ym.split('-')]
+            pm = (y - 1, 12) if m == 1 else (y, m - 1)
+            prev_ym = f'{pm[0]:04d}-{pm[1]:02d}'
+            c.execute("""
+                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
+                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
+            """, (prev_ym, prev_ym))
+            prev_total = c.fetchone()['n'] or 0
+            return jsonify({'type': dtype, 'ym': ym, 'title': f'Interações — {ym}',
+                            'total': total, 'prev_total': prev_total, 'delta': total - prev_total,
+                            'accounts': accounts, 'canal_breakdown': canal_breakdown})
+
+        # -------- TYPE: target_risk (insight "Risco de perda de proximidade") --------
+        if dtype == 'target_risk':
+            # Espelha exatamente a lógica de target_risco_atencao do overview:
+            # contas target sem contato OU na janela de atenção (green <= dias < yellow)
+            g_uni, y_uni = get_thresholds(None)
+            c.execute("""
+                SELECT a.id, a.name, a.logo_url, a.sector,
+                       (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE LOWER(TRIM(cl2.company))=LOWER(TRIM(a.name))) AS la_cli,
+                       (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id) AS la_acc
+                FROM accounts a
+                WHERE COALESCE(a.is_target,0)=1
+            """)
+            items = []
+            for r in c.fetchall():
+                last = r['la_cli'] or r['la_acc']
+                em_risco = False
+                days = None
+                if not last:
+                    em_risco = True
+                else:
+                    try:
+                        base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
+                        d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
+                        days = (now_dt - d).days
+                        if g_uni <= days < y_uni:
+                            em_risco = True
+                    except Exception:
+                        em_risco = True
+                if not em_risco:
+                    continue
+                # contagem de contatos por nome da empresa
+                c.execute(f"SELECT COUNT(*) AS n FROM clients cl WHERE LOWER(TRIM(cl.company))=LOWER(TRIM(?)){client_filter('cl')}", (r['name'],))
+                ncont = c.fetchone()['n']
+                items.append({
+                    'id': r['id'], 'name': r['name'], 'logo_url': r['logo_url'], 'sector': r['sector'],
+                    'last_activity': last, 'days': days, 'contacts': ncont,
+                })
+            items.sort(key=lambda x: (x['days'] is None, -(x['days'] or 0), x['name'].lower()))
+            return jsonify({'type': dtype, 'title': 'Contas Target em Risco de Proximidade',
+                            'count': len(items), 'items': items})
+
+        return jsonify({'error': f'type desconhecido: {dtype}'}), 400
+    except Exception as e:
+        print(f'[ERROR] GET /api/home/drilldown: {e}')
         import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 

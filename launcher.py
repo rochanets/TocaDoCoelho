@@ -4,6 +4,7 @@
 import os
 import sys
 import time
+import shutil
 import webbrowser
 import subprocess
 import requests
@@ -191,6 +192,69 @@ class WindowsTrayIcon:
             self._show_menu()
         return 0
 
+WAHA_PORT = int(os.environ.get('WAHA_PORT', '3001'))
+WAHA_API_KEY_DEFAULT = os.environ.get('WAHA_API_KEY', 'toca-test-key-2024')
+WAHA_COMPOSE_FILE = 'docker-compose.whatsapp.yml'
+
+
+def _find_docker():
+    """Localiza o executável do Docker no PATH ou em caminhos comuns do Windows."""
+    docker = shutil.which('docker')
+    if docker:
+        return docker
+    candidates = [
+        Path(os.environ.get('PROGRAMFILES', r'C:\Program Files')) / 'Docker' / 'Docker' / 'resources' / 'bin' / 'docker.exe',
+        Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Docker' / 'Docker' / 'resources' / 'bin' / 'docker.exe',
+    ]
+    for p in candidates:
+        if str(p) and p.exists():
+            return str(p)
+    return None
+
+
+def _start_waha():
+    """
+    Sobe o WAHA (gateway do WhatsApp Update) como container Docker, se o Docker
+    estiver disponível e o compose existir. Define as variáveis de ambiente para
+    que o app.py auto-configure o WhatsApp Update na inicialização.
+
+    O WAHA roda em container destacado e persiste entre execuções do app (mantém
+    a sessão do WhatsApp ativa, evitando reescanear o QR a cada abertura).
+    """
+    # Aponta o app para o WAHA local independentemente de conseguir subir o container
+    os.environ.setdefault('WAHA_API_URL', f'http://localhost:{WAHA_PORT}')
+    os.environ.setdefault('WAHA_API_KEY', WAHA_API_KEY_DEFAULT)
+    os.environ.setdefault('WAHA_SESSION_NAME', 'default')
+
+    compose_file = next(
+        (p for p in (EXE_DIR / WAHA_COMPOSE_FILE, APP_DIR / WAHA_COMPOSE_FILE) if p.exists()),
+        None
+    )
+    if not compose_file:
+        print("[INFO] Compose do WAHA não encontrado — configure o WhatsApp Update manualmente.")
+        return False
+
+    docker = _find_docker()
+    if not docker:
+        print("[INFO] Docker não encontrado — WhatsApp Update exige Docker Desktop instalado e em execução.")
+        return False
+
+    try:
+        subprocess.run(
+            [docker, 'compose', '-f', str(compose_file), 'up', '-d'],
+            cwd=str(compose_file.parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=180,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+        )
+        print(f"[OK] WAHA iniciado via Docker — porta {WAHA_PORT}")
+        return True
+    except Exception as exc:
+        print(f"[WARN] Falha ao iniciar WAHA via Docker (verifique se o Docker Desktop está rodando): {exc}")
+        return False
+
+
 # Modo servidor interno para evitar loop de subprocesso no bundle PyInstaller.
 # No modo frozen, sys.executable aponta para o próprio TocaDoCoelho.exe.
 # Aqui importamos o módulo app diretamente (sem runpy) para que o PyInstaller
@@ -220,6 +284,11 @@ if not APP_PY.exists():
     print("[erro] Verifique se o build foi feito com --add-data \"app.py;.\"")
     input("Pressione ENTER para fechar...")
     sys.exit(1)
+
+# Iniciar WAHA (gateway do WhatsApp Update) via Docker, se disponível
+print("[INFO] Verificando WAHA (WhatsApp Update)...")
+_start_waha()
+print()
 
 # Iniciar servidor Flask em background
 print("[INFO] Iniciando servidor...")
@@ -324,4 +393,6 @@ finally:
     if server_process.poll() is None:
         server_process.terminate()
         server_process.wait(timeout=5)
+    # O WAHA roda em container Docker destacado e é mantido vivo de propósito
+    # (preserva a sessão do WhatsApp entre execuções do app).
     print("[OK] Servidor encerrado!")
