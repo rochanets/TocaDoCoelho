@@ -29,7 +29,7 @@ from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 try:
@@ -6631,13 +6631,13 @@ def outlook_diagnose():
     })
 
     has_graph_creds = bool(
-        os.environ.get('OUTLOOK_GRAPH_CLIENT_ID') or
-        os.environ.get('OUTLOOK_GRAPH_CLIENT_SECRET')
+        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') and
+        _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET')
     )
     checks.append({
-        'label': 'Graph API (variáveis de ambiente)',
+        'label': 'Graph API (credenciais)',
         'ok': has_graph_creds,
-        'detail': 'OUTLOOK_GRAPH_CLIENT_ID configurado' if has_graph_creds else 'OUTLOOK_GRAPH_CLIENT_ID não configurado no ambiente'
+        'detail': 'Client ID e Secret configurados' if has_graph_creds else 'Configure Tenant ID / Client ID / Client Secret nas Configurações'
     })
 
     has_graph_token = False
@@ -6772,6 +6772,20 @@ def _outlook_sync_stream_com():
     return _build_outlook_stream_response(days=days, source='com', page_size=100, max_pages=1)
 
 
+def _graph_redirect_uri():
+    return f"{request.scheme}://{request.host}/api/outlook/oauth/callback"
+
+
+def _graph_make_settings(redirect_uri=''):
+    return {
+        'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or 'common').strip(),
+        'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or '').strip(),
+        'client_secret': (_resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or '').strip(),
+        'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
+        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read User.Read').strip(),
+    }
+
+
 @app.route('/api/outlook/sync-stream-graph', methods=['GET'])
 def sync_outlook_stream_graph():
     """SSE dedicado do conector Graph (OAuth + Graph API)."""
@@ -6782,7 +6796,8 @@ def sync_outlook_stream_graph():
 def outlook_oauth_start():
     try:
         user_id = max(1, int(request.args.get('user_id', 1)))
-        auth_url = outlook_graph_build_authorize_url(user_id=user_id)
+        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+        auth_url = outlook_graph_build_authorize_url(user_id=user_id, settings=settings)
         return jsonify({'auth_url': auth_url, 'provider': 'outlook_graph', 'user_id': user_id})
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha ao iniciar OAuth: {e}')
@@ -6798,23 +6813,96 @@ def outlook_oauth_callback():
         error = (request.args.get('error') or '').strip()
         if error:
             desc = request.args.get('error_description') or error
-            raise OutlookOAuthError(f'Autorização OAuth negada: {desc}')
+            return redirect(f'/?graph_error={urllib.parse.quote(str(desc))}', 302)
 
         code = (request.args.get('code') or '').strip()
         state = (request.args.get('state') or '').strip()
         if not code or not state:
-            raise OutlookOAuthError('Parâmetros OAuth incompletos: code/state são obrigatórios.')
+            return redirect('/?graph_error=Par%C3%A2metros+OAuth+incompletos', 302)
 
         user_id = outlook_graph_parse_state(state)
+        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
         conn = get_db()
-        outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id)
+        outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id, settings=settings)
         conn.close()
-        return jsonify({'ok': True, 'provider': 'outlook_graph', 'user_id': user_id})
+        return redirect('/?graph_connected=1', 302)
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')
-        return jsonify({'error': str(e), 'error_type': 'oauth_authentication'}), 400
+        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/outlook/oauth/callback: {e}')
+        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
+
+
+@app.route('/api/outlook/graph-config', methods=['GET', 'POST'])
+def outlook_graph_config():
+    """Lê ou salva credenciais do Microsoft Graph nas configurações do app."""
+    if request.method == 'GET':
+        tenant = _resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or ''
+        client_id = _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or ''
+        client_secret = _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or ''
+        return jsonify({
+            'tenant_id': tenant,
+            'client_id': client_id,
+            'has_secret': bool(client_secret),
+            'configured': bool(tenant and client_id and client_secret),
+        })
+    data = request.get_json() or {}
+    tenant = (data.get('tenant_id') or '').strip()
+    client_id = (data.get('client_id') or '').strip()
+    client_secret = (data.get('client_secret') or '').strip()
+    conn = get_db()
+    c = conn.cursor()
+    for key, value in [('outlook_graph_tenant_id', tenant), ('outlook_graph_client_id', client_id)]:
+        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', (key, value))
+    if client_secret:
+        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_graph_client_secret', client_secret))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/outlook/graph-status', methods=['GET'])
+def outlook_graph_status_endpoint():
+    """Retorna se o usuário está conectado ao Microsoft Graph e com qual email."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT expires_at FROM user_integrations WHERE provider = 'outlook_graph' AND user_id = 1 LIMIT 1")
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({'connected': False})
+        email = None
+        try:
+            settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+            conn2 = get_db()
+            token = outlook_graph_get_valid_access_token(conn=conn2, user_id=1, settings=settings)
+            conn2.close()
+            req = urllib.request.Request('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', method='GET')
+            req.add_header('Authorization', f'Bearer {token}')
+            req.add_header('Accept', 'application/json')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                me = json.loads(resp.read())
+                email = me.get('mail') or me.get('userPrincipalName')
+        except Exception:
+            pass
+        return jsonify({'connected': True, 'email': email, 'expires_at': row['expires_at']})
+    except Exception as e:
+        return jsonify({'connected': False, 'error': str(e)})
+
+
+@app.route('/api/outlook/graph-disconnect', methods=['DELETE'])
+def outlook_graph_disconnect():
+    """Remove tokens do Microsoft Graph para o usuário."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM user_integrations WHERE provider = 'outlook_graph'")
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
@@ -6824,10 +6912,11 @@ def _outlook_sync_stream_graph():
     page_size = max(1, min(int(request.args.get('page_size', 50)), 200))
     max_pages = max(1, min(int(request.args.get('max_pages', 10)), 50))
     user_id = max(1, int(request.args.get('user_id', 1)))
-    return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id)
+    graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+    return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id, graph_settings=graph_settings)
 
 
-def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1):
+def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1, graph_settings=None):
     def generate():
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
@@ -6840,7 +6929,7 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     end_date = datetime.utcnow()
                     start_date = end_date - timedelta(days=days)
                     conn = get_db()
-                    access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id)
+                    access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id, settings=graph_settings)
                     emails = outlook_graph_fetch_messages(
                         access_token=access_token,
                         start_date=start_date,

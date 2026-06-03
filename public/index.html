@@ -2609,6 +2609,42 @@
                     </details>
                 </div>
 
+                <!-- Microsoft 365 / Graph -->
+                <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:14px; margin-bottom:16px;">
+                    <h4 style="margin-bottom:8px; color:#1e40af; font-size:14px;"><i class="fas fa-cloud"></i> Microsoft 365 — Sincronização direta (sem plugin)</h4>
+                    <div id="graphStatusArea">
+                        <p style="color:#4b5563; font-size:13px; margin-bottom:10px;">Conecte sua conta Microsoft 365 para sincronizar emails diretamente — sem instalar nada no Outlook.</p>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                            <button class="btn btn-auto-mapping btn-small" onclick="connectMicrosoft365()">
+                                <span class="ai-star-icon">✦</span> Conectar Microsoft 365
+                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="showGraphConfigForm()" id="graphConfigBtn">
+                                <i class="fas fa-cog"></i> Configurar credenciais
+                            </button>
+                        </div>
+                    </div>
+                    <div id="graphConnectedArea" style="display:none;">
+                        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                            <span style="color:#1e40af; font-size:13px;"><i class="fas fa-check-circle" style="color:#16a34a;"></i> Conectado como <strong id="graphConnectedEmail">—</strong></span>
+                            <button class="btn btn-secondary btn-small" onclick="disconnectMicrosoft365()"><i class="fas fa-unlink"></i> Desconectar</button>
+                        </div>
+                    </div>
+                    <!-- Formulário de credenciais (collapsible) -->
+                    <div id="graphConfigForm" style="display:none; margin-top:12px; border-top:1px solid #bfdbfe; padding-top:12px;">
+                        <p style="font-size:12px; color:#4b5563; margin-bottom:10px;">Informe as credenciais registradas no Azure AD:</p>
+                        <div style="display:grid; gap:8px;">
+                            <input id="graphTenantId" type="text" placeholder="Tenant ID (ex: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)" style="padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; font-size:12px; width:100%; box-sizing:border-box;">
+                            <input id="graphClientId" type="text" placeholder="Client ID (Application ID)" style="padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; font-size:12px; width:100%; box-sizing:border-box;">
+                            <input id="graphClientSecret" type="password" placeholder="Client Secret (Value)" style="padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; font-size:12px; width:100%; box-sizing:border-box;">
+                        </div>
+                        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+                            <button class="btn btn-auto-mapping btn-small" onclick="saveGraphConfig()"><i class="fas fa-save"></i> Salvar e Conectar</button>
+                            <button class="btn btn-secondary btn-small" onclick="document.getElementById('graphConfigForm').style.display='none'">Cancelar</button>
+                        </div>
+                        <p id="graphConfigMsg" style="font-size:12px; margin-top:8px;"></p>
+                    </div>
+                </div>
+
                 <!-- Sincronização -->
                 <div>
                     <h4 style="margin-bottom:10px; color:#065f46; font-size:14px;"><i class="fas fa-sync-alt"></i> Sincronizar Emails</h4>
@@ -2620,7 +2656,10 @@
                             <option value="60">60 dias</option>
                             <option value="90">90 dias</option>
                         </select>
-                        <button class="btn btn-auto-mapping btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
+                        <button class="btn btn-auto-mapping btn-small" id="outlookGraphSyncBtn" onclick="syncOutlookGraph()" style="display:none;">
+                            <span class="ai-star-icon">✦</span> Sync Microsoft 365
+                        </button>
+                        <button class="btn btn-secondary btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
                             <span class="ai-star-icon">✦</span> Sync via PowerShell
                         </button>
                         <button class="btn btn-auto-mapping btn-small" id="outlookAddinCaptureBtn" onclick="captureOutlookAddin()" style="display:none; position:relative;">
@@ -3572,6 +3611,143 @@
             window.location.href = `${window.location.origin}/api/outlook/manifest.xml?download=1`;
         }
 
+        // ── Microsoft Graph OAuth ─────────────────────────────────────────────
+
+        async function loadOutlookGraphStatus() {
+            try {
+                const res = await fetch(`${API_BASE}/outlook/graph-status`);
+                const data = await res.json();
+                const statusArea = document.getElementById('graphStatusArea');
+                const connectedArea = document.getElementById('graphConnectedArea');
+                const emailEl = document.getElementById('graphConnectedEmail');
+                const graphSyncBtn = document.getElementById('outlookGraphSyncBtn');
+                if (data.connected) {
+                    if (statusArea) statusArea.style.display = 'none';
+                    if (connectedArea) connectedArea.style.display = '';
+                    if (emailEl) emailEl.textContent = data.email || 'conta conectada';
+                    if (graphSyncBtn) graphSyncBtn.style.display = '';
+                } else {
+                    if (statusArea) statusArea.style.display = '';
+                    if (connectedArea) connectedArea.style.display = 'none';
+                    if (graphSyncBtn) graphSyncBtn.style.display = 'none';
+                }
+            } catch (e) { /* silently ignore */ }
+        }
+
+        async function showGraphConfigForm() {
+            const form = document.getElementById('graphConfigForm');
+            if (!form) return;
+            form.style.display = form.style.display === 'none' ? '' : 'none';
+            if (form.style.display !== 'none') {
+                const res = await fetch(`${API_BASE}/outlook/graph-config`).catch(() => null);
+                if (res && res.ok) {
+                    const cfg = await res.json();
+                    document.getElementById('graphTenantId').value = cfg.tenant_id || '';
+                    document.getElementById('graphClientId').value = cfg.client_id || '';
+                    document.getElementById('graphClientSecret').placeholder = cfg.has_secret ? 'Client Secret já salvo (deixe em branco para manter)' : 'Client Secret (Value)';
+                }
+            }
+        }
+
+        async function saveGraphConfig() {
+            const tenant_id = (document.getElementById('graphTenantId')?.value || '').trim();
+            const client_id = (document.getElementById('graphClientId')?.value || '').trim();
+            const client_secret = (document.getElementById('graphClientSecret')?.value || '').trim();
+            const msg = document.getElementById('graphConfigMsg');
+            if (!tenant_id || !client_id) {
+                if (msg) { msg.style.color = '#dc2626'; msg.textContent = 'Tenant ID e Client ID são obrigatórios.'; }
+                return;
+            }
+            const res = await fetch(`${API_BASE}/outlook/graph-config`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({tenant_id, client_id, client_secret})
+            });
+            if (!res.ok) {
+                if (msg) { msg.style.color = '#dc2626'; msg.textContent = 'Erro ao salvar.'; }
+                return;
+            }
+            if (msg) { msg.style.color = '#16a34a'; msg.textContent = 'Salvo! Clique em Conectar Microsoft 365 para autenticar.'; }
+            document.getElementById('graphConfigForm').style.display = 'none';
+        }
+
+        async function connectMicrosoft365() {
+            const res = await fetch(`${API_BASE}/outlook/oauth/start`).catch(() => null);
+            if (!res || !res.ok) {
+                const err = res ? (await res.json()).error : 'Erro de rede';
+                await uiConfirm(err || 'Verifique as credenciais nas Configurações.', 'Falha ao conectar');
+                return;
+            }
+            const data = await res.json();
+            if (!data.auth_url) {
+                await uiConfirm(data.error || 'Configure Tenant ID e Client ID antes de conectar.', 'Configuração ausente');
+                showGraphConfigForm();
+                return;
+            }
+            window.open(data.auth_url, '_blank', 'width=520,height=640,noopener');
+        }
+
+        async function disconnectMicrosoft365() {
+            if (!await uiConfirm('Deseja desconectar a conta Microsoft 365? Será necessário reconectar para sincronizar via Graph.', 'Desconectar')) return;
+            await fetch(`${API_BASE}/outlook/graph-disconnect`, {method: 'DELETE'});
+            loadOutlookGraphStatus();
+        }
+
+        async function syncOutlookGraph() {
+            const days = parseInt(document.getElementById('outlookSyncDays')?.value || '30');
+            const statusEl = document.getElementById('outlookImportStatus');
+            const btn = document.getElementById('outlookGraphSyncBtn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ai-star-icon">✦</span> Lendo emails...'; }
+            if (statusEl) statusEl.innerHTML = '<span style="color:#2563eb;">Conectando ao Microsoft 365...</span>';
+            const evtSource = new EventSource(`${API_BASE}/outlook/sync-stream-graph?days=${days}`);
+            evtSource.onmessage = e => {
+                const d = JSON.parse(e.data);
+                if (d.phase === 'connecting' || d.phase === 'reading') {
+                    if (statusEl) statusEl.innerHTML = `<span style="color:#2563eb;">${d.message}</span>`;
+                } else if (d.phase === 'done') {
+                    evtSource.close();
+                    if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> Sync Microsoft 365'; }
+                    if (statusEl) statusEl.innerHTML = '';
+                    _openOutlookReviewModal(d);
+                } else if (d.phase === 'error') {
+                    evtSource.close();
+                    if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> Sync Microsoft 365'; }
+                    if (statusEl) statusEl.innerHTML = `<span style="color:#dc2626;">${d.message}</span>`;
+                    if (d.error_type === 'oauth_authentication') {
+                        loadOutlookGraphStatus();
+                    }
+                }
+            };
+            evtSource.onerror = () => {
+                evtSource.close();
+                if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> Sync Microsoft 365'; }
+                if (statusEl) statusEl.innerHTML = '<span style="color:#dc2626;">Conexão perdida. Tente novamente.</span>';
+            };
+        }
+
+        // Checa se voltamos de um OAuth callback e mostra notificação
+        (function _checkGraphOAuthReturn() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.has('graph_connected')) {
+                history.replaceState(null, '', window.location.pathname);
+                setTimeout(() => {
+                    loadOutlookGraphStatus();
+                    const statusArea = document.getElementById('autotocaExtensionStatus');
+                    if (statusArea) {
+                        statusArea.style.display = '';
+                        statusArea.textContent = 'Microsoft 365 conectado com sucesso! Use o botão "Sync Microsoft 365" para importar emails.';
+                        setTimeout(() => { statusArea.style.display = 'none'; }, 6000);
+                    }
+                    switchTab(null, 'autotoca');
+                    toggleAutoTocaAutomation('sync-outlook');
+                }, 300);
+            } else if (params.has('graph_error')) {
+                const err = params.get('graph_error');
+                history.replaceState(null, '', window.location.pathname);
+                setTimeout(() => uiConfirm(decodeURIComponent(err), 'Erro na autenticação Microsoft 365'), 300);
+            }
+        })();
+
         async function loadStartupConfig() {
             try {
                 const res = await fetch('/api/config/startup');
@@ -4316,6 +4492,7 @@
 
         async function loadAutoToca() {
             _initOutlookAddinManifestUrl();
+            loadOutlookGraphStatus();
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
             if (response.ok && select) {
