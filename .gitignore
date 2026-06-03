@@ -1,6 +1,5 @@
-# Credenciais locais (não versionar)
+# Credenciais locais (não versionar — remover desta lista se quiser versionar com bypass)
 secrets.py
-graph_credentials.py
 
 # Ambiente virtual Python
 .venv/
