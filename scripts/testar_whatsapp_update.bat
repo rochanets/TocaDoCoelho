@@ -2,113 +2,95 @@
 chcp 65001 > nul
 echo.
 echo ============================================================
-echo   WhatsApp Update -- Ambiente de Teste
+echo   WhatsApp Update -- Ambiente de Teste (WAHA-lite)
 echo   Toca do Coelho
 echo ============================================================
 echo.
 
-:: Procura o Docker em locais comuns do Windows
-set DOCKER_EXE=
-where docker >nul 2>nul
-if %errorlevel% equ 0 set DOCKER_EXE=docker
+:: ---------------------------------------------------------------------------
+:: Localiza o Node.js: primeiro node.exe na raiz do projeto, depois no PATH
+:: ---------------------------------------------------------------------------
+set NODE_EXE=
+set PROJ_ROOT=%~dp0..
 
-if "%DOCKER_EXE%"=="" (
-    if exist "%PROGRAMFILES%\Docker\Docker\resources\bin\docker.exe" (
-        set "DOCKER_EXE=%PROGRAMFILES%\Docker\Docker\resources\bin\docker.exe"
-        echo [INFO] Docker encontrado em Program Files
-    )
-)
-if "%DOCKER_EXE%"=="" (
-    if exist "%LOCALAPPDATA%\Programs\Docker\Docker\resources\bin\docker.exe" (
-        set "DOCKER_EXE=%LOCALAPPDATA%\Programs\Docker\Docker\resources\bin\docker.exe"
-        echo [INFO] Docker encontrado em AppData Local
-    )
-)
-
-if "%DOCKER_EXE%"=="" (
-    echo [ERRO] Docker Desktop nao encontrado.
-    echo.
-    echo  Para testar o WhatsApp Update, instale o Docker Desktop:
-    echo  https://www.docker.com/products/docker-desktop/
-    echo.
-    echo  Apos instalar, ABRA o Docker Desktop, aguarde o icone
-    echo  ficar verde na bandeja do sistema, e rode este script novamente.
-    pause
-    exit /b 1
-)
-
-:: Verifica se o Docker daemon esta respondendo
-"%DOCKER_EXE%" info >nul 2>nul
-if %errorlevel% neq 0 (
-    echo [AVISO] Docker encontrado mas nao esta rodando.
-    echo [INFO]  Tentando iniciar o Docker Desktop...
-
-    if exist "%PROGRAMFILES%\Docker\Docker\Docker Desktop.exe" (
-        start "" "%PROGRAMFILES%\Docker\Docker\Docker Desktop.exe"
-    ) else if exist "%LOCALAPPDATA%\Programs\Docker\Docker\Docker Desktop.exe" (
-        start "" "%LOCALAPPDATA%\Programs\Docker\Docker\Docker Desktop.exe"
-    ) else (
-        echo [AVISO] Nao foi possivel iniciar automaticamente.
-        echo         Abra o Docker Desktop manualmente e aguarde o icone verde.
-    )
-
-    echo [INFO] Aguardando Docker inicializar (max 90s)...
-    set TENTATIVAS=0
-    :aguardar_docker
-    timeout /t 6 /nobreak > nul
-    "%DOCKER_EXE%" info >nul 2>nul
-    if %errorlevel% equ 0 goto docker_pronto
-    set /a TENTATIVAS+=1
-    echo [INFO] Aguardando... (%TENTATIVAS%/15)
-    if %TENTATIVAS% lss 15 goto aguardar_docker
-
-    echo.
-    echo [ERRO] Docker nao respondeu em 90 segundos.
-    echo        Abra o Docker Desktop manualmente e aguarde o icone
-    echo        verde na bandeja antes de tentar novamente.
-    pause
-    exit /b 1
-)
-
-:docker_pronto
-echo [OK] Docker esta rodando.
-echo.
-
-:: Verifica se docker compose (v2) esta disponivel; tenta docker-compose (v1) como fallback
-set COMPOSE_CMD="%DOCKER_EXE%" compose
-"%DOCKER_EXE%" compose version >nul 2>nul
-if %errorlevel% neq 0 (
-    where docker-compose >nul 2>nul
+if exist "%PROJ_ROOT%\node.exe" (
+    set "NODE_EXE=%PROJ_ROOT%\node.exe"
+    echo [INFO] node.exe encontrado na pasta do projeto.
+) else (
+    where node >nul 2>nul
     if %errorlevel% equ 0 (
-        set COMPOSE_CMD=docker-compose
-        echo [INFO] Usando docker-compose v1
+        set NODE_EXE=node
+        echo [INFO] Node.js encontrado no PATH.
+    )
+)
+
+if "%NODE_EXE%"=="" (
+    echo [ERRO] Node.js nao encontrado.
+    echo.
+    echo  Opcao A: instale o Node.js LTS em https://nodejs.org
+    echo  Opcao B: baixe node.exe em https://nodejs.org/dist/latest/node.exe
+    echo           e coloque na pasta raiz do projeto (junto com launcher.py).
+    echo.
+    pause
+    exit /b 1
+)
+
+:: ---------------------------------------------------------------------------
+:: Verifica se o waha-lite.js existe
+:: ---------------------------------------------------------------------------
+set SCRIPT_DIR=%PROJ_ROOT%\waha-lite
+if not exist "%SCRIPT_DIR%\waha-lite.js" (
+    echo [ERRO] waha-lite\waha-lite.js nao encontrado.
+    echo        Rode este script a partir da pasta raiz do projeto.
+    pause
+    exit /b 1
+)
+
+:: ---------------------------------------------------------------------------
+:: Instala dependencias npm se necessario
+:: ---------------------------------------------------------------------------
+if not exist "%SCRIPT_DIR%\node_modules\express" (
+    echo [INFO] Instalando dependencias npm (primeira vez)...
+    pushd "%SCRIPT_DIR%"
+    where npm >nul 2>nul
+    if %errorlevel% equ 0 (
+        npm install
     ) else (
-        echo [ERRO] Plugin docker compose nao encontrado.
-        echo        Atualize o Docker Desktop para a versao mais recente.
+        echo [ERRO] npm nao encontrado. Instale o Node.js completo (nao apenas node.exe isolado).
+        echo        Baixe em https://nodejs.org e instale normalmente.
+        popd
+        pause
+        exit /b 1
+    )
+    popd
+    if not exist "%SCRIPT_DIR%\node_modules\express" (
+        echo [ERRO] Falha ao instalar dependencias.
         pause
         exit /b 1
     )
 )
 
-echo [1/2] Iniciando WAHA (primeira vez pode demorar para baixar a imagem)...
-%COMPOSE_CMD% -f docker-compose.whatsapp.yml up -d
+:: ---------------------------------------------------------------------------
+:: Inicia o WAHA-lite
+:: ---------------------------------------------------------------------------
+echo [1/2] Iniciando WAHA-lite (Node.js, sem Docker)...
 
-if %errorlevel% neq 0 (
-    echo.
-    echo [ERRO] Falha ao iniciar o container.
-    echo        Certifique-se de rodar este script a partir da pasta raiz do projeto
-    echo        (onde fica o arquivo docker-compose.whatsapp.yml).
-    pause
-    exit /b 1
-)
+set WAHA_PORT=3001
+set WAHA_API_KEY=toca-test-key-2024
+set WAHA_SESSION_NAME=default
+set WAHA_DATA_DIR=%APPDATA%\toca-do-coelho\waha-sessions
+
+if not exist "%WAHA_DATA_DIR%" mkdir "%WAHA_DATA_DIR%"
+
+start "WAHA-lite" "%NODE_EXE%" "%SCRIPT_DIR%\waha-lite.js"
 
 echo.
-echo [2/2] Aguardando WAHA inicializar...
-timeout /t 12 /nobreak > nul
+echo [2/2] Aguardando WAHA-lite inicializar...
+timeout /t 10 /nobreak > nul
 
 echo.
 echo ============================================================
-echo   WAHA pronto: http://localhost:3001
+echo   WAHA-lite pronto: http://localhost:3001
 echo.
 echo   Configure no WhatsApp Update (AutoToca ^> botao do lado):
 echo.
@@ -116,8 +98,12 @@ echo     URL da API : http://localhost:3001
 echo     API Key    : toca-test-key-2024
 echo     Sessao     : default
 echo.
-echo   Clique em "Salvar e Conectar", depois escaneie o QR
-echo   com seu WhatsApp (igual ao WhatsApp Web).
+echo   Clique em "Salvar e Conectar" e escaneie o QR com
+echo   seu WhatsApp (igual ao WhatsApp Web).
+echo.
+echo   O WAHA-lite usa o Chrome ou Edge ja instalado no PC.
+echo   Se nenhum for encontrado, instale o Chrome:
+echo     https://www.google.com/chrome
 echo ============================================================
 echo.
 
@@ -127,7 +113,6 @@ if /i "%ABRIR%" neq "n" (
 )
 
 echo.
-echo Para PARAR o WAHA depois do teste:
-echo   %COMPOSE_CMD% -f docker-compose.whatsapp.yml down
+echo Para PARAR o WAHA-lite: feche a janela "WAHA-lite" na barra de tarefas.
 echo.
 pause

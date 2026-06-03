@@ -28,3 +28,7 @@ tools/
 
 # Instalador gerado
 TocaDoCoelho-*-Setup.exe
+
+# WhatsApp Update (WAHA-lite) — gerados localmente, nao versionados
+waha-lite/node_modules/
+node.exe
