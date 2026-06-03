@@ -25,6 +25,7 @@ import ssl
 import base64
 import mimetypes
 import uuid
+import hashlib
 from datetime import datetime, timedelta
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
@@ -689,6 +690,21 @@ def init_db():
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
     )''')
     
+    # Tabela de log de sincronizacao WhatsApp (deduplicacao)
+    c.execute('''CREATE TABLE IF NOT EXISTS whatsapp_sync_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL,
+        phone TEXT,
+        period_days INTEGER,
+        message_count INTEGER,
+        content_hash TEXT NOT NULL,
+        activity_id INTEGER,
+        imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+        FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_wa_sync_hash ON whatsapp_sync_log(client_id, content_hash)')
+
     # Tabela de cards de mapeamento de ambiente
     c.execute('''CREATE TABLE IF NOT EXISTS environment_cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -885,6 +901,19 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_simple_template_id', '69bc155d7462bf7c702e9295'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_url', 'http://localhost:3001'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_session_name', 'default'))
+    # Auto-configurar a partir de variáveis de ambiente injetadas pelo launcher (build bundled)
+    _waha_url_env = os.environ.get('WAHA_API_URL', '').strip()
+    _waha_key_env = os.environ.get('WAHA_API_KEY', '').strip()
+    _waha_session_env = os.environ.get('WAHA_SESSION_NAME', '').strip()
+    if _waha_url_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='http://localhost:3001'", ('waha_api_url', _waha_url_env))
+    if _waha_key_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
+    if _waha_session_env:
+        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
     # Histórico de conversas do iToca (30 dias)
     c.execute('''
         CREATE TABLE IF NOT EXISTS itoca_chat_history (
@@ -13480,6 +13509,398 @@ def autotoca_teste_linkedin():
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/linkedin/teste: {e}')
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+# ─────────────────────────────────────────
+#  WhatsApp Update — WAHA (WhatsApp HTTP API)
+# ─────────────────────────────────────────
+
+def _phone_to_waha_chatid(phone):
+    """Converte telefone normalizado do projeto para chatId do WAHA (5511999999999@c.us)."""
+    if not phone:
+        return None
+    digits = re.sub(r'\D', '', str(phone))
+    if len(digits) < 10:
+        return None
+    if not digits.startswith('55'):
+        digits = '55' + digits
+    return f'{digits}@c.us'
+
+
+def _waha_settings():
+    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
+    return (
+        (s.get('waha_api_url') or 'http://localhost:3001').strip().rstrip('/'),
+        (s.get('waha_api_key') or '').strip(),
+        (s.get('waha_session_name') or 'default').strip(),
+    )
+
+
+def _waha_headers(api_key):
+    h = {'Content-Type': 'application/json'}
+    if api_key:
+        h['X-Api-Key'] = api_key
+    return h
+
+
+def _waha_extract_text(msg, client_name):
+    """Extrai texto de uma mensagem do WAHA. Retorna (texto, sender_label)."""
+    sender = 'Você' if msg.get('fromMe') else client_name
+    body = (msg.get('body') or '').strip()
+    if body:
+        return f'{sender}: {body}', sender
+    # Sem corpo de texto → rotula por tipo de mídia
+    mtype = (msg.get('type') or '').lower()
+    label_map = {
+        'image': '[Imagem]', 'video': '[Vídeo]', 'ptt': '[Áudio]',
+        'audio': '[Áudio]', 'document': '[Documento]', 'sticker': '[Figurinha]',
+        'location': '[Localização]',
+    }
+    if msg.get('hasMedia') or mtype in label_map:
+        return f'{sender}: {label_map.get(mtype, "[Mídia]")}', sender
+    return None, sender
+
+
+def _whatsapp_sync_async(task_id, period_days):
+    try:
+        _bg_task_set(task_id, {'step': '📋 Carregando clientes...', 'progress': 5})
+
+        api_url, api_key, session = _waha_settings()
+        headers = _waha_headers(api_key)
+
+        db = get_db()
+        c = db.cursor()
+        c.execute("SELECT id, name, phone FROM clients WHERE phone IS NOT NULL AND phone != '' AND is_archived = 0")
+        clients = c.fetchall()
+
+        if not clients:
+            _bg_task_set(task_id, {
+                'status': 'done', 'progress': 100,
+                'step': '✅ Concluído',
+                'result': {'imported': 0, 'skipped': 0, 'total_clients': 0,
+                           'message': 'Nenhum cliente com telefone cadastrado.'}
+            })
+            _bg_task_cleanup(task_id)
+            return
+
+        now_dt = datetime.utcnow()
+        since_dt = now_dt - timedelta(days=period_days)
+        since_ts = int(since_dt.timestamp())
+        now_ts = int(now_dt.timestamp())
+
+        imported = 0
+        skipped = 0
+        total = len(clients)
+        pending_items = []
+        period_label = {1: '1 dia', 3: '3 dias', 7: '1 semana', 15: '15 dias', 30: '30 dias'}.get(period_days, f'{period_days} dias')
+
+        for i, (client_id, client_name, phone) in enumerate(clients):
+            progress = 10 + int((i / total) * 78)
+            _bg_task_set(task_id, {
+                'step': f'📱 Verificando {client_name}... ({i + 1}/{total})',
+                'progress': progress
+            })
+
+            chat_id = _phone_to_waha_chatid(phone)
+            if not chat_id:
+                skipped += 1
+                continue
+
+            try:
+                # WAHA: GET /api/{session}/chats/{chatId}/messages com filtro de timestamp server-side
+                msg_resp = requests.get(
+                    f'{api_url}/api/{session}/chats/{chat_id}/messages',
+                    headers=headers,
+                    params={
+                        'limit': 500,
+                        'downloadMedia': 'false',
+                        'filter.timestamp.gte': since_ts,
+                        'filter.timestamp.lte': now_ts,
+                    },
+                    timeout=25
+                )
+                if msg_resp.status_code != 200:
+                    skipped += 1
+                    continue
+                raw = msg_resp.json()
+                messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
+            except Exception:
+                skipped += 1
+                continue
+
+            if not messages:
+                skipped += 1
+                continue
+
+            # Ordena por timestamp (segundos). WAHA já filtra pelo período, mas garantimos o range.
+            def _msg_ts(m):
+                try:
+                    return int(m.get('timestamp') or 0)
+                except (TypeError, ValueError):
+                    return 0
+            messages.sort(key=_msg_ts)
+
+            texts = []
+            last_ts = 0
+            for msg in messages:
+                ts = _msg_ts(msg)
+                if ts and (ts < since_ts or ts > now_ts):
+                    continue
+                if ts > last_ts:
+                    last_ts = ts
+                text, _sender = _waha_extract_text(msg, client_name)
+                if text:
+                    texts.append(text)
+
+            if not texts:
+                skipped += 1
+                continue
+
+            content_hash = hashlib.sha256('|'.join(texts).encode('utf-8', errors='replace')).hexdigest()[:40]
+            c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
+                      (client_id, content_hash))
+            if c.fetchone():
+                skipped += 1
+                continue
+
+            conversation_text = '\n'.join(texts[-60:])
+            prompt = (
+                f"Analise a conversa de WhatsApp entre o usuário e '{client_name}' "
+                f"(período: {period_label}) e escreva um resumo conciso em 2 a 4 frases, "
+                "em português, no formato de log de atividade CRM. "
+                "Mencione tópicos tratados, decisões tomadas ou pendências. "
+                "Não use aspas nem markdown.\n\n"
+                f"Conversa:\n{conversation_text}\n\nResumo:"
+            )
+
+            summary = _sai_simple_prompt(prompt)
+            if not summary:
+                or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+                if or_key:
+                    try:
+                        or_s = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+                        or_resp = requests.post(
+                            'https://openrouter.ai/api/v1/chat/completions',
+                            headers={
+                                'Authorization': f'Bearer {or_key}',
+                                'Content-Type': 'application/json',
+                                'HTTP-Referer': or_s.get('openrouter_site_url') or 'http://localhost',
+                                'X-Title': or_s.get('openrouter_app_name') or 'TocaDoCoelho'
+                            },
+                            json={
+                                'model': (or_s.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip(),
+                                'messages': [
+                                    {'role': 'system', 'content': 'Você é um assistente de CRM especializado em resumos de conversas de WhatsApp.'},
+                                    {'role': 'user', 'content': prompt}
+                                ],
+                                'temperature': 0.1
+                            },
+                            timeout=30
+                        )
+                        summary = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
+                    except Exception:
+                        pass
+
+            if not summary:
+                summary = f'Conversa de WhatsApp com {client_name} no período de {period_label}. {len(texts)} mensagem(ns) trocada(s).'
+
+            activity_date = datetime.utcfromtimestamp(last_ts).strftime('%Y-%m-%d %H:%M:%S') if last_ts else now_dt.strftime('%Y-%m-%d %H:%M:%S')
+            pending_items.append({
+                'client_id': client_id,
+                'client_name': client_name,
+                'phone': phone,
+                'summary': summary,
+                'activity_date': activity_date,
+                'message_count': len(texts),
+                'content_hash': content_hash,
+                'period_days': period_days,
+            })
+            imported += 1
+
+        _bg_task_set(task_id, {
+            'status': 'done', 'progress': 100,
+            'step': '✅ Análise concluída — revise os resumos!',
+            'result': {
+                'pending': imported,
+                'skipped': skipped,
+                'total_clients': total,
+                'items': pending_items,
+                'message': f'{imported} conversa(s) para revisar, {skipped} sem novidade.'
+            }
+        })
+        _bg_task_cleanup(task_id)
+    except Exception as exc:
+        logger.exception(f'[WhatsApp Sync] Erro: {exc}')
+        _bg_task_set(task_id, {'status': 'error', 'progress': 0, 'step': f'Erro: {exc}', 'error': str(exc)})
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/whatsapp/config', methods=['GET'])
+def whatsapp_get_config():
+    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
+    has_key = bool((s.get('waha_api_key') or '').strip())
+    return jsonify({
+        'waha_api_url': s.get('waha_api_url') or 'http://localhost:3001',
+        'waha_api_key': '••••••••' if has_key else '',
+        'waha_session_name': s.get('waha_session_name') or 'default',
+        'configured': bool((s.get('waha_api_url') or '').strip()),
+    })
+
+
+@app.route('/api/whatsapp/config', methods=['PUT'])
+def whatsapp_save_config():
+    data = request.get_json(force=True) or {}
+    db = get_db()
+    c = db.cursor()
+    for key in ['waha_api_url', 'waha_api_key', 'waha_session_name']:
+        val = (data.get(key) or '').strip()
+        if val and val != '••••••••':
+            c.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+                (key, val)
+            )
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/whatsapp/status', methods=['GET'])
+def whatsapp_status():
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'configured': False, 'connected': False, 'state': 'not_configured'})
+    try:
+        resp = requests.get(f'{api_url}/api/sessions/{session}', headers=_waha_headers(api_key), timeout=5)
+        if resp.status_code == 404:
+            return jsonify({'configured': True, 'connected': False, 'state': 'no_session'})
+        if resp.status_code == 401:
+            return jsonify({'configured': True, 'connected': False, 'state': 'unauthorized',
+                            'error': 'API Key inválida.'})
+        status = (resp.json() or {}).get('status', 'STOPPED')
+        return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
+    except requests.exceptions.ConnectionError:
+        return jsonify({'configured': True, 'connected': False, 'state': 'offline',
+                        'error': 'WAHA offline. Verifique se o serviço (container) está rodando.'})
+    except Exception as e:
+        return jsonify({'configured': True, 'connected': False, 'state': 'error', 'error': str(e)})
+
+
+@app.route('/api/whatsapp/connect', methods=['POST'])
+def whatsapp_connect():
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'ok': False, 'error': 'WAHA não configurado.'}), 400
+    headers = _waha_headers(api_key)
+
+    # 1. Garante que a sessão existe e está iniciada
+    try:
+        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        if st.status_code == 200:
+            status = (st.json() or {}).get('status')
+            if status == 'WORKING':
+                return jsonify({'ok': True, 'connected': True})
+            if status in ('STOPPED', 'FAILED'):
+                requests.post(f'{api_url}/api/sessions/{session}/start', headers=headers, timeout=15)
+        elif st.status_code == 404:
+            # Cria e inicia a sessão
+            requests.post(f'{api_url}/api/sessions/', headers=headers,
+                          json={'name': session, 'start': True}, timeout=20)
+        elif st.status_code == 401:
+            return jsonify({'ok': False, 'error': 'API Key inválida.'}), 401
+    except requests.exceptions.ConnectionError:
+        return jsonify({'ok': False, 'error': 'WAHA não está acessível.'}), 503
+    except Exception as exc:
+        logger.warning(f'[WhatsApp] WAHA session check error: {exc}')
+
+    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64)
+    qr = None
+    for _ in range(10):
+        time.sleep(1.3)
+        try:
+            st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+            status = (st.json() or {}).get('status') if st.ok else None
+            if status == 'WORKING':
+                return jsonify({'ok': True, 'connected': True})
+            if status == 'SCAN_QR_CODE':
+                qr_resp = requests.get(f'{api_url}/api/{session}/auth/qr',
+                                       headers=headers, params={'format': 'image'}, timeout=10)
+                if qr_resp.status_code == 200 and qr_resp.content:
+                    ctype = qr_resp.headers.get('Content-Type', 'image/png')
+                    b64 = base64.b64encode(qr_resp.content).decode('ascii')
+                    qr = f'data:{ctype};base64,{b64}'
+                    break
+        except Exception:
+            pass
+
+    if qr:
+        return jsonify({'ok': True, 'connected': False, 'qr': qr})
+
+    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code. Verifique os logs do container WAHA (docker logs toca-waha).'}), 500
+
+
+@app.route('/api/whatsapp/sync', methods=['POST'])
+def whatsapp_sync_start():
+    data = request.get_json(force=True) or {}
+    period_days = int(data.get('period_days', 7))
+    if period_days not in [1, 3, 7, 15, 30]:
+        period_days = 7
+    task_id = uuid.uuid4().hex
+    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando sincronização...', 'progress': 5})
+    threading.Thread(target=_whatsapp_sync_async, args=(task_id, period_days), daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
+
+
+@app.route('/api/whatsapp/tasks/<task_id>', methods=['GET'])
+def whatsapp_task_poll(task_id):
+    task = _bg_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    return jsonify(task)
+
+
+@app.route('/api/whatsapp/approve', methods=['POST'])
+def whatsapp_approve():
+    data = request.get_json(force=True) or {}
+    items = data.get('items', [])
+    if not isinstance(items, list):
+        return jsonify({'ok': False, 'error': 'items deve ser uma lista'}), 400
+
+    db = get_db()
+    c = db.cursor()
+    inserted = 0
+    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+    for item in items:
+        client_id = item.get('client_id')
+        summary = (item.get('summary') or '').strip()
+        activity_date = (item.get('activity_date') or now_str).strip()
+        content_hash = (item.get('content_hash') or '').strip()
+        phone = (item.get('phone') or '').strip()
+        period_days = int(item.get('period_days') or 7)
+        message_count = int(item.get('message_count') or 0)
+
+        if not client_id or not summary or not content_hash:
+            continue
+
+        c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
+                  (client_id, content_hash))
+        if c.fetchone():
+            continue
+
+        c.execute(
+            "INSERT INTO activities (client_id, contact_type, information, activity_date) VALUES (?, 'WhatsApp', ?, ?)",
+            (client_id, summary, activity_date)
+        )
+        activity_id = c.lastrowid
+        c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
+        c.execute(
+            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, activity_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (client_id, phone, period_days, message_count, content_hash, activity_id)
+        )
+        inserted += 1
+
+    db.commit()
+    db.close()
+    return jsonify({'ok': True, 'inserted': inserted})
+
 
 # Servir arquivos estaticos
 
