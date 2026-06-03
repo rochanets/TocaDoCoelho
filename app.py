@@ -6773,7 +6773,10 @@ def _outlook_sync_stream_com():
 
 
 try:
-    from secrets import GRAPH_TENANT_ID as _GRAPH_DEFAULT_TENANT, GRAPH_CLIENT_ID as _GRAPH_DEFAULT_CLIENT_ID, GRAPH_CLIENT_SECRET as _GRAPH_DEFAULT_CLIENT_SECRET
+    import graph_credentials as _gc
+    _GRAPH_DEFAULT_TENANT = getattr(_gc, 'GRAPH_TENANT_ID', '')
+    _GRAPH_DEFAULT_CLIENT_ID = getattr(_gc, 'GRAPH_CLIENT_ID', '')
+    _GRAPH_DEFAULT_CLIENT_SECRET = getattr(_gc, 'GRAPH_CLIENT_SECRET', '')
 except ImportError:
     _GRAPH_DEFAULT_TENANT = ''
     _GRAPH_DEFAULT_CLIENT_ID = ''

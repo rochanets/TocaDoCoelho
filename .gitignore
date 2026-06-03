@@ -1,5 +1,6 @@
 # Credenciais locais (não versionar)
 secrets.py
+graph_credentials.py
 
 # Ambiente virtual Python
 .venv/

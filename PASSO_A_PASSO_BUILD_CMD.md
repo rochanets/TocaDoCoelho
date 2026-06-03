@@ -18,13 +18,38 @@ pip install -r requirements.txt
 pip install pyinstaller
 ```
 
-## 3) Gerar o executável (PyInstaller) **sem abrir janela de terminal**
+## 3) Garantir que o arquivo de credenciais existe
+
+O arquivo `graph_credentials.py` contém as credenciais da integração Microsoft 365 e **não é versionado no git**.
+Ele deve estar presente na raiz do projeto antes do build.
+
+Se não existir, crie manualmente:
 
 ```cmd
-pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --hidden-import win32com.client --hidden-import pywintypes --hidden-import app launcher.py
+copy NUL graph_credentials.py
 ```
 
-## 4) Validar se o executável foi criado
+...e adicione o conteúdo:
+```
+GRAPH_TENANT_ID = 'seu-tenant-id'
+GRAPH_CLIENT_ID = 'seu-client-id'
+GRAPH_CLIENT_SECRET = 'seu-client-secret'
+```
+
+> **Nota:** solicite o arquivo completo com as credenciais ao administrador do projeto.
+
+## 4) Gerar o executável (PyInstaller) **sem abrir janela de terminal**
+
+```cmd
+pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --add-data "integrations;integrations" --add-data "graph_credentials.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --hidden-import win32com.client --hidden-import pywintypes --hidden-import app --hidden-import graph_credentials launcher.py
+```
+
+> **Novo em relação à versão anterior:**
+> - `--add-data "integrations;integrations"` — inclui o pacote de integrações (Microsoft Graph)
+> - `--add-data "graph_credentials.py;."` — inclui as credenciais do Microsoft 365
+> - `--hidden-import graph_credentials` — garante que o módulo é reconhecido pelo PyInstaller
+
+## 5) Validar se o executável foi criado
 
 ```cmd
 if exist dist\TocaDoCoelho\TocaDoCoelho.exe (
@@ -34,7 +59,7 @@ if exist dist\TocaDoCoelho\TocaDoCoelho.exe (
 )
 ```
 
-## 5) Compilar instalador NSIS
+## 6) Compilar instalador NSIS
 
 > Com NSIS já instalado no Windows:
 
@@ -47,7 +72,7 @@ Esse script:
 - baixa `tools\tesseract-ocr-w64-setup.exe` (se ainda não existir);
 - gera `TocaDoCoelho-1.0.0-Setup.exe`.
 
-## 6) Validar se o instalador foi criado
+## 7) Validar se o instalador foi criado
 
 ```cmd
 if exist TocaDoCoelho-1.0.0-Setup.exe (
@@ -57,7 +82,7 @@ if exist TocaDoCoelho-1.0.0-Setup.exe (
 )
 ```
 
-## 7) Entregáveis finais
+## 8) Entregáveis finais
 
 - `dist\TocaDoCoelho\TocaDoCoelho.exe`
 - `TocaDoCoelho-1.0.0-Setup.exe`
