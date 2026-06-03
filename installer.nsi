@@ -41,11 +41,15 @@ Section "Instalar Toca do Coelho" SecApp
     File "README.md"
     File "coelho_icon_transparent.ico"
 
-    ; WhatsApp Update: o gateway WAHA roda como container Docker, iniciado
-    ; automaticamente pelo launcher (docker-compose.whatsapp.yml). Incluímos
-    ; o arquivo de compose no diretório de instalação.
-    IfFileExists "docker-compose.whatsapp.yml" 0 +2
-        File "docker-compose.whatsapp.yml"
+    ; WhatsApp Update: mini-servidor Node.js (sem Docker).
+    ; node.exe = Node.js portátil (baixar em nodejs.org/dist/latest/node.exe antes do build).
+    ; waha-lite/ = servidor + node_modules (rodar "npm install" em waha-lite/ antes do build).
+    IfFileExists "node.exe" 0 +2
+        File "node.exe"
+    IfFileExists "waha-lite\waha-lite.js" 0 +3
+        SetOutPath "$INSTDIR\waha-lite"
+        File /r "waha-lite\*.*"
+    SetOutPath "$INSTDIR"
 
     CreateDirectory "$APPDATA\toca-do-coelho"
 
@@ -74,8 +78,8 @@ Section /o "Iniciar com o Windows" SecAutoStart
 SectionEnd
 
 Section "Uninstall"
-    ; Encerra o container WAHA do WhatsApp Update, se o Docker estiver disponível
-    nsExec::Exec 'docker rm -f toca-waha'
+    ; Encerra o WAHA-lite (processo Node.js), se estiver rodando
+    nsExec::Exec 'taskkill /F /IM node.exe /FI "WINDOWTITLE eq waha-lite*"'
     RMDir /r "$INSTDIR"
     !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
     Delete "$SMPROGRAMS\$StartMenuFolder\Toca.lnk"

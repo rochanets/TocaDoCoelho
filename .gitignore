@@ -31,3 +31,7 @@ TocaDoCoelho-*-Setup.exe
 
 # Preview helper local (não versionar)
 .claude/launch.json
+
+# WhatsApp Update (WAHA-lite) — gerados localmente, nao versionados
+waha-lite/node_modules/
+node.exe
