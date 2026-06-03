@@ -10,6 +10,9 @@ on:
       release_notes:
         description: 'Notas do release (opcional — usa padrão se vazio)'
         required: false
+  push:
+    branches: [main]
+    paths: [version.txt]
 
 permissions:
   contents: write
@@ -21,10 +24,22 @@ jobs:
 
     steps:
       # -----------------------------------------------------------------------
-      # 1. Checkout
+      # 1. Checkout + resolver versão
       # -----------------------------------------------------------------------
       - name: Checkout main
         uses: actions/checkout@v4
+
+      - name: Resolver versão do release
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION=$(cat version.txt | tr -d '[:space:]')
+          else
+            VERSION="${{ steps.ver.outputs.VERSION }}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Versão: $VERSION"
 
       # -----------------------------------------------------------------------
       # 2. Python
@@ -98,7 +113,7 @@ jobs:
 
       - name: Escrever version.txt
         shell: cmd
-        run: echo ${{ inputs.version }}> dist\TocaDoCoelho\version.txt
+        run: echo ${{ steps.ver.outputs.VERSION }}> dist\TocaDoCoelho\version.txt
 
       # -----------------------------------------------------------------------
       # 6. NSIS installer
@@ -110,7 +125,7 @@ jobs:
       - name: Compilar instalador NSIS
         shell: cmd
         env:
-          TOCA_APP_VERSION: ${{ inputs.version }}
+          TOCA_APP_VERSION: ${{ steps.ver.outputs.VERSION }}
         run: |
           set "NSIS_EXE=C:\Program Files (x86)\NSIS\makensis.exe"
           if not exist "%NSIS_EXE%" set "NSIS_EXE=C:\Program Files\NSIS\makensis.exe"
@@ -127,7 +142,7 @@ jobs:
       - name: Calcular SHA256
         shell: powershell
         run: |
-          $file = "TocaDoCoelho-${{ inputs.version }}-Setup.exe"
+          $file = "TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe"
           $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
           "$hash  $file" | Out-File -FilePath "$file.sha256" -Encoding UTF8 -NoNewline
           Write-Host "SHA256: $hash"
@@ -138,10 +153,10 @@ jobs:
       - name: Criar GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version }}
-          name: "🐇 Toca do Coelho v${{ inputs.version }} — Hotfix: WhatsApp Update sem Docker"
+          tag_name: v${{ steps.ver.outputs.VERSION }}
+          name: "🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }} — Hotfix: WhatsApp Update sem Docker"
           body: |
-            ## 🐇 Toca do Coelho v${{ inputs.version }}
+            ## 🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }}
 
             ### 🔧 Correção
 
@@ -153,13 +168,13 @@ jobs:
             - Botões **Aceitar todos / Rejeitar todos** para aprovação em lote
 
             ### 📦 Instalação
-            1. Baixe `TocaDoCoelho-${{ inputs.version }}-Setup.exe`
+            1. Baixe `TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe`
             2. Execute e siga o assistente (next, next, finish)
             3. Verifique a integridade com o arquivo `.sha256`
 
             > **Atualização:** o instalador preserva seus dados automaticamente.
           files: |
-            TocaDoCoelho-${{ inputs.version }}-Setup.exe
-            TocaDoCoelho-${{ inputs.version }}-Setup.exe.sha256
+            TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe
+            TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe.sha256
           draft: false
           prerelease: false
