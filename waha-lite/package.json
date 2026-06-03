@@ -1,0 +1,11 @@
+{
+  "name": "toca-waha-lite",
+  "version": "1.0.0",
+  "description": "Mini-servidor WhatsApp compatível com WAHA API — sem Docker",
+  "main": "waha-lite.js",
+  "dependencies": {
+    "express": "^4.18.2",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.26.0"
+  }
+}

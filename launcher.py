@@ -194,64 +194,66 @@ class WindowsTrayIcon:
 
 WAHA_PORT = int(os.environ.get('WAHA_PORT', '3001'))
 WAHA_API_KEY_DEFAULT = os.environ.get('WAHA_API_KEY', 'toca-test-key-2024')
-WAHA_COMPOSE_FILE = 'docker-compose.whatsapp.yml'
+WAHA_LITE_SCRIPT = Path('waha-lite') / 'waha-lite.js'
 
 
-def _find_docker():
-    """Localiza o executável do Docker no PATH ou em caminhos comuns do Windows."""
-    docker = shutil.which('docker')
-    if docker:
-        return docker
-    candidates = [
-        Path(os.environ.get('PROGRAMFILES', r'C:\Program Files')) / 'Docker' / 'Docker' / 'resources' / 'bin' / 'docker.exe',
-        Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Docker' / 'Docker' / 'resources' / 'bin' / 'docker.exe',
-    ]
-    for p in candidates:
-        if str(p) and p.exists():
-            return str(p)
-    return None
+def _find_node():
+    """Localiza o node.exe bundled no EXE_DIR, depois no PATH."""
+    bundled = EXE_DIR / 'node.exe'
+    if bundled.exists():
+        return str(bundled)
+    found = shutil.which('node') or shutil.which('node.exe')
+    return found
 
 
-def _start_waha():
+def _start_waha_lite():
     """
-    Sobe o WAHA (gateway do WhatsApp Update) como container Docker, se o Docker
-    estiver disponível e o compose existir. Define as variáveis de ambiente para
-    que o app.py auto-configure o WhatsApp Update na inicialização.
-
-    O WAHA roda em container destacado e persiste entre execuções do app (mantém
-    a sessão do WhatsApp ativa, evitando reescanear o QR a cada abertura).
+    Inicia o WAHA-lite (mini-servidor WhatsApp em Node.js) como processo
+    separado, sem Docker. Usa Chrome ou Edge já instalado no sistema.
+    Define as variáveis de ambiente para que o app.py auto-configure o
+    WhatsApp Update na inicialização.
     """
-    # Aponta o app para o WAHA local independentemente de conseguir subir o container
-    os.environ.setdefault('WAHA_API_URL', f'http://localhost:{WAHA_PORT}')
-    os.environ.setdefault('WAHA_API_KEY', WAHA_API_KEY_DEFAULT)
-    os.environ.setdefault('WAHA_SESSION_NAME', 'default')
+    os.environ.setdefault('WAHA_API_URL',      f'http://localhost:{WAHA_PORT}')
+    os.environ.setdefault('WAHA_API_KEY',       WAHA_API_KEY_DEFAULT)
+    os.environ.setdefault('WAHA_SESSION_NAME',  'default')
 
-    compose_file = next(
-        (p for p in (EXE_DIR / WAHA_COMPOSE_FILE, APP_DIR / WAHA_COMPOSE_FILE) if p.exists()),
+    node = _find_node()
+    if not node:
+        print("[INFO] Node.js não encontrado — WhatsApp Update não disponível.")
+        return False
+
+    script = next(
+        (p for p in (EXE_DIR / WAHA_LITE_SCRIPT, APP_DIR / WAHA_LITE_SCRIPT) if p.exists()),
         None
     )
-    if not compose_file:
-        print("[INFO] Compose do WAHA não encontrado — configure o WhatsApp Update manualmente.")
+    if not script:
+        print("[INFO] waha-lite.js não encontrado — WhatsApp Update não disponível.")
         return False
 
-    docker = _find_docker()
-    if not docker:
-        print("[INFO] Docker não encontrado — WhatsApp Update exige Docker Desktop instalado e em execução.")
-        return False
+    waha_data = DATA_DIR / 'waha-sessions'
+    waha_data.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env['WAHA_PORT']         = str(WAHA_PORT)
+    env['WAHA_API_KEY']      = WAHA_API_KEY_DEFAULT
+    env['WAHA_SESSION_NAME'] = 'default'
+    env['WAHA_DATA_DIR']     = str(waha_data)
 
     try:
-        subprocess.run(
-            [docker, 'compose', '-f', str(compose_file), 'up', '-d'],
-            cwd=str(compose_file.parent),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=180,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-        )
-        print(f"[OK] WAHA iniciado via Docker — porta {WAHA_PORT}")
+        kwargs = {
+            'env': env,
+            'cwd': str(script.parent),
+            'stdout': subprocess.DEVNULL,
+            'stderr': subprocess.DEVNULL,
+        }
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+        subprocess.Popen([node, str(script)], **kwargs)
+        print(f"[OK] WAHA-lite iniciado (Node.js) — porta {WAHA_PORT}")
         return True
     except Exception as exc:
-        print(f"[WARN] Falha ao iniciar WAHA via Docker (verifique se o Docker Desktop está rodando): {exc}")
+        print(f"[WARN] Falha ao iniciar WAHA-lite: {exc}")
         return False
 
 
@@ -285,9 +287,9 @@ if not APP_PY.exists():
     input("Pressione ENTER para fechar...")
     sys.exit(1)
 
-# Iniciar WAHA (gateway do WhatsApp Update) via Docker, se disponível
-print("[INFO] Verificando WAHA (WhatsApp Update)...")
-_start_waha()
+# Iniciar WAHA-lite (gateway do WhatsApp Update via Node.js, sem Docker)
+print("[INFO] Verificando WAHA-lite (WhatsApp Update)...")
+_start_waha_lite()
 print()
 
 # Iniciar servidor Flask em background
@@ -393,6 +395,6 @@ finally:
     if server_process.poll() is None:
         server_process.terminate()
         server_process.wait(timeout=5)
-    # O WAHA roda em container Docker destacado e é mantido vivo de propósito
-    # (preserva a sessão do WhatsApp entre execuções do app).
+    # O WAHA-lite é um processo filho separado — encerra junto com o sistema operacional
+    # ou ao fechar o Toca do Coelho. A sessão do WhatsApp persiste em DATA_DIR/waha-sessions.
     print("[OK] Servidor encerrado!")
