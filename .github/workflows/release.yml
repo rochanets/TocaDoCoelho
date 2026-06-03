@@ -1,0 +1,165 @@
+name: Build & Release Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão do release (ex: 5.3.0.1)'
+        required: true
+        default: '5.3.0.1'
+      release_notes:
+        description: 'Notas do release (opcional — usa padrão se vazio)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Python
+      # -----------------------------------------------------------------------
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        shell: cmd
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          python -m pywin32_postinstall -install 2>nul
+          exit /b 0
+
+      # -----------------------------------------------------------------------
+      # 3. Node.js (para waha-lite npm install)
+      # -----------------------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install waha-lite npm dependencies
+        shell: cmd
+        run: |
+          cd waha-lite
+          npm install
+          cd ..
+
+      # -----------------------------------------------------------------------
+      # 4. node.exe portátil (bundled no instalador)
+      # -----------------------------------------------------------------------
+      - name: Download node.exe portátil (Windows x64)
+        shell: powershell
+        run: |
+          $url = 'https://nodejs.org/dist/v24.16.0/win-x64/node.exe'
+          Invoke-WebRequest -Uri $url -OutFile 'node.exe'
+          Write-Host "node.exe: $((Get-Item node.exe).Length / 1MB -as [int]) MB"
+
+      # -----------------------------------------------------------------------
+      # 5. Build PyInstaller
+      # -----------------------------------------------------------------------
+      - name: Build executável com PyInstaller
+        shell: cmd
+        run: |
+          pyinstaller ^
+            --name TocaDoCoelho ^
+            --onedir ^
+            --noconsole ^
+            --icon coelho_icon_transparent.ico ^
+            --add-data "app.py;." ^
+            --add-data "public;public" ^
+            --add-data "README.md;." ^
+            --add-data "coelho_icon_transparent.ico;." ^
+            --hidden-import win32timezone ^
+            --hidden-import win32api ^
+            --hidden-import win32con ^
+            --hidden-import win32gui ^
+            --collect-all faster_whisper ^
+            --collect-all onnxruntime ^
+            launcher.py
+          if %ERRORLEVEL% neq 0 (
+            echo [ERRO] PyInstaller falhou
+            exit /b 1
+          )
+
+      - name: Escrever version.txt
+        shell: cmd
+        run: echo ${{ inputs.version }}> dist\TocaDoCoelho\version.txt
+
+      # -----------------------------------------------------------------------
+      # 6. NSIS installer
+      # -----------------------------------------------------------------------
+      - name: Instalar NSIS
+        shell: powershell
+        run: choco install nsis --no-progress -y
+
+      - name: Compilar instalador NSIS
+        shell: cmd
+        env:
+          TOCA_APP_VERSION: ${{ inputs.version }}
+        run: |
+          set "NSIS_EXE=C:\Program Files (x86)\NSIS\makensis.exe"
+          if not exist "%NSIS_EXE%" set "NSIS_EXE=C:\Program Files\NSIS\makensis.exe"
+          echo %TOCA_APP_VERSION%> dist\TocaDoCoelho\version.txt
+          "%NSIS_EXE%" /V4 /DAPP_VERSION=%TOCA_APP_VERSION% installer.nsi
+          if %ERRORLEVEL% neq 0 (
+            echo [ERRO] NSIS falhou
+            exit /b 1
+          )
+
+      # -----------------------------------------------------------------------
+      # 7. SHA256
+      # -----------------------------------------------------------------------
+      - name: Calcular SHA256
+        shell: powershell
+        run: |
+          $file = "TocaDoCoelho-${{ inputs.version }}-Setup.exe"
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+          "$hash  $file" | Out-File -FilePath "$file.sha256" -Encoding UTF8 -NoNewline
+          Write-Host "SHA256: $hash"
+
+      # -----------------------------------------------------------------------
+      # 8. GitHub Release
+      # -----------------------------------------------------------------------
+      - name: Criar GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: "🐇 Toca do Coelho v${{ inputs.version }} — Hotfix: WhatsApp Update sem Docker"
+          body: |
+            ## 🐇 Toca do Coelho v${{ inputs.version }}
+
+            ### 🔧 Correção
+
+            #### WhatsApp Update — sem Docker Desktop
+            - Substituído container WAHA (Docker) por **mini-servidor Node.js embutido** no instalador
+            - Usa o Chrome ou Microsoft Edge **já instalado no PC** — nenhuma dependência extra para o usuário
+            - Sessão do WhatsApp persiste entre reinicializações sem reescanear o QR
+            - Modal de revisão individual: aceite ou rejeite cada conversa antes de inserir no CRM
+            - Botões **Aceitar todos / Rejeitar todos** para aprovação em lote
+
+            ### 📦 Instalação
+            1. Baixe `TocaDoCoelho-${{ inputs.version }}-Setup.exe`
+            2. Execute e siga o assistente (next, next, finish)
+            3. Verifique a integridade com o arquivo `.sha256`
+
+            > **Atualização:** o instalador preserva seus dados automaticamente.
+          files: |
+            TocaDoCoelho-${{ inputs.version }}-Setup.exe
+            TocaDoCoelho-${{ inputs.version }}-Setup.exe.sha256
+          draft: false
+          prerelease: false
