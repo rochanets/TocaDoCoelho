@@ -17573,7 +17573,7 @@
           <div id="waSyncConfigArea" style="display:none;">
             <div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:14px 16px; margin-bottom:16px; font-size:13px; color:#9a3412;">
               <i class="fas fa-info-circle" style="margin-right:6px;"></i>
-              Configure o <strong>WAHA</strong> para conectar seu WhatsApp. O serviço WAHA deve estar rodando localmente (container Docker) ou em um servidor acessível.
+              Configure a conexão com o WhatsApp. O mini-servidor <strong>WAHA-lite</strong> é iniciado automaticamente pelo app — ou rode <code>scripts\testar_whatsapp_update.bat</code> em modo de desenvolvimento. URL padrão: <strong>http://localhost:3001</strong>.
             </div>
             <div style="display:flex; flex-direction:column; gap:12px;">
               <div>
@@ -17700,6 +17700,16 @@
           @keyframes waBunnyHop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-65%) scaleY(.88)} }
           @keyframes waPawFade  { 0%,100%{opacity:.25} 50%{opacity:.75} }
           .wa-paw { display:inline-block; animation:waPawFade 1s ease-in-out infinite; }
+          .wa-switch { position:relative; display:inline-block; width:42px; height:24px; flex-shrink:0; vertical-align:middle; }
+          .wa-switch input { opacity:0; width:0; height:0; }
+          .wa-switch-slider { position:absolute; cursor:pointer; inset:0; background:#cbd5e1; border-radius:24px; transition:.25s; }
+          .wa-switch-slider:before { content:""; position:absolute; height:18px; width:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.25s; box-shadow:0 1px 2px rgba(0,0,0,.2); }
+          .wa-switch input:checked + .wa-switch-slider { background:#059669; }
+          .wa-switch input:checked + .wa-switch-slider:before { transform:translateX(18px); }
+          .wa-switch.wa-switch-sm { width:34px; height:20px; }
+          .wa-switch.wa-switch-sm .wa-switch-slider:before { height:14px; width:14px; }
+          .wa-switch.wa-switch-sm input:checked + .wa-switch-slider:before { transform:translateX(14px); }
+          .wa-state-label { font-size:12px; font-weight:600; min-width:54px; text-align:left; }
         `;
         document.head.appendChild(s);
       }
@@ -17825,18 +17835,31 @@
       fetch('/api/whatsapp/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({period_days:_waSelectedPeriod})})
         .then(r=>r.json()).then(d=>{
           if (!d.task_id) { alert('Erro ao iniciar sincronização.'); _waResetToForm(); return; }
-          const poll = setInterval(()=>{
-            fetch('/api/whatsapp/tasks/'+d.task_id).then(r=>r.json()).then(t=>{
-              _waSetProgress(t.progress||5, t.step||'Processando...');
-              if (t.status === 'done') {
-                clearInterval(poll);
-                _waShowResult(t.result);
-              } else if (t.status === 'error') {
-                clearInterval(poll);
-                _waShowResultError(t.error);
-              }
-            });
-          }, 800);
+          const taskId = d.task_id;
+          // Botões Minimizar / Cancelar — permite usar o sistema enquanto processa
+          _attachBgTaskControls(
+            document.getElementById('waSyncProgressArea'), taskId,
+            () => { closeWhatsappSyncModal(); },   // minimizar: fecha o modal, a tarefa segue no background
+            () => { _waResetToForm(); }             // cancelar: volta ao formulário
+          );
+          const sourceTab = (typeof _currentTab !== 'undefined') ? _currentTab : 'auto-toca';
+          BgTaskManager.register(
+            taskId,
+            '/api/whatsapp/tasks/' + taskId,
+            'WhatsApp Update — analisando conversas',
+            sourceTab,
+            (result) => {            // onComplete — avisa quando termina
+              const modal = document.getElementById('whatsappSyncModal');
+              if (modal && modal.style.display === 'none') modal.style.display = 'block';
+              _waShowResult(result);
+            },
+            (errMsg) => {            // onError
+              const modal = document.getElementById('whatsappSyncModal');
+              if (modal && modal.style.display === 'none') modal.style.display = 'block';
+              _waShowResultError(errMsg);
+            },
+            (pct, step) => _waSetProgress(pct || 5, step || 'Processando...')   // progresso inline
+          );
         })
         .catch(e=>{ alert('Erro: '+e); _waResetToForm(); });
     }
@@ -17853,7 +17876,7 @@
         box.style.border = '1px solid #93c5fd';
         box.innerHTML = `<div style="font-weight:700; color:#1e40af; margin-bottom:4px;"><i class="fab fa-whatsapp" style="margin-right:6px;"></i>Análise concluída — revise os resumos</div><div style="color:#374151; font-size:13px;">${items.length} conversa(s) encontrada(s). Aceite ou rejeite cada uma antes de inserir no CRM.</div>`;
 
-        _waReviewItems = items.map((item, idx) => Object.assign({}, item, {idx, state: 'accept'}));
+        _waReviewItems = items.map((item, idx) => Object.assign({}, item, {idx, state: 'accept', followup_enabled: !!item.followup_date}));
 
         const list = document.getElementById('waReviewList');
         list.innerHTML = '';
@@ -17862,15 +17885,36 @@
           card.id = 'waReviewCard_' + item.idx;
           card.style.cssText = 'border:1px solid #d1fae5; border-radius:8px; padding:12px 14px; background:#f0fdf4; transition:background .15s,border-color .15s;';
           const dateStr = item.activity_date ? item.activity_date.substring(0,10) : '';
+          // Bloco de follow-up (FUP) — só aparece quando a IA detectou uma data combinada
+          let fupHtml = '';
+          if (item.followup_date) {
+            const fd = item.followup_date.split('-');
+            const fupBr = fd.length === 3 ? (fd[2] + '/' + fd[1] + '/' + fd[0]) : item.followup_date;
+            fupHtml =
+              '<div style="display:flex; align-items:center; gap:8px; margin-top:8px; padding:7px 10px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px;">' +
+                '<span style="font-size:12px; color:#1e40af; flex:1; min-width:0;">📅 <strong>Follow-up:</strong> ' + fupBr +
+                  (item.followup_title ? ' — <span style="color:#374151;">' + item.followup_title + '</span>' : '') +
+                  '<br><span style="font-size:10px; color:#6b7280;">Adicionar ao calendário do sistema</span>' +
+                '</span>' +
+                '<label class="wa-switch wa-switch-sm" title="Adicionar follow-up ao calendário">' +
+                  '<input type="checkbox" id="waFupChk_' + item.idx + '" checked onchange="_waToggleFup(' + item.idx + ', this.checked)">' +
+                  '<span class="wa-switch-slider"></span>' +
+                '</label>' +
+              '</div>';
+          }
           card.innerHTML =
-            '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">' +
+            '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">' +
               '<strong style="font-size:13px; color:#111827; flex:1; min-width:0; word-break:break-word;">' + (item.client_name || '') + '</strong>' +
-              '<div style="display:flex; gap:6px; flex-shrink:0;">' +
-                '<button id="waAcceptBtn_' + item.idx + '" onclick="_waToggleItem(' + item.idx + ',\'accept\')" style="padding:4px 10px; font-size:12px; border-radius:6px; border:1px solid #059669; background:#059669; color:#fff; cursor:pointer; font-weight:600; white-space:nowrap;">✓ Incluir</button>' +
-                '<button id="waRejectBtn_' + item.idx + '" onclick="_waToggleItem(' + item.idx + ',\'reject\')" style="padding:4px 10px; font-size:12px; border-radius:6px; border:1px solid #e5e7eb; background:#f9fafb; color:#6b7280; cursor:pointer; white-space:nowrap;">✗ Rejeitar</button>' +
+              '<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">' +
+                '<span id="waStateLabel_' + item.idx + '" class="wa-state-label" style="color:#059669;">Incluir</span>' +
+                '<label class="wa-switch" title="Incluir ou rejeitar esta conversa">' +
+                  '<input type="checkbox" id="waSwitch_' + item.idx + '" checked onchange="_waToggleItem(' + item.idx + ', this.checked ? \'accept\' : \'reject\')">' +
+                  '<span class="wa-switch-slider"></span>' +
+                '</label>' +
               '</div>' +
             '</div>' +
             '<div style="font-size:13px; color:#374151; margin-top:8px; line-height:1.5;">' + (item.summary || '') + '</div>' +
+            fupHtml +
             '<div style="font-size:11px; color:#9ca3af; margin-top:6px;">' + item.message_count + ' mensagem(ns)' + (dateStr ? ' · ' + dateStr : '') + '</div>';
           list.appendChild(card);
         });
@@ -17892,18 +17936,22 @@
       if (!item) return;
       item.state = action;
       const card = document.getElementById('waReviewCard_' + idx);
-      const acceptBtn = document.getElementById('waAcceptBtn_' + idx);
-      const rejectBtn = document.getElementById('waRejectBtn_' + idx);
+      const sw = document.getElementById('waSwitch_' + idx);
+      const label = document.getElementById('waStateLabel_' + idx);
+      if (sw) sw.checked = (action === 'accept');
       if (action === 'accept') {
-        card.style.borderColor = '#d1fae5'; card.style.background = '#f0fdf4';
-        acceptBtn.style.background = '#059669'; acceptBtn.style.borderColor = '#059669'; acceptBtn.style.color = '#fff';
-        rejectBtn.style.background = '#f9fafb'; rejectBtn.style.borderColor = '#e5e7eb'; rejectBtn.style.color = '#6b7280';
+        if (card) { card.style.borderColor = '#d1fae5'; card.style.background = '#f0fdf4'; card.style.opacity = '1'; }
+        if (label) { label.textContent = 'Incluir'; label.style.color = '#059669'; }
       } else {
-        card.style.borderColor = '#e5e7eb'; card.style.background = '#f3f4f6';
-        acceptBtn.style.background = '#f9fafb'; acceptBtn.style.borderColor = '#e5e7eb'; acceptBtn.style.color = '#9ca3af';
-        rejectBtn.style.background = '#ef4444'; rejectBtn.style.borderColor = '#ef4444'; rejectBtn.style.color = '#fff';
+        if (card) { card.style.borderColor = '#e5e7eb'; card.style.background = '#f3f4f6'; card.style.opacity = '0.7'; }
+        if (label) { label.textContent = 'Rejeitar'; label.style.color = '#9ca3af'; }
       }
       _waUpdateReviewCounter();
+    }
+
+    function _waToggleFup(idx, enabled) {
+      const item = _waReviewItems.find(function(i){ return i.idx === idx; });
+      if (item) item.followup_enabled = !!enabled;
     }
 
     function _waSelectAllItems(action) {
@@ -17930,7 +17978,7 @@
         .then(function(r){ return r.json(); })
         .then(function(d){
           if (d.ok) {
-            _waShowFinalResult(d.inserted, _waReviewItems.length);
+            _waShowFinalResult(d.inserted, _waReviewItems.length, d.commitments || 0);
           } else {
             alert('Erro ao inserir atividades: ' + (d.error || 'Erro desconhecido'));
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Confirmar e inserir aceitos'; }
@@ -17942,14 +17990,17 @@
         });
     }
 
-    function _waShowFinalResult(inserted, total) {
+    function _waShowFinalResult(inserted, total, commitments) {
       _waShowSection('result');
       const box = document.getElementById('waSyncResultBox');
       const reviewContainer = document.getElementById('waReviewContainer');
       const noItemsFooter = document.getElementById('waNoItemsFooter');
       box.style.background = '#ecfdf5';
       box.style.border = '1px solid #6ee7b7';
-      box.innerHTML = '<div style="font-weight:700; color:#065f46; margin-bottom:8px;"><i class="fas fa-check-circle" style="margin-right:6px;"></i>Atividades inseridas!</div><div style="color:#374151;">' + inserted + ' atividade(s) inserida(s) no CRM com sucesso.</div>';
+      var fupLine = (commitments && commitments > 0)
+        ? '<div style="color:#1e40af; margin-top:6px; font-size:13px;">📅 ' + commitments + ' follow-up(s) adicionado(s) ao calendário do sistema.</div>'
+        : '';
+      box.innerHTML = '<div style="font-weight:700; color:#065f46; margin-bottom:8px;"><i class="fas fa-check-circle" style="margin-right:6px;"></i>Atividades inseridas!</div><div style="color:#374151;">' + inserted + ' atividade(s) inserida(s) no CRM com sucesso.</div>' + fupLine;
       reviewContainer.style.display = 'none';
       noItemsFooter.style.display = '';
     }

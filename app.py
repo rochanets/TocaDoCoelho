@@ -698,12 +698,18 @@ def init_db():
         period_days INTEGER,
         message_count INTEGER,
         content_hash TEXT NOT NULL,
+        last_message_ts INTEGER DEFAULT 0,
         activity_id INTEGER,
         imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
         FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_wa_sync_hash ON whatsapp_sync_log(client_id, content_hash)')
+    # Migração: coluna last_message_ts para deduplicação incremental (só resume mensagens novas)
+    c.execute("PRAGMA table_info(whatsapp_sync_log)")
+    _wa_sync_cols = [col[1] for col in c.fetchall()]
+    if 'last_message_ts' not in _wa_sync_cols:
+        c.execute('ALTER TABLE whatsapp_sync_log ADD COLUMN last_message_ts INTEGER DEFAULT 0')
 
     # Tabela de cards de mapeamento de ambiente
     c.execute('''CREATE TABLE IF NOT EXISTS environment_cards (
@@ -14365,6 +14371,13 @@ def _whatsapp_sync_async(task_id, period_days):
                 skipped += 1
                 continue
 
+            # Deduplicação incremental: só resumimos mensagens MAIS NOVAS do que a
+            # última já processada para este cliente. Evita re-resumir a mesma conversa.
+            c.execute('SELECT MAX(last_message_ts) FROM whatsapp_sync_log WHERE client_id = ?', (client_id,))
+            _row = c.fetchone()
+            last_processed_ts = int(_row[0]) if _row and _row[0] else 0
+            effective_since = max(since_ts, last_processed_ts + 1) if last_processed_ts else since_ts
+
             try:
                 # WAHA: GET /api/{session}/chats/{chatId}/messages com filtro de timestamp server-side
                 msg_resp = requests.get(
@@ -14373,7 +14386,7 @@ def _whatsapp_sync_async(task_id, period_days):
                     params={
                         'limit': 500,
                         'downloadMedia': 'false',
-                        'filter.timestamp.gte': since_ts,
+                        'filter.timestamp.gte': effective_since,
                         'filter.timestamp.lte': now_ts,
                     },
                     timeout=25
@@ -14403,7 +14416,7 @@ def _whatsapp_sync_async(task_id, period_days):
             last_ts = 0
             for msg in messages:
                 ts = _msg_ts(msg)
-                if ts and (ts < since_ts or ts > now_ts):
+                if ts and (ts < effective_since or ts > now_ts):
                     continue
                 if ts > last_ts:
                     last_ts = ts
@@ -14423,17 +14436,22 @@ def _whatsapp_sync_async(task_id, period_days):
                 continue
 
             conversation_text = '\n'.join(texts[-60:])
+            today_str = datetime.now().strftime('%Y-%m-%d')
             prompt = (
                 f"Analise a conversa de WhatsApp entre o usuário e '{client_name}' "
-                f"(período: {period_label}) e escreva um resumo conciso em 2 a 4 frases, "
-                "em português, no formato de log de atividade CRM. "
-                "Mencione tópicos tratados, decisões tomadas ou pendências. "
-                "Não use aspas nem markdown.\n\n"
-                f"Conversa:\n{conversation_text}\n\nResumo:"
+                f"(período: {period_label}). A data de hoje é {today_str}. "
+                "Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois) no formato:\n"
+                '{"resumo": "resumo conciso em 2 a 4 frases em português, formato log de atividade CRM, '
+                'mencionando tópicos tratados, decisões e pendências, sem aspas nem markdown", '
+                '"followup": {"data": "YYYY-MM-DD", "titulo": "descrição curta do retorno/compromisso combinado"}}\n'
+                "Se houver uma data combinada de retorno, reunião, ligação ou follow-up (FUP) na conversa, "
+                "preencha o objeto 'followup' resolvendo datas relativas (ex.: 'amanhã', 'semana que vem') a partir de hoje. "
+                "Se NÃO houver compromisso de data combinado, use \"followup\": null.\n\n"
+                f"Conversa:\n{conversation_text}"
             )
 
-            summary = _sai_simple_prompt(prompt)
-            if not summary:
+            raw_llm = _sai_simple_prompt(prompt)
+            if not raw_llm:
                 or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
                 if or_key:
                     try:
@@ -14449,19 +14467,42 @@ def _whatsapp_sync_async(task_id, period_days):
                             json={
                                 'model': (or_s.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip(),
                                 'messages': [
-                                    {'role': 'system', 'content': 'Você é um assistente de CRM especializado em resumos de conversas de WhatsApp.'},
+                                    {'role': 'system', 'content': 'Você é um assistente de CRM especializado em resumos de conversas de WhatsApp. Responde sempre em JSON válido.'},
                                     {'role': 'user', 'content': prompt}
                                 ],
                                 'temperature': 0.1
                             },
                             timeout=30
                         )
-                        summary = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
+                        raw_llm = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
                     except Exception:
                         pass
 
+            # Parse da resposta: JSON {resumo, followup} ou texto puro (fallback retrocompatível)
+            summary = ''
+            followup_date = ''
+            followup_title = ''
+            parsed = _extract_json_object_from_text(raw_llm) if raw_llm else None
+            if isinstance(parsed, dict):
+                summary = (parsed.get('resumo') or parsed.get('summary') or '').strip()
+                fu = parsed.get('followup')
+                if isinstance(fu, dict):
+                    fu_data = (fu.get('data') or fu.get('date') or '').strip()
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', fu_data):
+                        followup_date = fu_data
+                        followup_title = (fu.get('titulo') or fu.get('title') or '').strip()
+            elif raw_llm:
+                summary = raw_llm.strip()
+
             if not summary:
                 summary = f'Conversa de WhatsApp com {client_name} no período de {period_label}. {len(texts)} mensagem(ns) trocada(s).'
+
+            # Fallback: se a IA não detectou follow-up, tenta extrair datas do texto via regex
+            if not followup_date:
+                _dates = extract_future_commitment_dates(conversation_text)
+                if _dates:
+                    followup_date = _dates[0]
+                    followup_title = f'Retorno combinado com {client_name}'
 
             activity_date = datetime.utcfromtimestamp(last_ts).strftime('%Y-%m-%d %H:%M:%S') if last_ts else now_dt.strftime('%Y-%m-%d %H:%M:%S')
             pending_items.append({
@@ -14472,7 +14513,10 @@ def _whatsapp_sync_async(task_id, period_days):
                 'activity_date': activity_date,
                 'message_count': len(texts),
                 'content_hash': content_hash,
+                'last_message_ts': last_ts,
                 'period_days': period_days,
+                'followup_date': followup_date,
+                'followup_title': followup_title or (f'Retorno combinado com {client_name}' if followup_date else ''),
             })
             imported += 1
 
@@ -14538,7 +14582,7 @@ def whatsapp_status():
         return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
     except requests.exceptions.ConnectionError:
         return jsonify({'configured': True, 'connected': False, 'state': 'offline',
-                        'error': 'WAHA offline. Verifique se o serviço (container) está rodando.'})
+                        'error': 'Serviço do WhatsApp (WAHA-lite) offline. Reinicie o Toca do Coelho para iniciá-lo automaticamente.'})
     except Exception as e:
         return jsonify({'configured': True, 'connected': False, 'state': 'error', 'error': str(e)})
 
@@ -14593,7 +14637,7 @@ def whatsapp_connect():
     if qr:
         return jsonify({'ok': True, 'connected': False, 'qr': qr})
 
-    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code. Verifique os logs do container WAHA (docker logs toca-waha).'}), 500
+    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code. Verifique se o Chrome ou Edge está instalado e reinicie o Toca do Coelho.'}), 500
 
 
 @app.route('/api/whatsapp/sync', methods=['POST'])
@@ -14626,6 +14670,7 @@ def whatsapp_approve():
     db = get_db()
     c = db.cursor()
     inserted = 0
+    commitments_created = 0
     now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 
     for item in items:
@@ -14636,6 +14681,11 @@ def whatsapp_approve():
         phone = (item.get('phone') or '').strip()
         period_days = int(item.get('period_days') or 7)
         message_count = int(item.get('message_count') or 0)
+        last_message_ts = int(item.get('last_message_ts') or 0)
+        followup_date = (item.get('followup_date') or '').strip()
+        followup_title = (item.get('followup_title') or '').strip()
+        # Permite que o usuário desmarque o FUP no modal de revisão
+        followup_enabled = item.get('followup_enabled', True)
 
         if not client_id or not summary or not content_hash:
             continue
@@ -14652,14 +14702,26 @@ def whatsapp_approve():
         activity_id = c.lastrowid
         c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
         c.execute(
-            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, activity_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (client_id, phone, period_days, message_count, content_hash, activity_id)
+            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id)
         )
         inserted += 1
 
+        # Compromisso de follow-up (FUP) → calendário do sistema
+        if followup_enabled and re.match(r'^\d{4}-\d{2}-\d{2}$', followup_date):
+            title = followup_title or 'Retorno combinado (WhatsApp)'
+            if len(title) > 120:
+                title = title[:117] + '...'
+            c.execute(
+                '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (client_id, activity_id, title, summary, followup_date, None, 'whatsapp')
+            )
+            commitments_created += 1
+
     db.commit()
     db.close()
-    return jsonify({'ok': True, 'inserted': inserted})
+    return jsonify({'ok': True, 'inserted': inserted, 'commitments': commitments_created})
 
 
 # Servir arquivos estaticos
