@@ -61,8 +61,19 @@ if exist "%SCRIPT_DIR%\node_modules\express" goto start_server
 echo [INFO] Instalando dependencias npm...
 npm --version >nul 2>nul
 if errorlevel 1 (
-    echo [ERRO] npm nao encontrado. Instale o Node.js completo em https://nodejs.org
-    pause
+    echo.
+    echo [ERRO] npm nao encontrado.
+    echo.
+    echo  Voce tem node.exe, mas o npm nao esta disponivel.
+    echo  Solucao: instale o Node.js completo em https://nodejs.org
+    echo  (o instalador ja inclui o npm)
+    echo.
+    echo  Ou instale manualmente as dependencias:
+    echo    cd waha-lite
+    echo    npm install
+    echo.
+    echo Pressione qualquer tecla para fechar...
+    pause > nul
     exit /b 1
 )
 pushd "%SCRIPT_DIR%"
