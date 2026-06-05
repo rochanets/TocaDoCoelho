@@ -17750,6 +17750,7 @@
     function closeWhatsappSyncModal() {
       document.getElementById('whatsappSyncModal').style.display = 'none';
       if (_waQrPollInterval) { clearInterval(_waQrPollInterval); _waQrPollInterval = null; }
+      if (typeof _waStatusRetryTimer !== 'undefined' && _waStatusRetryTimer) { clearTimeout(_waStatusRetryTimer); _waStatusRetryTimer = null; }
     }
 
     function _waShowSection(name) {
@@ -17768,9 +17769,18 @@
       }).catch(()=>_waShowSection('config'));
     }
 
+    let _waStatusRetryTimer = null;
+
     function _waCheckStatus() {
+      if (_waStatusRetryTimer) { clearTimeout(_waStatusRetryTimer); _waStatusRetryTimer = null; }
       fetch('/api/whatsapp/status').then(r=>r.json()).then(d=>{
         if (!d.configured) { _waShowConfig(); return; }
+        if (d.state === 'starting') {
+          document.getElementById('waSyncOfflineMsg').textContent = d.error || 'WAHA-lite está inicializando...';
+          _waShowSection('offline');
+          _waStatusRetryTimer = setTimeout(_waCheckStatus, 5000);
+          return;
+        }
         if (d.state === 'offline' || d.state === 'error' || d.state === 'unauthorized') {
           document.getElementById('waSyncOfflineMsg').textContent = d.error || 'WAHA não está acessível.';
           _waShowSection('offline');
@@ -17788,7 +17798,10 @@
       const inst = document.getElementById('waConfigInstance').value.trim();
       if (!url) { alert('A URL do WAHA é obrigatória.'); return; }
       fetch('/api/whatsapp/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({waha_api_url:url, waha_api_key:key, waha_session_name:inst||'default'})})
-        .then(()=>{ _waShowSection('loading'); _waCheckStatus(); })
+        .then(r=>r.json()).then(d=>{
+          if (!d.ok) { alert('Erro ao salvar: ' + (d.error || 'Erro desconhecido.')); return; }
+          _waShowSection('loading'); _waCheckStatus();
+        })
         .catch(e=>alert('Erro ao salvar: '+e));
     }
 

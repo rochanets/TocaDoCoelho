@@ -69,10 +69,7 @@ jobs:
 
       - name: Install waha-lite npm dependencies
         shell: cmd
-        run: |
-          cd waha-lite
-          npm install
-          cd ..
+        run: cd waha-lite && npm install && cd ..
 
       # -----------------------------------------------------------------------
       # 4. node.exe portátil (bundled no instalador)

@@ -239,6 +239,10 @@ def _start_waha_lite():
     env['WAHA_SESSION_NAME'] = 'default'
     env['WAHA_DATA_DIR']     = str(waha_data)
 
+    # Expõe paths para que app.py possa reiniciar o WAHA-lite automaticamente
+    os.environ['WAHA_NODE_EXE'] = node
+    os.environ['WAHA_SCRIPT']   = str(script)
+
     try:
         kwargs = {
             'env': env,
@@ -250,6 +254,7 @@ def _start_waha_lite():
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
         subprocess.Popen([node, str(script)], **kwargs)
+        os.environ['WAHA_STARTED_AT'] = str(time.time())
         print(f"[OK] WAHA-lite iniciado (Node.js) — porta {WAHA_PORT}")
         return True
     except Exception as exc:
