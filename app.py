@@ -902,6 +902,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_token', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_snooze_until', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
@@ -6427,6 +6428,90 @@ def check_updates():
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
+
+
+@app.route('/api/config/startup-update-check', methods=['GET'])
+def startup_update_check():
+    """Verificação silenciosa de update ao iniciar o app. Respeita o snooze de 5 dias."""
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo', 'update_snooze_until'])
+        snooze_until = (settings_map.get('update_snooze_until') or '').strip()
+        if snooze_until:
+            try:
+                snooze_dt = datetime.fromisoformat(snooze_until)
+                if datetime.now() < snooze_dt:
+                    return jsonify({'snoozed': True, 'snooze_until': snooze_until})
+            except ValueError:
+                pass
+
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+        if not owner or not repo:
+            return jsonify({'update_available': False, 'configured': False})
+
+        github_token = _resolve_setting('update_github_token', 'TOCA_UPDATE_GITHUB_TOKEN')
+        api_headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'TocaDoCoelho-Updater'}
+        if github_token:
+            api_headers['Authorization'] = f'Bearer {github_token}'
+
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
+        req = urllib.request.Request(api_url, headers=api_headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+
+        latest_tag = (payload.get('tag_name') or '').strip()
+        latest_version = _normalize_version(latest_tag)
+        current_version = _normalize_version(APP_VERSION)
+
+        if not latest_version:
+            return jsonify({'update_available': False})
+
+        update_available = _version_key(latest_version) > _version_key(current_version)
+        if not update_available:
+            return jsonify({'update_available': False, 'current_version': current_version})
+
+        installer_url = ''
+        installer_name = ''
+        installer_size = 0
+        for asset in (payload.get('assets') or []):
+            asset_name = (asset.get('name') or '').strip()
+            if asset_name.lower().endswith('.exe'):
+                installer_url = (asset.get('browser_download_url') or '').strip()
+                installer_name = asset_name
+                installer_size = int(asset.get('size') or 0)
+                break
+
+        return jsonify({
+            'update_available': True,
+            'current_version': current_version,
+            'latest_version': latest_version,
+            'latest_tag': latest_tag,
+            'release_name': payload.get('name') or latest_tag,
+            'release_notes': payload.get('body') or '',
+            'html_url': payload.get('html_url') or '',
+            'published_at': payload.get('published_at'),
+            'installer_url': installer_url,
+            'installer_name': installer_name,
+            'installer_size': installer_size,
+            'can_auto_install': bool(installer_url),
+        })
+    except Exception as e:
+        logger.warning('[startup-update-check] Falha silenciosa: %s', e)
+        return jsonify({'update_available': False})
+
+
+@app.route('/api/config/snooze-update', methods=['POST'])
+def snooze_update():
+    """Salva snooze de 5 dias para a notificação de update."""
+    try:
+        snooze_until = (datetime.now() + timedelta(days=5)).isoformat()
+        db = get_db()
+        db.execute("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('update_snooze_until', ?, CURRENT_TIMESTAMP)", (snooze_until,))
+        db.commit()
+        return jsonify({'ok': True, 'snooze_until': snooze_until})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/snooze-update: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 # ---------------------------------------------------------------------------

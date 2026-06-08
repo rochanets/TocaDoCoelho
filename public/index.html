@@ -7946,6 +7946,86 @@
             }
         }
 
+        async function checkForUpdatesOnStartup() {
+            try {
+                const resp = await fetch(`${API_BASE}/config/startup-update-check`);
+                if (!resp.ok) return;
+                const result = await resp.json().catch(() => ({}));
+                if (!result.update_available) return;
+                window._pendingUpdate = result.installer_url
+                    ? { url: result.installer_url, name: result.installer_name || 'TocaDoCoelho-Setup.exe' }
+                    : null;
+                _showStartupUpdateModal(result);
+            } catch (_) {}
+        }
+
+        function _showStartupUpdateModal(result) {
+            const existingId = 'startupUpdateModal';
+            if (document.getElementById(existingId)) return;
+
+            const releaseUrl = result.html_url || '';
+            const releaseLinkHtml = releaseUrl
+                ? `<a href="${releaseUrl}" target="_blank" rel="noopener noreferrer" style="color:#059669;font-size:12px;">Ver release no GitHub ↗</a>`
+                : '';
+            const notes = (result.release_notes || '').trim();
+            const notesHtml = notes
+                ? `<div style="margin-top:10px;max-height:120px;overflow-y:auto;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;font-size:12px;color:#6b7280;white-space:pre-wrap;">${escapeHtml(notes)}</div>`
+                : '';
+            const hasInstaller = !!(result.installer_url);
+
+            const overlay = document.createElement('div');
+            overlay.id = existingId;
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);';
+            overlay.innerHTML = `
+                <div style="background:#fff;border-radius:14px;padding:28px 28px 22px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.25);font-family:inherit;">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+                        <span style="font-size:28px;">🐇</span>
+                        <div>
+                            <div style="font-size:16px;font-weight:700;color:#111827;">Nova versão disponível!</div>
+                            <div style="font-size:13px;color:#6b7280;margin-top:2px;">
+                                Versão <strong style="color:#059669;">${escapeHtml(result.latest_version || '')}</strong>
+                                &nbsp;·&nbsp; atual: ${escapeHtml(result.current_version || '')}
+                            </div>
+                        </div>
+                    </div>
+                    ${notesHtml}
+                    <div style="margin-top:12px;">${releaseLinkHtml}</div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:16px;font-size:13px;color:#6b7280;cursor:pointer;">
+                        <input type="checkbox" id="startupUpdateSnoozeCheck" style="width:15px;height:15px;accent-color:#059669;">
+                        Não perguntar nos próximos 5 dias
+                    </label>
+                    <div style="display:flex;gap:10px;margin-top:18px;">
+                        ${hasInstaller
+                            ? `<button id="startupUpdateYesBtn" style="flex:1;padding:9px 0;background:#059669;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Atualizar agora</button>`
+                            : `<button id="startupUpdateYesBtn" style="flex:1;padding:9px 0;background:#6b7280;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;" disabled title="Esta release não possui instalador .exe">Sem instalador</button>`
+                        }
+                        <button id="startupUpdateNoBtn" style="flex:1;padding:9px 0;background:#f3f4f6;color:#374151;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Não agora</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            const closeModal = async (doSnooze) => {
+                if (doSnooze) {
+                    try { await fetch(`${API_BASE}/config/snooze-update`, { method: 'POST' }); } catch (_) {}
+                }
+                overlay.remove();
+            };
+
+            document.getElementById('startupUpdateNoBtn').addEventListener('click', () => {
+                const snooze = document.getElementById('startupUpdateSnoozeCheck')?.checked;
+                closeModal(snooze);
+            });
+
+            if (hasInstaller) {
+                document.getElementById('startupUpdateYesBtn').addEventListener('click', async () => {
+                    overlay.remove();
+                    await navigateTo('settings');
+                    setTimeout(() => downloadAndInstallUpdate(), 400);
+                });
+            }
+        }
+
         async function checkForUpdates() {
             const container = document.getElementById('updateCheckResult');
             if (container) container.textContent = 'Verificando releases no GitHub...';
@@ -17314,6 +17394,7 @@
             if (wikiContent) wikiContent.addEventListener('blur', autoFillWikiTags);
             loadDashboard();
             loadHome();
+            setTimeout(checkForUpdatesOnStartup, 3000);
         });
 
         // -----------------------------------------------------------------------
