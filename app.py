@@ -922,6 +922,14 @@ def init_db():
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
     if _waha_session_env:
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
+    # Cura URLs já salvas apontando para a porta do próprio app (causa loop Flask→Flask, 404/405).
+    # A validação no PUT impede salvar novas, mas valores antigos no banco precisam ser corrigidos aqui.
+    _app_port = str(os.environ.get('PORT', '3000'))
+    _healed_url = _waha_url_env or 'http://localhost:3001'
+    c.execute(
+        "UPDATE app_settings SET value=? WHERE key='waha_api_url' AND (value LIKE ? OR value LIKE ?)",
+        (_healed_url, f'%localhost:{_app_port}%', f'%127.0.0.1:{_app_port}%')
+    )
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_timeout_seconds', '120'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_days', '30'))
     # Histórico de conversas do iToca (30 dias)
@@ -14310,14 +14318,46 @@ def _waha_headers(api_key):
 
 _waha_last_restart = 0.0
 
+def _waha_runtime_paths():
+    """Retorna (node, script) do WAHA-lite. Usa as env vars exportadas pelo launcher;
+    se ausentes (ex.: app rodando direto do código-fonte), tenta um fallback razoável."""
+    node   = os.environ.get('WAHA_NODE_EXE', '').strip()
+    script = os.environ.get('WAHA_SCRIPT', '').strip()
+    if not script:
+        candidate = Path(__file__).resolve().parent / 'waha-lite' / 'waha-lite.js'
+        if candidate.exists():
+            script = str(candidate)
+    if not node:
+        node = shutil.which('node') or shutil.which('node.exe') or ''
+    return node, script
+
+
+def _waha_deps_missing():
+    """True se o node_modules do WAHA-lite estiver ausente/vazio. Nesse caso o processo
+    Node crasha no primeiro require e nada escuta na porta — reiniciar não adianta."""
+    if os.environ.get('WAHA_DEPS_MISSING') == '1':
+        return True
+    _, script = _waha_runtime_paths()
+    if not script:
+        return False  # não sabemos onde está o waha-lite; não afirmar que falta
+    nm = Path(script).parent / 'node_modules'
+    try:
+        return (not nm.is_dir()) or (next(nm.iterdir(), None) is None)
+    except Exception:
+        return False
+
+
 def _restart_waha_lite():
-    """Reinicia o WAHA-lite usando os caminhos definidos pelo launcher. Máximo 1 restart a cada 5 minutos."""
+    """Reinicia o WAHA-lite. Máximo 1 restart a cada 5 minutos. Não tenta reiniciar quando
+    as dependências (node_modules) estão ausentes, pois o Node crasharia de novo."""
     global _waha_last_restart
     now = time.time()
     if now - _waha_last_restart < 300:
         return False
-    node   = os.environ.get('WAHA_NODE_EXE', '').strip()
-    script = os.environ.get('WAHA_SCRIPT', '').strip()
+    if _waha_deps_missing():
+        logger.warning('[WhatsApp] node_modules do WAHA-lite ausente — restart ignorado (reinstale).')
+        return False
+    node, script = _waha_runtime_paths()
     if not node or not script:
         return False
     try:
@@ -14621,6 +14661,11 @@ def whatsapp_status():
         status = (resp.json() or {}).get('status', 'STOPPED')
         return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
     except requests.exceptions.ConnectionError:
+        # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
+        if _waha_deps_missing():
+            return jsonify({'configured': True, 'connected': False, 'state': 'offline',
+                            'error': 'WAHA-lite não pôde iniciar: dependências (node_modules) ausentes. '
+                                     'Reinstale o Toca do Coelho (ou rode "npm install" na pasta waha-lite).'})
         started_at = float(os.environ.get('WAHA_STARTED_AT', '0'))
         seconds_up = time.time() - started_at
         if seconds_up < 90:
