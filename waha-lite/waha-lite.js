@@ -174,6 +174,18 @@ app.post('/api/sessions', (_req, res) => {
   res.json({ name: SESSION_NAME, status: clientStatus });
 });
 
+/** POST /api/sessions/:session/start — (re)inicia a sessão (compat WAHA).
+ *  Necessário para o app reerguer uma sessão STOPPED/FAILED sem reiniciar o Toca. */
+app.post('/api/sessions/:session/start', (_req, res) => {
+  if (!waClient || clientStatus === 'STOPPED') {
+    clientStatus = 'STARTING';
+    currentQr    = null;
+    initError    = null;
+    waClient     = createWaClient();
+  }
+  res.json({ name: SESSION_NAME, status: clientStatus });
+});
+
 /** GET /api/:session/auth/qr — QR code (format=image → PNG binário) */
 app.get('/api/:session/auth/qr', async (req, res) => {
   if (!currentQr) {

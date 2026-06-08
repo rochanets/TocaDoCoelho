@@ -14789,8 +14789,25 @@ def whatsapp_status():
         if resp.status_code == 401:
             return jsonify({'configured': True, 'connected': False, 'state': 'unauthorized',
                             'error': 'API Key inválida.'})
-        status = (resp.json() or {}).get('status', 'STOPPED')
-        return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
+        body = resp.json() or {}
+        raw = (body.get('status') or 'STOPPED').upper()
+        waha_err = body.get('error')
+        # Normaliza os estados crus do WAHA-lite (MAIÚSCULOS) para os estados que o front
+        # entende (minúsculos). Sem isso, 'STARTING' não casava com nenhum branch do front,
+        # que pulava direto para o QR e estourava o timeout de 40s durante o cold start do
+        # Chrome — mesmo quando a sessão já estava prestes a ficar WORKING (sessão salva).
+        if raw == 'WORKING':
+            return jsonify({'configured': True, 'connected': True, 'state': 'connected'})
+        if raw == 'SCAN_QR_CODE':
+            return jsonify({'configured': True, 'connected': False, 'state': 'scan_qr'})
+        if raw == 'STARTING':
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WhatsApp conectando (abrindo o Chrome e restaurando a sessão)... aguarde.'})
+        # STOPPED / FAILED: se o WAHA-lite reportou um erro (ex.: navegador não encontrado),
+        # mostra a causa real; senão, deixa o front seguir para (re)conectar.
+        return jsonify({'configured': True, 'connected': False,
+                        'state': 'offline' if waha_err else 'stopped',
+                        'error': waha_err or 'Sessão do WhatsApp parada. Clique para reconectar.'})
     except requests.exceptions.ConnectionError:
         # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
         if _waha_deps_missing():
@@ -14839,9 +14856,10 @@ def whatsapp_connect():
     except Exception as exc:
         logger.warning(f'[WhatsApp] WAHA session check error: {exc}')
 
-    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64)
+    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64).
+    # 90s: o primeiro start (cold) abre o Chrome e carrega o WhatsApp Web — pode passar de 1 min.
     qr = None
-    for _ in range(20):
+    for _ in range(45):
         time.sleep(2)
         try:
             st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
@@ -14862,7 +14880,22 @@ def whatsapp_connect():
     if qr:
         return jsonify({'ok': True, 'connected': False, 'qr': qr})
 
-    return jsonify({'ok': False, 'error': 'QR code não apareceu em 40 segundos. O Chrome/Edge pode estar demorando para abrir — feche e abra novamente o Toca do Coelho.'}), 500
+    # Reconfere uma última vez: a sessão pode ter ficado WORKING (sessão salva reconectou)
+    # justamente no fim da espera — nesse caso não há QR a exibir e está tudo certo.
+    try:
+        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        body = st.json() if st.ok else {}
+        if (body or {}).get('status') == 'WORKING':
+            return jsonify({'ok': True, 'connected': True})
+        # Ainda inicializando (Chrome abrindo): pede para o front aguardar e repetir, em vez
+        # de mostrar erro definitivo.
+        if (body or {}).get('status') == 'STARTING':
+            return jsonify({'ok': False, 'state': 'starting',
+                            'error': 'WhatsApp ainda conectando (abrindo o Chrome)... aguarde alguns instantes e tente de novo.'}), 503
+    except Exception:
+        pass
+
+    return jsonify({'ok': False, 'error': 'O QR code não apareceu a tempo. O Chrome pode estar demorando para abrir na primeira conexão — aguarde alguns instantes e clique em Tentar novamente.'}), 500
 
 
 @app.route('/api/whatsapp/sync', methods=['POST'])
