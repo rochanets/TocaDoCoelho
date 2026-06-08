@@ -6041,6 +6041,44 @@ def get_ui_config():
         return jsonify({'error': str(e)}), 500
 
 
+_VALID_THEMES = {'verde-classico', 'baby-pink', 'black-cat', 'white-pearl', 'blue-space'}
+
+
+@app.route('/api/config/theme', methods=['GET'])
+def get_theme_config():
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT value FROM app_settings WHERE key = "ui_color_theme"')
+        row = c.fetchone()
+        conn.close()
+        theme = row['value'] if row and row['value'] in _VALID_THEMES else 'verde-classico'
+        return jsonify({'theme': theme})
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/theme: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/theme', methods=['PUT'])
+def put_theme_config():
+    try:
+        data = request.get_json(force=True) or {}
+        theme = data.get('theme', 'verde-classico')
+        if theme not in _VALID_THEMES:
+            return jsonify({'error': 'Tema inválido'}), 400
+        conn = get_db(); c = conn.cursor()
+        c.execute(
+            'INSERT INTO app_settings (key, value) VALUES ("ui_color_theme", ?) '
+            'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP',
+            (theme,)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'theme': theme})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/config/theme: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 # =====================================================
 # Logs de Depuração
 # Endpoints para o painel "Logs de Depuração" em Configurações.
