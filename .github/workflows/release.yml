@@ -36,7 +36,7 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             VERSION=$(cat version.txt | tr -d '[:space:]')
           else
-            VERSION="${{ steps.ver.outputs.VERSION }}"
+            VERSION="${{ github.event.inputs.version }}"
           fi
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "Versão: $VERSION"
@@ -69,6 +69,10 @@ jobs:
 
       - name: Install waha-lite npm dependencies
         shell: cmd
+        # PUPPETEER_SKIP_CHROMIUM_DOWNLOAD evita o download do Chromium bundled (~150MB).
+        # O app já usa o Chrome/Edge instalado no PC do usuário via executablePath.
+        env:
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
         run: cd waha-lite && npm install && cd ..
 
       # -----------------------------------------------------------------------
