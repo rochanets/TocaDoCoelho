@@ -922,6 +922,14 @@ def init_db():
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
     if _waha_session_env:
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
+    # Cura URLs já salvas apontando para a porta do próprio app (causa loop Flask→Flask, 404/405).
+    # A validação no PUT impede salvar novas, mas valores antigos no banco precisam ser corrigidos aqui.
+    _app_port = str(os.environ.get('PORT', '3000'))
+    _healed_url = _waha_url_env or 'http://localhost:3001'
+    c.execute(
+        "UPDATE app_settings SET value=? WHERE key='waha_api_url' AND (value LIKE ? OR value LIKE ?)",
+        (_healed_url, f'%localhost:{_app_port}%', f'%127.0.0.1:{_app_port}%')
+    )
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_timeout_seconds', '120'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_days', '30'))
     # Histórico de conversas do iToca (30 dias)
@@ -14346,6 +14354,71 @@ def _waha_headers(api_key):
     return h
 
 
+_waha_last_restart = 0.0
+
+def _waha_runtime_paths():
+    """Retorna (node, script) do WAHA-lite. Usa as env vars exportadas pelo launcher;
+    se ausentes (ex.: app rodando direto do código-fonte), tenta um fallback razoável."""
+    node   = os.environ.get('WAHA_NODE_EXE', '').strip()
+    script = os.environ.get('WAHA_SCRIPT', '').strip()
+    if not script:
+        candidate = Path(__file__).resolve().parent / 'waha-lite' / 'waha-lite.js'
+        if candidate.exists():
+            script = str(candidate)
+    if not node:
+        node = shutil.which('node') or shutil.which('node.exe') or ''
+    return node, script
+
+
+def _waha_deps_missing():
+    """True se o node_modules do WAHA-lite estiver ausente/vazio. Nesse caso o processo
+    Node crasha no primeiro require e nada escuta na porta — reiniciar não adianta."""
+    if os.environ.get('WAHA_DEPS_MISSING') == '1':
+        return True
+    _, script = _waha_runtime_paths()
+    if not script:
+        return False  # não sabemos onde está o waha-lite; não afirmar que falta
+    nm = Path(script).parent / 'node_modules'
+    try:
+        return (not nm.is_dir()) or (next(nm.iterdir(), None) is None)
+    except Exception:
+        return False
+
+
+def _restart_waha_lite():
+    """Reinicia o WAHA-lite. Máximo 1 restart a cada 5 minutos. Não tenta reiniciar quando
+    as dependências (node_modules) estão ausentes, pois o Node crasharia de novo."""
+    global _waha_last_restart
+    now = time.time()
+    if now - _waha_last_restart < 300:
+        return False
+    if _waha_deps_missing():
+        logger.warning('[WhatsApp] node_modules do WAHA-lite ausente — restart ignorado (reinstale).')
+        return False
+    node, script = _waha_runtime_paths()
+    if not node or not script:
+        return False
+    try:
+        import subprocess as _sp
+        env = os.environ.copy()
+        kwargs = {
+            'env': env,
+            'cwd': str(Path(script).parent),
+            'stdout': _sp.DEVNULL,
+            'stderr': _sp.DEVNULL,
+        }
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = _sp.CREATE_NO_WINDOW
+        _sp.Popen([node, script], **kwargs)
+        _waha_last_restart = now
+        os.environ['WAHA_STARTED_AT'] = str(now)
+        logger.info('[WhatsApp] WAHA-lite reiniciado automaticamente.')
+        return True
+    except Exception as exc:
+        logger.warning(f'[WhatsApp] Falha ao reiniciar WAHA-lite: {exc}')
+        return False
+
+
 def _waha_extract_text(msg, client_name):
     """Extrai texto de uma mensagem do WAHA. Retorna (texto, sender_label)."""
     sender = 'Você' if msg.get('fromMe') else client_name
@@ -14591,6 +14664,13 @@ def whatsapp_get_config():
 @app.route('/api/whatsapp/config', methods=['PUT'])
 def whatsapp_save_config():
     data = request.get_json(force=True) or {}
+    waha_url = (data.get('waha_api_url') or '').strip()
+    if waha_url:
+        app_port = str(os.environ.get('PORT', '3000'))
+        for forbidden in (f'localhost:{app_port}', f'127.0.0.1:{app_port}'):
+            if forbidden in waha_url:
+                return jsonify({'ok': False,
+                                'error': f'A URL do WAHA não pode apontar para a porta do próprio app (:{app_port}). Use a porta 3001.'}), 400
     db = get_db()
     c = db.cursor()
     for key in ['waha_api_url', 'waha_api_key', 'waha_session_name']:
@@ -14619,6 +14699,20 @@ def whatsapp_status():
         status = (resp.json() or {}).get('status', 'STOPPED')
         return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
     except requests.exceptions.ConnectionError:
+        # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
+        if _waha_deps_missing():
+            return jsonify({'configured': True, 'connected': False, 'state': 'offline',
+                            'error': 'WAHA-lite não pôde iniciar: dependências (node_modules) ausentes. '
+                                     'Reinstale o Toca do Coelho (ou rode "npm install" na pasta waha-lite).'})
+        started_at = float(os.environ.get('WAHA_STARTED_AT', '0'))
+        seconds_up = time.time() - started_at
+        if seconds_up < 90:
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite está inicializando. Aguarde alguns instantes...'})
+        restarted = _restart_waha_lite()
+        if restarted:
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite foi reiniciado. Aguarde alguns instantes...'})
         return jsonify({'configured': True, 'connected': False, 'state': 'offline',
                         'error': 'Serviço do WhatsApp (WAHA-lite) offline. Reinicie o Toca do Coelho para iniciá-lo automaticamente.'})
     except Exception as e:
@@ -14654,8 +14748,8 @@ def whatsapp_connect():
 
     # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64)
     qr = None
-    for _ in range(10):
-        time.sleep(1.3)
+    for _ in range(20):
+        time.sleep(2)
         try:
             st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
             status = (st.json() or {}).get('status') if st.ok else None
@@ -14675,7 +14769,7 @@ def whatsapp_connect():
     if qr:
         return jsonify({'ok': True, 'connected': False, 'qr': qr})
 
-    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code. Verifique se o Chrome ou Edge está instalado e reinicie o Toca do Coelho.'}), 500
+    return jsonify({'ok': False, 'error': 'QR code não apareceu em 40 segundos. O Chrome/Edge pode estar demorando para abrir — feche e abra novamente o Toca do Coelho.'}), 500
 
 
 @app.route('/api/whatsapp/sync', methods=['POST'])

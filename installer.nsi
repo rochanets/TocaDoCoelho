@@ -37,7 +37,7 @@ Section "Instalar Toca do Coelho" SecApp
     Sleep 2500
 
     SetOutPath "$INSTDIR"
-    File /r "dist\TocaDoCoelho\*.*"
+    File /r "dist\TocaDoCoelho\*"
     File "README.md"
     File "coelho_icon_transparent.ico"
 
@@ -48,7 +48,7 @@ Section "Instalar Toca do Coelho" SecApp
         File "node.exe"
     IfFileExists "waha-lite\waha-lite.js" 0 +3
         SetOutPath "$INSTDIR\waha-lite"
-        File /r "waha-lite\*.*"
+        File /r "waha-lite\*"
     SetOutPath "$INSTDIR"
 
     CreateDirectory "$APPDATA\toca-do-coelho"

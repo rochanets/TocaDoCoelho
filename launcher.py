@@ -206,6 +206,34 @@ def _find_node():
     return found
 
 
+def _waha_node_modules_ok(script):
+    """True se o node_modules do WAHA-lite existir e não estiver vazio."""
+    nm = Path(script).parent / 'node_modules'
+    try:
+        return nm.is_dir() and next(nm.iterdir(), None) is not None
+    except Exception:
+        return False
+
+
+def _ensure_waha_deps(script):
+    """Garante o node_modules do WAHA-lite. Se ausente (ex.: build sem deps ou execução
+    do código-fonte), tenta 'npm install' como best effort. Retorna True se ok ao final."""
+    if _waha_node_modules_ok(script):
+        return True
+    npm = shutil.which('npm') or shutil.which('npm.cmd')
+    if not npm:
+        return False
+    print("[INFO] Dependências do WAHA-lite ausentes — rodando 'npm install' (pode levar alguns minutos)...")
+    try:
+        kwargs = {'cwd': str(Path(script).parent)}
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        subprocess.run([npm, 'install', '--no-audit', '--no-fund'], timeout=600, **kwargs)
+    except Exception as exc:
+        print(f"[WARN] npm install falhou: {exc}")
+    return _waha_node_modules_ok(script)
+
+
 def _start_waha_lite():
     """
     Inicia o WAHA-lite (mini-servidor WhatsApp em Node.js) como processo
@@ -239,6 +267,18 @@ def _start_waha_lite():
     env['WAHA_SESSION_NAME'] = 'default'
     env['WAHA_DATA_DIR']     = str(waha_data)
 
+    # Expõe paths para que app.py possa reiniciar o WAHA-lite automaticamente
+    os.environ['WAHA_NODE_EXE'] = node
+    os.environ['WAHA_SCRIPT']   = str(script)
+
+    # Sem node_modules, o Node crasha no primeiro require e nada escuta na porta do WhatsApp.
+    if not _ensure_waha_deps(script):
+        os.environ['WAHA_DEPS_MISSING'] = '1'
+        print("[ERRO] Dependencias do WAHA-lite ausentes (node_modules) e nao foi possivel instala-las.")
+        print("[ERRO] WhatsApp Update indisponivel — reinstale o Toca do Coelho ou rode 'npm install' em waha-lite.")
+        return False
+    os.environ.pop('WAHA_DEPS_MISSING', None)
+
     try:
         kwargs = {
             'env': env,
@@ -250,6 +290,7 @@ def _start_waha_lite():
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
         subprocess.Popen([node, str(script)], **kwargs)
+        os.environ['WAHA_STARTED_AT'] = str(time.time())
         print(f"[OK] WAHA-lite iniciado (Node.js) — porta {WAHA_PORT}")
         return True
     except Exception as exc:

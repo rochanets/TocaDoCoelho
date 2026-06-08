@@ -69,10 +69,11 @@ jobs:
 
       - name: Install waha-lite npm dependencies
         shell: cmd
-        run: |
-          cd waha-lite
-          npm install
-          cd ..
+        # PUPPETEER_SKIP_CHROMIUM_DOWNLOAD evita o download do Chromium bundled (~150MB).
+        # O app já usa o Chrome/Edge instalado no PC do usuário via executablePath.
+        env:
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+        run: cd waha-lite && npm install && cd ..
 
       # -----------------------------------------------------------------------
       # 4. node.exe portátil (bundled no instalador)
