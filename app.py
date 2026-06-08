@@ -14486,11 +14486,19 @@ def _restart_waha_lite():
     try:
         import subprocess as _sp
         env = os.environ.copy()
+        # Reaproveita o log do WAHA-lite definido pelo launcher (WAHA_LOG); sem ele, o
+        # crash do Node ficaria invisível (DEVNULL), exatamente o que dificultou diagnosticar
+        # a falha do WhatsApp Update em produção.
+        _waha_log = os.environ.get('WAHA_LOG', '').strip()
+        try:
+            _out = open(_waha_log, 'a', encoding='utf-8', buffering=1) if _waha_log else _sp.DEVNULL
+        except Exception:
+            _out = _sp.DEVNULL
         kwargs = {
             'env': env,
             'cwd': str(Path(script).parent),
-            'stdout': _sp.DEVNULL,
-            'stderr': _sp.DEVNULL,
+            'stdout': _out,
+            'stderr': _out,
         }
         if sys.platform == 'win32':
             kwargs['creationflags'] = _sp.CREATE_NO_WINDOW
