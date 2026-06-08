@@ -119,6 +119,24 @@ jobs:
       # -----------------------------------------------------------------------
       # 6. NSIS installer
       # -----------------------------------------------------------------------
+      - name: Verificar artefatos do WhatsApp Update (WAHA-lite)
+        # Falha cedo se node.exe / node_modules sumirem: o installer.nsi os embute via 'File'
+        # e, sem eles, o WhatsApp Update fica indisponível em produção (sem Docker) — bug que
+        # passava despercebido porque o build compilava normalmente.
+        shell: powershell
+        run: |
+          $erros = @()
+          if (-not (Test-Path 'node.exe'))                                { $erros += 'node.exe (Node.js portatil) ausente na raiz do projeto' }
+          if (-not (Test-Path 'waha-lite\waha-lite.js'))                  { $erros += 'waha-lite\waha-lite.js ausente' }
+          if (-not (Test-Path 'waha-lite\node_modules\express'))          { $erros += 'waha-lite\node_modules ausente (rode npm install em waha-lite)' }
+          if (-not (Test-Path 'waha-lite\node_modules\whatsapp-web.js'))  { $erros += 'waha-lite\node_modules\whatsapp-web.js ausente' }
+          if ($erros.Count -gt 0) {
+            Write-Host '[ERRO] Artefatos do WhatsApp Update ausentes -- o instalador ficaria sem WAHA-lite:'
+            $erros | ForEach-Object { Write-Host "  - $_" }
+            exit 1
+          }
+          Write-Host '[OK] node.exe + waha-lite/node_modules presentes -- WAHA-lite sera embutido no instalador.'
+
       - name: Instalar NSIS
         shell: powershell
         run: choco install nsis --no-progress -y

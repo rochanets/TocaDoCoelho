@@ -279,12 +279,23 @@ def _start_waha_lite():
         return False
     os.environ.pop('WAHA_DEPS_MISSING', None)
 
+    # Log do WAHA-lite: antes a saída ia para DEVNULL, então qualquer crash do Node
+    # (navegador ausente, node_modules quebrado, etc.) ficava invisível. Gravar num
+    # arquivo no DATA_DIR torna esses problemas diagnosticáveis. WAHA_LOG é exposto para
+    # que o app.py reaproveite o mesmo arquivo ao reiniciar o WAHA-lite.
+    waha_log_path = DATA_DIR / 'waha-lite.log'
+    try:
+        waha_log = open(waha_log_path, 'a', encoding='utf-8', buffering=1)
+        os.environ['WAHA_LOG'] = str(waha_log_path)
+    except Exception:
+        waha_log = subprocess.DEVNULL
+
     try:
         kwargs = {
             'env': env,
             'cwd': str(script.parent),
-            'stdout': subprocess.DEVNULL,
-            'stderr': subprocess.DEVNULL,
+            'stdout': waha_log,
+            'stderr': waha_log,
         }
         if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -292,6 +303,7 @@ def _start_waha_lite():
         subprocess.Popen([node, str(script)], **kwargs)
         os.environ['WAHA_STARTED_AT'] = str(time.time())
         print(f"[OK] WAHA-lite iniciado (Node.js) — porta {WAHA_PORT}")
+        print(f"[INFO] Log do WAHA-lite: {waha_log_path}")
         return True
     except Exception as exc:
         print(f"[WARN] Falha ao iniciar WAHA-lite: {exc}")
