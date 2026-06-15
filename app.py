@@ -182,6 +182,8 @@ AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / 'chamado-juridico'
 AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
+OPENROUTER_DISABLED = True  # [SEGURANÇA] Integração OpenRouter desabilitada temporariamente - usar somente SAI
+
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
 TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
@@ -5340,30 +5342,14 @@ def _validate_openrouter_api_key(api_key):
 
 
 def _run_openrouter_synthesis(result_payload):
-    settings_map = _load_app_settings_map([
-        'openrouter_model',
-        'openrouter_site_url',
-        'openrouter_app_name'
-    ])
-
-    api_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if not api_key:
-        raise RuntimeError('A chave da OpenRouter não está configurada. Configure em Configurações > Integrações ou defina OPENROUTER_API_KEY no ambiente.')
-
-    key_ok, key_msg = _validate_openrouter_api_key(api_key)
-    if not key_ok:
-        raise RuntimeError(f'Chave OpenRouter inválida: {key_msg}')
-
-    model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-    site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-    app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    """Síntese de AutoMapping via SAI (OpenRouter desabilitado por segurança)."""
     sections = result_payload.get('sections') or {}
-
     company = result_payload.get('company') or ''
+    company_lower = company.lower()
+
     compact_sections = {}
     for section_key, section_data in sections.items():
         evidence = section_data.get('evidence') or []
-        company_lower = company.lower()
         compact_sections[section_key] = {
             'matched_keywords': section_data.get('matched_keywords') or [],
             'evidence': [
@@ -5383,99 +5369,45 @@ def _run_openrouter_synthesis(result_payload):
         'sections': compact_sections
     }
 
-    system_prompt = (
+    sai_prompt = (
         'Você é um analista de inteligência de mercado. Responda APENAS em JSON válido. '
         'REGRA ABSOLUTA: só gere um final_answer específico se pelo menos um trecho '
         '(campo "snippet") mencionar EXPLICITAMENTE o nome da empresa junto com a solução confirmada. '
-        'Indícios proibidos: "parece utilizar", "pode estar usando", "provavelmente usa", listas de opções. '
         'Se nenhum trecho com mentions_company=true confirmar a solução, use '
         'final_answer:"Não foi possível identificar com as evidências disponíveis" e confidence_percent:0. '
         'confidence_percent deve refletir a qualidade da evidência: 0 se genérica, >70 só se confirmada. '
         'Formato obrigatório: '
-        '{"sections":{"cloud":{"final_answer":"...","confidence_percent":0,"certainty":"confirmed|uncertain","reasoning":"..."}, ...}}'
+        '{"sections":{"cloud":{"final_answer":"...","confidence_percent":0,"certainty":"confirmed|uncertain","reasoning":"..."}, ...}} '
+        f'\n\nDADOS:\n{json.dumps(user_payload, ensure_ascii=False)}'
     )
 
-    request_payload = {
-        'model': model,
-        'messages': [
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False)}
-        ],
-        'temperature': 0.1
-    }
-
-    req = urllib.request.Request(
-        'https://openrouter.ai/api/v1/chat/completions',
-        data=json.dumps(request_payload).encode('utf-8'),
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}',
-            'HTTP-Referer': site_url,
-            'X-Title': app_name
-        },
-        method='POST'
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
-        diagnostics = {
-            'status': getattr(e, 'code', None),
-            'model': model,
-            'has_api_key': bool(api_key),
-            'api_key_prefix': api_key[:7] if api_key else '',
-            'sent_headers': ['Content-Type', 'Authorization', 'HTTP-Referer', 'X-Title']
-        }
-        print(f'[ERROR][OpenRouter] HTTPError diagnostics={diagnostics} body={detail[:500]}')
-        hint = ' Verifique se OPENROUTER_API_KEY é a chave da OpenRouter (prefixo sk-or-) e se foi exportada no mesmo terminal do app.' if diagnostics.get('status') == 401 else ''
-        raise RuntimeError(f'OpenRouter HTTP {diagnostics["status"]} - body: {detail[:400]} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}{hint}')
-    except Exception as e:
-        diagnostics = {
-            'model': model,
-            'has_api_key': bool(api_key),
-            'api_key_prefix': api_key[:7] if api_key else ''
-        }
-        print(f'[ERROR][OpenRouter] Exception diagnostics={diagnostics} error={e}')
-        raise RuntimeError(f'Falha inesperada OpenRouter: {str(e)} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}')
-
-    choices = data.get('choices') or []
-    message_content = ''
-    if choices:
-        content = ((choices[0] or {}).get('message') or {}).get('content')
-        if isinstance(content, list):
-            message_content = ''.join([part.get('text', '') for part in content if isinstance(part, dict)])
-        else:
-            message_content = str(content or '')
-
-    parsed = _extract_json_object_from_text(message_content)
-    llm_sections = ((parsed or {}).get('sections') or {}) if isinstance(parsed, dict) else {}
+    message_content = _sai_simple_prompt(sai_prompt)
 
     final_sections = _default_llm_summary(sections)
-    for section_key in final_sections.keys():
-        candidate = llm_sections.get(section_key)
-        if not isinstance(candidate, dict):
-            continue
-        answer = (candidate.get('final_answer') or '').strip() or final_sections[section_key]['final_answer']
-        reasoning = (candidate.get('reasoning') or '').strip() or final_sections[section_key]['reasoning']
-        certainty = candidate.get('certainty') if candidate.get('certainty') in {'confirmed', 'uncertain'} else 'uncertain'
-        try:
-            confidence = int(candidate.get('confidence_percent'))
-        except Exception:
-            confidence = final_sections[section_key]['confidence_percent']
-        confidence = max(0, min(100, confidence))
-
-        final_sections[section_key] = {
-            'final_answer': answer,
-            'confidence_percent': confidence,
-            'certainty': certainty,
-            'reasoning': reasoning
-        }
+    if message_content:
+        parsed = _extract_json_object_from_text(message_content)
+        llm_sections = ((parsed or {}).get('sections') or {}) if isinstance(parsed, dict) else {}
+        for section_key in final_sections.keys():
+            candidate = llm_sections.get(section_key)
+            if not isinstance(candidate, dict):
+                continue
+            answer = (candidate.get('final_answer') or '').strip() or final_sections[section_key]['final_answer']
+            reasoning = (candidate.get('reasoning') or '').strip() or final_sections[section_key]['reasoning']
+            certainty = candidate.get('certainty') if candidate.get('certainty') in {'confirmed', 'uncertain'} else 'uncertain'
+            try:
+                confidence = int(candidate.get('confidence_percent'))
+            except Exception:
+                confidence = final_sections[section_key]['confidence_percent']
+            confidence = max(0, min(100, confidence))
+            final_sections[section_key] = {
+                'final_answer': answer,
+                'confidence_percent': confidence,
+                'certainty': certainty,
+                'reasoning': reasoning
+            }
 
     meta = {
-        'provider': 'openrouter',
-        'model': model,
+        'provider': 'SAI' if message_content else 'sem_llm',
         'raw_response_received': bool(message_content)
     }
     return final_sections, meta
@@ -7022,43 +6954,10 @@ def _outlook_import_emails(emails_data, conn):
 
 
 def _outlook_call_llm(prompt):
-    """Chama LLM para análise de email (SAI primeiro, OpenRouter como fallback). Retorna str ou None."""
+    """Chama LLM para análise de email via SAI. Retorna str ou None."""
     raw = _sai_simple_prompt(prompt)
     if raw:
         return raw.strip()
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
-        try:
-            payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um assistente de CRM. Responda de forma objetiva e concisa em português.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                'temperature': 0.1
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            content = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            return content.strip() if content else None
-        except Exception as e:
-            logger.warning(f'[OutlookLLM][OpenRouter] falha: {e}')
     return None
 
 
@@ -7119,9 +7018,8 @@ def outlook_diagnose():
     })
 
     has_sai = bool(_resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY'))
-    has_or = bool(_resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY'))
-    has_llm = has_sai or has_or
-    llm_detail = (('SAI' if has_sai else '') + (' + ' if has_sai and has_or else '') + ('OpenRouter' if has_or else '')) if has_llm else 'Nenhum LLM configurado — resumos desativados'
+    has_llm = has_sai
+    llm_detail = 'SAI' if has_sai else 'Nenhum LLM configurado — resumos desativados'
     checks.append({'label': 'LLM (resumos)', 'ok': has_llm, 'detail': llm_detail})
 
     can_sync = is_win or has_graph_token
@@ -8974,43 +8872,6 @@ def _autopic_get_role_via_llm(name, company):
             logger.info(f'[AutoPic][LLM] Cargo encontrado via SAI: {role!r}')
             return role[:80]
 
-    # Fallback: OpenRouter
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
-        try:
-            or_payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um especialista em mercado corporativo. Responda SOMENTE com o cargo, sem texto adicional.'},
-                    {'role': 'user', 'content': llm_prompt}
-                ],
-                'temperature': 0.1
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            role = ((choices[0].get('message') or {}).get('content', '') if choices else '').strip().split('\n')[0].strip(' "\'.')
-            if role and role.lower() not in ('null', 'none', '', 'não sei', 'desconhecido'):
-                logger.info(f'[AutoPic][LLM] Cargo encontrado via OpenRouter: {role!r}')
-                return role[:80]
-        except Exception as e:
-            logger.warning(f'[AutoPic][LLM] Falha ao buscar cargo via OpenRouter: {e}')
-
     return None
 
 
@@ -10739,44 +10600,6 @@ def _environment_extract_suggestions(company, industry, cards, card_results):
     )
 
     answer_map = {}
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        try:
-            or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-            model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip()
-            site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip()
-            app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip()
-            req_payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': prompt_system},
-                    {'role': 'user', 'content': prompt_user},
-                ],
-                'temperature': 0.1,
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(req_payload).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name,
-                },
-                method='POST',
-            )
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            if choices:
-                content = ((choices[0] or {}).get('message') or {}).get('content') or ''
-                if isinstance(content, list):
-                    content = ''.join([p.get('text', '') for p in content if isinstance(p, dict)])
-                parsed = _extract_json_object_from_text(content.strip())
-                if isinstance(parsed, dict):
-                    answer_map = parsed.get('answers') or {}
-        except Exception as e:
-            logger.warning(f'[EnvAutoFill] OpenRouter error: {e}')
 
     if not answer_map:
         raw = _sai_simple_prompt(
@@ -11725,45 +11548,7 @@ def _account_autofill_via_sai(account_name):
         logger.info(f'[AccountAutoFill][SAI] resultado: {result}')
         return result
 
-    # --- Tentativa 2: OpenRouter ---
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            or_payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um analista corporativo. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
-                    {'role': 'user', 'content': llm_prompt}
-                ],
-                'temperature': 0.1
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            result = _account_autofill_parse_llm_raw(raw)
-            result['source'] = 'OpenRouter'
-            logger.info(f'[AccountAutoFill][OpenRouter] resultado: {result}')
-            return result
-        except Exception as e:
-            logger.warning(f'[AccountAutoFill][OpenRouter] falha: {e}')
-
-    logger.info(f'[AccountAutoFill] Nenhum LLM configurado para empresa: {account_name!r}')
+    logger.info(f'[AccountAutoFill] SAI indisponível para empresa: {account_name!r}')
     return {'average_revenue_brl': None, 'professionals_count': None, 'global_presence': '', 'source': 'sem_llm'}
 
 
@@ -11873,51 +11658,6 @@ def _portfolio_generate_offer_from_llm(raw_input, image_data=None, image_mime=No
     )
     if raw_input:
         text_prompt += f"\n\nMATERIAL:\n{raw_input[:30000]}"
-
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            if image_data and image_mime:
-                user_content = [
-                    {'type': 'text', 'text': text_prompt},
-                    {'type': 'image_url', 'image_url': {'url': f'data:{image_mime};base64,{image_data}'}}
-                ]
-            else:
-                user_content = text_prompt
-            or_payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um analista comercial. Responda SEMPRE e SOMENTE com JSON válido.'},
-                    {'role': 'user', 'content': user_content}
-                ],
-                'temperature': 0.2
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            source = 'OpenRouter'
-            parsed = _portfolio_parse_llm_raw(raw)
-            if parsed:
-                return parsed, source
-            logger.warning('[Portfolio][OpenRouter] Resposta recebida mas inválida para parsing de oferta. Tentando SAI.')
-        except Exception as e:
-            logger.warning(f'[Portfolio][OpenRouter] Falha ao gerar oferta: {e}. Tentando SAI.')
 
     if not image_data:
         raw = _sai_simple_prompt(text_prompt)
@@ -12447,43 +12187,7 @@ def _iata_parse_llm_insights(raw):
 
 
 def _iata_call_llm(system_msg, user_msg, log_tag):
-    """OpenRouter como primário; SAI como fallback."""
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg}
-                ],
-                'temperature': 0.2
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            if raw and str(raw).strip():
-                return raw, 'OpenRouter'
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
-        except Exception as e:
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
-    # Fallback: SAI
+    """Chama LLM via SAI para análise de iAta."""
     raw = _sai_simple_prompt(user_msg)
     if raw is not None and not str(raw).strip():
         raw = None
@@ -12868,40 +12572,6 @@ def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extensi
 
         raw = _sai_simple_prompt(llm_prompt)
 
-        if not raw:
-            or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-            if or_key:
-                or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-                model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
-                site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip()
-                app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip()
-                try:
-                    or_payload = {
-                        'model': model,
-                        'messages': [
-                            {'role': 'system', 'content': 'Você é um analista de dados. Responda SEMPRE e SOMENTE com JSON válido, sem texto adicional.'},
-                            {'role': 'user', 'content': llm_prompt}
-                        ],
-                        'temperature': 0.1
-                    }
-                    req = urllib.request.Request(
-                        'https://openrouter.ai/api/v1/chat/completions',
-                        data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
-                        headers={
-                            'Content-Type': 'application/json',
-                            'Authorization': f'Bearer {or_key}',
-                            'HTTP-Referer': site_url,
-                            'X-Title': app_name
-                        },
-                        method='POST'
-                    )
-                    with urllib.request.urlopen(req, timeout=45) as resp:
-                        data = json.loads(resp.read().decode('utf-8'))
-                    choices = data.get('choices') or []
-                    raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-                except Exception as e:
-                    logger.warning(f'[ClientLinkedInAutoFill][OpenRouter] Falha: {e}')
-
         parsed = {}
         if raw:
             try:
@@ -13042,43 +12712,6 @@ def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data
     if raw:
         logger.info('[LinkedIn][SAI] Resumo gerado com sucesso')
         return raw, 'SAI'
-
-    # Tentativa 2: OpenRouter
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            or_payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um analista de inteligência executiva. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
-                    {'role': 'user', 'content': llm_prompt}
-                ],
-                'temperature': 0.3
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            if raw:
-                logger.info('[LinkedIn][OpenRouter] Resumo gerado com sucesso')
-                return raw, 'OpenRouter'
-        except Exception as e:
-            logger.warning(f'[LinkedIn][OpenRouter] Falha: {e}')
 
     return None, 'sem_llm'
 
@@ -13533,15 +13166,10 @@ def _automapping_process_async(task_id, company, country, industry, force, reque
             llm_summary, llm_meta = _run_openrouter_synthesis(result_payload)
             result_payload['llm_summary'] = llm_summary
             result_payload['llm_meta'] = llm_meta
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
-            conn.close()
-            _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao consultar OpenRouter: {detail[:400]}'})
-            return
         except Exception as e:
-            conn.close()
-            _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao consultar OpenRouter: {str(e)}'})
-            return
+            logger.warning(f'[AutoMapping] Falha na síntese LLM: {e}. Usando resumo padrão.')
+            result_payload['llm_summary'] = _default_llm_summary(result_payload.get('sections') or {})
+            result_payload['llm_meta'] = {'provider': 'sem_llm', 'raw_response_received': False}
 
         if _is_automapping_cancelled(request_id, consume=True):
             conn.close()
@@ -14312,46 +13940,7 @@ def _autotoca_account_info_via_llm(account_name: str) -> dict:
         "Use null nos campos que não conseguir determinar."
     )
 
-    raw = None
-
-    # --- Tentativa 1: OpenRouter ---
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            or_payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um analista de dados cadastrais corporativos. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                'temperature': 0.1
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                or_data = json.loads(resp.read().decode('utf-8'))
-            choices = or_data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-        except Exception as e:
-            logger.warning(f'[AutoToca][AccountInfo][OpenRouter] falha: {e}')
-            raw = None
-
-    # --- Tentativa 2: SAI (fallback) ---
-    if not raw:
-        raw = _sai_simple_prompt(prompt)
+    raw = _sai_simple_prompt(prompt)
 
     parsed = _autotoca_parse_account_info_raw(raw)
 
@@ -14655,32 +14244,6 @@ def _whatsapp_sync_async(task_id, period_days):
             )
 
             raw_llm = _sai_simple_prompt(prompt)
-            if not raw_llm:
-                or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-                if or_key:
-                    try:
-                        or_s = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-                        or_resp = requests.post(
-                            'https://openrouter.ai/api/v1/chat/completions',
-                            headers={
-                                'Authorization': f'Bearer {or_key}',
-                                'Content-Type': 'application/json',
-                                'HTTP-Referer': or_s.get('openrouter_site_url') or 'http://localhost',
-                                'X-Title': or_s.get('openrouter_app_name') or 'TocaDoCoelho'
-                            },
-                            json={
-                                'model': (or_s.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip(),
-                                'messages': [
-                                    {'role': 'system', 'content': 'Você é um assistente de CRM especializado em resumos de conversas de WhatsApp. Responde sempre em JSON válido.'},
-                                    {'role': 'user', 'content': prompt}
-                                ],
-                                'temperature': 0.1
-                            },
-                            timeout=30
-                        )
-                        raw_llm = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
-                    except Exception:
-                        pass
 
             # Parse da resposta: JSON {resumo, followup} ou texto puro (fallback retrocompatível)
             summary = ''
