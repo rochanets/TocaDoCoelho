@@ -103,6 +103,13 @@ except ImportError:
     PDF2IMAGE_AVAILABLE = False
 
 try:
+    import pypdfium2 as pdfium
+    PYPDFIUM2_AVAILABLE = True
+except ImportError:
+    pdfium = None
+    PYPDFIUM2_AVAILABLE = False
+
+try:
     from PIL import Image as PILImage
     from PIL import ImageOps
     PIL_AVAILABLE = True
@@ -1118,6 +1125,7 @@ def _sai_simple_prompt(question: str) -> str | None:
             timeout=45
         )
         if resp.status_code == 200:
+            logger.info(f'[SAI][simple_prompt] OK ({len(resp.text)} chars)')
             return resp.text
         logger.warning(f'[SAI][simple_prompt] HTTP {resp.status_code}: {resp.text[:200]}')
         return None
@@ -3643,24 +3651,36 @@ def _itoca_extract_text_from_file(file_path_str):
                 except Exception as e2:
                     logger.debug(f'[iToca] pdftotext não disponível para {path.name}: {e2}')
 
-            # --- Tentativa 3: OCR com pdf2image + pytesseract (PDFs escaneados) ---
-            if not extracted and PDF2IMAGE_AVAILABLE and PYTESSERACT_AVAILABLE:
+            # --- Tentativa 3: OCR com pypdfium2/pdf2image + pytesseract (PDFs escaneados) ---
+            if not extracted and PYTESSERACT_AVAILABLE and (PYPDFIUM2_AVAILABLE or PDF2IMAGE_AVAILABLE):
                 tess_cmd = _itoca_find_tesseract_cmd()
                 if tess_cmd:
+                    pytesseract.pytesseract.tesseract_cmd = tess_cmd
+                    images = []
                     try:
-                        pytesseract.pytesseract.tesseract_cmd = tess_cmd
-                        images = convert_from_path(str(path), dpi=200, first_page=1, last_page=15)
-                        ocr_parts = []
-                        for img in images:
-                            ocr_text = pytesseract.image_to_string(img, lang='por+eng')
-                            if ocr_text.strip():
-                                ocr_parts.append(ocr_text.strip())
-                        if ocr_parts:
-                            text_parts.extend(ocr_parts)
-                            extracted = True
-                            logger.info(f'[iToca] OCR extraiu texto de {path.name} ({len(images)} páginas)')
-                    except Exception as e3:
-                        logger.warning(f'[iToca] OCR falhou em {path.name}: {e3}')
+                        if PYPDFIUM2_AVAILABLE:
+                            doc = pdfium.PdfDocument(str(path))
+                            for i in range(min(len(doc), 15)):
+                                page = doc[i]
+                                bitmap = page.render(scale=200/72)
+                                images.append(bitmap.to_pil())
+                        elif PDF2IMAGE_AVAILABLE:
+                            images = convert_from_path(str(path), dpi=200, first_page=1, last_page=15)
+                    except Exception as e_render:
+                        logger.warning(f'[iToca] OCR render falhou em {path.name}: {e_render}')
+                    if images:
+                        try:
+                            ocr_parts = []
+                            for img in images:
+                                ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                                if ocr_text.strip():
+                                    ocr_parts.append(ocr_text.strip())
+                            if ocr_parts:
+                                text_parts.extend(ocr_parts)
+                                extracted = True
+                                logger.info(f'[iToca] OCR extraiu texto de {path.name} ({len(images)} páginas)')
+                        except Exception as e3:
+                            logger.warning(f'[iToca] OCR falhou em {path.name}: {e3}')
                 else:
                     logger.info(f'[iToca] Tesseract não encontrado. Instale em https://github.com/UB-Mannheim/tesseract/wiki para OCR de PDFs escaneados.')
 
