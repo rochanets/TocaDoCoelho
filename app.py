@@ -1111,14 +1111,16 @@ def _sai_simple_prompt(question: str) -> str | None:
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
     template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
     try:
-        req = urllib.request.Request(
+        resp = requests.post(
             f'{base_url}/api/templates/{template_id}/execute',
-            data=json.dumps({'inputs': {'question': question}}, ensure_ascii=False).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'X-Api-Key': api_key},
-            method='POST'
+            json={'inputs': {'question': question}},
+            headers={'X-Api-Key': api_key},
+            timeout=45
         )
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            return resp.read().decode('utf-8', errors='ignore')
+        if resp.status_code == 200:
+            return resp.text
+        logger.warning(f'[SAI][simple_prompt] HTTP {resp.status_code}: {resp.text[:200]}')
+        return None
     except Exception as e:
         logger.warning(f'[SAI][simple_prompt] falha: {e}')
         return None
@@ -2004,15 +2006,9 @@ def _relation_report_call_sai_narrative_template(
             'output_style': output_style,
         }
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST'
-    )
-
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read().decode('utf-8')
+    resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=60)
+    resp.raise_for_status()
+    raw = resp.text
 
     logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
     parsed_outer = None
@@ -4691,19 +4687,14 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
             'context_sources': context_text if context_text else 'Nenhum dado encontrado na base interna para esta pergunta.'
         }
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST'
-    )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode('utf-8')
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
-        logger.error(f'[iToca][SAI] HTTPError {getattr(e, "code", None)}: {detail[:400]}')
-        raise RuntimeError(f'Erro na API SAI (HTTP {getattr(e, "code", None)}): {detail[:200]}')
+        resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=60)
+        if not resp.ok:
+            logger.error(f'[iToca][SAI] HTTPError {resp.status_code}: {resp.text[:400]}')
+            raise RuntimeError(f'Erro na API SAI (HTTP {resp.status_code}): {resp.text[:200]}')
+        raw = resp.text
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error(f'[iToca][SAI] Erro de conexão: {e}')
         raise RuntimeError(f'Falha ao conectar com a API SAI: {str(e)}')
@@ -4877,14 +4868,8 @@ def _itoca_detect_action_intent(question: str, answer: str) -> dict:
             }
         }
 
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers=headers,
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode('utf-8')
+        resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=30)
+        raw = resp.text
 
         parsed = _extract_json_object_from_text(raw)
         if not parsed or not isinstance(parsed, dict):
