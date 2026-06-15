@@ -14471,44 +14471,62 @@ def _waha_deps_missing():
 
 
 def _kill_process_on_port(port):
-    """Mata o processo que estiver escutando na porta informada (WAHA-lite)."""
+    """Mata o processo que estiver ESCUTANDO na porta informada (WAHA-lite).
+
+    Importante: só mata quem está em LISTENING no endereço local — nunca conexões
+    ESTABLISHED, senão poderíamos matar o próprio Toca (que conecta no WAHA-lite)."""
+    killed = []
     try:
         import subprocess as _sp
         if sys.platform == 'win32':
-            # netstat retorna linhas como: TCP  127.0.0.1:3001  ...  <PID>
+            # Colunas do netstat -ano: Proto | Local Address | Foreign Address | State | PID
+            #   TCP    127.0.0.1:3001    0.0.0.0:0    LISTENING    12345
             out = _sp.check_output(
                 ['netstat', '-ano', '-p', 'TCP'],
                 creationflags=_sp.CREATE_NO_WINDOW,
                 stderr=_sp.DEVNULL,
                 timeout=5,
             ).decode(errors='ignore')
+            seen = set()
             for line in out.splitlines():
-                if f':{port} ' in line or f':{port}\t' in line:
-                    parts = line.split()
-                    pid = parts[-1] if parts else ''
-                    if pid.isdigit() and pid != '0':
-                        _sp.call(
-                            ['taskkill', '/F', '/T', '/PID', pid],
-                            creationflags=_sp.CREATE_NO_WINDOW,
-                            stderr=_sp.DEVNULL,
-                        )
-                        logger.info(f'[WhatsApp] Processo WAHA-lite anterior (PID {pid}) encerrado.')
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                proto, local, _foreign, state, pid = parts[0], parts[1], parts[2], parts[3], parts[-1]
+                if not proto.upper().startswith('TCP'):
+                    continue
+                if state.upper() != 'LISTENING':
+                    continue            # ignora ESTABLISHED/TIME_WAIT etc.
+                if not local.endswith(f':{port}'):
+                    continue
+                if pid.isdigit() and pid != '0' and pid not in seen:
+                    seen.add(pid)
+                    _sp.call(
+                        ['taskkill', '/F', '/T', '/PID', pid],
+                        creationflags=_sp.CREATE_NO_WINDOW,
+                        stderr=_sp.DEVNULL,
+                    )
+                    killed.append(pid)
         else:
+            # -sTCP:LISTEN garante que só pegamos quem escuta, não quem conecta.
             out = _sp.check_output(
-                ['lsof', '-ti', f'TCP:{port}'],
+                ['lsof', '-ti', f'TCP:{port}', '-sTCP:LISTEN'],
                 stderr=_sp.DEVNULL,
                 timeout=5,
             ).decode(errors='ignore').strip()
+            import signal as _sig
             for pid in out.splitlines():
                 if pid.isdigit():
                     try:
-                        import signal as _sig
                         os.kill(int(pid), _sig.SIGTERM)
-                        logger.info(f'[WhatsApp] Processo WAHA-lite anterior (PID {pid}) encerrado.')
+                        killed.append(pid)
                     except Exception:
                         pass
     except Exception as exc:
         logger.debug(f'[WhatsApp] _kill_process_on_port({port}): {exc}')
+    if killed:
+        logger.info(f'[WhatsApp] Processo(s) WAHA-lite anterior(es) na porta {port} encerrado(s): {", ".join(killed)}')
+    return bool(killed)
 
 
 def _restart_waha_lite():

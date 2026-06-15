@@ -27,6 +27,24 @@ const SESSION_NAME = process.env.WAHA_SESSION_NAME || 'default';
 const PORT         = parseInt(process.env.WAHA_PORT || '3001', 10);
 const DATA_DIR     = process.env.WAHA_DATA_DIR     || path.join(__dirname, '.waha-sessions');
 
+// Tempo máximo (ms) para a sessão sair de STARTING/autenticada e ficar pronta (WORKING).
+// Passou disso sem QR e sem ready = sessão travada → reciclar.
+const READY_TIMEOUT_MS = parseInt(process.env.WAHA_READY_TIMEOUT_MS || '75000', 10);
+// Quantas vezes recriar o cliente automaticamente antes de desistir.
+const MAX_RECREATE     = parseInt(process.env.WAHA_MAX_RECREATE || '3', 10);
+
+// ---------------------------------------------------------------------------
+// Logging — timestamp ISO + nível + PID. Substitui os console.log "secos".
+// ---------------------------------------------------------------------------
+function log(level, ...args) {
+  const ts   = new Date().toISOString();
+  const msg  = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+  const line = `[${ts}] [${level}] [pid:${process.pid}] ${msg}`;
+  if (level === 'ERROR')      console.error(line);
+  else if (level === 'WARN')  console.warn(line);
+  else                        console.log(line);
+}
+
 const app = express();
 app.use(express.json());
 
@@ -64,29 +82,116 @@ function findBrowser() {
 
   for (const p of candidates) {
     if (p && fs.existsSync(p)) {
-      console.log(`[WAHA-lite] Navegador: ${p}`);
+      log('INFO', `Navegador encontrado: ${p}`);
       return p;
     }
   }
+  log('ERROR', 'Nenhum navegador (Chrome/Edge) encontrado nos caminhos conhecidos.');
   return null;
 }
 
 // ---------------------------------------------------------------------------
 // Estado da sessão WhatsApp
 // ---------------------------------------------------------------------------
-let waClient     = null;
-let clientStatus = 'STOPPED';  // STOPPED | STARTING | SCAN_QR_CODE | WORKING
-let currentQr    = null;
-let initError    = null;
+let waClient      = null;
+let clientStatus  = 'STOPPED';  // STOPPED | STARTING | SCAN_QR_CODE | WORKING
+let currentQr     = null;
+let initError     = null;
+let chromePid     = null;       // PID do Chrome controlado pelo Puppeteer (p/ kill forçado)
+let recreateCount = 0;          // quantas vezes já reciclamos o cliente
+let readyWatchdog = null;       // timer que detecta sessão travada
+
+/** Remove os arquivos de lock que o Chrome deixa quando o processo morre sujo. */
+function cleanSessionLocks() {
+  const sessionDir = path.join(DATA_DIR, `session-${SESSION_NAME}`);
+  for (const lf of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    try {
+      fs.unlinkSync(path.join(sessionDir, lf));
+      log('WARN', `Lock de sessão removido: ${lf}`);
+    } catch (_) { /* não existe = ok */ }
+  }
+}
+
+/** Mata o Chrome do Puppeteer à força, caso o destroy() não o feche. */
+function killChrome() {
+  if (!chromePid) return;
+  try {
+    process.kill(chromePid);
+    log('WARN', `Chrome (PID ${chromePid}) encerrado à força.`);
+  } catch (_) { /* já morreu */ }
+  chromePid = null;
+}
+
+function clearReadyWatchdog() {
+  if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+}
+
+/** Arma o watchdog: se em READY_TIMEOUT_MS a sessão não ficar pronta (e não
+ *  estiver legitimamente esperando o scan do QR), recicla o cliente. */
+function armReadyWatchdog() {
+  clearReadyWatchdog();
+  readyWatchdog = setTimeout(() => {
+    if (clientStatus === 'WORKING') return;            // conectou, tudo certo
+    if (clientStatus === 'SCAN_QR_CODE') {             // esperando o usuário escanear
+      log('INFO', 'Aguardando leitura do QR code pelo usuário — watchdog re-armado.');
+      armReadyWatchdog();
+      return;
+    }
+    // STARTING há tempo demais = autenticou mas nunca ficou pronto → travou.
+    log('WARN', `Sessão presa em '${clientStatus}' por mais de ${Math.round(READY_TIMEOUT_MS / 1000)}s sem ficar pronta.`);
+    recycleClient('timeout aguardando ready (autenticado mas não conectou)');
+  }, READY_TIMEOUT_MS);
+}
+
+/** Destrói o cliente atual fechando o Chrome (com timeout de segurança). */
+async function destroyClient() {
+  clearReadyWatchdog();
+  const c = waClient;
+  waClient = null;
+  if (c) {
+    try {
+      await Promise.race([
+        c.destroy(),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ]);
+      log('INFO', 'Cliente WhatsApp destruído.');
+    } catch (e) {
+      log('WARN', `Falha ao destruir cliente: ${e.message}`);
+    }
+  }
+  killChrome();
+}
+
+/** Recicla o cliente: destrói, limpa locks e recria. Limitado a MAX_RECREATE. */
+async function recycleClient(reason) {
+  if (recreateCount >= MAX_RECREATE) {
+    initError    = `Não foi possível conectar após ${MAX_RECREATE} tentativas (${reason}). ` +
+                   'Abra o WhatsApp no celular, confira a conexão e reinicie o Toca do Coelho.';
+    clientStatus = 'STOPPED';
+    log('ERROR', initError);
+    return;
+  }
+  recreateCount++;
+  log('WARN', `Reciclando cliente WhatsApp (tentativa ${recreateCount}/${MAX_RECREATE}) — motivo: ${reason}`);
+  await destroyClient();
+  cleanSessionLocks();
+  setTimeout(() => {
+    if (!waClient) {
+      clientStatus = 'STARTING';
+      waClient     = createWaClient();
+    }
+  }, 2500);
+}
 
 function createWaClient() {
   const executablePath = findBrowser();
   if (!executablePath) {
     initError    = 'Chrome ou Edge não encontrado. Instale o Google Chrome para usar o WhatsApp Update.';
     clientStatus = 'STOPPED';
-    console.error('[WAHA-lite] ERRO:', initError);
     return null;
   }
+
+  log('INFO', `Inicializando cliente WhatsApp (sessão='${SESSION_NAME}', data='${DATA_DIR}')...`);
 
   const client = new Client({
     authStrategy: new LocalAuth({
@@ -108,62 +213,90 @@ function createWaClient() {
     },
   });
 
-  client.on('qr', async (qr) => {
+  // Captura o PID do Chrome assim que o Puppeteer o sobe (best effort).
+  const captureChromePid = () => {
+    if (chromePid) return;
+    try {
+      const proc = client.pupBrowser && client.pupBrowser.process && client.pupBrowser.process();
+      if (proc && proc.pid) {
+        chromePid = proc.pid;
+        log('INFO', `Chrome iniciado (PID ${chromePid}).`);
+      }
+    } catch (_) { /* ainda não disponível */ }
+  };
+
+  // loading_screen e change_state são OURO p/ diagnosticar o "autenticado mas travado":
+  // mostram exatamente em que ponto da sincronização o WhatsApp Web parou.
+  client.on('loading_screen', (percent, message) => {
+    captureChromePid();
+    log('INFO', `Carregando WhatsApp Web: ${percent}% ${message || ''}`.trim());
+  });
+
+  client.on('change_state', (state) => {
+    log('INFO', `Mudança de estado interno do WhatsApp: ${state}`);
+  });
+
+  client.on('qr', (qr) => {
+    captureChromePid();
     clientStatus = 'SCAN_QR_CODE';
     currentQr    = qr;
     initError    = null;
-    console.log('[WAHA-lite] QR code disponível — aguardando scan.');
+    log('INFO', 'QR code disponível — aguardando leitura pelo celular.');
   });
 
   client.on('authenticated', () => {
-    console.log('[WAHA-lite] Sessão autenticada.');
+    captureChromePid();
+    log('INFO', 'Sessão autenticada — aguardando sincronização (ready)...');
   });
 
   client.on('ready', () => {
-    clientStatus = 'WORKING';
-    currentQr    = null;
-    initError    = null;
-    console.log('[WAHA-lite] WhatsApp conectado e pronto.');
+    clientStatus  = 'WORKING';
+    currentQr     = null;
+    initError     = null;
+    recreateCount = 0;            // sucesso: zera o contador de reciclagens
+    clearReadyWatchdog();
+    captureChromePid();
+    log('INFO', 'WhatsApp conectado e pronto (WORKING).');
   });
 
   client.on('auth_failure', (msg) => {
-    console.error('[WAHA-lite] Falha de autenticação:', msg);
+    log('ERROR', `Falha de autenticação: ${msg}`);
     clientStatus = 'STOPPED';
+    initError    = `Falha de autenticação: ${msg}`;
+    clearReadyWatchdog();
     waClient     = null;
   });
 
   client.on('disconnected', (reason) => {
-    console.log('[WAHA-lite] Desconectado:', reason);
+    log('WARN', `Desconectado: ${reason}`);
     clientStatus = 'STOPPED';
     currentQr    = null;
+    clearReadyWatchdog();
     waClient     = null;
+    killChrome();
   });
 
-  client.initialize().catch((err) => {
-    const msg = err.message || '';
-    // Chrome deixa arquivos de lock quando o Node.js trava com o browser aberto.
-    // Limpa o lock e tenta uma vez mais antes de desistir.
-    if (msg.includes('browser is already running')) {
-      console.warn('[WAHA-lite] Chrome travado da sessão anterior — limpando lock e retentando...');
-      const sessionDir = path.join(DATA_DIR, `session-${SESSION_NAME}`);
-      for (const lf of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
-        try { fs.unlinkSync(path.join(sessionDir, lf)); } catch (_) {}
+  client.initialize()
+    .then(() => {
+      captureChromePid();
+    })
+    .catch((err) => {
+      const msg = (err && err.message) || String(err);
+      // Chrome deixa lock quando o Node morre com o browser aberto.
+      if (msg.includes('browser is already running')) {
+        log('WARN', `Chrome travado da sessão anterior: ${msg}`);
+        clientStatus = 'STARTING';
+        recycleClient('browser já estava rodando (lock órfão)');
+        return;
       }
-      waClient = null;
-      setTimeout(() => {
-        if (!waClient) {
-          clientStatus = 'STARTING';
-          waClient     = createWaClient();
-        }
-      }, 2000);
-      return;
-    }
-    console.error('[WAHA-lite] Erro ao inicializar:', msg);
-    clientStatus = 'STOPPED';
-    initError    = msg;
-    waClient     = null;
-  });
+      log('ERROR', `Erro ao inicializar: ${err && err.stack ? err.stack : msg}`);
+      clientStatus = 'STOPPED';
+      initError    = msg;
+      clearReadyWatchdog();
+      waClient     = null;
+    });
 
+  armReadyWatchdog();
   return client;
 }
 
@@ -172,7 +305,7 @@ function createWaClient() {
 // ---------------------------------------------------------------------------
 
 /** GET /ping — healthcheck */
-app.get('/ping', (_req, res) => res.json({ ok: true }));
+app.get('/ping', (_req, res) => res.json({ ok: true, status: clientStatus, pid: process.pid }));
 
 /** GET /api/sessions/:session — status da sessão */
 app.get('/api/sessions/:session', (_req, res) => {
@@ -186,8 +319,10 @@ app.get('/api/sessions/:session', (_req, res) => {
 /** POST /api/sessions — cria/inicia sessão */
 app.post('/api/sessions', (_req, res) => {
   if (!waClient) {
-    clientStatus = 'STARTING';
-    waClient     = createWaClient();
+    log('INFO', 'POST /api/sessions — iniciando sessão.');
+    recreateCount = 0;
+    clientStatus  = 'STARTING';
+    waClient      = createWaClient();
   }
   res.json({ name: SESSION_NAME, status: clientStatus });
 });
@@ -196,10 +331,12 @@ app.post('/api/sessions', (_req, res) => {
  *  Necessário para o app reerguer uma sessão STOPPED/FAILED sem reiniciar o Toca. */
 app.post('/api/sessions/:session/start', (_req, res) => {
   if (!waClient || clientStatus === 'STOPPED') {
-    clientStatus = 'STARTING';
-    currentQr    = null;
-    initError    = null;
-    waClient     = createWaClient();
+    log('INFO', `POST /api/sessions/${SESSION_NAME}/start — (re)iniciando sessão.`);
+    recreateCount = 0;
+    clientStatus  = 'STARTING';
+    currentQr     = null;
+    initError     = null;
+    waClient      = createWaClient();
   }
   res.json({ name: SESSION_NAME, status: clientStatus });
 });
@@ -252,6 +389,7 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
         hasMedia: m.hasMedia,
       }));
 
+    log('INFO', `Mensagens de ${chatId}: ${filtered.length} no intervalo.`);
     res.json(filtered);
   } catch (_err) {
     // Chat inexistente = sem conversa com este contato
@@ -262,9 +400,12 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Inicialização
 // ---------------------------------------------------------------------------
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`[WAHA-lite] Servidor na porta ${PORT}`);
-  console.log(`[WAHA-lite] Sessão: ${SESSION_NAME} | Data: ${DATA_DIR}`);
+const server = app.listen(PORT, '127.0.0.1', () => {
+  log('INFO', '='.repeat(60));
+  log('INFO', `WAHA-lite iniciado | Node ${process.version} | ${process.platform}`);
+  log('INFO', `Porta: ${PORT} | Sessão: ${SESSION_NAME}`);
+  log('INFO', `Data dir: ${DATA_DIR}`);
+  log('INFO', '='.repeat(60));
   // Inicia a sessão automaticamente ao subir
   if (!waClient) {
     clientStatus = 'STARTING';
@@ -272,13 +413,34 @@ app.listen(PORT, '127.0.0.1', () => {
   }
 });
 
-// Graceful shutdown — destroça o cliente para fechar o Chrome antes de sair.
-// Sem isso o processo Chrome fica orfão e impede reinicializações subsequentes.
-async function gracefulShutdown() {
-  if (waClient) {
-    try { await waClient.destroy(); } catch (_) {}
+// EADDRINUSE = outra instância já está na porta. Antes isso virava um crash com
+// stack trace cru ("Unhandled 'error' event"); agora encerramos limpo para não
+// brigar pela porta nem corromper a sessão da instância que já está rodando.
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    log('ERROR', `Porta ${PORT} já está em uso — outra instância do WAHA-lite já está ativa. ` +
+                 'Encerrando esta instância para não conflitar.');
+    process.exit(0);
   }
+  log('ERROR', `Erro no servidor HTTP: ${err && err.stack ? err.stack : err}`);
+  process.exit(1);
+});
+
+// Nada deve morrer em silêncio: registra com timestamp em vez de stack trace cru.
+process.on('uncaughtException', (err) => {
+  log('ERROR', `uncaughtException: ${err && err.stack ? err.stack : err}`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  log('ERROR', `unhandledRejection: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+// Graceful shutdown — destrói o cliente (fecha o Chrome) antes de sair.
+// Sem isso o Chrome fica órfão e impede reinicializações ("browser is already running").
+async function gracefulShutdown(signal) {
+  log('INFO', `Recebido ${signal} — encerrando WAHA-lite...`);
+  await destroyClient();
   process.exit(0);
 }
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT',  gracefulShutdown);
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
