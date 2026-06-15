@@ -33,6 +33,29 @@ const READY_TIMEOUT_MS = parseInt(process.env.WAHA_READY_TIMEOUT_MS || '75000', 
 // Quantas vezes recriar o cliente automaticamente antes de desistir.
 const MAX_RECREATE     = parseInt(process.env.WAHA_MAX_RECREATE || '3', 10);
 
+// Versão do WhatsApp Web a fixar — workaround para o bug "trava em 99% → LOGOUT" do
+// whatsapp-web.js com as versões 2.3000.x (issue upstream #5758). Fixar uma versão
+// conhecida via webVersionCache evita que o WhatsApp Web atualize para uma versão que a
+// lib ainda não suporta. Vazio = não fixa (usa o padrão do whatsapp-web.js).
+//
+// Pode ser configurada SEM editar este arquivo, por (em ordem de prioridade):
+//   1) variável de ambiente WAHA_WEB_VERSION
+//   2) arquivo "web-version.txt" ao lado deste script (1 linha com a versão)
+// Ex. de versão: 2.3000.1041467552-alpha  (lista em github.com/wppconnect-team/wa-version)
+function resolveWebVersion() {
+  const fromEnv = (process.env.WAHA_WEB_VERSION || '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const f = path.join(__dirname, 'web-version.txt');
+    if (fs.existsSync(f)) {
+      const v = fs.readFileSync(f, 'utf8').trim();
+      if (v && !v.startsWith('#')) return v;
+    }
+  } catch (_) { /* sem arquivo = sem fixar */ }
+  return '';
+}
+const WEB_VERSION = resolveWebVersion();
+
 // ---------------------------------------------------------------------------
 // Logging — timestamp ISO + nível + PID. Substitui os console.log "secos".
 // ---------------------------------------------------------------------------
@@ -193,7 +216,7 @@ function createWaClient() {
 
   log('INFO', `Inicializando cliente WhatsApp (sessão='${SESSION_NAME}', data='${DATA_DIR}')...`);
 
-  const client = new Client({
+  const clientOptions = {
     authStrategy: new LocalAuth({
       clientId: SESSION_NAME,
       dataPath:  DATA_DIR,
@@ -211,7 +234,21 @@ function createWaClient() {
         '--disable-background-timer-throttling',
       ],
     },
-  });
+  };
+
+  // Fixa a versão do WhatsApp Web (workaround do bug 99%/LOGOUT), se configurada.
+  if (WEB_VERSION) {
+    clientOptions.webVersion = WEB_VERSION;
+    clientOptions.webVersionCache = {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+    };
+    log('INFO', `Fixando WhatsApp Web na versão ${WEB_VERSION} (webVersionCache remoto).`);
+  } else {
+    log('INFO', 'Versão do WhatsApp Web não fixada (padrão do whatsapp-web.js). Defina WAHA_WEB_VERSION ou web-version.txt se travar em 99%.');
+  }
+
+  const client = new Client(clientOptions);
 
   // Captura o PID do Chrome assim que o Puppeteer o sobe (best effort).
   const captureChromePid = () => {
