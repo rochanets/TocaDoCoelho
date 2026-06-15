@@ -246,6 +246,14 @@ function createWaClient() {
 
   client.on('authenticated', () => {
     captureChromePid();
+    // QR escaneado (ou sessão restaurada): saímos do estado de QR e passamos a cobrar o
+    // 'ready' via watchdog. Sem isto o status ficava preso em SCAN_QR_CODE e o watchdog
+    // achava que ainda esperava o scan do usuário — re-armando para sempre em vez de
+    // reciclar quando a sincronização travava (caso real visto em produção).
+    if (clientStatus === 'SCAN_QR_CODE') {
+      clientStatus = 'STARTING';
+      currentQr    = null;
+    }
     log('INFO', 'Sessão autenticada — aguardando sincronização (ready)...');
   });
 
