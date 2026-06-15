@@ -140,9 +140,27 @@ function createWaClient() {
   });
 
   client.initialize().catch((err) => {
-    console.error('[WAHA-lite] Erro ao inicializar:', err.message);
+    const msg = err.message || '';
+    // Chrome deixa arquivos de lock quando o Node.js trava com o browser aberto.
+    // Limpa o lock e tenta uma vez mais antes de desistir.
+    if (msg.includes('browser is already running')) {
+      console.warn('[WAHA-lite] Chrome travado da sessão anterior — limpando lock e retentando...');
+      const sessionDir = path.join(DATA_DIR, `session-${SESSION_NAME}`);
+      for (const lf of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+        try { fs.unlinkSync(path.join(sessionDir, lf)); } catch (_) {}
+      }
+      waClient = null;
+      setTimeout(() => {
+        if (!waClient) {
+          clientStatus = 'STARTING';
+          waClient     = createWaClient();
+        }
+      }, 2000);
+      return;
+    }
+    console.error('[WAHA-lite] Erro ao inicializar:', msg);
     clientStatus = 'STOPPED';
-    initError    = err.message;
+    initError    = msg;
     waClient     = null;
   });
 
@@ -254,6 +272,13 @@ app.listen(PORT, '127.0.0.1', () => {
   }
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => process.exit(0));
-process.on('SIGINT',  () => process.exit(0));
+// Graceful shutdown — destroça o cliente para fechar o Chrome antes de sair.
+// Sem isso o processo Chrome fica orfão e impede reinicializações subsequentes.
+async function gracefulShutdown() {
+  if (waClient) {
+    try { await waClient.destroy(); } catch (_) {}
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT',  gracefulShutdown);

@@ -14470,6 +14470,47 @@ def _waha_deps_missing():
         return False
 
 
+def _kill_process_on_port(port):
+    """Mata o processo que estiver escutando na porta informada (WAHA-lite)."""
+    try:
+        import subprocess as _sp
+        if sys.platform == 'win32':
+            # netstat retorna linhas como: TCP  127.0.0.1:3001  ...  <PID>
+            out = _sp.check_output(
+                ['netstat', '-ano', '-p', 'TCP'],
+                creationflags=_sp.CREATE_NO_WINDOW,
+                stderr=_sp.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore')
+            for line in out.splitlines():
+                if f':{port} ' in line or f':{port}\t' in line:
+                    parts = line.split()
+                    pid = parts[-1] if parts else ''
+                    if pid.isdigit() and pid != '0':
+                        _sp.call(
+                            ['taskkill', '/F', '/T', '/PID', pid],
+                            creationflags=_sp.CREATE_NO_WINDOW,
+                            stderr=_sp.DEVNULL,
+                        )
+                        logger.info(f'[WhatsApp] Processo WAHA-lite anterior (PID {pid}) encerrado.')
+        else:
+            out = _sp.check_output(
+                ['lsof', '-ti', f'TCP:{port}'],
+                stderr=_sp.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore').strip()
+            for pid in out.splitlines():
+                if pid.isdigit():
+                    try:
+                        import signal as _sig
+                        os.kill(int(pid), _sig.SIGTERM)
+                        logger.info(f'[WhatsApp] Processo WAHA-lite anterior (PID {pid}) encerrado.')
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.debug(f'[WhatsApp] _kill_process_on_port({port}): {exc}')
+
+
 def _restart_waha_lite():
     """Reinicia o WAHA-lite. Máximo 1 restart a cada 5 minutos. Não tenta reiniciar quando
     as dependências (node_modules) estão ausentes, pois o Node crasharia de novo."""
@@ -14485,6 +14526,11 @@ def _restart_waha_lite():
         return False
     try:
         import subprocess as _sp
+        # Encerra o processo atual na porta antes de subir um novo para evitar EADDRINUSE.
+        waha_port = int(os.environ.get('WAHA_PORT', '3001'))
+        _kill_process_on_port(waha_port)
+        import threading as _th
+        _th.Event().wait(timeout=1.5)  # aguarda o SO liberar a porta
         env = os.environ.copy()
         # Reaproveita o log do WAHA-lite definido pelo launcher (WAHA_LOG); sem ele, o
         # crash do Node ficaria invisível (DEVNULL), exatamente o que dificultou diagnosticar
