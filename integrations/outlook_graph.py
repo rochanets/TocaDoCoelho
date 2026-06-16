@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import urllib.error
 import urllib.parse
@@ -93,6 +94,70 @@ def _http_get_json(url, headers=None):
         raise OutlookSyncError(f'Falha de conexão Graph API: {e}') from e
 
 
+# ── PKCE (RFC 7636) ─────────────────────────────────────────────────────────
+# Public client flow — sem client_secret. Recomendado pela Microsoft para apps
+# desktop/nativos (https://learn.microsoft.com/en-us/azure/active-directory/
+# develop/v2-oauth2-auth-code-flow#request-an-authorization-code).
+
+_pkce_store: dict = {}  # {user_id: (verifier, expires_ts)}
+
+
+def _pkce_make_verifier() -> str:
+    return base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b'=').decode('ascii')
+
+
+def _pkce_make_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode('ascii')).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b'=').decode('ascii')
+
+
+def _pkce_save(user_id: int, verifier: str):
+    _pkce_store[int(user_id)] = (verifier, _now_utc().timestamp() + 600)
+
+
+def _pkce_pop(user_id: int) -> str:
+    entry = _pkce_store.pop(int(user_id), None)
+    if not entry:
+        raise OutlookOAuthError('PKCE verifier não encontrado. Reinicie o fluxo de autorização.')
+    verifier, exp = entry
+    if _now_utc().timestamp() > exp:
+        raise OutlookOAuthError('PKCE verifier expirado (>10 min). Reinicie o fluxo de autorização.')
+    return verifier
+
+
+# ── DPAPI — tokens em repouso ────────────────────────────────────────────────
+# Criptografa tokens usando Windows DPAPI, amarrado à conta do usuário do SO.
+# Em ambientes não-Windows (ex.: dev Linux) armazena em texto puro com prefixo
+# diferente para que a descriptografia identifique e retorne o valor original.
+
+_DPAPI_PREFIX = 'dpapi:'
+
+
+def _dpapi_encrypt(plaintext: str) -> str:
+    if not plaintext:
+        return plaintext
+    try:
+        import win32crypt  # type: ignore
+        encrypted = win32crypt.CryptProtectData(plaintext.encode('utf-8'), None, None, None, None, 0)
+        return _DPAPI_PREFIX + base64.b64encode(encrypted).decode('ascii')
+    except Exception:
+        return plaintext
+
+
+def _dpapi_decrypt(value: str) -> str:
+    if not value or not value.startswith(_DPAPI_PREFIX):
+        return value
+    try:
+        import win32crypt  # type: ignore
+        encrypted = base64.b64decode(value[len(_DPAPI_PREFIX):])
+        _, decrypted = win32crypt.CryptUnprotectData(encrypted, None, None, None, 0)
+        return decrypted.decode('utf-8')
+    except Exception:
+        return value
+
+
+# ── State CSRF ───────────────────────────────────────────────────────────────
+
 def _state_secret():
     return (os.environ.get('OUTLOOK_GRAPH_STATE_SECRET') or 'toca-outlook-graph-state').encode('utf-8')
 
@@ -123,29 +188,28 @@ def parse_state(state: str):
         raise OutlookOAuthError(f'state OAuth inválido: {e}') from e
 
 
+# ── OAuth config ─────────────────────────────────────────────────────────────
+
 def _oauth_config(settings=None):
     if settings:
         tenant = (settings.get('tenant') or 'common').strip()
         client_id = (settings.get('client_id') or '').strip()
-        client_secret = (settings.get('client_secret') or '').strip()
         redirect_uri = (settings.get('redirect_uri') or '').strip()
         scope = (settings.get('scope') or 'offline_access Mail.Read').strip()
     else:
         tenant = (os.environ.get('OUTLOOK_GRAPH_TENANT_ID') or 'common').strip()
         client_id = (os.environ.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
-        client_secret = (os.environ.get('OUTLOOK_GRAPH_CLIENT_SECRET') or '').strip()
         redirect_uri = (os.environ.get('OUTLOOK_GRAPH_REDIRECT_URI') or '').strip()
         scope = (os.environ.get('OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read').strip()
 
-    if not client_id or not client_secret or not redirect_uri:
+    if not client_id or not redirect_uri:
         raise OutlookOAuthError(
-            'Configuração OAuth ausente. Configure Tenant ID, Client ID e Client Secret nas Configurações do Toca.'
+            'Configuração OAuth ausente. Configure Tenant ID e Client ID nas Configurações do Toca.'
         )
 
     return {
         'tenant': tenant,
         'client_id': client_id,
-        'client_secret': client_secret,
         'redirect_uri': redirect_uri,
         'scope': scope,
         'token_url': TOKEN_URL_TEMPLATE.format(tenant=tenant),
@@ -155,6 +219,8 @@ def _oauth_config(settings=None):
 
 def build_authorize_url(user_id: int, settings=None):
     cfg = _oauth_config(settings)
+    verifier = _pkce_make_verifier()
+    _pkce_save(user_id, verifier)
     params = {
         'client_id': cfg['client_id'],
         'response_type': 'code',
@@ -162,6 +228,8 @@ def build_authorize_url(user_id: int, settings=None):
         'response_mode': 'query',
         'scope': cfg['scope'],
         'state': make_state(user_id),
+        'code_challenge': _pkce_make_challenge(verifier),
+        'code_challenge_method': 'S256',
     }
     return f"{cfg['authorize_url']}?{urllib.parse.urlencode(params)}"
 
@@ -186,8 +254,8 @@ def _upsert_tokens(conn, user_id, token_payload):
         (
             int(user_id),
             PROVIDER,
-            token_payload.get('access_token'),
-            token_payload.get('refresh_token'),
+            _dpapi_encrypt(token_payload.get('access_token') or ''),
+            _dpapi_encrypt(token_payload.get('refresh_token') or ''),
             token_payload.get('scope'),
             token_payload.get('token_type') or 'Bearer',
             expires_at,
@@ -199,13 +267,14 @@ def _upsert_tokens(conn, user_id, token_payload):
 
 def exchange_code_and_store(conn, code: str, user_id: int, settings=None):
     cfg = _oauth_config(settings)
+    verifier = _pkce_pop(user_id)
     body = {
         'client_id': cfg['client_id'],
-        'client_secret': cfg['client_secret'],
         'grant_type': 'authorization_code',
         'code': code,
         'redirect_uri': cfg['redirect_uri'],
         'scope': cfg['scope'],
+        'code_verifier': verifier,
     }
     token_payload = _http_form_post(cfg['token_url'], body)
     if not token_payload.get('access_token'):
@@ -237,10 +306,8 @@ def _refresh_tokens(conn, user_id: int, refresh_token: str, settings=None):
     cfg = _oauth_config(settings)
     body = {
         'client_id': cfg['client_id'],
-        'client_secret': cfg['client_secret'],
         'grant_type': 'refresh_token',
         'refresh_token': refresh_token,
-        'redirect_uri': cfg['redirect_uri'],
         'scope': cfg['scope'],
     }
     payload = _http_form_post(cfg['token_url'], body)
@@ -255,8 +322,8 @@ def get_valid_access_token(conn, user_id: int, settings=None):
     if not row:
         raise OutlookOAuthError('Integração Outlook Graph não conectada para este usuário.')
 
-    access_token = row['access_token']
-    refresh_token = row['refresh_token']
+    access_token = _dpapi_decrypt(row['access_token'] or '')
+    refresh_token = _dpapi_decrypt(row['refresh_token'] or '')
     expires_at = row['expires_at']
 
     if access_token and not _is_expired(expires_at):
