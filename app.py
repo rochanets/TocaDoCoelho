@@ -698,12 +698,18 @@ def init_db():
         period_days INTEGER,
         message_count INTEGER,
         content_hash TEXT NOT NULL,
+        last_message_ts INTEGER DEFAULT 0,
         activity_id INTEGER,
         imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
         FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_wa_sync_hash ON whatsapp_sync_log(client_id, content_hash)')
+    # Migração: coluna last_message_ts para deduplicação incremental (só resume mensagens novas)
+    c.execute("PRAGMA table_info(whatsapp_sync_log)")
+    _wa_sync_cols = [col[1] for col in c.fetchall()]
+    if 'last_message_ts' not in _wa_sync_cols:
+        c.execute('ALTER TABLE whatsapp_sync_log ADD COLUMN last_message_ts INTEGER DEFAULT 0')
 
     # Tabela de cards de mapeamento de ambiente
     c.execute('''CREATE TABLE IF NOT EXISTS environment_cards (
@@ -916,6 +922,14 @@ def init_db():
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
     if _waha_session_env:
         c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
+    # Cura URLs já salvas apontando para a porta do próprio app (causa loop Flask→Flask, 404/405).
+    # A validação no PUT impede salvar novas, mas valores antigos no banco precisam ser corrigidos aqui.
+    _app_port = str(os.environ.get('PORT', '3000'))
+    _healed_url = _waha_url_env or 'http://localhost:3001'
+    c.execute(
+        "UPDATE app_settings SET value=? WHERE key='waha_api_url' AND (value LIKE ? OR value LIKE ?)",
+        (_healed_url, f'%localhost:{_app_port}%', f'%127.0.0.1:{_app_port}%')
+    )
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_timeout_seconds', '120'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_sync_days', '30'))
     # Histórico de conversas do iToca (30 dias)
@@ -6032,6 +6046,44 @@ def get_ui_config():
         return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
     except Exception as e:
         print(f'[ERROR] GET /api/config/ui: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+_VALID_THEMES = {'verde-classico', 'baby-pink', 'black-cat', 'white-pearl', 'blue-space'}
+
+
+@app.route('/api/config/theme', methods=['GET'])
+def get_theme_config():
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT value FROM app_settings WHERE key = "ui_color_theme"')
+        row = c.fetchone()
+        conn.close()
+        theme = row['value'] if row and row['value'] in _VALID_THEMES else 'verde-classico'
+        return jsonify({'theme': theme})
+    except Exception as e:
+        print(f'[ERROR] GET /api/config/theme: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/theme', methods=['PUT'])
+def put_theme_config():
+    try:
+        data = request.get_json(force=True) or {}
+        theme = data.get('theme', 'verde-classico')
+        if theme not in _VALID_THEMES:
+            return jsonify({'error': 'Tema inválido'}), 400
+        conn = get_db(); c = conn.cursor()
+        c.execute(
+            'INSERT INTO app_settings (key, value) VALUES ("ui_color_theme", ?) '
+            'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP',
+            (theme,)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'theme': theme})
+    except Exception as e:
+        print(f'[ERROR] PUT /api/config/theme: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14257,6 +14309,71 @@ def _waha_headers(api_key):
     return h
 
 
+_waha_last_restart = 0.0
+
+def _waha_runtime_paths():
+    """Retorna (node, script) do WAHA-lite. Usa as env vars exportadas pelo launcher;
+    se ausentes (ex.: app rodando direto do código-fonte), tenta um fallback razoável."""
+    node   = os.environ.get('WAHA_NODE_EXE', '').strip()
+    script = os.environ.get('WAHA_SCRIPT', '').strip()
+    if not script:
+        candidate = Path(__file__).resolve().parent / 'waha-lite' / 'waha-lite.js'
+        if candidate.exists():
+            script = str(candidate)
+    if not node:
+        node = shutil.which('node') or shutil.which('node.exe') or ''
+    return node, script
+
+
+def _waha_deps_missing():
+    """True se o node_modules do WAHA-lite estiver ausente/vazio. Nesse caso o processo
+    Node crasha no primeiro require e nada escuta na porta — reiniciar não adianta."""
+    if os.environ.get('WAHA_DEPS_MISSING') == '1':
+        return True
+    _, script = _waha_runtime_paths()
+    if not script:
+        return False  # não sabemos onde está o waha-lite; não afirmar que falta
+    nm = Path(script).parent / 'node_modules'
+    try:
+        return (not nm.is_dir()) or (next(nm.iterdir(), None) is None)
+    except Exception:
+        return False
+
+
+def _restart_waha_lite():
+    """Reinicia o WAHA-lite. Máximo 1 restart a cada 5 minutos. Não tenta reiniciar quando
+    as dependências (node_modules) estão ausentes, pois o Node crasharia de novo."""
+    global _waha_last_restart
+    now = time.time()
+    if now - _waha_last_restart < 300:
+        return False
+    if _waha_deps_missing():
+        logger.warning('[WhatsApp] node_modules do WAHA-lite ausente — restart ignorado (reinstale).')
+        return False
+    node, script = _waha_runtime_paths()
+    if not node or not script:
+        return False
+    try:
+        import subprocess as _sp
+        env = os.environ.copy()
+        kwargs = {
+            'env': env,
+            'cwd': str(Path(script).parent),
+            'stdout': _sp.DEVNULL,
+            'stderr': _sp.DEVNULL,
+        }
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = _sp.CREATE_NO_WINDOW
+        _sp.Popen([node, script], **kwargs)
+        _waha_last_restart = now
+        os.environ['WAHA_STARTED_AT'] = str(now)
+        logger.info('[WhatsApp] WAHA-lite reiniciado automaticamente.')
+        return True
+    except Exception as exc:
+        logger.warning(f'[WhatsApp] Falha ao reiniciar WAHA-lite: {exc}')
+        return False
+
+
 def _waha_extract_text(msg, client_name):
     """Extrai texto de uma mensagem do WAHA. Retorna (texto, sender_label)."""
     sender = 'Você' if msg.get('fromMe') else client_name
@@ -14320,6 +14437,13 @@ def _whatsapp_sync_async(task_id, period_days):
                 skipped += 1
                 continue
 
+            # Deduplicação incremental: só resumimos mensagens MAIS NOVAS do que a
+            # última já processada para este cliente. Evita re-resumir a mesma conversa.
+            c.execute('SELECT MAX(last_message_ts) FROM whatsapp_sync_log WHERE client_id = ?', (client_id,))
+            _row = c.fetchone()
+            last_processed_ts = int(_row[0]) if _row and _row[0] else 0
+            effective_since = max(since_ts, last_processed_ts + 1) if last_processed_ts else since_ts
+
             try:
                 # WAHA: GET /api/{session}/chats/{chatId}/messages com filtro de timestamp server-side
                 msg_resp = requests.get(
@@ -14328,7 +14452,7 @@ def _whatsapp_sync_async(task_id, period_days):
                     params={
                         'limit': 500,
                         'downloadMedia': 'false',
-                        'filter.timestamp.gte': since_ts,
+                        'filter.timestamp.gte': effective_since,
                         'filter.timestamp.lte': now_ts,
                     },
                     timeout=25
@@ -14358,7 +14482,7 @@ def _whatsapp_sync_async(task_id, period_days):
             last_ts = 0
             for msg in messages:
                 ts = _msg_ts(msg)
-                if ts and (ts < since_ts or ts > now_ts):
+                if ts and (ts < effective_since or ts > now_ts):
                     continue
                 if ts > last_ts:
                     last_ts = ts
@@ -14378,17 +14502,22 @@ def _whatsapp_sync_async(task_id, period_days):
                 continue
 
             conversation_text = '\n'.join(texts[-60:])
+            today_str = datetime.now().strftime('%Y-%m-%d')
             prompt = (
                 f"Analise a conversa de WhatsApp entre o usuário e '{client_name}' "
-                f"(período: {period_label}) e escreva um resumo conciso em 2 a 4 frases, "
-                "em português, no formato de log de atividade CRM. "
-                "Mencione tópicos tratados, decisões tomadas ou pendências. "
-                "Não use aspas nem markdown.\n\n"
-                f"Conversa:\n{conversation_text}\n\nResumo:"
+                f"(período: {period_label}). A data de hoje é {today_str}. "
+                "Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois) no formato:\n"
+                '{"resumo": "resumo conciso em 2 a 4 frases em português, formato log de atividade CRM, '
+                'mencionando tópicos tratados, decisões e pendências, sem aspas nem markdown", '
+                '"followup": {"data": "YYYY-MM-DD", "titulo": "descrição curta do retorno/compromisso combinado"}}\n'
+                "Se houver uma data combinada de retorno, reunião, ligação ou follow-up (FUP) na conversa, "
+                "preencha o objeto 'followup' resolvendo datas relativas (ex.: 'amanhã', 'semana que vem') a partir de hoje. "
+                "Se NÃO houver compromisso de data combinado, use \"followup\": null.\n\n"
+                f"Conversa:\n{conversation_text}"
             )
 
-            summary = _sai_simple_prompt(prompt)
-            if not summary:
+            raw_llm = _sai_simple_prompt(prompt)
+            if not raw_llm:
                 or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
                 if or_key:
                     try:
@@ -14404,19 +14533,42 @@ def _whatsapp_sync_async(task_id, period_days):
                             json={
                                 'model': (or_s.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip(),
                                 'messages': [
-                                    {'role': 'system', 'content': 'Você é um assistente de CRM especializado em resumos de conversas de WhatsApp.'},
+                                    {'role': 'system', 'content': 'Você é um assistente de CRM especializado em resumos de conversas de WhatsApp. Responde sempre em JSON válido.'},
                                     {'role': 'user', 'content': prompt}
                                 ],
                                 'temperature': 0.1
                             },
                             timeout=30
                         )
-                        summary = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
+                        raw_llm = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
                     except Exception:
                         pass
 
+            # Parse da resposta: JSON {resumo, followup} ou texto puro (fallback retrocompatível)
+            summary = ''
+            followup_date = ''
+            followup_title = ''
+            parsed = _extract_json_object_from_text(raw_llm) if raw_llm else None
+            if isinstance(parsed, dict):
+                summary = (parsed.get('resumo') or parsed.get('summary') or '').strip()
+                fu = parsed.get('followup')
+                if isinstance(fu, dict):
+                    fu_data = (fu.get('data') or fu.get('date') or '').strip()
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', fu_data):
+                        followup_date = fu_data
+                        followup_title = (fu.get('titulo') or fu.get('title') or '').strip()
+            elif raw_llm:
+                summary = raw_llm.strip()
+
             if not summary:
                 summary = f'Conversa de WhatsApp com {client_name} no período de {period_label}. {len(texts)} mensagem(ns) trocada(s).'
+
+            # Fallback: se a IA não detectou follow-up, tenta extrair datas do texto via regex
+            if not followup_date:
+                _dates = extract_future_commitment_dates(conversation_text)
+                if _dates:
+                    followup_date = _dates[0]
+                    followup_title = f'Retorno combinado com {client_name}'
 
             activity_date = datetime.utcfromtimestamp(last_ts).strftime('%Y-%m-%d %H:%M:%S') if last_ts else now_dt.strftime('%Y-%m-%d %H:%M:%S')
             pending_items.append({
@@ -14427,7 +14579,10 @@ def _whatsapp_sync_async(task_id, period_days):
                 'activity_date': activity_date,
                 'message_count': len(texts),
                 'content_hash': content_hash,
+                'last_message_ts': last_ts,
                 'period_days': period_days,
+                'followup_date': followup_date,
+                'followup_title': followup_title or (f'Retorno combinado com {client_name}' if followup_date else ''),
             })
             imported += 1
 
@@ -14464,6 +14619,13 @@ def whatsapp_get_config():
 @app.route('/api/whatsapp/config', methods=['PUT'])
 def whatsapp_save_config():
     data = request.get_json(force=True) or {}
+    waha_url = (data.get('waha_api_url') or '').strip()
+    if waha_url:
+        app_port = str(os.environ.get('PORT', '3000'))
+        for forbidden in (f'localhost:{app_port}', f'127.0.0.1:{app_port}'):
+            if forbidden in waha_url:
+                return jsonify({'ok': False,
+                                'error': f'A URL do WAHA não pode apontar para a porta do próprio app (:{app_port}). Use a porta 3001.'}), 400
     db = get_db()
     c = db.cursor()
     for key in ['waha_api_url', 'waha_api_key', 'waha_session_name']:
@@ -14492,8 +14654,22 @@ def whatsapp_status():
         status = (resp.json() or {}).get('status', 'STOPPED')
         return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
     except requests.exceptions.ConnectionError:
+        # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
+        if _waha_deps_missing():
+            return jsonify({'configured': True, 'connected': False, 'state': 'offline',
+                            'error': 'WAHA-lite não pôde iniciar: dependências (node_modules) ausentes. '
+                                     'Reinstale o Toca do Coelho (ou rode "npm install" na pasta waha-lite).'})
+        started_at = float(os.environ.get('WAHA_STARTED_AT', '0'))
+        seconds_up = time.time() - started_at
+        if seconds_up < 90:
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite está inicializando. Aguarde alguns instantes...'})
+        restarted = _restart_waha_lite()
+        if restarted:
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite foi reiniciado. Aguarde alguns instantes...'})
         return jsonify({'configured': True, 'connected': False, 'state': 'offline',
-                        'error': 'WAHA offline. Verifique se o serviço (container) está rodando.'})
+                        'error': 'Serviço do WhatsApp (WAHA-lite) offline. Reinicie o Toca do Coelho para iniciá-lo automaticamente.'})
     except Exception as e:
         return jsonify({'configured': True, 'connected': False, 'state': 'error', 'error': str(e)})
 
@@ -14527,8 +14703,8 @@ def whatsapp_connect():
 
     # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64)
     qr = None
-    for _ in range(10):
-        time.sleep(1.3)
+    for _ in range(20):
+        time.sleep(2)
         try:
             st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
             status = (st.json() or {}).get('status') if st.ok else None
@@ -14548,7 +14724,7 @@ def whatsapp_connect():
     if qr:
         return jsonify({'ok': True, 'connected': False, 'qr': qr})
 
-    return jsonify({'ok': False, 'error': 'Não foi possível gerar o QR code. Verifique os logs do container WAHA (docker logs toca-waha).'}), 500
+    return jsonify({'ok': False, 'error': 'QR code não apareceu em 40 segundos. O Chrome/Edge pode estar demorando para abrir — feche e abra novamente o Toca do Coelho.'}), 500
 
 
 @app.route('/api/whatsapp/sync', methods=['POST'])
@@ -14581,6 +14757,7 @@ def whatsapp_approve():
     db = get_db()
     c = db.cursor()
     inserted = 0
+    commitments_created = 0
     now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 
     for item in items:
@@ -14591,6 +14768,11 @@ def whatsapp_approve():
         phone = (item.get('phone') or '').strip()
         period_days = int(item.get('period_days') or 7)
         message_count = int(item.get('message_count') or 0)
+        last_message_ts = int(item.get('last_message_ts') or 0)
+        followup_date = (item.get('followup_date') or '').strip()
+        followup_title = (item.get('followup_title') or '').strip()
+        # Permite que o usuário desmarque o FUP no modal de revisão
+        followup_enabled = item.get('followup_enabled', True)
 
         if not client_id or not summary or not content_hash:
             continue
@@ -14607,14 +14789,26 @@ def whatsapp_approve():
         activity_id = c.lastrowid
         c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
         c.execute(
-            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, activity_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (client_id, phone, period_days, message_count, content_hash, activity_id)
+            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id)
         )
         inserted += 1
 
+        # Compromisso de follow-up (FUP) → calendário do sistema
+        if followup_enabled and re.match(r'^\d{4}-\d{2}-\d{2}$', followup_date):
+            title = followup_title or 'Retorno combinado (WhatsApp)'
+            if len(title) > 120:
+                title = title[:117] + '...'
+            c.execute(
+                '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (client_id, activity_id, title, summary, followup_date, None, 'whatsapp')
+            )
+            commitments_created += 1
+
     db.commit()
     db.close()
-    return jsonify({'ok': True, 'inserted': inserted})
+    return jsonify({'ok': True, 'inserted': inserted, 'commitments': commitments_created})
 
 
 # Servir arquivos estaticos
