@@ -14475,6 +14475,65 @@ def _waha_deps_missing():
         return False
 
 
+def _kill_process_on_port(port):
+    """Mata o processo que estiver ESCUTANDO na porta informada (WAHA-lite).
+
+    Importante: só mata quem está em LISTENING no endereço local — nunca conexões
+    ESTABLISHED, senão poderíamos matar o próprio Toca (que conecta no WAHA-lite)."""
+    killed = []
+    try:
+        import subprocess as _sp
+        if sys.platform == 'win32':
+            # Colunas do netstat -ano: Proto | Local Address | Foreign Address | State | PID
+            #   TCP    127.0.0.1:3001    0.0.0.0:0    LISTENING    12345
+            out = _sp.check_output(
+                ['netstat', '-ano', '-p', 'TCP'],
+                creationflags=_sp.CREATE_NO_WINDOW,
+                stderr=_sp.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore')
+            seen = set()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                proto, local, _foreign, state, pid = parts[0], parts[1], parts[2], parts[3], parts[-1]
+                if not proto.upper().startswith('TCP'):
+                    continue
+                if state.upper() != 'LISTENING':
+                    continue            # ignora ESTABLISHED/TIME_WAIT etc.
+                if not local.endswith(f':{port}'):
+                    continue
+                if pid.isdigit() and pid != '0' and pid not in seen:
+                    seen.add(pid)
+                    _sp.call(
+                        ['taskkill', '/F', '/T', '/PID', pid],
+                        creationflags=_sp.CREATE_NO_WINDOW,
+                        stderr=_sp.DEVNULL,
+                    )
+                    killed.append(pid)
+        else:
+            # -sTCP:LISTEN garante que só pegamos quem escuta, não quem conecta.
+            out = _sp.check_output(
+                ['lsof', '-ti', f'TCP:{port}', '-sTCP:LISTEN'],
+                stderr=_sp.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore').strip()
+            import signal as _sig
+            for pid in out.splitlines():
+                if pid.isdigit():
+                    try:
+                        os.kill(int(pid), _sig.SIGTERM)
+                        killed.append(pid)
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.debug(f'[WhatsApp] _kill_process_on_port({port}): {exc}')
+    if killed:
+        logger.info(f'[WhatsApp] Processo(s) WAHA-lite anterior(es) na porta {port} encerrado(s): {", ".join(killed)}')
+    return bool(killed)
+
+
 def _restart_waha_lite():
     """Reinicia o WAHA-lite. Máximo 1 restart a cada 5 minutos. Não tenta reiniciar quando
     as dependências (node_modules) estão ausentes, pois o Node crasharia de novo."""
@@ -14490,6 +14549,11 @@ def _restart_waha_lite():
         return False
     try:
         import subprocess as _sp
+        # Encerra o processo atual na porta antes de subir um novo para evitar EADDRINUSE.
+        waha_port = int(os.environ.get('WAHA_PORT', '3001'))
+        _kill_process_on_port(waha_port)
+        import threading as _th
+        _th.Event().wait(timeout=1.5)  # aguarda o SO liberar a porta
         env = os.environ.copy()
         # Reaproveita o log do WAHA-lite definido pelo launcher (WAHA_LOG); sem ele, o
         # crash do Node ficaria invisível (DEVNULL), exatamente o que dificultou diagnosticar
