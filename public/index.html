@@ -3887,6 +3887,7 @@
             <div id="gestaoContaSubPanel_accounts" data-subtab="accounts">
                 <div style="margin-bottom:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
                     <button class="btn btn-primary" onclick="openAccountModal()"><i class="fas fa-plus"></i> Nova Conta</button>
+                    <button class="btn btn-secondary" onclick="openArchivedAccountsModal()"><i class="fas fa-box-archive"></i> Contas Arquivadas</button>
                     <label style="display:flex; align-items:center; gap:7px; font-size:13px; color:#fff; cursor:pointer; user-select:none;">
                         <input type="checkbox" id="showTerminatedPresences" onchange="loadAccounts()" style="accent-color:#f97316; width:14px; height:14px;">
                         <i class="fas fa-circle-xmark" style="color:#f97316; font-size:13px;"></i>
@@ -15642,7 +15643,7 @@
             if (!account || account.error) return showError('Conta não encontrada');
             const sortedContacts = sortAccountContactsByRole(account.contacts || []);
             let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:860px;">`;
-            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-danger btn-small" onclick="deleteAccount(${account.id}, ${escapeHtml(JSON.stringify(account.name))})"><i class="fas fa-trash"></i> Excluir</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
             const mensalPresences = (account.presences || []).filter(p => (p.billing_type || 'Mensal') === 'Mensal' && !isPresenceTerminated(p));
             const unicoPresences = (account.presences || []).filter(p => p.billing_type === 'Unico' && !isPresenceTerminated(p));
@@ -15755,6 +15756,54 @@
         }
 
         function closeAccountViewModal(){ const m=document.getElementById('accountViewModal'); if(m)m.remove(); }
+
+        async function deleteAccount(accountId, accountName) {
+            const nome = accountName || 'esta conta';
+            if (!await uiConfirm(`Deseja realmente excluir a conta "${nome}"? Todos os contatos, atividades e dados serão arquivados e poderão ser restaurados depois em "Contas Arquivadas".`, 'Excluir Conta')) return;
+            const r = await fetch(`${API_BASE}/accounts/${accountId}`, { method: 'DELETE' });
+            if (!r.ok) {
+                const data = await r.json().catch(() => ({}));
+                return showError(data.error || 'Erro ao excluir conta');
+            }
+            closeAccountViewModal();
+            showSuccess('Conta arquivada e excluída com sucesso');
+            await loadAccounts();
+        }
+
+        async function openArchivedAccountsModal() {
+            const r = await fetch(`${API_BASE}/accounts/archives`);
+            const archives = r.ok ? await r.json() : [];
+            let html = `<div class="modal active" id="archivedAccountsModal" onclick="if(event.target===this) closeArchivedAccountsModal()"><div class="modal-content" style="max-width:640px;">`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;"><h2 style="color:#047857; margin:0;"><i class="fas fa-box-archive"></i> Contas Arquivadas</h2><button class="btn btn-secondary btn-small" onclick="closeArchivedAccountsModal()">Fechar</button></div>`;
+            if (!archives.length) {
+                html += `<div style="color:#6b7280;">Nenhuma conta arquivada.</div>`;
+            } else {
+                html += archives.map(a => `<div class='history-item' style='display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;'><div><div class='history-meta'>${escapeHtml(a.account_name)}</div><div style='font-size:12px; color:#6b7280;'>Arquivada em ${formatDateBr((a.archived_at||'').slice(0,10))} • ${a.contacts_count||0} contato(s) • ${a.activities_count||0} atividade(s)</div></div><div style='display:flex; gap:6px;'><button class='btn btn-primary btn-small' onclick='restoreAccountArchive(${a.id})'><i class="fas fa-rotate-left"></i> Restaurar</button><button class='btn btn-danger btn-small' onclick='deleteAccountArchive(${a.id})'><i class="fas fa-trash"></i></button></div></div>`).join('');
+            }
+            html += `</div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeArchivedAccountsModal(){ const m=document.getElementById('archivedAccountsModal'); if(m)m.remove(); }
+
+        async function restoreAccountArchive(archiveId) {
+            if (!await uiConfirm('Restaurar esta conta com todos os seus contatos e atividades?', 'Restaurar Conta')) return;
+            const r = await fetch(`${API_BASE}/accounts/archives/${archiveId}/restore`, { method: 'POST' });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) return showError(data.error || 'Erro ao restaurar conta');
+            showSuccess('Conta restaurada com sucesso');
+            closeArchivedAccountsModal();
+            await loadAccounts();
+        }
+
+        async function deleteAccountArchive(archiveId) {
+            if (!await uiConfirm('Excluir permanentemente esta conta arquivada? Esta ação não pode ser desfeita.', 'Excluir Arquivo')) return;
+            const r = await fetch(`${API_BASE}/accounts/archives/${archiveId}`, { method: 'DELETE' });
+            if (!r.ok) return showError('Erro ao excluir arquivo');
+            showSuccess('Arquivo excluído');
+            closeArchivedAccountsModal();
+            await openArchivedAccountsModal();
+        }
 
         function toggleMainContactSelection(clientId) {
             const hidden = document.getElementById('accountMainContactsHidden');
