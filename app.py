@@ -6548,11 +6548,14 @@ def set_startup_config():
 
 
 def _outlook_fetch_via_powershell(days=60):
-    """
-    Lê emails do Outlook via PowerShell (compatível com Office C2R/365).
-    PowerShell corre em 64-bit e tem acesso nativo ao COM do Click-to-Run.
-    Retorna lista de dicts no formato de _outlook_extract_email().
-    """
+    """Desabilitado por recomendação de segurança SAST — use Microsoft Graph API."""
+    raise RuntimeError(
+        'Sincronização via PowerShell/COM foi desabilitada. Use "Sync Microsoft 365" (Graph API).'
+    )
+
+
+def _DISABLED_outlook_fetch_via_powershell_legacy(days=60):
+    """Mantido apenas como referência histórica — NÃO EXECUTAR."""
     import subprocess, tempfile, json, os
 
     ps_script = """\
@@ -6885,44 +6888,10 @@ def _outlook_import_emails(emails_data, conn):
 
 
 def _outlook_call_llm(prompt):
-    """Chama LLM para análise de email (SAI primeiro, OpenRouter como fallback). Retorna str ou None."""
+    """Chama SAI para análise de email. Restrito a SAI por compliance — conteúdo de
+    e-mail não deve ser enviado a provedores externos não homologados (LGPD)."""
     raw = _sai_simple_prompt(prompt)
-    if raw:
-        return raw.strip()
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
-        try:
-            payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um assistente de CRM. Responda de forma objetiva e concisa em português.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                'temperature': 0.1
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            content = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            return content.strip() if content else None
-        except Exception as e:
-            logger.warning(f'[OutlookLLM][OpenRouter] falha: {e}')
-    return None
+    return raw.strip() if raw else None
 
 
 @app.route('/api/outlook/diagnose', methods=['GET'])
@@ -6938,8 +6907,7 @@ def outlook_diagnose():
     })
 
     has_graph_creds = bool(
-        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') and
-        _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET')
+        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID')
     )
     checks.append({
         'label': 'Graph API (credenciais)',
@@ -7069,25 +7037,18 @@ def sync_outlook_stream():
 
 
 def _outlook_sync_stream_com():
-    if sys.platform != 'win32':
-        def _err():
-            yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização COM com Outlook disponível somente no Windows.'})}\n\n"
-        return Response(stream_with_context(_err()), mimetype='text/event-stream')
-
-    default_days = int(_resolve_setting('outlook_sync_days', 'OUTLOOK_SYNC_DAYS') or 30)
-    days = max(1, min(int(request.args.get('days', default_days)), 365))
-    return _build_outlook_stream_response(days=days, source='com', page_size=100, max_pages=1)
+    def _err():
+        yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização via PowerShell/COM foi desabilitada. Use o botão Sync Microsoft 365 (Graph API).'})}\n\n"
+    return Response(stream_with_context(_err()), mimetype='text/event-stream')
 
 
 try:
     import graph_credentials as _gc
     _GRAPH_DEFAULT_TENANT = getattr(_gc, 'GRAPH_TENANT_ID', '')
     _GRAPH_DEFAULT_CLIENT_ID = getattr(_gc, 'GRAPH_CLIENT_ID', '')
-    _GRAPH_DEFAULT_CLIENT_SECRET = getattr(_gc, 'GRAPH_CLIENT_SECRET', '')
 except ImportError:
     _GRAPH_DEFAULT_TENANT = ''
     _GRAPH_DEFAULT_CLIENT_ID = ''
-    _GRAPH_DEFAULT_CLIENT_SECRET = ''
 
 
 def _graph_redirect_uri():
@@ -7098,7 +7059,6 @@ def _graph_make_settings(redirect_uri=''):
     return {
         'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
         'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
-        'client_secret': (_resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET).strip(),
         'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
         'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read User.Read').strip(),
     }
@@ -7158,23 +7118,18 @@ def outlook_graph_config():
     if request.method == 'GET':
         tenant = _resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT
         client_id = _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID
-        client_secret = _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET
         return jsonify({
             'tenant_id': tenant,
             'client_id': client_id,
-            'has_secret': bool(client_secret),
-            'configured': bool(tenant and client_id and client_secret),
+            'configured': bool(tenant and client_id),
         })
     data = request.get_json() or {}
     tenant = (data.get('tenant_id') or '').strip()
     client_id = (data.get('client_id') or '').strip()
-    client_secret = (data.get('client_secret') or '').strip()
     conn = get_db()
     c = conn.cursor()
     for key, value in [('outlook_graph_tenant_id', tenant), ('outlook_graph_client_id', client_id)]:
         c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', (key, value))
-    if client_secret:
-        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_graph_client_secret', client_secret))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})

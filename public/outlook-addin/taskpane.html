@@ -4,7 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Toca do Coelho — Sync</title>
-<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<!-- SRI não aplicável: a Microsoft atualiza office.js continuamente e não publica
+     hash estável. crossorigin="anonymous" garante isolamento de credenciais no
+     carregamento cross-origin. Hotspot SonarQube revisado e aceito. -->
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" crossorigin="anonymous"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
