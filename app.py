@@ -2018,6 +2018,7 @@ def _relation_report_call_sai_narrative_template(
     resp.raise_for_status()
     raw = resp.text
 
+    logger.info(f'[RelationReport][SAI] OK ({len(raw)} chars)')
     logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
     parsed_outer = None
     try:
@@ -4712,6 +4713,7 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
         if not resp.ok:
             logger.error(f'[iToca][SAI] HTTPError {resp.status_code}: {resp.text[:400]}')
             raise RuntimeError(f'Erro na API SAI (HTTP {resp.status_code}): {resp.text[:200]}')
+        logger.info(f'[iToca][SAI] OK ({len(resp.text)} chars)')
         raw = resp.text
     except RuntimeError:
         raise
@@ -4890,6 +4892,7 @@ def _itoca_detect_action_intent(question: str, answer: str) -> dict:
 
         resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=30)
         raw = resp.text
+        logger.info(f'[iToca][ActionDetector] OK ({len(raw)} chars)')
 
         parsed = _extract_json_object_from_text(raw)
         if not parsed or not isinstance(parsed, dict):
