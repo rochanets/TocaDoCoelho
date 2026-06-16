@@ -3308,6 +3308,36 @@
         html[data-theme="blue-space"] .nav-item.active { box-shadow: 0 4px 15px rgba(87,84,168,0.45), 0 0 22px rgba(87,84,168,0.25) !important; }
         html[data-theme="blue-space"] .btn-primary { box-shadow: 0 4px 12px rgba(87,84,168,0.4), 0 0 18px rgba(87,84,168,0.2) !important; }
 
+        /* ── Relationship Report: bloco do nome do módulo segue o tema ── */
+        html[data-theme="black-cat"] .relreport-hero { background: linear-gradient(135deg, #2b2b2b, #1a1a1a) !important; box-shadow: 0 14px 40px rgba(0,0,0,0.45) !important; }
+        html[data-theme="blue-space"] .relreport-hero { background: linear-gradient(135deg, #1a2a6c, #0d1733) !important; box-shadow: 0 14px 40px rgba(10,20,60,0.5) !important; }
+        html[data-theme="baby-pink"] .relreport-hero { background: linear-gradient(135deg, #d4708a, #a0607a) !important; box-shadow: 0 14px 40px rgba(212,112,138,0.22) !important; }
+        html[data-theme="white-pearl"] .relreport-hero { background: linear-gradient(135deg, #a09880, #7c6d5f) !important; box-shadow: 0 14px 40px rgba(124,109,95,0.22) !important; }
+
+        /* ── Resumo LinkedIn (Preparar Reunião): manter o relatório legível nos temas escuros ── */
+        html[data-theme="black-cat"] #atLinkedinResumoCard .settings-card,
+        html[data-theme="blue-space"] #atLinkedinResumoCard .settings-card { background: #ffffff !important; border-color: #e5e7eb !important; }
+        html[data-theme="black-cat"] #atLinkedinResumoCard h2,
+        html[data-theme="black-cat"] #atLinkedinResumoCard strong,
+        html[data-theme="black-cat"] #atLinkedinResumoCard b,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h2,
+        html[data-theme="blue-space"] #atLinkedinResumoCard strong,
+        html[data-theme="blue-space"] #atLinkedinResumoCard b { color: #065f46 !important; }
+        html[data-theme="black-cat"] #atLinkedinResumoCard h3,
+        html[data-theme="black-cat"] #atLinkedinResumoCard h4,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h3,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h4 { color: #047857 !important; }
+        html[data-theme="black-cat"] #atLinkedinResumoCard p,
+        html[data-theme="black-cat"] #atLinkedinResumoCard ul,
+        html[data-theme="black-cat"] #atLinkedinResumoCard li,
+        html[data-theme="black-cat"] #atLinkedinResumoCard label,
+        html[data-theme="black-cat"] #atLinkedinResumoCard span,
+        html[data-theme="blue-space"] #atLinkedinResumoCard p,
+        html[data-theme="blue-space"] #atLinkedinResumoCard ul,
+        html[data-theme="blue-space"] #atLinkedinResumoCard li,
+        html[data-theme="blue-space"] #atLinkedinResumoCard label,
+        html[data-theme="blue-space"] #atLinkedinResumoCard span { color: #374151 !important; }
+
     </style>
 </head>
 <body>
@@ -4454,7 +4484,7 @@
                 </section>
 
                 <section class="settings-card">
-                    <h3>Outlook Add-in (recomendado)</h3>
+                    <h3><i class="fas fa-envelope" style="margin-right:8px; color:#059669;"></i>Outlook Add-in (recomendado)</h3>
                     <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
                         Instale o add-in no Outlook para exportar emails diretamente para o Toca — sem timeout, sem janelas extras.
                         Funciona com qualquer conta Exchange ou Microsoft 365.
@@ -9825,7 +9855,7 @@
                 const data = await response.json();
                 clients = data;
 
-                let html = '<div style="background: linear-gradient(135deg, rgba(4,120,87,0.96), rgba(6,95,70,0.96)); color: white; padding: 24px; border-radius: 16px; box-shadow: 0 14px 40px rgba(4,120,87,0.16);">';
+                let html = '<div class="relreport-hero" style="background: linear-gradient(135deg, rgba(4,120,87,0.96), rgba(6,95,70,0.96)); color: white; padding: 24px; border-radius: 16px; box-shadow: 0 14px 40px rgba(4,120,87,0.16);">';
                 html += '<div style="max-width:680px;">';
                 html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relationship Report</h2>';
                 html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Abra um report executivo visual no navegador com identidade da conta, foto do usuário, cards dos contatos, contexto relacional, leitura temática e botão para imprimir ou salvar em PDF.</p>';
@@ -17748,13 +17778,15 @@
 
                 const photoImported = atLinkedinLastImportedPhotoUrl ? 'com foto do perfil' : 'sem foto detectada';
 
-                resultArea.innerHTML = `<div style="background:#ecfdf5; border:1px solid #6ee7b7; border-radius:8px; padding:10px 14px; font-size:13px; color:#065f46; margin-bottom:8px;">
-                    <i class="fas fa-check-circle" style="margin-right:6px;"></i>
-                    <strong>Perfil importado!</strong> Capturado em ${new Date(atLinkedinImportedAt).toLocaleTimeString('pt-BR')} (${photoImported}). Gerando resumo...
+                resultArea.innerHTML = `<div style="background:#ecfdf5; border:1px solid #6ee7b7; border-radius:8px; padding:12px 16px; font-size:13px; color:#065f46; margin-bottom:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <i class="fas fa-check-circle" style="margin-right:2px;"></i>
+                    <span><strong>Perfil importado!</strong> Capturado em ${new Date(atLinkedinImportedAt).toLocaleTimeString('pt-BR')} (${photoImported}). Revise os campos e clique em <strong>"Gerar Resumo Executivo"</strong> quando estiver pronto.</span>
+                    <button class="btn btn-auto-mapping btn-small" onclick="gerarResumoLinkedIn()" style="margin-left:auto;">
+                        <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
+                    </button>
                 </div>`;
 
-                // Dispara a geração do resumo automaticamente
-                await gerarResumoLinkedIn();
+                // Não dispara o resumo automaticamente — aguarda o usuário confirmar (clicar em "Gerar Resumo Executivo")
 
             } catch (e) {
                 resultArea.innerHTML = `<p style="color:#dc2626; background:#fee2e2; padding:10px; border-radius:8px; font-size:13px;">
