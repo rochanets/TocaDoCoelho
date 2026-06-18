@@ -1048,6 +1048,12 @@ run_automatic_db_backup(interval_days=3)
 def get_db():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    # Garante que o arquivo de banco só seja acessível pelo usuário atual do SO
+    try:
+        import stat as _stat
+        os.chmod(str(DB_PATH), _stat.S_IRUSR | _stat.S_IWUSR)
+    except Exception:
+        pass
     return conn
 
 def dict_from_row(row):
