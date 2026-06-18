@@ -42,13 +42,32 @@ Section "Instalar Toca do Coelho" SecApp
     File "coelho_icon_transparent.ico"
 
     ; WhatsApp Update: mini-servidor Node.js (sem Docker).
-    ; node.exe = Node.js portátil (baixar em nodejs.org/dist/latest/node.exe antes do build).
+    ; node.exe   = Node.js portátil (baixado de nodejs.org/dist/.../node.exe antes do build).
     ; waha-lite/ = servidor + node_modules (rodar "npm install" em waha-lite/ antes do build).
-    IfFileExists "node.exe" 0 +2
+    ;
+    ; ATENÇÃO: esta verificação TEM de ser em tempo de COMPILAÇÃO (!if /FileExists), e NÃO
+    ; em tempo de execução (IfFileExists). O comando 'File' empacota o arquivo no instalador
+    ; durante a compilação; já um 'IfFileExists' com caminho relativo roda na MÁQUINA DO
+    ; USUÁRIO e é avaliado a partir do diretório de trabalho do instalador (em geral
+    ; C:\Windows\System32 após a elevação UAC), onde node.exe e waha-lite NUNCA existem.
+    ; Resultado do bug antigo: o guard pulava a extração, os arquivos ficavam embutidos no
+    ; instalador mas jamais eram gravados em $INSTDIR, e o WhatsApp Update nunca subia em
+    ; produção (sem Docker). Com !if /FileExists a checagem ocorre no build (raiz do projeto,
+    ; onde node.exe e waha-lite existem) e a extração passa a ser incondicional na instalação.
+    !if /FileExists "node.exe"
+        SetOutPath "$INSTDIR"
         File "node.exe"
-    IfFileExists "waha-lite\waha-lite.js" 0 +3
+    !else
+        !warning "node.exe ausente no build: WhatsApp Update (WAHA-lite) ficara indisponivel no instalador."
+    !endif
+
+    !if /FileExists "waha-lite\waha-lite.js"
         SetOutPath "$INSTDIR\waha-lite"
         File /r "waha-lite\*"
+    !else
+        !warning "waha-lite\waha-lite.js ausente no build: WhatsApp Update ficara indisponivel no instalador."
+    !endif
+
     SetOutPath "$INSTDIR"
 
     CreateDirectory "$APPDATA\toca-do-coelho"
