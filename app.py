@@ -2024,6 +2024,7 @@ def _relation_report_call_sai_narrative_template(
     resp.raise_for_status()
     raw = resp.text
 
+    logger.info(f'[RelationReport][SAI] OK ({len(raw)} chars)')
     logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
     parsed_outer = None
     try:
@@ -4718,6 +4719,7 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
         if not resp.ok:
             logger.error(f'[iToca][SAI] HTTPError {resp.status_code}: {resp.text[:400]}')
             raise RuntimeError(f'Erro na API SAI (HTTP {resp.status_code}): {resp.text[:200]}')
+        logger.info(f'[iToca][SAI] OK ({len(resp.text)} chars)')
         raw = resp.text
     except RuntimeError:
         raise
@@ -4896,6 +4898,7 @@ def _itoca_detect_action_intent(question: str, answer: str) -> dict:
 
         resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=30)
         raw = resp.text
+        logger.info(f'[iToca][ActionDetector] OK ({len(raw)} chars)')
 
         parsed = _extract_json_object_from_text(raw)
         if not parsed or not isinstance(parsed, dict):
@@ -12413,48 +12416,50 @@ def _iata_parse_llm_insights(raw):
 
 
 def _iata_call_llm(system_msg, user_msg, log_tag):
-    """OpenRouter como primário; SAI como fallback."""
+    """SAI como primário; OpenRouter como fallback."""
+    # Tenta SAI primeiro
+    question = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
+    raw = _sai_simple_prompt(question)
+    if raw and str(raw).strip():
+        logger.info(f'[iAta][{log_tag}] SAI respondeu com sucesso')
+        return raw, 'SAI'
+    logger.info(f'[iAta][{log_tag}] SAI indisponível, tentando OpenRouter.')
+
+    # Fallback: OpenRouter
     or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            payload = {
+    if not or_key:
+        return None, 'sem_llm'
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    try:
+        resp = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            json={
                 'model': model,
                 'messages': [
                     {'role': 'system', 'content': system_msg},
                     {'role': 'user', 'content': user_msg}
                 ],
                 'temperature': 0.2
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            if raw and str(raw).strip():
-                return raw, 'OpenRouter'
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
-        except Exception as e:
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
-    # Fallback: SAI
-    raw = _sai_simple_prompt(user_msg)
-    if raw is not None and not str(raw).strip():
-        raw = None
-    if raw is not None:
-        return raw, 'SAI'
+            },
+            headers={
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            timeout=90
+        )
+        data = resp.json()
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        if raw and str(raw).strip():
+            logger.info(f'[iAta][{log_tag}][OpenRouter] Resposta gerada com sucesso')
+            return raw, 'OpenRouter'
+        logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia.')
+    except Exception as e:
+        logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}.')
     return None, 'sem_llm'
 
 

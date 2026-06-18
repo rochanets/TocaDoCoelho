@@ -38,3 +38,10 @@ TocaDoCoelho-*-Setup.exe
 # WhatsApp Update (WAHA-lite) — gerados localmente, nao versionados
 waha-lite/node_modules/
 node.exe
+
+# Cache WhatsApp Web.js (sessão do navegador, gerado em runtime)
+.wwebjs_cache/
+scripts/.wwebjs_cache/
+
+# Logs de build
+build_log.txt
