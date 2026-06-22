@@ -103,6 +103,13 @@ except ImportError:
     PDF2IMAGE_AVAILABLE = False
 
 try:
+    import pypdfium2 as pdfium
+    PYPDFIUM2_AVAILABLE = True
+except ImportError:
+    pdfium = None
+    PYPDFIUM2_AVAILABLE = False
+
+try:
     from PIL import Image as PILImage
     from PIL import ImageOps
     PIL_AVAILABLE = True
@@ -902,6 +909,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_owner', DEFAULT_GITHUB_OWNER))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_token', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_snooze_until', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
@@ -1040,6 +1048,12 @@ run_automatic_db_backup(interval_days=3)
 def get_db():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    # Garante que o arquivo de banco só seja acessível pelo usuário atual do SO
+    try:
+        import stat as _stat
+        os.chmod(str(DB_PATH), _stat.S_IRUSR | _stat.S_IWUSR)
+    except Exception:
+        pass
     return conn
 
 def dict_from_row(row):
@@ -1110,14 +1124,17 @@ def _sai_simple_prompt(question: str) -> str | None:
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
     template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
     try:
-        req = urllib.request.Request(
+        resp = requests.post(
             f'{base_url}/api/templates/{template_id}/execute',
-            data=json.dumps({'inputs': {'question': question}}, ensure_ascii=False).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'X-Api-Key': api_key},
-            method='POST'
+            json={'inputs': {'question': question}},
+            headers={'X-Api-Key': api_key},
+            timeout=45
         )
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            return resp.read().decode('utf-8', errors='ignore')
+        if resp.status_code == 200:
+            logger.info(f'[SAI][simple_prompt] OK ({len(resp.text)} chars)')
+            return resp.text
+        logger.warning(f'[SAI][simple_prompt] HTTP {resp.status_code}: {resp.text[:200]}')
+        return None
     except Exception as e:
         logger.warning(f'[SAI][simple_prompt] falha: {e}')
         return None
@@ -2003,16 +2020,11 @@ def _relation_report_call_sai_narrative_template(
             'output_style': output_style,
         }
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST'
-    )
+    resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=60)
+    resp.raise_for_status()
+    raw = resp.text
 
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read().decode('utf-8')
-
+    logger.info(f'[RelationReport][SAI] OK ({len(raw)} chars)')
     logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
     parsed_outer = None
     try:
@@ -3646,24 +3658,36 @@ def _itoca_extract_text_from_file(file_path_str):
                 except Exception as e2:
                     logger.debug(f'[iToca] pdftotext não disponível para {path.name}: {e2}')
 
-            # --- Tentativa 3: OCR com pdf2image + pytesseract (PDFs escaneados) ---
-            if not extracted and PDF2IMAGE_AVAILABLE and PYTESSERACT_AVAILABLE:
+            # --- Tentativa 3: OCR com pypdfium2/pdf2image + pytesseract (PDFs escaneados) ---
+            if not extracted and PYTESSERACT_AVAILABLE and (PYPDFIUM2_AVAILABLE or PDF2IMAGE_AVAILABLE):
                 tess_cmd = _itoca_find_tesseract_cmd()
                 if tess_cmd:
+                    pytesseract.pytesseract.tesseract_cmd = tess_cmd
+                    images = []
                     try:
-                        pytesseract.pytesseract.tesseract_cmd = tess_cmd
-                        images = convert_from_path(str(path), dpi=200, first_page=1, last_page=15)
-                        ocr_parts = []
-                        for img in images:
-                            ocr_text = pytesseract.image_to_string(img, lang='por+eng')
-                            if ocr_text.strip():
-                                ocr_parts.append(ocr_text.strip())
-                        if ocr_parts:
-                            text_parts.extend(ocr_parts)
-                            extracted = True
-                            logger.info(f'[iToca] OCR extraiu texto de {path.name} ({len(images)} páginas)')
-                    except Exception as e3:
-                        logger.warning(f'[iToca] OCR falhou em {path.name}: {e3}')
+                        if PYPDFIUM2_AVAILABLE:
+                            doc = pdfium.PdfDocument(str(path))
+                            for i in range(min(len(doc), 15)):
+                                page = doc[i]
+                                bitmap = page.render(scale=200/72)
+                                images.append(bitmap.to_pil())
+                        elif PDF2IMAGE_AVAILABLE:
+                            images = convert_from_path(str(path), dpi=200, first_page=1, last_page=15)
+                    except Exception as e_render:
+                        logger.warning(f'[iToca] OCR render falhou em {path.name}: {e_render}')
+                    if images:
+                        try:
+                            ocr_parts = []
+                            for img in images:
+                                ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                                if ocr_text.strip():
+                                    ocr_parts.append(ocr_text.strip())
+                            if ocr_parts:
+                                text_parts.extend(ocr_parts)
+                                extracted = True
+                                logger.info(f'[iToca] OCR extraiu texto de {path.name} ({len(images)} páginas)')
+                        except Exception as e3:
+                            logger.warning(f'[iToca] OCR falhou em {path.name}: {e3}')
                 else:
                     logger.info(f'[iToca] Tesseract não encontrado. Instale em https://github.com/UB-Mannheim/tesseract/wiki para OCR de PDFs escaneados.')
 
@@ -4690,19 +4714,15 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
             'context_sources': context_text if context_text else 'Nenhum dado encontrado na base interna para esta pergunta.'
         }
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-        headers=headers,
-        method='POST'
-    )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode('utf-8')
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else str(e)
-        logger.error(f'[iToca][SAI] HTTPError {getattr(e, "code", None)}: {detail[:400]}')
-        raise RuntimeError(f'Erro na API SAI (HTTP {getattr(e, "code", None)}): {detail[:200]}')
+        resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=60)
+        if not resp.ok:
+            logger.error(f'[iToca][SAI] HTTPError {resp.status_code}: {resp.text[:400]}')
+            raise RuntimeError(f'Erro na API SAI (HTTP {resp.status_code}): {resp.text[:200]}')
+        logger.info(f'[iToca][SAI] OK ({len(resp.text)} chars)')
+        raw = resp.text
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error(f'[iToca][SAI] Erro de conexão: {e}')
         raise RuntimeError(f'Falha ao conectar com a API SAI: {str(e)}')
@@ -4876,14 +4896,9 @@ def _itoca_detect_action_intent(question: str, answer: str) -> dict:
             }
         }
 
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-            headers=headers,
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode('utf-8')
+        resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=30)
+        raw = resp.text
+        logger.info(f'[iToca][ActionDetector] OK ({len(raw)} chars)')
 
         parsed = _extract_json_object_from_text(raw)
         if not parsed or not isinstance(parsed, dict):
@@ -6429,6 +6444,90 @@ def check_updates():
         return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
 
 
+@app.route('/api/config/startup-update-check', methods=['GET'])
+def startup_update_check():
+    """Verificação silenciosa de update ao iniciar o app. Respeita o snooze de 5 dias."""
+    try:
+        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo', 'update_snooze_until'])
+        snooze_until = (settings_map.get('update_snooze_until') or '').strip()
+        if snooze_until:
+            try:
+                snooze_dt = datetime.fromisoformat(snooze_until)
+                if datetime.now() < snooze_dt:
+                    return jsonify({'snoozed': True, 'snooze_until': snooze_until})
+            except ValueError:
+                pass
+
+        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
+        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
+        if not owner or not repo:
+            return jsonify({'update_available': False, 'configured': False})
+
+        github_token = _resolve_setting('update_github_token', 'TOCA_UPDATE_GITHUB_TOKEN')
+        api_headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'TocaDoCoelho-Updater'}
+        if github_token:
+            api_headers['Authorization'] = f'Bearer {github_token}'
+
+        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
+        req = urllib.request.Request(api_url, headers=api_headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+
+        latest_tag = (payload.get('tag_name') or '').strip()
+        latest_version = _normalize_version(latest_tag)
+        current_version = _normalize_version(APP_VERSION)
+
+        if not latest_version:
+            return jsonify({'update_available': False})
+
+        update_available = _version_key(latest_version) > _version_key(current_version)
+        if not update_available:
+            return jsonify({'update_available': False, 'current_version': current_version})
+
+        installer_url = ''
+        installer_name = ''
+        installer_size = 0
+        for asset in (payload.get('assets') or []):
+            asset_name = (asset.get('name') or '').strip()
+            if asset_name.lower().endswith('.exe'):
+                installer_url = (asset.get('browser_download_url') or '').strip()
+                installer_name = asset_name
+                installer_size = int(asset.get('size') or 0)
+                break
+
+        return jsonify({
+            'update_available': True,
+            'current_version': current_version,
+            'latest_version': latest_version,
+            'latest_tag': latest_tag,
+            'release_name': payload.get('name') or latest_tag,
+            'release_notes': payload.get('body') or '',
+            'html_url': payload.get('html_url') or '',
+            'published_at': payload.get('published_at'),
+            'installer_url': installer_url,
+            'installer_name': installer_name,
+            'installer_size': installer_size,
+            'can_auto_install': bool(installer_url),
+        })
+    except Exception as e:
+        logger.warning('[startup-update-check] Falha silenciosa: %s', e)
+        return jsonify({'update_available': False})
+
+
+@app.route('/api/config/snooze-update', methods=['POST'])
+def snooze_update():
+    """Salva snooze de 5 dias para a notificação de update."""
+    try:
+        snooze_until = (datetime.now() + timedelta(days=5)).isoformat()
+        db = get_db()
+        db.execute("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('update_snooze_until', ?, CURRENT_TIMESTAMP)", (snooze_until,))
+        db.commit()
+        return jsonify({'ok': True, 'snooze_until': snooze_until})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/snooze-update: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 # ---------------------------------------------------------------------------
 # Atualização automática baseada em release: baixa o instalador anexado à
 # release e o executa, encerrando o app para que os arquivos sejam liberados.
@@ -6600,11 +6699,14 @@ def set_startup_config():
 
 
 def _outlook_fetch_via_powershell(days=60):
-    """
-    Lê emails do Outlook via PowerShell (compatível com Office C2R/365).
-    PowerShell corre em 64-bit e tem acesso nativo ao COM do Click-to-Run.
-    Retorna lista de dicts no formato de _outlook_extract_email().
-    """
+    """Desabilitado por recomendação de segurança SAST — use Microsoft Graph API."""
+    raise RuntimeError(
+        'Sincronização via PowerShell/COM foi desabilitada. Use "Sync Microsoft 365" (Graph API).'
+    )
+
+
+def _DISABLED_outlook_fetch_via_powershell_legacy(days=60):
+    """Mantido apenas como referência histórica — NÃO EXECUTAR."""
     import subprocess, tempfile, json, os
 
     ps_script = """\
@@ -6937,44 +7039,10 @@ def _outlook_import_emails(emails_data, conn):
 
 
 def _outlook_call_llm(prompt):
-    """Chama LLM para análise de email (SAI primeiro, OpenRouter como fallback). Retorna str ou None."""
+    """Chama SAI para análise de email. Restrito a SAI por compliance — conteúdo de
+    e-mail não deve ser enviado a provedores externos não homologados (LGPD)."""
     raw = _sai_simple_prompt(prompt)
-    if raw:
-        return raw.strip()
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
-        try:
-            payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um assistente de CRM. Responda de forma objetiva e concisa em português.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                'temperature': 0.1
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            content = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            return content.strip() if content else None
-        except Exception as e:
-            logger.warning(f'[OutlookLLM][OpenRouter] falha: {e}')
-    return None
+    return raw.strip() if raw else None
 
 
 @app.route('/api/outlook/diagnose', methods=['GET'])
@@ -6990,8 +7058,7 @@ def outlook_diagnose():
     })
 
     has_graph_creds = bool(
-        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') and
-        _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET')
+        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID')
     )
     checks.append({
         'label': 'Graph API (credenciais)',
@@ -7121,25 +7188,18 @@ def sync_outlook_stream():
 
 
 def _outlook_sync_stream_com():
-    if sys.platform != 'win32':
-        def _err():
-            yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização COM com Outlook disponível somente no Windows.'})}\n\n"
-        return Response(stream_with_context(_err()), mimetype='text/event-stream')
-
-    default_days = int(_resolve_setting('outlook_sync_days', 'OUTLOOK_SYNC_DAYS') or 30)
-    days = max(1, min(int(request.args.get('days', default_days)), 365))
-    return _build_outlook_stream_response(days=days, source='com', page_size=100, max_pages=1)
+    def _err():
+        yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização via PowerShell/COM foi desabilitada. Use o botão Sync Microsoft 365 (Graph API).'})}\n\n"
+    return Response(stream_with_context(_err()), mimetype='text/event-stream')
 
 
 try:
     import graph_credentials as _gc
     _GRAPH_DEFAULT_TENANT = getattr(_gc, 'GRAPH_TENANT_ID', '')
     _GRAPH_DEFAULT_CLIENT_ID = getattr(_gc, 'GRAPH_CLIENT_ID', '')
-    _GRAPH_DEFAULT_CLIENT_SECRET = getattr(_gc, 'GRAPH_CLIENT_SECRET', '')
 except ImportError:
     _GRAPH_DEFAULT_TENANT = ''
     _GRAPH_DEFAULT_CLIENT_ID = ''
-    _GRAPH_DEFAULT_CLIENT_SECRET = ''
 
 
 def _graph_redirect_uri():
@@ -7150,7 +7210,6 @@ def _graph_make_settings(redirect_uri=''):
     return {
         'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
         'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
-        'client_secret': (_resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET).strip(),
         'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
         'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read User.Read').strip(),
     }
@@ -7210,23 +7269,18 @@ def outlook_graph_config():
     if request.method == 'GET':
         tenant = _resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT
         client_id = _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID
-        client_secret = _resolve_setting('outlook_graph_client_secret', 'OUTLOOK_GRAPH_CLIENT_SECRET') or _GRAPH_DEFAULT_CLIENT_SECRET
         return jsonify({
             'tenant_id': tenant,
             'client_id': client_id,
-            'has_secret': bool(client_secret),
-            'configured': bool(tenant and client_id and client_secret),
+            'configured': bool(tenant and client_id),
         })
     data = request.get_json() or {}
     tenant = (data.get('tenant_id') or '').strip()
     client_id = (data.get('client_id') or '').strip()
-    client_secret = (data.get('client_secret') or '').strip()
     conn = get_db()
     c = conn.cursor()
     for key, value in [('outlook_graph_tenant_id', tenant), ('outlook_graph_client_id', client_id)]:
         c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', (key, value))
-    if client_secret:
-        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', ('outlook_graph_client_secret', client_secret))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -12362,48 +12416,50 @@ def _iata_parse_llm_insights(raw):
 
 
 def _iata_call_llm(system_msg, user_msg, log_tag):
-    """OpenRouter como primário; SAI como fallback."""
+    """SAI como primário; OpenRouter como fallback."""
+    # Tenta SAI primeiro
+    question = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
+    raw = _sai_simple_prompt(question)
+    if raw and str(raw).strip():
+        logger.info(f'[iAta][{log_tag}] SAI respondeu com sucesso')
+        return raw, 'SAI'
+    logger.info(f'[iAta][{log_tag}] SAI indisponível, tentando OpenRouter.')
+
+    # Fallback: OpenRouter
     or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            payload = {
+    if not or_key:
+        return None, 'sem_llm'
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    try:
+        resp = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            json={
                 'model': model,
                 'messages': [
                     {'role': 'system', 'content': system_msg},
                     {'role': 'user', 'content': user_msg}
                 ],
                 'temperature': 0.2
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            if raw and str(raw).strip():
-                return raw, 'OpenRouter'
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
-        except Exception as e:
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
-    # Fallback: SAI
-    raw = _sai_simple_prompt(user_msg)
-    if raw is not None and not str(raw).strip():
-        raw = None
-    if raw is not None:
-        return raw, 'SAI'
+            },
+            headers={
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            timeout=90
+        )
+        data = resp.json()
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        if raw and str(raw).strip():
+            logger.info(f'[iAta][{log_tag}][OpenRouter] Resposta gerada com sucesso')
+            return raw, 'OpenRouter'
+        logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia.')
+    except Exception as e:
+        logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}.')
     return None, 'sem_llm'
 
 
@@ -14385,6 +14441,65 @@ def _waha_deps_missing():
         return False
 
 
+def _kill_process_on_port(port):
+    """Mata o processo que estiver ESCUTANDO na porta informada (WAHA-lite).
+
+    Importante: só mata quem está em LISTENING no endereço local — nunca conexões
+    ESTABLISHED, senão poderíamos matar o próprio Toca (que conecta no WAHA-lite)."""
+    killed = []
+    try:
+        import subprocess as _sp
+        if sys.platform == 'win32':
+            # Colunas do netstat -ano: Proto | Local Address | Foreign Address | State | PID
+            #   TCP    127.0.0.1:3001    0.0.0.0:0    LISTENING    12345
+            out = _sp.check_output(
+                ['netstat', '-ano', '-p', 'TCP'],
+                creationflags=_sp.CREATE_NO_WINDOW,
+                stderr=_sp.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore')
+            seen = set()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                proto, local, _foreign, state, pid = parts[0], parts[1], parts[2], parts[3], parts[-1]
+                if not proto.upper().startswith('TCP'):
+                    continue
+                if state.upper() != 'LISTENING':
+                    continue            # ignora ESTABLISHED/TIME_WAIT etc.
+                if not local.endswith(f':{port}'):
+                    continue
+                if pid.isdigit() and pid != '0' and pid not in seen:
+                    seen.add(pid)
+                    _sp.call(
+                        ['taskkill', '/F', '/T', '/PID', pid],
+                        creationflags=_sp.CREATE_NO_WINDOW,
+                        stderr=_sp.DEVNULL,
+                    )
+                    killed.append(pid)
+        else:
+            # -sTCP:LISTEN garante que só pegamos quem escuta, não quem conecta.
+            out = _sp.check_output(
+                ['lsof', '-ti', f'TCP:{port}', '-sTCP:LISTEN'],
+                stderr=_sp.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore').strip()
+            import signal as _sig
+            for pid in out.splitlines():
+                if pid.isdigit():
+                    try:
+                        os.kill(int(pid), _sig.SIGTERM)
+                        killed.append(pid)
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.debug(f'[WhatsApp] _kill_process_on_port({port}): {exc}')
+    if killed:
+        logger.info(f'[WhatsApp] Processo(s) WAHA-lite anterior(es) na porta {port} encerrado(s): {", ".join(killed)}')
+    return bool(killed)
+
+
 def _restart_waha_lite():
     """Reinicia o WAHA-lite. Máximo 1 restart a cada 5 minutos. Não tenta reiniciar quando
     as dependências (node_modules) estão ausentes, pois o Node crasharia de novo."""
@@ -14400,12 +14515,25 @@ def _restart_waha_lite():
         return False
     try:
         import subprocess as _sp
+        # Encerra o processo atual na porta antes de subir um novo para evitar EADDRINUSE.
+        waha_port = int(os.environ.get('WAHA_PORT', '3001'))
+        _kill_process_on_port(waha_port)
+        import threading as _th
+        _th.Event().wait(timeout=1.5)  # aguarda o SO liberar a porta
         env = os.environ.copy()
+        # Reaproveita o log do WAHA-lite definido pelo launcher (WAHA_LOG); sem ele, o
+        # crash do Node ficaria invisível (DEVNULL), exatamente o que dificultou diagnosticar
+        # a falha do WhatsApp Update em produção.
+        _waha_log = os.environ.get('WAHA_LOG', '').strip()
+        try:
+            _out = open(_waha_log, 'a', encoding='utf-8', buffering=1) if _waha_log else _sp.DEVNULL
+        except Exception:
+            _out = _sp.DEVNULL
         kwargs = {
             'env': env,
             'cwd': str(Path(script).parent),
-            'stdout': _sp.DEVNULL,
-            'stderr': _sp.DEVNULL,
+            'stdout': _out,
+            'stderr': _out,
         }
         if sys.platform == 'win32':
             kwargs['creationflags'] = _sp.CREATE_NO_WINDOW
@@ -14696,8 +14824,25 @@ def whatsapp_status():
         if resp.status_code == 401:
             return jsonify({'configured': True, 'connected': False, 'state': 'unauthorized',
                             'error': 'API Key inválida.'})
-        status = (resp.json() or {}).get('status', 'STOPPED')
-        return jsonify({'configured': True, 'connected': status == 'WORKING', 'state': status})
+        body = resp.json() or {}
+        raw = (body.get('status') or 'STOPPED').upper()
+        waha_err = body.get('error')
+        # Normaliza os estados crus do WAHA-lite (MAIÚSCULOS) para os estados que o front
+        # entende (minúsculos). Sem isso, 'STARTING' não casava com nenhum branch do front,
+        # que pulava direto para o QR e estourava o timeout de 40s durante o cold start do
+        # Chrome — mesmo quando a sessão já estava prestes a ficar WORKING (sessão salva).
+        if raw == 'WORKING':
+            return jsonify({'configured': True, 'connected': True, 'state': 'connected'})
+        if raw == 'SCAN_QR_CODE':
+            return jsonify({'configured': True, 'connected': False, 'state': 'scan_qr'})
+        if raw == 'STARTING':
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WhatsApp conectando (abrindo o Chrome e restaurando a sessão)... aguarde.'})
+        # STOPPED / FAILED: se o WAHA-lite reportou um erro (ex.: navegador não encontrado),
+        # mostra a causa real; senão, deixa o front seguir para (re)conectar.
+        return jsonify({'configured': True, 'connected': False,
+                        'state': 'offline' if waha_err else 'stopped',
+                        'error': waha_err or 'Sessão do WhatsApp parada. Clique para reconectar.'})
     except requests.exceptions.ConnectionError:
         # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
         if _waha_deps_missing():
@@ -14746,9 +14891,10 @@ def whatsapp_connect():
     except Exception as exc:
         logger.warning(f'[WhatsApp] WAHA session check error: {exc}')
 
-    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64)
+    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64).
+    # 90s: o primeiro start (cold) abre o Chrome e carrega o WhatsApp Web — pode passar de 1 min.
     qr = None
-    for _ in range(20):
+    for _ in range(45):
         time.sleep(2)
         try:
             st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
@@ -14769,7 +14915,22 @@ def whatsapp_connect():
     if qr:
         return jsonify({'ok': True, 'connected': False, 'qr': qr})
 
-    return jsonify({'ok': False, 'error': 'QR code não apareceu em 40 segundos. O Chrome/Edge pode estar demorando para abrir — feche e abra novamente o Toca do Coelho.'}), 500
+    # Reconfere uma última vez: a sessão pode ter ficado WORKING (sessão salva reconectou)
+    # justamente no fim da espera — nesse caso não há QR a exibir e está tudo certo.
+    try:
+        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        body = st.json() if st.ok else {}
+        if (body or {}).get('status') == 'WORKING':
+            return jsonify({'ok': True, 'connected': True})
+        # Ainda inicializando (Chrome abrindo): pede para o front aguardar e repetir, em vez
+        # de mostrar erro definitivo.
+        if (body or {}).get('status') == 'STARTING':
+            return jsonify({'ok': False, 'state': 'starting',
+                            'error': 'WhatsApp ainda conectando (abrindo o Chrome)... aguarde alguns instantes e tente de novo.'}), 503
+    except Exception:
+        pass
+
+    return jsonify({'ok': False, 'error': 'O QR code não apareceu a tempo. O Chrome pode estar demorando para abrir na primeira conexão — aguarde alguns instantes e clique em Tentar novamente.'}), 500
 
 
 @app.route('/api/whatsapp/sync', methods=['POST'])

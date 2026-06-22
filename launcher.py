@@ -234,6 +234,54 @@ def _ensure_waha_deps(script):
     return _waha_node_modules_ok(script)
 
 
+def _kill_stale_waha_port(port):
+    """Encerra processos órfãos ESCUTANDO na porta do WAHA-lite antes de subir um novo.
+
+    Sem isso, um node.exe/Chrome que sobrou de uma sessão anterior que travou segura
+    a porta 3001 e o novo WAHA-lite morre com EADDRINUSE. Só mata quem está em
+    LISTENING no endereço local — nunca conexões de saída."""
+    try:
+        if sys.platform == 'win32':
+            out = subprocess.check_output(
+                ['netstat', '-ano', '-p', 'TCP'],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore')
+            seen = set()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                proto, local, state, pid = parts[0], parts[1], parts[3], parts[-1]
+                if (proto.upper().startswith('TCP') and state.upper() == 'LISTENING'
+                        and local.endswith(f':{port}') and pid.isdigit() and pid != '0'
+                        and pid not in seen):
+                    seen.add(pid)
+                    subprocess.call(
+                        ['taskkill', '/F', '/T', '/PID', pid],
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    print(f"[INFO] WAHA-lite órfão (PID {pid}) na porta {port} encerrado.")
+        else:
+            out = subprocess.check_output(
+                ['lsof', '-ti', f'TCP:{port}', '-sTCP:LISTEN'],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            ).decode(errors='ignore').strip()
+            import signal as _sig
+            for pid in out.splitlines():
+                if pid.isdigit():
+                    try:
+                        os.kill(int(pid), _sig.SIGTERM)
+                        print(f"[INFO] WAHA-lite órfão (PID {pid}) na porta {port} encerrado.")
+                    except Exception:
+                        pass
+    except Exception:
+        pass  # netstat/lsof ausente ou porta livre — segue o fluxo
+
+
 def _start_waha_lite():
     """
     Inicia o WAHA-lite (mini-servidor WhatsApp em Node.js) como processo
@@ -279,12 +327,27 @@ def _start_waha_lite():
         return False
     os.environ.pop('WAHA_DEPS_MISSING', None)
 
+    # Log do WAHA-lite: antes a saída ia para DEVNULL, então qualquer crash do Node
+    # (navegador ausente, node_modules quebrado, etc.) ficava invisível. Gravar num
+    # arquivo no DATA_DIR torna esses problemas diagnosticáveis. WAHA_LOG é exposto para
+    # que o app.py reaproveite o mesmo arquivo ao reiniciar o WAHA-lite.
+    waha_log_path = DATA_DIR / 'waha-lite.log'
+    try:
+        waha_log = open(waha_log_path, 'a', encoding='utf-8', buffering=1)
+        os.environ['WAHA_LOG'] = str(waha_log_path)
+    except Exception:
+        waha_log = subprocess.DEVNULL
+
+    # Limpa órfãos na porta antes de subir, evitando EADDRINUSE no arranque.
+    _kill_stale_waha_port(WAHA_PORT)
+    time.sleep(1.0)  # dá tempo de o SO liberar a porta
+
     try:
         kwargs = {
             'env': env,
             'cwd': str(script.parent),
-            'stdout': subprocess.DEVNULL,
-            'stderr': subprocess.DEVNULL,
+            'stdout': waha_log,
+            'stderr': waha_log,
         }
         if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -292,6 +355,7 @@ def _start_waha_lite():
         subprocess.Popen([node, str(script)], **kwargs)
         os.environ['WAHA_STARTED_AT'] = str(time.time())
         print(f"[OK] WAHA-lite iniciado (Node.js) — porta {WAHA_PORT}")
+        print(f"[INFO] Log do WAHA-lite: {waha_log_path}")
         return True
     except Exception as exc:
         print(f"[WARN] Falha ao iniciar WAHA-lite: {exc}")
