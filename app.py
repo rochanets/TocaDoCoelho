@@ -7247,20 +7247,20 @@ def outlook_oauth_callback():
         code = (request.args.get('code') or '').strip()
         state = (request.args.get('state') or '').strip()
         if not code or not state:
-            return redirect('/?graph_error=Par%C3%A2metros+OAuth+incompletos', 302)
+            return redirect('/outlook-connected.html?error=Par%C3%A2metros+OAuth+incompletos', 302)
 
         user_id = outlook_graph_parse_state(state)
         settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
         conn = get_db()
         outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id, settings=settings)
         conn.close()
-        return redirect('/?graph_connected=1', 302)
+        return redirect('/outlook-connected.html', 302)
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')
-        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
+        return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/outlook/oauth/callback: {e}')
-        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
+        return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
 
 
 @app.route('/api/outlook/graph-config', methods=['GET', 'POST'])
@@ -7340,8 +7340,44 @@ def _outlook_sync_stream_graph():
     return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id, graph_settings=graph_settings)
 
 
+_OUTLOOK_SUBJECT_PREFIX_RE = re.compile(r'^\s*(re|res|fw|fwd|enc|encaminhada|encaminhado)\s*:\s*', re.IGNORECASE)
+
+
+def _outlook_normalize_subject(subject):
+    """Remove prefixos de resposta/encaminhamento e normaliza para agrupar threads."""
+    s = (subject or '').strip()
+    prev = None
+    while s and s != prev:
+        prev = s
+        s = _OUTLOOK_SUBJECT_PREFIX_RE.sub('', s).strip()
+    return ' '.join(s.lower().split())
+
+
+def _outlook_thread_key(email_data):
+    """Chave de agrupamento de thread: conversation_id se houver, senão assunto normalizado."""
+    conv = (email_data.get('conversation_id') or '').strip()
+    if conv:
+        return f'conv:{conv}'
+    return f'subj:{_outlook_normalize_subject(email_data.get("subject"))}'
+
+
+def _graph_get_me_email(access_token):
+    """Retorna o email da conta conectada (para excluir o domínio próprio do matching)."""
+    try:
+        req = urllib.request.Request(
+            'https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', method='GET')
+        req.add_header('Authorization', f'Bearer {access_token}')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            me = json.loads(resp.read())
+        return ((me.get('mail') or me.get('userPrincipalName') or '')).strip().lower()
+    except Exception:
+        return ''
+
+
 def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1, graph_settings=None):
     def generate():
+        own_domain = ''
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
         try:
@@ -7354,6 +7390,8 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     start_date = end_date - timedelta(days=days)
                     conn = get_db()
                     access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id, settings=graph_settings)
+                    own_email = _graph_get_me_email(access_token)
+                    own_domain = own_email.split('@', 1)[-1] if '@' in own_email else ''
                     emails = outlook_graph_fetch_messages(
                         access_token=access_token,
                         start_date=start_date,
@@ -7434,9 +7472,32 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
             for row in c.fetchall():
                 all_clients_for_select.append({'id': row['id'], 'name': row['name'], 'company': row['company'] or ''})
 
-            activities = []
-            unmatched = []
-            seen_keys = set()
+            # IDs de mensagens já processadas em sincronizações anteriores (dedup persistente)
+            processed_ids = set()
+            try:
+                c.execute('SELECT message_id FROM outlook_processed_emails WHERE user_id = ?', (user_id,))
+                processed_ids = {r['message_id'] for r in c.fetchall() if r['message_id']}
+            except Exception:
+                processed_ids = set()
+
+            def _match_client(cand_email):
+                cand_email = (cand_email or '').strip().lower()
+                if not cand_email:
+                    return None
+                client = clients_map.get(cand_email)
+                if client:
+                    return client
+                domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
+                # Não usa fallback por domínio para o domínio corporativo do próprio usuário,
+                # evitando atribuir emails internos a um único cliente que compartilha o domínio.
+                if domain and domain != own_domain:
+                    domain_clients = domain_map.get(domain, [])
+                    if len(domain_clients) == 1:
+                        return domain_clients[0]
+                return None
+
+            matched_groups = {}    # (client_id, thread_key) -> grupo
+            unmatched_groups = {}  # (counterpart_email, thread_key) -> grupo
 
             for email_data in emails:
                 subject = (email_data.get('subject') or '').strip()
@@ -7445,8 +7506,16 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                 sender = email_data.get('sender') or {}
                 recipients = email_data.get('recipients') or []
                 body_preview = (email_data.get('body_preview') or '').strip()
+                message_id = (email_data.get('message_id') or '').strip()
+                conversation_id = (email_data.get('conversation_id') or '').strip()
                 if not email_date:
                     continue
+                # Pula mensagens já importadas em sincronizações anteriores
+                if message_id and message_id in processed_ids:
+                    continue
+
+                # Candidatos = remetente (recebido) ou destinatários TO (enviado).
+                # CC é ignorado de propósito (item de quem está só em cópia não vira atividade).
                 if direction == 'received':
                     candidates = [sender] if sender.get('email') else []
                     label = 'De'
@@ -7454,66 +7523,89 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     candidates = [r for r in recipients if r.get('email')]
                     label = 'Para'
 
-                matched_this = False
+                client = None
+                chosen = None
                 for candidate in candidates:
-                    cand_email = (candidate.get('email') or '').strip().lower()
-                    if not cand_email:
-                        continue
-                    client = clients_map.get(cand_email)
-                    if not client:
-                        domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
-                        domain_clients = domain_map.get(domain, [])
-                        if len(domain_clients) == 1:
-                            client = domain_clients[0]
-                    if not client:
-                        continue
+                    client = _match_client(candidate.get('email'))
+                    if client:
+                        chosen = candidate
+                        break
 
-                    dedup_key = (client['id'], email_date[:16], subject[:100])
-                    if dedup_key in seen_keys:
-                        matched_this = True
-                        continue
-                    date_minute = email_date[:16]
-                    c.execute(
-                        '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
-                           AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
-                           AND information LIKE ? LIMIT 1''',
-                        (client['id'], date_minute, f'{subject[:100]}%')
-                    )
-                    if c.fetchone():
-                        matched_this = True
-                        continue
-                    seen_keys.add(dedup_key)
-                    matched_this = True
-                    activities.append({
-                        'client_id': client['id'],
-                        'client_name': client['name'],
-                        'client_photo_url': client['photo_url'],
-                        'subject': subject,
-                        'date': email_date,
-                        'direction': direction,
-                        'counterpart_label': label,
-                        'counterpart_name': (candidate.get('name') or cand_email).strip(),
-                        'counterpart_email': cand_email,
-                        'body_preview': body_preview
-                    })
-                    break
+                ref = chosen or (candidates[0] if candidates else {})
+                msg_entry = {
+                    'direction': direction,
+                    'name': (ref.get('name') or '').strip(),
+                    'email': (ref.get('email') or '').strip().lower(),
+                    'date': email_date,
+                    'subject': subject,
+                    'body_preview': body_preview,
+                    'message_id': message_id,
+                    'conversation_id': conversation_id,
+                }
+                tkey = _outlook_thread_key(email_data)
 
-                if not matched_this and candidates:
-                    first = candidates[0]
-                    unmatched.append({
-                        'subject': subject,
-                        'date': email_date,
-                        'direction': direction,
-                        'counterpart_label': label,
-                        'counterpart_name': (first.get('name') or first.get('email') or '').strip(),
-                        'counterpart_email': (first.get('email') or '').strip().lower(),
-                        'body_preview': body_preview[:180]
-                    })
+                if client:
+                    gkey = (client['id'], tkey)
+                    grp = matched_groups.get(gkey)
+                    if not grp:
+                        grp = {
+                            'client_id': client['id'],
+                            'client_name': client['name'],
+                            'client_photo_url': client['photo_url'],
+                            'counterpart_label': label,
+                            'conversation_id': conversation_id,
+                            'messages': [],
+                            'message_ids': [],
+                        }
+                        matched_groups[gkey] = grp
+                    grp['messages'].append(msg_entry)
+                    if message_id:
+                        grp['message_ids'].append(message_id)
+                elif candidates:
+                    cemail = (candidates[0].get('email') or '').strip().lower()
+                    cdomain = cemail.split('@', 1)[-1] if '@' in cemail else ''
+                    # Ignora ruído interno (mesmo domínio do usuário) na lista "sem cliente"
+                    if cdomain and cdomain == own_domain:
+                        continue
+                    gkey = (cemail, tkey)
+                    grp = unmatched_groups.get(gkey)
+                    if not grp:
+                        grp = {
+                            'counterpart_label': label,
+                            'counterpart_name': (candidates[0].get('name') or cemail).strip(),
+                            'counterpart_email': cemail,
+                            'conversation_id': conversation_id,
+                            'messages': [],
+                            'message_ids': [],
+                        }
+                        unmatched_groups[gkey] = grp
+                    grp['messages'].append(msg_entry)
+                    if message_id:
+                        grp['message_ids'].append(message_id)
+
+            def _finalize(grp):
+                msgs = sorted(grp['messages'], key=lambda m: m['date'])
+                latest = msgs[-1]
+                grp['messages'] = msgs[:12]
+                grp['subject'] = latest['subject']
+                grp['date'] = latest['date']
+                grp['direction'] = latest['direction']
+                grp['counterpart_name'] = latest['name'] or grp.get('counterpart_name') or latest['email']
+                grp['counterpart_email'] = latest['email'] or grp.get('counterpart_email') or ''
+                grp['body_preview'] = latest['body_preview']
+                grp['email_count'] = len(msgs)
+                return grp
+
+            activities = [_finalize(g) for g in matched_groups.values() if g['messages']]
+            unmatched = [_finalize(g) for g in unmatched_groups.values() if g['messages']]
+            activities.sort(key=lambda g: g['date'], reverse=True)
+            unmatched.sort(key=lambda g: g['date'], reverse=True)
+
             conn.close()
 
-            msg = f'{len(activities)} nova(s) atividade(s) encontrada(s) em {total_read} email(s) lidos.'
+            msg = f'{len(activities)} atividade(s) agrupada(s) por assunto em {total_read} email(s) lidos.'
             if unmatched:
-                msg += f' {len(unmatched)} email(s) sem cliente correspondente.'
+                msg += f' {len(unmatched)} thread(s) sem cliente correspondente.'
             yield evt({
                 'phase': 'done',
                 'total_read': total_read,
@@ -7576,7 +7668,7 @@ def _outlook_confirm_async(task_id, activities_to_import):
 
         for i, act in enumerate(activities_to_import):
             _outlook_confirm_task_set(task_id, {
-                'step': f'Processando email {i + 1}/{total}...',
+                'step': f'Processando thread {i + 1}/{total}...',
                 'progress': 10 + int((i / total) * 75)
             })
 
@@ -7587,10 +7679,26 @@ def _outlook_confirm_async(task_id, activities_to_import):
             cname = (act.get('counterpart_name') or '').strip()
             cemail = (act.get('counterpart_email') or '').strip()
             body_preview = (act.get('body_preview') or '').strip()
+            messages = act.get('messages') or []
+            message_ids = [m for m in (act.get('message_ids') or []) if m]
+            conv_id = (act.get('conversation_id') or '').strip()
 
             if not client_id or not email_date:
                 continue
 
+            # Dedup persistente: se todas as mensagens da thread já foram processadas, pula
+            if message_ids:
+                placeholders = ','.join('?' * len(message_ids))
+                c.execute(
+                    f'SELECT COUNT(*) AS n FROM outlook_processed_emails WHERE message_id IN ({placeholders})',
+                    tuple(message_ids)
+                )
+                row_n = c.fetchone()
+                if row_n and row_n['n'] >= len(message_ids):
+                    skipped += 1
+                    continue
+
+            # Dedup contra atividade já existente (mesma thread/cliente no mesmo minuto)
             date_minute = email_date[:16]
             c.execute(
                 '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
@@ -7600,29 +7708,58 @@ def _outlook_confirm_async(task_id, activities_to_import):
             )
             if c.fetchone():
                 skipped += 1
+                for mid in message_ids:
+                    try:
+                        c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
+                                  '(user_id, message_id, conversation_id, client_id) VALUES (1, ?, ?, ?)',
+                                  (mid, conv_id, client_id))
+                    except Exception:
+                        pass
                 continue
 
-            summary = None
-            if body_preview:
-                raw = _outlook_call_llm(
-                    f'Resuma em 1 a 2 frases o conteúdo do email abaixo em português, '
-                    f'de forma objetiva, sem mencionar remetente ou destinatário:\n'
-                    f'Assunto: {subject}\nTexto: {body_preview[:1000]}\n\n'
-                    'Retorne SOMENTE o resumo, sem introdução, aspas ou formatação extra.'
+            # Monta o texto consolidado da thread para o resumo do LLM
+            if not messages:
+                messages = [{'direction': act.get('direction', 'received'), 'name': cname,
+                             'email': cemail, 'date': email_date, 'subject': subject,
+                             'body_preview': body_preview}]
+            thread_lines = []
+            participants = []
+            for m in messages:
+                nm = (m.get('name') or m.get('email') or '').strip()
+                if nm and nm not in participants:
+                    participants.append(nm)
+                d = 'enviado' if m.get('direction') == 'sent' else 'recebido'
+                thread_lines.append(
+                    f"- ({d}) {nm}: {(m.get('subject') or '').strip()} — "
+                    f"{(m.get('body_preview') or '').strip()[:400]}"
                 )
-                if raw:
-                    summary = raw.strip()
+            thread_text = '\n'.join(thread_lines)
 
-            info_parts = [subject, f'{label}: {cname} <{cemail}>']
+            summary = _outlook_call_llm(
+                'Você é um assistente de CRM. Resuma a thread de emails abaixo em 1 a 2 frases objetivas, '
+                'em português, dizendo quem fez o quê e qual o assunto ou decisão principal. '
+                'Se vários participantes fizeram a mesma ação (ex.: aceitaram um convite), agrupe-os numa só frase. '
+                'Não comece com "Resumo:" e não use aspas.\n\n'
+                f'Contraparte principal: {cname}\n'
+                f'Thread:\n{thread_text}'
+            )
+            summary = summary.strip() if summary else None
+
+            participants_str = ', '.join(participants[:6]) or cname
+            first_line = subject if len(messages) <= 1 else f'{subject}  ({len(messages)} emails na thread)'
+            info_parts = [first_line, f'{label}: {participants_str}']
             if summary:
                 info_parts.append(f'Resumo: {summary}')
             elif body_preview:
                 info_parts.append(body_preview[:300])
+            information = '\n'.join(info_parts)
+
+            analysis_text = (summary or body_preview or subject or '')[:600]
 
             c.execute(
                 '''INSERT INTO activities (client_id, contact_type, information, activity_date)
                    VALUES (?, 'Email', ?, ?)''',
-                (client_id, '\n'.join(info_parts), email_date)
+                (client_id, information, email_date)
             )
             activity_id = c.lastrowid
             c.execute(
@@ -7632,13 +7769,22 @@ def _outlook_confirm_async(task_id, activities_to_import):
             )
             imported += 1
 
-            new_commitments = create_commitments_from_activity(c, client_id, activity_id, '\n'.join(info_parts))
+            # Registra mensagens processadas para não reimportar nas próximas sincronizações
+            for mid in message_ids:
+                try:
+                    c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
+                              '(user_id, message_id, conversation_id, client_id, activity_id) VALUES (1, ?, ?, ?, ?)',
+                              (mid, conv_id, client_id, activity_id))
+                except Exception:
+                    pass
+
+            new_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
             commitments_created += len(new_commitments)
 
-            if body_preview:
+            if analysis_text:
                 stage_raw = _outlook_call_llm(
-                    f'Analise este email e classifique o momento do relacionamento comercial.\n'
-                    f'Assunto: {subject}\nTexto: {body_preview[:500]}\n\n'
+                    f'Analise esta interação e classifique o momento do relacionamento comercial.\n'
+                    f'Assunto: {subject}\nTexto: {analysis_text}\n\n'
                     'Retorne SOMENTE um destes valores (sem mais texto):\n'
                     'lead_quente | negociando | pos_venda | sem_mudanca\n'
                     'lead_quente = cliente demonstrou interesse ativo\n'
@@ -7683,7 +7829,7 @@ def _outlook_confirm_async(task_id, activities_to_import):
                     cards_text = '\n'.join([f'- ID {card["id"]}: "{card["title"]}" (coluna: {card["col_title"]})' for card in cards])
                     cols_text = ' | '.join([col['title'] for col in columns])
                     kanban_raw = _outlook_call_llm(
-                        f'Email:\nAssunto: {subject}\nTexto: {body_preview[:400]}\n\n'
+                        f'Interação:\nAssunto: {subject}\nTexto: {analysis_text}\n\n'
                         f'Cards do Kanban deste cliente:\n{cards_text}\n\n'
                         f'Colunas disponíveis: {cols_text}\n\n'
                         'Algum card precisa ser movido com base neste email? '

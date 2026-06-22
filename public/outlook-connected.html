@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toca do Coelho — Microsoft 365</title>
+<link rel="icon" href="/favicon-toca-pearl.png">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: linear-gradient(160deg, #064e3b 0%, #065f46 50%, #047857 100%);
+    color: #111827;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .card {
+    background: #ffffff;
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    width: 100%;
+    max-width: 380px;
+    padding: 32px 28px;
+    text-align: center;
+  }
+  .logo {
+    width: 64px; height: 64px;
+    border-radius: 18px;
+    background: #ecfdf5;
+    border: 2px solid #6ee7b7;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 34px;
+    margin: 0 auto 16px;
+  }
+  h1 { font-size: 18px; color: #065f46; margin-bottom: 6px; }
+  .sub { font-size: 13px; color: #6b7280; margin-bottom: 20px; line-height: 1.5; }
+  .ok-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #ecfdf5; color: #065f46;
+    border: 1px solid #6ee7b7; border-radius: 999px;
+    padding: 6px 14px; font-size: 13px; font-weight: 600;
+    margin-bottom: 20px;
+  }
+  .field { text-align: left; margin-bottom: 18px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+  select {
+    width: 100%; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid #d1d5db; font-size: 14px; background: #f9fafb; color: #111827;
+  }
+  .btn {
+    width: 100%; border: none; border-radius: 10px;
+    padding: 12px; font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: transform .08s ease, box-shadow .2s ease;
+  }
+  .btn-primary { background: linear-gradient(135deg, #10b981, #059669); color: #fff; box-shadow: 0 6px 18px rgba(16,185,129,.4); }
+  .btn-primary:hover { transform: translateY(-1px); }
+  .btn-ghost { background: transparent; color: #6b7280; margin-top: 10px; }
+  .btn-ghost:hover { color: #374151; }
+  .error { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 10px; padding: 12px; font-size: 13px; margin-bottom: 16px; }
+  .spinner { width: 18px; height: 18px; border: 3px solid #d1fae5; border-top-color: #10b981; border-radius: 50%; display: inline-block; animation: spin .8s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🐇</div>
+
+    <!-- Estado: erro -->
+    <div id="errorState" class="hidden">
+      <h1>Não foi possível conectar</h1>
+      <div class="error" id="errorMsg"></div>
+      <button class="btn btn-ghost" onclick="window.close()">Fechar janela</button>
+    </div>
+
+    <!-- Estado: sucesso -->
+    <div id="successState" class="hidden">
+      <h1>Microsoft 365 conectado</h1>
+      <div class="ok-badge"><span>✓</span> <span id="connectedEmail">conta conectada</span></div>
+      <p class="sub">Escolha o período e inicie a sincronização. Os emails serão importados como atividades na janela principal do Toca.</p>
+      <div class="field">
+        <label for="syncDays">Período de sincronização</label>
+        <select id="syncDays">
+          <option value="7">Últimos 7 dias</option>
+          <option value="15">Últimos 15 dias</option>
+          <option value="30" selected>Últimos 30 dias</option>
+          <option value="60">Últimos 60 dias</option>
+          <option value="90">Últimos 90 dias</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="startBtn" onclick="startSync()">Iniciar sincronização</button>
+      <button class="btn btn-ghost" onclick="window.close()">Agora não</button>
+    </div>
+
+    <!-- Estado: carregando -->
+    <div id="loadingState">
+      <h1>Conectando…</h1>
+      <p class="sub"><span class="spinner"></span></p>
+    </div>
+  </div>
+
+<script>
+  var channel = null;
+  try { channel = new BroadcastChannel('toca-outlook'); } catch (e) { channel = null; }
+
+  function notifyMain(payload) {
+    try { if (channel) channel.postMessage(payload); } catch (e) {}
+    // Fallback via localStorage (dispara evento 'storage' na janela principal)
+    try { localStorage.setItem('toca-outlook-msg', JSON.stringify(Object.assign({ ts: Date.now() }, payload))); } catch (e) {}
+  }
+
+  function show(state) {
+    ['errorState', 'successState', 'loadingState'].forEach(function (id) {
+      document.getElementById(id).classList.toggle('hidden', id !== state);
+    });
+  }
+
+  function startSync() {
+    var days = parseInt(document.getElementById('syncDays').value || '30', 10);
+    notifyMain({ action: 'start-sync', days: days });
+    var btn = document.getElementById('startBtn');
+    btn.textContent = 'Sincronização iniciada na janela principal ✓';
+    btn.disabled = true;
+    setTimeout(function () { window.close(); }, 1200);
+  }
+
+  (function init() {
+    var params = new URLSearchParams(window.location.search);
+    var err = params.get('error');
+    if (err) {
+      document.getElementById('errorMsg').textContent = decodeURIComponent(err);
+      show('errorState');
+      return;
+    }
+    // Avisa a janela principal que a conexão foi concluída (atualiza o status lá)
+    notifyMain({ action: 'connected' });
+    fetch('/api/outlook/graph-status')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.connected) {
+          document.getElementById('connectedEmail').textContent = data.email || 'conta conectada';
+          show('successState');
+        } else {
+          document.getElementById('errorMsg').textContent = 'A conexão não foi confirmada. Tente novamente.';
+          show('errorState');
+        }
+      })
+      .catch(function () {
+        // Mesmo sem status, consideramos conectado (o token já foi salvo no callback)
+        show('successState');
+      });
+  })();
+</script>
+</body>
+</html>
