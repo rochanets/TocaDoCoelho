@@ -4810,12 +4810,39 @@
     <!-- Outlook — Modal de Progresso do Import -->
     <div id="outlookImportProgressModal" class="modal" style="display:none;">
         <div class="modal-content" style="max-width:460px;">
-            <div class="modal-header">
-                <h2><i class="fas fa-brain" style="margin-right:8px;color:#10b981;"></i>Importando e analisando...</h2>
+            <div class="modal-header" style="display:flex;align-items:center;justify-content:space-between;">
+                <h2 style="margin:0;"><i class="fas fa-brain" style="margin-right:8px;color:#10b981;"></i>Importando e analisando...</h2>
+                <button onclick="_minimizeOutlookImport()" title="Minimizar — continua em segundo plano"
+                    style="background:none;border:none;cursor:pointer;font-size:20px;line-height:1;color:#6b7280;padding:0 4px;"
+                    onmouseover="this.style.color='#374151'" onmouseout="this.style.color='#6b7280'">⊟</button>
             </div>
             <div id="outlookImportProgressArea" style="padding:20px;">
                 <div class="outlook-progress-track"><div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;"></div></div>
                 <p id="outlookImportStep" style="font-size:13px;color:#374151;margin:8px 0 0;">Iniciando...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Outlook — Indicador minimizado (flutuante) -->
+    <div id="outlookImportMini" style="display:none;position:fixed;bottom:24px;right:24px;background:#065f46;color:#fff;padding:10px 18px;border-radius:12px;font-size:13px;cursor:pointer;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.35);align-items:center;gap:10px;"
+         onclick="_restoreOutlookImport()" title="Clique para ver progresso">
+        <span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0;"></span>
+        <span id="outlookImportMiniStep">Importando...</span>
+    </div>
+
+    <!-- Outlook — Modal de Resultado do Import -->
+    <div id="outlookImportResultModal" class="modal" style="display:none;" onclick="if(event.target===this)closeOutlookImportResult()">
+        <div class="modal-content" style="max-width:520px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-check-circle" style="margin-right:8px;color:#10b981;"></i>Resultado da importação</h2>
+                <button class="modal-close" onclick="closeOutlookImportResult()">×</button>
+            </div>
+            <div style="padding:20px;">
+                <p id="outlookImportResultMsg" style="font-size:14px;color:#065f46;background:#d1fae5;padding:10px 14px;border-radius:8px;margin:0 0 16px;"></p>
+                <div id="outlookImportResultBody"></div>
+                <div style="text-align:right;margin-top:16px;">
+                    <button class="btn btn-primary" onclick="closeOutlookImportResult()">OK</button>
+                </div>
             </div>
         </div>
     </div>
@@ -5938,6 +5965,81 @@
             _outlookUnmatchedItems = [];
         }
 
+        // ── Importação — minimizar/restaurar e resultado detalhado ───────────
+        let _outlookImportMinimized = false;
+
+        function _minimizeOutlookImport() {
+            document.getElementById('outlookImportProgressModal').style.display = 'none';
+            const mini = document.getElementById('outlookImportMini');
+            if (mini) { mini.style.display = 'flex'; }
+            _outlookImportMinimized = true;
+        }
+
+        function _restoreOutlookImport() {
+            document.getElementById('outlookImportProgressModal').style.display = 'flex';
+            const mini = document.getElementById('outlookImportMini');
+            if (mini) mini.style.display = 'none';
+            _outlookImportMinimized = false;
+        }
+
+        function _hideOutlookImportUI() {
+            document.getElementById('outlookImportProgressModal').style.display = 'none';
+            const mini = document.getElementById('outlookImportMini');
+            if (mini) mini.style.display = 'none';
+            _outlookImportMinimized = false;
+        }
+
+        function closeOutlookImportResult() {
+            const modal = document.getElementById('outlookImportResultModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function _showOutlookImportResult(result) {
+            const modal = document.getElementById('outlookImportResultModal');
+            const msgEl = document.getElementById('outlookImportResultMsg');
+            const bodyEl = document.getElementById('outlookImportResultBody');
+            if (!modal || !msgEl || !bodyEl) return;
+
+            msgEl.textContent = result.message || '';
+
+            const imported = result.imported_items || [];
+            const skipped = result.skipped_items || [];
+            let html = '';
+
+            if (imported.length) {
+                html += `<div style="margin-bottom:14px;">
+                    <div style="font-size:12px;font-weight:700;color:#065f46;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+                        ✓ Registradas (${imported.length})
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:4px;">`;
+                for (const it of imported) {
+                    html += `<div style="display:flex;gap:8px;font-size:13px;padding:6px 10px;background:#f0fdf4;border-radius:6px;align-items:flex-start;">
+                        <span style="color:#10b981;flex-shrink:0;">✓</span>
+                        <span><strong>${escapeHtml(it.client_name)}</strong> — ${escapeHtml(it.subject)}${it.date ? ` <span style="color:#9ca3af;">(${it.date})</span>` : ''}</span>
+                    </div>`;
+                }
+                html += `</div></div>`;
+            }
+
+            if (skipped.length) {
+                html += `<div>
+                    <div style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+                        ↩ Ignoradas — já existiam (${skipped.length})
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:4px;">`;
+                for (const it of skipped) {
+                    html += `<div style="display:flex;gap:8px;font-size:13px;padding:6px 10px;background:#fffbeb;border-radius:6px;align-items:flex-start;">
+                        <span style="color:#d97706;flex-shrink:0;">↩</span>
+                        <span><strong>${escapeHtml(it.client_name)}</strong> — ${escapeHtml(it.subject)}</span>
+                    </div>`;
+                }
+                html += `</div></div>`;
+            }
+
+            bodyEl.innerHTML = html;
+            modal.style.display = 'flex';
+        }
+
         function closeOutlookSuggestions() {
             const modal = document.getElementById('outlookSuggestionsModal');
             if (modal) modal.style.display = 'none';
@@ -6058,10 +6160,12 @@
             closeOutlookReview();
 
             // Mostrar modal de progresso de import
-            const importModal = document.getElementById('outlookImportProgressModal');
             const importFill = document.getElementById('outlookImportFill');
             const importStep = document.getElementById('outlookImportStep');
-            if (importModal) importModal.style.display = 'flex';
+            const importMiniStep = document.getElementById('outlookImportMiniStep');
+            _outlookImportMinimized = false;
+            document.getElementById('outlookImportProgressModal').style.display = 'flex';
+            document.getElementById('outlookImportMini').style.display = 'none';
             if (importFill) importFill.style.width = '5%';
             if (importStep) importStep.textContent = 'Iniciando...';
 
@@ -6084,6 +6188,7 @@
                             const taskData = await statusRes.json();
                             if (importFill) importFill.style.width = `${taskData.progress || 5}%`;
                             if (importStep) importStep.textContent = taskData.step || '';
+                            if (importMiniStep) importMiniStep.textContent = taskData.step || 'Importando...';
                             if (taskData.status === 'done') {
                                 clearInterval(poll);
                                 resolve(taskData.result);
@@ -6097,20 +6202,21 @@
                         }
                     }, 800);
                 }).then(result => {
-                    if (importModal) importModal.style.display = 'none';
+                    _hideOutlookImportUI();
                     const statusEl = document.getElementById('outlookImportStatus');
                     if (statusEl) statusEl.innerHTML = `<span style="color:#10b981;">✓ ${escapeHtml(result.message || '')}</span>`;
                     loadActivities();
+                    _showOutlookImportResult(result);
                     if ((result.status_suggestions || []).length || (result.kanban_suggestions || []).length) {
                         _openSuggestionsModal(result);
                     }
                 }).catch(err => {
-                    if (importModal) importModal.style.display = 'none';
+                    _hideOutlookImportUI();
                     const statusEl = document.getElementById('outlookImportStatus');
                     if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(err.message)}</span>`;
                 });
             } catch (e) {
-                if (importModal) importModal.style.display = 'none';
+                _hideOutlookImportUI();
                 const statusEl = document.getElementById('outlookImportStatus');
                 if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(e.message)}</span>`;
             }

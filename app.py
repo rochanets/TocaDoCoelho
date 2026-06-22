@@ -7472,13 +7472,19 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
             for row in c.fetchall():
                 all_clients_for_select.append({'id': row['id'], 'name': row['name'], 'company': row['company'] or ''})
 
-            # IDs de mensagens já processadas em sincronizações anteriores (dedup persistente)
+            # IDs e conversas já processadas em sincronizações anteriores (dedup persistente)
             processed_ids = set()
+            processed_conv_ids = set()
             try:
-                c.execute('SELECT message_id FROM outlook_processed_emails WHERE user_id = ?', (user_id,))
-                processed_ids = {r['message_id'] for r in c.fetchall() if r['message_id']}
+                c.execute('SELECT message_id, conversation_id FROM outlook_processed_emails WHERE user_id = ?', (user_id,))
+                for _pr in c.fetchall():
+                    if _pr['message_id']:
+                        processed_ids.add(_pr['message_id'])
+                    if _pr['conversation_id']:
+                        processed_conv_ids.add(_pr['conversation_id'])
             except Exception:
                 processed_ids = set()
+                processed_conv_ids = set()
 
             def _match_client(cand_email):
                 cand_email = (cand_email or '').strip().lower()
@@ -7523,56 +7529,67 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     candidates = [r for r in recipients if r.get('email')]
                     label = 'Para'
 
-                client = None
-                chosen = None
-                for candidate in candidates:
-                    client = _match_client(candidate.get('email'))
-                    if client:
-                        chosen = candidate
-                        break
-
-                ref = chosen or (candidates[0] if candidates else {})
-                msg_entry = {
-                    'direction': direction,
-                    'name': (ref.get('name') or '').strip(),
-                    'email': (ref.get('email') or '').strip().lower(),
-                    'date': email_date,
-                    'subject': subject,
-                    'body_preview': body_preview,
-                    'message_id': message_id,
-                    'conversation_id': conversation_id,
-                }
                 tkey = _outlook_thread_key(email_data)
 
-                if client:
-                    gkey = (client['id'], tkey)
-                    grp = matched_groups.get(gkey)
-                    if not grp:
-                        grp = {
-                            'client_id': client['id'],
-                            'client_name': client['name'],
-                            'client_photo_url': client['photo_url'],
-                            'counterpart_label': label,
+                # Em emails enviados todos os destinatários TO são candidatos;
+                # cria um grupo por cliente correspondente (multi-recipiente).
+                matched_for_email = []
+                for candidate in candidates:
+                    c_match = _match_client(candidate.get('email'))
+                    if c_match:
+                        matched_for_email.append((c_match, candidate))
+
+                if matched_for_email:
+                    for m_client, chosen in matched_for_email:
+                        msg_entry = {
+                            'direction': direction,
+                            'name': (chosen.get('name') or '').strip(),
+                            'email': (chosen.get('email') or '').strip().lower(),
+                            'date': email_date,
+                            'subject': subject,
+                            'body_preview': body_preview,
+                            'message_id': message_id,
                             'conversation_id': conversation_id,
-                            'messages': [],
-                            'message_ids': [],
                         }
-                        matched_groups[gkey] = grp
-                    grp['messages'].append(msg_entry)
-                    if message_id:
-                        grp['message_ids'].append(message_id)
+                        gkey = (m_client['id'], tkey)
+                        grp = matched_groups.get(gkey)
+                        if not grp:
+                            grp = {
+                                'client_id': m_client['id'],
+                                'client_name': m_client['name'],
+                                'client_photo_url': m_client['photo_url'],
+                                'counterpart_label': label,
+                                'conversation_id': conversation_id,
+                                'messages': [],
+                                'message_ids': [],
+                            }
+                            matched_groups[gkey] = grp
+                        grp['messages'].append(msg_entry)
+                        if message_id:
+                            grp['message_ids'].append(message_id)
                 elif candidates:
-                    cemail = (candidates[0].get('email') or '').strip().lower()
+                    ref = candidates[0]
+                    cemail = (ref.get('email') or '').strip().lower()
                     cdomain = cemail.split('@', 1)[-1] if '@' in cemail else ''
                     # Ignora ruído interno (mesmo domínio do usuário) na lista "sem cliente"
                     if cdomain and cdomain == own_domain:
                         continue
+                    msg_entry = {
+                        'direction': direction,
+                        'name': (ref.get('name') or '').strip(),
+                        'email': cemail,
+                        'date': email_date,
+                        'subject': subject,
+                        'body_preview': body_preview,
+                        'message_id': message_id,
+                        'conversation_id': conversation_id,
+                    }
                     gkey = (cemail, tkey)
                     grp = unmatched_groups.get(gkey)
                     if not grp:
                         grp = {
                             'counterpart_label': label,
-                            'counterpart_name': (candidates[0].get('name') or cemail).strip(),
+                            'counterpart_name': (ref.get('name') or cemail).strip(),
                             'counterpart_email': cemail,
                             'conversation_id': conversation_id,
                             'messages': [],
@@ -7582,6 +7599,18 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     grp['messages'].append(msg_entry)
                     if message_id:
                         grp['message_ids'].append(message_id)
+
+            # Dedup de grupo: remove threads cujo conteúdo todo já foi importado antes.
+            # grp['message_ids'] só contém IDs *novos* (os já processados foram filtrados
+            # individualmente acima). Se a lista está vazia, confirma via conversation_id.
+            def _is_group_new(grp):
+                if grp.get('message_ids'):
+                    return True
+                conv_id = (grp.get('conversation_id') or '').strip()
+                return not (conv_id and conv_id in processed_conv_ids)
+
+            matched_groups = {k: v for k, v in matched_groups.items() if v['messages'] and _is_group_new(v)}
+            unmatched_groups = {k: v for k, v in unmatched_groups.items() if v['messages'] and _is_group_new(v)}
 
             def _finalize(grp):
                 msgs = sorted(grp['messages'], key=lambda m: m['date'])
@@ -7662,6 +7691,8 @@ def _outlook_confirm_async(task_id, activities_to_import):
         commitments_created = 0
         status_suggestions = []
         kanban_suggestions = []
+        imported_items = []
+        skipped_items = []
 
         conn = get_db()
         c = conn.cursor()
@@ -7696,6 +7727,7 @@ def _outlook_confirm_async(task_id, activities_to_import):
                 row_n = c.fetchone()
                 if row_n and row_n['n'] >= len(message_ids):
                     skipped += 1
+                    skipped_items.append({'client_name': act.get('client_name') or cname, 'subject': subject})
                     continue
 
             # Dedup contra atividade já existente (mesma thread/cliente no mesmo minuto)
@@ -7708,6 +7740,7 @@ def _outlook_confirm_async(task_id, activities_to_import):
             )
             if c.fetchone():
                 skipped += 1
+                skipped_items.append({'client_name': act.get('client_name') or cname, 'subject': subject})
                 for mid in message_ids:
                     try:
                         c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
@@ -7768,6 +7801,11 @@ def _outlook_confirm_async(task_id, activities_to_import):
                 (email_date, client_id, email_date)
             )
             imported += 1
+            imported_items.append({
+                'client_name': act.get('client_name') or cname,
+                'subject': subject,
+                'date': email_date[:10] if email_date else '',
+            })
 
             # Registra mensagens processadas para não reimportar nas próximas sincronizações
             for mid in message_ids:
@@ -7879,6 +7917,9 @@ def _outlook_confirm_async(task_id, activities_to_import):
             'progress': 100,
             'result': {
                 'imported': imported,
+                'imported_items': imported_items,
+                'skipped': skipped,
+                'skipped_items': skipped_items,
                 'commitments_created': commitments_created,
                 'status_suggestions': status_suggestions,
                 'kanban_suggestions': kanban_suggestions,
