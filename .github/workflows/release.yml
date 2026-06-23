@@ -173,25 +173,50 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.VERSION }}
-          name: "🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }} — Hotfix: WhatsApp Update sem Docker"
+          name: "🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }} — Outlook, Segurança e WhatsApp"
           body: |
             ## 🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }}
 
-            ### 🔧 Correção
+            ### ✨ Novidades
 
-            #### WhatsApp Update — sem Docker Desktop
-            - Substituído container WAHA (Docker) por **mini-servidor Node.js embutido** no instalador
-            - Usa o Chrome ou Microsoft Edge **já instalado no PC** — nenhuma dependência extra para o usuário
-            - Sessão do WhatsApp persiste entre reinicializações sem reescanear o QR
-            - Modal de revisão individual: aceite ou rejeite cada conversa antes de inserir no CRM
-            - Botões **Aceitar todos / Rejeitar todos** para aprovação em lote
+            #### Outlook — Sincronização Inteligente
+            - Agrupa threads de e-mail por assunto com resumo consolidado
+            - Deduplicação persistente: e-mails já importados não aparecem novamente
+            - Suporte a múltiplos destinatários (CC e BCC) na importação
+            - Popup branded com resultado detalhado após sincronização
+
+            ### 🔧 Correções
+
+            #### WhatsApp Update
+            - Elimina processo Chrome órfão ao iniciar e ao reciclar a sessão
+            - Corrigido crash `EADDRINUSE` no restart do WAHA-lite
+            - Watchdog agora recicla corretamente sessão travada após autenticar
+            - Permite fixar versão do WhatsApp Web (`webVersionCache`) para contornar bug de 99%/LOGOUT
+            - Logging detalhado para diagnóstico de sessões travadas
+
+            #### Segurança
+            - Permissões do arquivo SQLite restritas ao usuário atual do sistema operacional
+            - Corrigidos achados SAST: PKCE, DPAPI, remoção de PowerShell/COM e `client_secret` no frontend
+
+            #### Contas
+            - Excluir conta agora move para arquivo em vez de apagar permanentemente
+            - Corrigida duplicação ao renomear conta
+
+            #### iAta / IA
+            - SAI agora é o provedor primário de LLM; OpenRouter como fallback
+            - Integração SAI corrigida: migrada de `urllib` para `requests`
+            - Logging de sucesso adicionado em todas as chamadas SAI
+
+            #### UI
+            - Ajustes no modal Preparar Reunião e Relationship Report
+            - Ícone do Outlook corrigido na barra lateral
 
             ### 📦 Instalação
             1. Baixe `TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe`
             2. Execute e siga o assistente (next, next, finish)
             3. Verifique a integridade com o arquivo `.sha256`
 
-            > **Atualização:** o instalador preserva seus dados automaticamente.
+            > **Atualização:** o instalador preserva seus dados automaticamente. Nenhuma migração necessária.
           files: |
             TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe
             TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe.sha256
