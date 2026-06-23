@@ -63,6 +63,23 @@ def ensure_schema(conn: sqlite3.Connection):
     c.execute('CREATE INDEX IF NOT EXISTS idx_user_integrations_provider ON user_integrations(provider)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_user_integrations_user ON user_integrations(user_id)')
 
+    # Registro de emails já processados, para deduplicação entre sincronizações.
+    # message_id = internetMessageId (globalmente único). conversation_id agrupa a thread.
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS outlook_processed_emails (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL DEFAULT 1,
+            message_id TEXT NOT NULL,
+            conversation_id TEXT,
+            client_id INTEGER,
+            activity_id INTEGER,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, message_id)
+        )'''
+    )
+    c.execute('CREATE INDEX IF NOT EXISTS idx_outlook_processed_msg ON outlook_processed_emails(message_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_outlook_processed_conv ON outlook_processed_emails(conversation_id)')
+
 
 def _http_form_post(url, form_data):
     payload = urllib.parse.urlencode(form_data).encode('utf-8')
@@ -346,7 +363,8 @@ def fetch_messages(access_token: str, start_date: datetime, end_date: datetime, 
 
     def collect(folder_name, direction):
         items = []
-        select = 'subject,receivedDateTime,sentDateTime,from,toRecipients,bodyPreview,internetMessageId'
+        select = ('subject,receivedDateTime,sentDateTime,from,toRecipients,ccRecipients,'
+                  'bodyPreview,internetMessageId,conversationId')
         flt = (
             f"receivedDateTime ge {start_date.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} "
             f"and receivedDateTime le {end_date.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
@@ -367,6 +385,10 @@ def fetch_messages(access_token: str, start_date: datetime, end_date: datetime, 
                 for r in msg.get('toRecipients') or []:
                     em = (r.get('emailAddress') or {})
                     recipients.append({'name': em.get('name') or '', 'email': (em.get('address') or '').lower()})
+                cc_recipients = []
+                for r in msg.get('ccRecipients') or []:
+                    em = (r.get('emailAddress') or {})
+                    cc_recipients.append({'name': em.get('name') or '', 'email': (em.get('address') or '').lower()})
                 when = msg.get('receivedDateTime') or msg.get('sentDateTime') or ''
                 items.append({
                     'subject': msg.get('subject') or '',
@@ -377,8 +399,10 @@ def fetch_messages(access_token: str, start_date: datetime, end_date: datetime, 
                         'email': (sender.get('address') or '').lower(),
                     },
                     'recipients': recipients,
+                    'cc_recipients': cc_recipients,
                     'body_preview': msg.get('bodyPreview') or '',
                     'message_id': msg.get('internetMessageId') or '',
+                    'conversation_id': msg.get('conversationId') or '',
                 })
             next_url = payload.get('@odata.nextLink')
             page += 1
