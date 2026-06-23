@@ -627,6 +627,16 @@ def init_db():
         FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
     )''')
 
+    # Arquivo morto de contas excluídas (snapshot completo em JSON para restauração futura)
+    c.execute('''CREATE TABLE IF NOT EXISTS account_archives (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_name TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        contacts_count INTEGER DEFAULT 0,
+        activities_count INTEGER DEFAULT 0,
+        archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS message_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
@@ -13225,6 +13235,24 @@ def update_account(account_id):
         row = dict_from_row(c.fetchone())
         if not row:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        old_name = row['name']
+        new_name = name or old_name
+        # Renomear conta: propagar para os contatos (clients.company) e mesclar conta duplicada,
+        # evitando que sync_accounts_from_clients() recrie a conta com o nome antigo.
+        if new_name.strip().lower() != (old_name or '').strip().lower():
+            c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ?', (new_name, account_id))
+            conflict = c.fetchone()
+            if conflict:
+                conflict_id = conflict['id'] if isinstance(conflict, sqlite3.Row) else conflict[0]
+                # Move os dados da conta conflitante para esta conta e remove a duplicata
+                c.execute('UPDATE account_presences SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('UPDATE account_renewal_events SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('UPDATE account_activities SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('UPDATE kanban_cards SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('DELETE FROM account_main_contacts WHERE account_id=?', (conflict_id,))
+                c.execute('DELETE FROM accounts WHERE id=?', (conflict_id,))
+            # Atualiza a referência do nome em todos os contatos vinculados
+            c.execute('UPDATE clients SET company=?, updated_at=CURRENT_TIMESTAMP WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (new_name, old_name))
         logo_url = None if remove_logo else (autofill_logo_url or row.get('logo_url'))
         if 'logo' in request.files:
             f = request.files['logo']
@@ -13244,6 +13272,215 @@ def update_account(account_id):
         return jsonify({'message': 'Conta atualizada'})
     except Exception as e:
         print(f'[ERROR] PUT /api/accounts/{account_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>', methods=['DELETE'])
+def delete_account(account_id):
+    """Arquiva (snapshot completo em JSON) e exclui a conta, seus contatos e todo o histórico."""
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
+        account = dict_from_row(c.fetchone())
+        if not account:
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        name = account['name']
+
+        # Contatos (clients) vinculados à conta pelo nome da empresa
+        c.execute('SELECT * FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (name,))
+        clients = [dict_from_row(r) for r in c.fetchall()]
+        client_ids = [cl['id'] for cl in clients]
+
+        def _fetch_for_clients(query):
+            if not client_ids:
+                return []
+            ph = ','.join('?' * len(client_ids))
+            c.execute(query.format(ph=ph), client_ids)
+            return [dict_from_row(r) for r in c.fetchall()]
+
+        client_activities = _fetch_for_clients('SELECT * FROM activities WHERE client_id IN ({ph})')
+        client_commitments = _fetch_for_clients('SELECT * FROM commitments WHERE client_id IN ({ph})')
+        client_env_responses = _fetch_for_clients('SELECT * FROM environment_responses WHERE client_id IN ({ph})')
+
+        c.execute('SELECT * FROM account_main_contacts WHERE account_id = ?', (account_id,))
+        main_contacts = [dict_from_row(r) for r in c.fetchall()]
+        c.execute('SELECT * FROM account_presences WHERE account_id = ?', (account_id,))
+        presences = [dict_from_row(r) for r in c.fetchall()]
+        c.execute('SELECT * FROM account_renewal_events WHERE account_id = ?', (account_id,))
+        renewal_events = [dict_from_row(r) for r in c.fetchall()]
+        c.execute('SELECT * FROM account_activities WHERE account_id = ?', (account_id,))
+        account_activities = [dict_from_row(r) for r in c.fetchall()]
+
+        snapshot = {
+            'version': 1,
+            'account': account,
+            'clients': clients,
+            'client_activities': client_activities,
+            'client_commitments': client_commitments,
+            'client_env_responses': client_env_responses,
+            'main_contacts': main_contacts,
+            'presences': presences,
+            'renewal_events': renewal_events,
+            'account_activities': account_activities,
+        }
+        c.execute('''INSERT INTO account_archives (account_name, snapshot_json, contacts_count, activities_count)
+                     VALUES (?, ?, ?, ?)''',
+                  (name, json.dumps(snapshot, default=str, ensure_ascii=False),
+                   len(clients), len(client_activities) + len(account_activities)))
+
+        # Remove dados específicos da conta
+        c.execute('DELETE FROM account_renewal_events WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM account_presences WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM account_activities WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM account_main_contacts WHERE account_id = ?', (account_id,))
+
+        # Remove contatos e seus dados relacionados (FKs não são forçadas no SQLite)
+        if client_ids:
+            ph = ','.join('?' * len(client_ids))
+            c.execute(f'DELETE FROM activities WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM commitments WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM environment_responses WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM whatsapp_sync_log WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'UPDATE kanban_cards SET contact_id = NULL WHERE contact_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM clients WHERE id IN ({ph})', client_ids)
+
+        c.execute('UPDATE kanban_cards SET account_id = NULL WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM accounts WHERE id = ?', (account_id,))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Conta arquivada e excluída', 'archived_contacts': len(clients)})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/accounts/{account_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/archives', methods=['GET'])
+def list_account_archives():
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('''SELECT id, account_name, contacts_count, activities_count, archived_at
+                     FROM account_archives ORDER BY archived_at DESC, id DESC''')
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close(); return jsonify(rows)
+    except Exception as e:
+        print(f'[ERROR] GET /api/accounts/archives: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/archives/<int:archive_id>/restore', methods=['POST'])
+def restore_account_archive(archive_id):
+    """Recria a conta arquivada, seus contatos e todo o histórico a partir do snapshot."""
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT * FROM account_archives WHERE id = ?', (archive_id,))
+        arch = dict_from_row(c.fetchone())
+        if not arch:
+            conn.close(); return jsonify({'error': 'Arquivo não encontrado'}), 404
+        snap = json.loads(arch['snapshot_json'])
+        account = snap.get('account') or {}
+        name = account.get('name') or arch['account_name']
+
+        c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (name,))
+        if c.fetchone():
+            conn.close()
+            return jsonify({'error': f'Já existe uma conta com o nome "{name}". Renomeie ou exclua a conta atual antes de restaurar.'}), 409
+
+        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+                  (name, account.get('logo_url'), account.get('is_target', 0), account.get('sector'),
+                   account.get('average_revenue_cents'), account.get('professionals_count'),
+                   account.get('global_presence'), account.get('created_at')))
+        new_account_id = c.lastrowid
+
+        # Recria os contatos (clients), mapeando id antigo -> novo
+        client_id_map = {}
+        for cl in snap.get('clients', []):
+            c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+                      (cl.get('name'), name, cl.get('position'), cl.get('area_of_activity'), cl.get('email'),
+                       cl.get('phone'), cl.get('linkedin'), cl.get('photo_url'), cl.get('is_target', 0),
+                       cl.get('is_cold_contact', 0), cl.get('is_archived', 0), cl.get('created_at')))
+            client_id_map[cl.get('id')] = c.lastrowid
+
+        # Atividades dos contatos
+        activity_id_map = {}
+        for a in snap.get('client_activities', []):
+            new_cid = client_id_map.get(a.get('client_id'))
+            if not new_cid:
+                continue
+            c.execute('''INSERT INTO activities (client_id, contact_type, information, description, activity_date, created_at)
+                         VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))''',
+                      (new_cid, a.get('contact_type', 'Outro'), a.get('information'), a.get('description'),
+                       a.get('activity_date'), a.get('created_at')))
+            activity_id_map[a.get('id')] = c.lastrowid
+
+        # Compromissos (agenda)
+        for cm in snap.get('client_commitments', []):
+            new_cid = client_id_map.get(cm.get('client_id'))
+            if not new_cid:
+                continue
+            new_aid = activity_id_map.get(cm.get('activity_id')) if cm.get('activity_id') else None
+            c.execute('''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))''',
+                      (new_cid, new_aid, cm.get('title'), cm.get('notes'), cm.get('due_date'),
+                       cm.get('due_time'), cm.get('source_type', 'activity'), cm.get('created_at')))
+
+        # Respostas de mapeamento de ambiente
+        for er in snap.get('client_env_responses', []):
+            new_cid = client_id_map.get(er.get('client_id'))
+            if not new_cid:
+                continue
+            c.execute('INSERT OR IGNORE INTO environment_responses (card_id, client_id, response, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                      (er.get('card_id'), new_cid, er.get('response')))
+
+        # Pontos focais principais
+        for mc in snap.get('main_contacts', []):
+            new_cid = client_id_map.get(mc.get('client_id'))
+            if not new_cid:
+                continue
+            c.execute('INSERT OR IGNORE INTO account_main_contacts (account_id, client_id) VALUES (?, ?)', (new_account_id, new_cid))
+
+        # Presenças (serviços Stefanini)
+        presence_id_map = {}
+        for p in snap.get('presences', []):
+            focal = client_id_map.get(p.get('focal_client_id')) if p.get('focal_client_id') else None
+            c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+                      (new_account_id, p.get('delivery_name'), p.get('stf_owner'), p.get('delivery_cell'),
+                       p.get('service_id'), p.get('billing_type', 'Mensal'), p.get('validity_month'),
+                       p.get('contract_duration_months'), p.get('contract_end_date'), p.get('early_terminated', 0),
+                       p.get('current_revenue_cents'), focal, p.get('created_at')))
+            presence_id_map[p.get('id')] = c.lastrowid
+
+        # Eventos de renovação
+        for ev in snap.get('renewal_events', []):
+            new_pid = presence_id_map.get(ev.get('presence_id'))
+            if not new_pid:
+                continue
+            c.execute('INSERT OR IGNORE INTO account_renewal_events (account_id, presence_id, title, due_date, due_time, created_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))',
+                      (new_account_id, new_pid, ev.get('title'), ev.get('due_date'), ev.get('due_time', '09:00'), ev.get('created_at')))
+
+        # Atividades genéricas da conta
+        for aa in snap.get('account_activities', []):
+            c.execute('INSERT INTO account_activities (account_id, description, activity_date, created_at) VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))',
+                      (new_account_id, aa.get('description'), aa.get('activity_date'), aa.get('created_at')))
+
+        c.execute('DELETE FROM account_archives WHERE id = ?', (archive_id,))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Conta restaurada', 'account_id': new_account_id})
+    except Exception as e:
+        print(f'[ERROR] POST /api/accounts/archives/{archive_id}/restore: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/archives/<int:archive_id>', methods=['DELETE'])
+def delete_account_archive(archive_id):
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('DELETE FROM account_archives WHERE id = ?', (archive_id,))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Arquivo excluído'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/accounts/archives/{archive_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
