@@ -167,56 +167,72 @@ jobs:
           Write-Host "SHA256: $hash"
 
       # -----------------------------------------------------------------------
-      # 8. GitHub Release
+      # 8. Resolver notas do release
+      # -----------------------------------------------------------------------
+      - name: Resolver notas do release
+        shell: bash
+        env:
+          CUSTOM_NOTES: ${{ github.event.inputs.release_notes }}
+          VERSION: ${{ steps.ver.outputs.VERSION }}
+        run: |
+          if [ -n "$CUSTOM_NOTES" ]; then
+            printf '%s' "$CUSTOM_NOTES" > release_notes.md
+          else
+            cat > release_notes.md << 'ENDOFNOTES'
+          ## 🐇 Toca do Coelho
+
+          ### ✨ Novidades
+
+          #### Outlook — Sincronização Inteligente
+          - Agrupa threads de e-mail por assunto com resumo consolidado
+          - Deduplicação persistente: e-mails já importados não aparecem novamente
+          - Suporte a múltiplos destinatários (CC e BCC) na importação
+          - Popup branded com resultado detalhado após sincronização
+
+          ### 🔧 Correções
+
+          #### WhatsApp Update
+          - Elimina processo Chrome órfão ao iniciar e ao reciclar a sessão
+          - Corrigido crash `EADDRINUSE` no restart do WAHA-lite
+          - Watchdog agora recicla corretamente sessão travada após autenticar
+          - Permite fixar versão do WhatsApp Web (`webVersionCache`) para contornar bug de 99%/LOGOUT
+          - Logging detalhado para diagnóstico de sessões travadas
+
+          #### Segurança
+          - Permissões do arquivo SQLite restritas ao usuário atual do sistema operacional
+          - Corrigidos achados SAST: PKCE, DPAPI, remoção de PowerShell/COM e `client_secret` no frontend
+
+          #### Contas
+          - Excluir conta agora move para arquivo em vez de apagar permanentemente
+          - Corrigida duplicação ao renomear conta
+
+          #### iAta / IA
+          - SAI agora é o provedor primário de LLM; OpenRouter como fallback
+          - Integração SAI corrigida: migrada de `urllib` para `requests`
+          - Logging de sucesso adicionado em todas as chamadas SAI
+
+          #### UI
+          - Ajustes no modal Preparar Reunião e Relationship Report
+          - Ícone do Outlook corrigido na barra lateral
+
+          ### 📦 Instalação
+          1. Baixe `TocaDoCoelho-Setup.exe`
+          2. Execute e siga o assistente (next, next, finish)
+          3. Verifique a integridade com o arquivo `.sha256`
+
+          > **Atualização:** o instalador preserva seus dados automaticamente. Nenhuma migração necessária.
+          ENDOFNOTES
+          fi
+
+      # -----------------------------------------------------------------------
+      # 9. GitHub Release
       # -----------------------------------------------------------------------
       - name: Criar GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.VERSION }}
-          name: "🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }} — Outlook, Segurança e WhatsApp"
-          body: |
-            ## 🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }}
-
-            ### ✨ Novidades
-
-            #### Outlook — Sincronização Inteligente
-            - Agrupa threads de e-mail por assunto com resumo consolidado
-            - Deduplicação persistente: e-mails já importados não aparecem novamente
-            - Suporte a múltiplos destinatários (CC e BCC) na importação
-            - Popup branded com resultado detalhado após sincronização
-
-            ### 🔧 Correções
-
-            #### WhatsApp Update
-            - Elimina processo Chrome órfão ao iniciar e ao reciclar a sessão
-            - Corrigido crash `EADDRINUSE` no restart do WAHA-lite
-            - Watchdog agora recicla corretamente sessão travada após autenticar
-            - Permite fixar versão do WhatsApp Web (`webVersionCache`) para contornar bug de 99%/LOGOUT
-            - Logging detalhado para diagnóstico de sessões travadas
-
-            #### Segurança
-            - Permissões do arquivo SQLite restritas ao usuário atual do sistema operacional
-            - Corrigidos achados SAST: PKCE, DPAPI, remoção de PowerShell/COM e `client_secret` no frontend
-
-            #### Contas
-            - Excluir conta agora move para arquivo em vez de apagar permanentemente
-            - Corrigida duplicação ao renomear conta
-
-            #### iAta / IA
-            - SAI agora é o provedor primário de LLM; OpenRouter como fallback
-            - Integração SAI corrigida: migrada de `urllib` para `requests`
-            - Logging de sucesso adicionado em todas as chamadas SAI
-
-            #### UI
-            - Ajustes no modal Preparar Reunião e Relationship Report
-            - Ícone do Outlook corrigido na barra lateral
-
-            ### 📦 Instalação
-            1. Baixe `TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe`
-            2. Execute e siga o assistente (next, next, finish)
-            3. Verifique a integridade com o arquivo `.sha256`
-
-            > **Atualização:** o instalador preserva seus dados automaticamente. Nenhuma migração necessária.
+          name: "🐇 Toca do Coelho v${{ steps.ver.outputs.VERSION }}"
+          body_path: release_notes.md
           files: |
             TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe
             TocaDoCoelho-${{ steps.ver.outputs.VERSION }}-Setup.exe.sha256
