@@ -14,6 +14,7 @@
  */
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const { execSync } = require('child_process');
 const express = require('express');
 const qrcode = require('qrcode');
 const fs = require('fs');
@@ -135,6 +136,41 @@ function cleanSessionLocks() {
   }
 }
 
+/**
+ * Mata processos Chrome que usam o diretório desta sessão (órfãos de execuções
+ * anteriores). Sem isto, um Chrome deixado rodando impede novas inicializações com
+ * "browser is already running" mesmo após cleanSessionLocks() remover os arquivos
+ * — porque o Chrome vivo regenera o SingletonLock imediatamente.
+ * Só executa no Windows; no Linux/macOS o Puppeteer fecha o Chrome corretamente.
+ */
+async function killOrphanChrome() {
+  if (process.platform !== 'win32') return;
+  try {
+    const out = execSync(
+      'wmic process where "name=\'chrome.exe\'" get ProcessId,CommandLine /format:list',
+      { encoding: 'utf8', timeout: 8000 }
+    );
+    const pids = [];
+    for (const block of out.split(/(?:\r?\n){2,}/)) {
+      if (/waha-sessions/i.test(block)) {
+        const m = block.match(/ProcessId=(\d+)/i);
+        if (m && m[1] !== '0') pids.push(m[1]);
+      }
+    }
+    for (const pid of pids) {
+      try {
+        execSync(`taskkill /F /T /PID ${pid}`, { timeout: 3000 });
+        log('INFO', `Chrome órfão (PID ${pid}) encerrado.`);
+      } catch (_) { /* pode já ter morrido */ }
+    }
+    if (pids.length) {
+      await new Promise((r) => setTimeout(r, 1500)); // aguarda processos sumirem
+    }
+  } catch (e) {
+    log('WARN', `killOrphanChrome: ${e.message}`);
+  }
+}
+
 /** Mata o Chrome do Puppeteer à força, caso o destroy() não o feche. */
 function killChrome() {
   if (!chromePid) return;
@@ -188,6 +224,7 @@ async function destroyClient() {
 /** Recicla o cliente: destrói, limpa locks e recria. Limitado a MAX_RECREATE. */
 async function recycleClient(reason) {
   if (recreateCount >= MAX_RECREATE) {
+    clearReadyWatchdog(); // impede watchdog de re-disparar após desistirmos
     initError    = `Não foi possível conectar após ${MAX_RECREATE} tentativas (${reason}). ` +
                    'Abra o WhatsApp no celular, confira a conexão e reinicie o Toca do Coelho.';
     clientStatus = 'STOPPED';
@@ -198,6 +235,8 @@ async function recycleClient(reason) {
   log('WARN', `Reciclando cliente WhatsApp (tentativa ${recreateCount}/${MAX_RECREATE}) — motivo: ${reason}`);
   await destroyClient();
   cleanSessionLocks();
+  await killOrphanChrome(); // mata Chrome órfão que regeneraria o lock imediatamente
+  cleanSessionLocks();      // remove locks que o Chrome órfão possa ter recriado
   setTimeout(() => {
     if (!waClient) {
       clientStatus = 'STARTING';
@@ -445,14 +484,19 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Inicialização
 // ---------------------------------------------------------------------------
-const server = app.listen(PORT, '127.0.0.1', () => {
+const server = app.listen(PORT, '127.0.0.1', async () => {
   log('INFO', '='.repeat(60));
   log('INFO', `WAHA-lite iniciado | Node ${process.version} | ${process.platform}`);
   log('INFO', `Porta: ${PORT} | Sessão: ${SESSION_NAME}`);
   log('INFO', `Data dir: ${DATA_DIR}`);
   log('INFO', '='.repeat(60));
-  // Inicia a sessão automaticamente ao subir
+  // Inicia a sessão automaticamente ao subir.
+  // Mata Chrome órfão de sessões anteriores antes de tentar inicializar:
+  // sem isto o Chrome de uma execução anterior regenera o SingletonLock e
+  // bloqueia todas as tentativas com "browser is already running".
   if (!waClient) {
+    await killOrphanChrome();
+    cleanSessionLocks();
     clientStatus = 'STARTING';
     waClient     = createWaClient();
   }

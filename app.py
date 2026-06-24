@@ -627,6 +627,16 @@ def init_db():
         FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
     )''')
 
+    # Arquivo morto de contas excluídas (snapshot completo em JSON para restauração futura)
+    c.execute('''CREATE TABLE IF NOT EXISTS account_archives (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_name TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        contacts_count INTEGER DEFAULT 0,
+        activities_count INTEGER DEFAULT 0,
+        archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS message_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
@@ -2024,6 +2034,7 @@ def _relation_report_call_sai_narrative_template(
     resp.raise_for_status()
     raw = resp.text
 
+    logger.info(f'[RelationReport][SAI] OK ({len(raw)} chars)')
     logger.debug(f'[RelationReport][SAI] raw response (primeiros 500 chars): {raw[:500]}')
     parsed_outer = None
     try:
@@ -4718,6 +4729,7 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
         if not resp.ok:
             logger.error(f'[iToca][SAI] HTTPError {resp.status_code}: {resp.text[:400]}')
             raise RuntimeError(f'Erro na API SAI (HTTP {resp.status_code}): {resp.text[:200]}')
+        logger.info(f'[iToca][SAI] OK ({len(resp.text)} chars)')
         raw = resp.text
     except RuntimeError:
         raise
@@ -4896,6 +4908,7 @@ def _itoca_detect_action_intent(question: str, answer: str) -> dict:
 
         resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=30)
         raw = resp.text
+        logger.info(f'[iToca][ActionDetector] OK ({len(raw)} chars)')
 
         parsed = _extract_json_object_from_text(raw)
         if not parsed or not isinstance(parsed, dict):
@@ -7244,20 +7257,20 @@ def outlook_oauth_callback():
         code = (request.args.get('code') or '').strip()
         state = (request.args.get('state') or '').strip()
         if not code or not state:
-            return redirect('/?graph_error=Par%C3%A2metros+OAuth+incompletos', 302)
+            return redirect('/outlook-connected.html?error=Par%C3%A2metros+OAuth+incompletos', 302)
 
         user_id = outlook_graph_parse_state(state)
         settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
         conn = get_db()
         outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id, settings=settings)
         conn.close()
-        return redirect('/?graph_connected=1', 302)
+        return redirect('/outlook-connected.html', 302)
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')
-        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
+        return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/outlook/oauth/callback: {e}')
-        return redirect(f'/?graph_error={urllib.parse.quote(str(e))}', 302)
+        return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
 
 
 @app.route('/api/outlook/graph-config', methods=['GET', 'POST'])
@@ -7337,8 +7350,44 @@ def _outlook_sync_stream_graph():
     return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id, graph_settings=graph_settings)
 
 
+_OUTLOOK_SUBJECT_PREFIX_RE = re.compile(r'^\s*(re|res|fw|fwd|enc|encaminhada|encaminhado)\s*:\s*', re.IGNORECASE)
+
+
+def _outlook_normalize_subject(subject):
+    """Remove prefixos de resposta/encaminhamento e normaliza para agrupar threads."""
+    s = (subject or '').strip()
+    prev = None
+    while s and s != prev:
+        prev = s
+        s = _OUTLOOK_SUBJECT_PREFIX_RE.sub('', s).strip()
+    return ' '.join(s.lower().split())
+
+
+def _outlook_thread_key(email_data):
+    """Chave de agrupamento de thread: conversation_id se houver, senão assunto normalizado."""
+    conv = (email_data.get('conversation_id') or '').strip()
+    if conv:
+        return f'conv:{conv}'
+    return f'subj:{_outlook_normalize_subject(email_data.get("subject"))}'
+
+
+def _graph_get_me_email(access_token):
+    """Retorna o email da conta conectada (para excluir o domínio próprio do matching)."""
+    try:
+        req = urllib.request.Request(
+            'https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', method='GET')
+        req.add_header('Authorization', f'Bearer {access_token}')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            me = json.loads(resp.read())
+        return ((me.get('mail') or me.get('userPrincipalName') or '')).strip().lower()
+    except Exception:
+        return ''
+
+
 def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1, graph_settings=None):
     def generate():
+        own_domain = ''
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
         try:
@@ -7351,6 +7400,8 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     start_date = end_date - timedelta(days=days)
                     conn = get_db()
                     access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id, settings=graph_settings)
+                    own_email = _graph_get_me_email(access_token)
+                    own_domain = own_email.split('@', 1)[-1] if '@' in own_email else ''
                     emails = outlook_graph_fetch_messages(
                         access_token=access_token,
                         start_date=start_date,
@@ -7431,9 +7482,38 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
             for row in c.fetchall():
                 all_clients_for_select.append({'id': row['id'], 'name': row['name'], 'company': row['company'] or ''})
 
-            activities = []
-            unmatched = []
-            seen_keys = set()
+            # IDs e conversas já processadas em sincronizações anteriores (dedup persistente)
+            processed_ids = set()
+            processed_conv_ids = set()
+            try:
+                c.execute('SELECT message_id, conversation_id FROM outlook_processed_emails WHERE user_id = ?', (user_id,))
+                for _pr in c.fetchall():
+                    if _pr['message_id']:
+                        processed_ids.add(_pr['message_id'])
+                    if _pr['conversation_id']:
+                        processed_conv_ids.add(_pr['conversation_id'])
+            except Exception:
+                processed_ids = set()
+                processed_conv_ids = set()
+
+            def _match_client(cand_email):
+                cand_email = (cand_email or '').strip().lower()
+                if not cand_email:
+                    return None
+                client = clients_map.get(cand_email)
+                if client:
+                    return client
+                domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
+                # Não usa fallback por domínio para o domínio corporativo do próprio usuário,
+                # evitando atribuir emails internos a um único cliente que compartilha o domínio.
+                if domain and domain != own_domain:
+                    domain_clients = domain_map.get(domain, [])
+                    if len(domain_clients) == 1:
+                        return domain_clients[0]
+                return None
+
+            matched_groups = {}    # (client_id, thread_key) -> grupo
+            unmatched_groups = {}  # (counterpart_email, thread_key) -> grupo
 
             for email_data in emails:
                 subject = (email_data.get('subject') or '').strip()
@@ -7442,8 +7522,16 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                 sender = email_data.get('sender') or {}
                 recipients = email_data.get('recipients') or []
                 body_preview = (email_data.get('body_preview') or '').strip()
+                message_id = (email_data.get('message_id') or '').strip()
+                conversation_id = (email_data.get('conversation_id') or '').strip()
                 if not email_date:
                     continue
+                # Pula mensagens já importadas em sincronizações anteriores
+                if message_id and message_id in processed_ids:
+                    continue
+
+                # Candidatos = remetente (recebido) ou destinatários TO (enviado).
+                # CC é ignorado de propósito (item de quem está só em cópia não vira atividade).
                 if direction == 'received':
                     candidates = [sender] if sender.get('email') else []
                     label = 'De'
@@ -7451,66 +7539,112 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     candidates = [r for r in recipients if r.get('email')]
                     label = 'Para'
 
-                matched_this = False
+                tkey = _outlook_thread_key(email_data)
+
+                # Em emails enviados todos os destinatários TO são candidatos;
+                # cria um grupo por cliente correspondente (multi-recipiente).
+                matched_for_email = []
                 for candidate in candidates:
-                    cand_email = (candidate.get('email') or '').strip().lower()
-                    if not cand_email:
-                        continue
-                    client = clients_map.get(cand_email)
-                    if not client:
-                        domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
-                        domain_clients = domain_map.get(domain, [])
-                        if len(domain_clients) == 1:
-                            client = domain_clients[0]
-                    if not client:
-                        continue
+                    c_match = _match_client(candidate.get('email'))
+                    if c_match:
+                        matched_for_email.append((c_match, candidate))
 
-                    dedup_key = (client['id'], email_date[:16], subject[:100])
-                    if dedup_key in seen_keys:
-                        matched_this = True
+                if matched_for_email:
+                    for m_client, chosen in matched_for_email:
+                        msg_entry = {
+                            'direction': direction,
+                            'name': (chosen.get('name') or '').strip(),
+                            'email': (chosen.get('email') or '').strip().lower(),
+                            'date': email_date,
+                            'subject': subject,
+                            'body_preview': body_preview,
+                            'message_id': message_id,
+                            'conversation_id': conversation_id,
+                        }
+                        gkey = (m_client['id'], tkey)
+                        grp = matched_groups.get(gkey)
+                        if not grp:
+                            grp = {
+                                'client_id': m_client['id'],
+                                'client_name': m_client['name'],
+                                'client_photo_url': m_client['photo_url'],
+                                'counterpart_label': label,
+                                'conversation_id': conversation_id,
+                                'messages': [],
+                                'message_ids': [],
+                            }
+                            matched_groups[gkey] = grp
+                        grp['messages'].append(msg_entry)
+                        if message_id:
+                            grp['message_ids'].append(message_id)
+                elif candidates:
+                    ref = candidates[0]
+                    cemail = (ref.get('email') or '').strip().lower()
+                    cdomain = cemail.split('@', 1)[-1] if '@' in cemail else ''
+                    # Ignora ruído interno (mesmo domínio do usuário) na lista "sem cliente"
+                    if cdomain and cdomain == own_domain:
                         continue
-                    date_minute = email_date[:16]
-                    c.execute(
-                        '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
-                           AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
-                           AND information LIKE ? LIMIT 1''',
-                        (client['id'], date_minute, f'{subject[:100]}%')
-                    )
-                    if c.fetchone():
-                        matched_this = True
-                        continue
-                    seen_keys.add(dedup_key)
-                    matched_this = True
-                    activities.append({
-                        'client_id': client['id'],
-                        'client_name': client['name'],
-                        'client_photo_url': client['photo_url'],
-                        'subject': subject,
-                        'date': email_date,
+                    msg_entry = {
                         'direction': direction,
-                        'counterpart_label': label,
-                        'counterpart_name': (candidate.get('name') or cand_email).strip(),
-                        'counterpart_email': cand_email,
-                        'body_preview': body_preview
-                    })
-                    break
+                        'name': (ref.get('name') or '').strip(),
+                        'email': cemail,
+                        'date': email_date,
+                        'subject': subject,
+                        'body_preview': body_preview,
+                        'message_id': message_id,
+                        'conversation_id': conversation_id,
+                    }
+                    gkey = (cemail, tkey)
+                    grp = unmatched_groups.get(gkey)
+                    if not grp:
+                        grp = {
+                            'counterpart_label': label,
+                            'counterpart_name': (ref.get('name') or cemail).strip(),
+                            'counterpart_email': cemail,
+                            'conversation_id': conversation_id,
+                            'messages': [],
+                            'message_ids': [],
+                        }
+                        unmatched_groups[gkey] = grp
+                    grp['messages'].append(msg_entry)
+                    if message_id:
+                        grp['message_ids'].append(message_id)
 
-                if not matched_this and candidates:
-                    first = candidates[0]
-                    unmatched.append({
-                        'subject': subject,
-                        'date': email_date,
-                        'direction': direction,
-                        'counterpart_label': label,
-                        'counterpart_name': (first.get('name') or first.get('email') or '').strip(),
-                        'counterpart_email': (first.get('email') or '').strip().lower(),
-                        'body_preview': body_preview[:180]
-                    })
+            # Dedup de grupo: remove threads cujo conteúdo todo já foi importado antes.
+            # grp['message_ids'] só contém IDs *novos* (os já processados foram filtrados
+            # individualmente acima). Se a lista está vazia, confirma via conversation_id.
+            def _is_group_new(grp):
+                if grp.get('message_ids'):
+                    return True
+                conv_id = (grp.get('conversation_id') or '').strip()
+                return not (conv_id and conv_id in processed_conv_ids)
+
+            matched_groups = {k: v for k, v in matched_groups.items() if v['messages'] and _is_group_new(v)}
+            unmatched_groups = {k: v for k, v in unmatched_groups.items() if v['messages'] and _is_group_new(v)}
+
+            def _finalize(grp):
+                msgs = sorted(grp['messages'], key=lambda m: m['date'])
+                latest = msgs[-1]
+                grp['messages'] = msgs[:12]
+                grp['subject'] = latest['subject']
+                grp['date'] = latest['date']
+                grp['direction'] = latest['direction']
+                grp['counterpart_name'] = latest['name'] or grp.get('counterpart_name') or latest['email']
+                grp['counterpart_email'] = latest['email'] or grp.get('counterpart_email') or ''
+                grp['body_preview'] = latest['body_preview']
+                grp['email_count'] = len(msgs)
+                return grp
+
+            activities = [_finalize(g) for g in matched_groups.values() if g['messages']]
+            unmatched = [_finalize(g) for g in unmatched_groups.values() if g['messages']]
+            activities.sort(key=lambda g: g['date'], reverse=True)
+            unmatched.sort(key=lambda g: g['date'], reverse=True)
+
             conn.close()
 
-            msg = f'{len(activities)} nova(s) atividade(s) encontrada(s) em {total_read} email(s) lidos.'
+            msg = f'{len(activities)} atividade(s) agrupada(s) por assunto em {total_read} email(s) lidos.'
             if unmatched:
-                msg += f' {len(unmatched)} email(s) sem cliente correspondente.'
+                msg += f' {len(unmatched)} thread(s) sem cliente correspondente.'
             yield evt({
                 'phase': 'done',
                 'total_read': total_read,
@@ -7567,13 +7701,15 @@ def _outlook_confirm_async(task_id, activities_to_import):
         commitments_created = 0
         status_suggestions = []
         kanban_suggestions = []
+        imported_items = []
+        skipped_items = []
 
         conn = get_db()
         c = conn.cursor()
 
         for i, act in enumerate(activities_to_import):
             _outlook_confirm_task_set(task_id, {
-                'step': f'Processando email {i + 1}/{total}...',
+                'step': f'Processando thread {i + 1}/{total}...',
                 'progress': 10 + int((i / total) * 75)
             })
 
@@ -7584,10 +7720,27 @@ def _outlook_confirm_async(task_id, activities_to_import):
             cname = (act.get('counterpart_name') or '').strip()
             cemail = (act.get('counterpart_email') or '').strip()
             body_preview = (act.get('body_preview') or '').strip()
+            messages = act.get('messages') or []
+            message_ids = [m for m in (act.get('message_ids') or []) if m]
+            conv_id = (act.get('conversation_id') or '').strip()
 
             if not client_id or not email_date:
                 continue
 
+            # Dedup persistente: se todas as mensagens da thread já foram processadas, pula
+            if message_ids:
+                placeholders = ','.join('?' * len(message_ids))
+                c.execute(
+                    f'SELECT COUNT(*) AS n FROM outlook_processed_emails WHERE message_id IN ({placeholders})',
+                    tuple(message_ids)
+                )
+                row_n = c.fetchone()
+                if row_n and row_n['n'] >= len(message_ids):
+                    skipped += 1
+                    skipped_items.append({'client_name': act.get('client_name') or cname, 'subject': subject})
+                    continue
+
+            # Dedup contra atividade já existente (mesma thread/cliente no mesmo minuto)
             date_minute = email_date[:16]
             c.execute(
                 '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
@@ -7597,29 +7750,59 @@ def _outlook_confirm_async(task_id, activities_to_import):
             )
             if c.fetchone():
                 skipped += 1
+                skipped_items.append({'client_name': act.get('client_name') or cname, 'subject': subject})
+                for mid in message_ids:
+                    try:
+                        c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
+                                  '(user_id, message_id, conversation_id, client_id) VALUES (1, ?, ?, ?)',
+                                  (mid, conv_id, client_id))
+                    except Exception:
+                        pass
                 continue
 
-            summary = None
-            if body_preview:
-                raw = _outlook_call_llm(
-                    f'Resuma em 1 a 2 frases o conteúdo do email abaixo em português, '
-                    f'de forma objetiva, sem mencionar remetente ou destinatário:\n'
-                    f'Assunto: {subject}\nTexto: {body_preview[:1000]}\n\n'
-                    'Retorne SOMENTE o resumo, sem introdução, aspas ou formatação extra.'
+            # Monta o texto consolidado da thread para o resumo do LLM
+            if not messages:
+                messages = [{'direction': act.get('direction', 'received'), 'name': cname,
+                             'email': cemail, 'date': email_date, 'subject': subject,
+                             'body_preview': body_preview}]
+            thread_lines = []
+            participants = []
+            for m in messages:
+                nm = (m.get('name') or m.get('email') or '').strip()
+                if nm and nm not in participants:
+                    participants.append(nm)
+                d = 'enviado' if m.get('direction') == 'sent' else 'recebido'
+                thread_lines.append(
+                    f"- ({d}) {nm}: {(m.get('subject') or '').strip()} — "
+                    f"{(m.get('body_preview') or '').strip()[:400]}"
                 )
-                if raw:
-                    summary = raw.strip()
+            thread_text = '\n'.join(thread_lines)
 
-            info_parts = [subject, f'{label}: {cname} <{cemail}>']
+            summary = _outlook_call_llm(
+                'Você é um assistente de CRM. Resuma a thread de emails abaixo em 1 a 2 frases objetivas, '
+                'em português, dizendo quem fez o quê e qual o assunto ou decisão principal. '
+                'Se vários participantes fizeram a mesma ação (ex.: aceitaram um convite), agrupe-os numa só frase. '
+                'Não comece com "Resumo:" e não use aspas.\n\n'
+                f'Contraparte principal: {cname}\n'
+                f'Thread:\n{thread_text}'
+            )
+            summary = summary.strip() if summary else None
+
+            participants_str = ', '.join(participants[:6]) or cname
+            first_line = subject if len(messages) <= 1 else f'{subject}  ({len(messages)} emails na thread)'
+            info_parts = [first_line, f'{label}: {participants_str}']
             if summary:
                 info_parts.append(f'Resumo: {summary}')
             elif body_preview:
                 info_parts.append(body_preview[:300])
+            information = '\n'.join(info_parts)
+
+            analysis_text = (summary or body_preview or subject or '')[:600]
 
             c.execute(
                 '''INSERT INTO activities (client_id, contact_type, information, activity_date)
                    VALUES (?, 'Email', ?, ?)''',
-                (client_id, '\n'.join(info_parts), email_date)
+                (client_id, information, email_date)
             )
             activity_id = c.lastrowid
             c.execute(
@@ -7628,14 +7811,28 @@ def _outlook_confirm_async(task_id, activities_to_import):
                 (email_date, client_id, email_date)
             )
             imported += 1
+            imported_items.append({
+                'client_name': act.get('client_name') or cname,
+                'subject': subject,
+                'date': email_date[:10] if email_date else '',
+            })
 
-            new_commitments = create_commitments_from_activity(c, client_id, activity_id, '\n'.join(info_parts))
+            # Registra mensagens processadas para não reimportar nas próximas sincronizações
+            for mid in message_ids:
+                try:
+                    c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
+                              '(user_id, message_id, conversation_id, client_id, activity_id) VALUES (1, ?, ?, ?, ?)',
+                              (mid, conv_id, client_id, activity_id))
+                except Exception:
+                    pass
+
+            new_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
             commitments_created += len(new_commitments)
 
-            if body_preview:
+            if analysis_text:
                 stage_raw = _outlook_call_llm(
-                    f'Analise este email e classifique o momento do relacionamento comercial.\n'
-                    f'Assunto: {subject}\nTexto: {body_preview[:500]}\n\n'
+                    f'Analise esta interação e classifique o momento do relacionamento comercial.\n'
+                    f'Assunto: {subject}\nTexto: {analysis_text}\n\n'
                     'Retorne SOMENTE um destes valores (sem mais texto):\n'
                     'lead_quente | negociando | pos_venda | sem_mudanca\n'
                     'lead_quente = cliente demonstrou interesse ativo\n'
@@ -7680,7 +7877,7 @@ def _outlook_confirm_async(task_id, activities_to_import):
                     cards_text = '\n'.join([f'- ID {card["id"]}: "{card["title"]}" (coluna: {card["col_title"]})' for card in cards])
                     cols_text = ' | '.join([col['title'] for col in columns])
                     kanban_raw = _outlook_call_llm(
-                        f'Email:\nAssunto: {subject}\nTexto: {body_preview[:400]}\n\n'
+                        f'Interação:\nAssunto: {subject}\nTexto: {analysis_text}\n\n'
                         f'Cards do Kanban deste cliente:\n{cards_text}\n\n'
                         f'Colunas disponíveis: {cols_text}\n\n'
                         'Algum card precisa ser movido com base neste email? '
@@ -7730,6 +7927,9 @@ def _outlook_confirm_async(task_id, activities_to_import):
             'progress': 100,
             'result': {
                 'imported': imported,
+                'imported_items': imported_items,
+                'skipped': skipped,
+                'skipped_items': skipped_items,
                 'commitments_created': commitments_created,
                 'status_suggestions': status_suggestions,
                 'kanban_suggestions': kanban_suggestions,
@@ -12413,48 +12613,50 @@ def _iata_parse_llm_insights(raw):
 
 
 def _iata_call_llm(system_msg, user_msg, log_tag):
-    """OpenRouter como primário; SAI como fallback."""
+    """SAI como primário; OpenRouter como fallback."""
+    # Tenta SAI primeiro
+    question = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
+    raw = _sai_simple_prompt(question)
+    if raw and str(raw).strip():
+        logger.info(f'[iAta][{log_tag}] SAI respondeu com sucesso')
+        return raw, 'SAI'
+    logger.info(f'[iAta][{log_tag}] SAI indisponível, tentando OpenRouter.')
+
+    # Fallback: OpenRouter
     or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            payload = {
+    if not or_key:
+        return None, 'sem_llm'
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    try:
+        resp = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            json={
                 'model': model,
                 'messages': [
                     {'role': 'system', 'content': system_msg},
                     {'role': 'user', 'content': user_msg}
                 ],
                 'temperature': 0.2
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            if raw and str(raw).strip():
-                return raw, 'OpenRouter'
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
-        except Exception as e:
-            logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
-    # Fallback: SAI
-    raw = _sai_simple_prompt(user_msg)
-    if raw is not None and not str(raw).strip():
-        raw = None
-    if raw is not None:
-        return raw, 'SAI'
+            },
+            headers={
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            timeout=90
+        )
+        data = resp.json()
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        if raw and str(raw).strip():
+            logger.info(f'[iAta][{log_tag}][OpenRouter] Resposta gerada com sucesso')
+            return raw, 'OpenRouter'
+        logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia.')
+    except Exception as e:
+        logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}.')
     return None, 'sem_llm'
 
 
@@ -13220,6 +13422,24 @@ def update_account(account_id):
         row = dict_from_row(c.fetchone())
         if not row:
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        old_name = row['name']
+        new_name = name or old_name
+        # Renomear conta: propagar para os contatos (clients.company) e mesclar conta duplicada,
+        # evitando que sync_accounts_from_clients() recrie a conta com o nome antigo.
+        if new_name.strip().lower() != (old_name or '').strip().lower():
+            c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ?', (new_name, account_id))
+            conflict = c.fetchone()
+            if conflict:
+                conflict_id = conflict['id'] if isinstance(conflict, sqlite3.Row) else conflict[0]
+                # Move os dados da conta conflitante para esta conta e remove a duplicata
+                c.execute('UPDATE account_presences SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('UPDATE account_renewal_events SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('UPDATE account_activities SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('UPDATE kanban_cards SET account_id=? WHERE account_id=?', (account_id, conflict_id))
+                c.execute('DELETE FROM account_main_contacts WHERE account_id=?', (conflict_id,))
+                c.execute('DELETE FROM accounts WHERE id=?', (conflict_id,))
+            # Atualiza a referência do nome em todos os contatos vinculados
+            c.execute('UPDATE clients SET company=?, updated_at=CURRENT_TIMESTAMP WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (new_name, old_name))
         logo_url = None if remove_logo else (autofill_logo_url or row.get('logo_url'))
         if 'logo' in request.files:
             f = request.files['logo']
@@ -13239,6 +13459,215 @@ def update_account(account_id):
         return jsonify({'message': 'Conta atualizada'})
     except Exception as e:
         print(f'[ERROR] PUT /api/accounts/{account_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/<int:account_id>', methods=['DELETE'])
+def delete_account(account_id):
+    """Arquiva (snapshot completo em JSON) e exclui a conta, seus contatos e todo o histórico."""
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
+        account = dict_from_row(c.fetchone())
+        if not account:
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        name = account['name']
+
+        # Contatos (clients) vinculados à conta pelo nome da empresa
+        c.execute('SELECT * FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (name,))
+        clients = [dict_from_row(r) for r in c.fetchall()]
+        client_ids = [cl['id'] for cl in clients]
+
+        def _fetch_for_clients(query):
+            if not client_ids:
+                return []
+            ph = ','.join('?' * len(client_ids))
+            c.execute(query.format(ph=ph), client_ids)
+            return [dict_from_row(r) for r in c.fetchall()]
+
+        client_activities = _fetch_for_clients('SELECT * FROM activities WHERE client_id IN ({ph})')
+        client_commitments = _fetch_for_clients('SELECT * FROM commitments WHERE client_id IN ({ph})')
+        client_env_responses = _fetch_for_clients('SELECT * FROM environment_responses WHERE client_id IN ({ph})')
+
+        c.execute('SELECT * FROM account_main_contacts WHERE account_id = ?', (account_id,))
+        main_contacts = [dict_from_row(r) for r in c.fetchall()]
+        c.execute('SELECT * FROM account_presences WHERE account_id = ?', (account_id,))
+        presences = [dict_from_row(r) for r in c.fetchall()]
+        c.execute('SELECT * FROM account_renewal_events WHERE account_id = ?', (account_id,))
+        renewal_events = [dict_from_row(r) for r in c.fetchall()]
+        c.execute('SELECT * FROM account_activities WHERE account_id = ?', (account_id,))
+        account_activities = [dict_from_row(r) for r in c.fetchall()]
+
+        snapshot = {
+            'version': 1,
+            'account': account,
+            'clients': clients,
+            'client_activities': client_activities,
+            'client_commitments': client_commitments,
+            'client_env_responses': client_env_responses,
+            'main_contacts': main_contacts,
+            'presences': presences,
+            'renewal_events': renewal_events,
+            'account_activities': account_activities,
+        }
+        c.execute('''INSERT INTO account_archives (account_name, snapshot_json, contacts_count, activities_count)
+                     VALUES (?, ?, ?, ?)''',
+                  (name, json.dumps(snapshot, default=str, ensure_ascii=False),
+                   len(clients), len(client_activities) + len(account_activities)))
+
+        # Remove dados específicos da conta
+        c.execute('DELETE FROM account_renewal_events WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM account_presences WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM account_activities WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM account_main_contacts WHERE account_id = ?', (account_id,))
+
+        # Remove contatos e seus dados relacionados (FKs não são forçadas no SQLite)
+        if client_ids:
+            ph = ','.join('?' * len(client_ids))
+            c.execute(f'DELETE FROM activities WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM commitments WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM environment_responses WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM whatsapp_sync_log WHERE client_id IN ({ph})', client_ids)
+            c.execute(f'UPDATE kanban_cards SET contact_id = NULL WHERE contact_id IN ({ph})', client_ids)
+            c.execute(f'DELETE FROM clients WHERE id IN ({ph})', client_ids)
+
+        c.execute('UPDATE kanban_cards SET account_id = NULL WHERE account_id = ?', (account_id,))
+        c.execute('DELETE FROM accounts WHERE id = ?', (account_id,))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Conta arquivada e excluída', 'archived_contacts': len(clients)})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/accounts/{account_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/archives', methods=['GET'])
+def list_account_archives():
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('''SELECT id, account_name, contacts_count, activities_count, archived_at
+                     FROM account_archives ORDER BY archived_at DESC, id DESC''')
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close(); return jsonify(rows)
+    except Exception as e:
+        print(f'[ERROR] GET /api/accounts/archives: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/archives/<int:archive_id>/restore', methods=['POST'])
+def restore_account_archive(archive_id):
+    """Recria a conta arquivada, seus contatos e todo o histórico a partir do snapshot."""
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('SELECT * FROM account_archives WHERE id = ?', (archive_id,))
+        arch = dict_from_row(c.fetchone())
+        if not arch:
+            conn.close(); return jsonify({'error': 'Arquivo não encontrado'}), 404
+        snap = json.loads(arch['snapshot_json'])
+        account = snap.get('account') or {}
+        name = account.get('name') or arch['account_name']
+
+        c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (name,))
+        if c.fetchone():
+            conn.close()
+            return jsonify({'error': f'Já existe uma conta com o nome "{name}". Renomeie ou exclua a conta atual antes de restaurar.'}), 409
+
+        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+                  (name, account.get('logo_url'), account.get('is_target', 0), account.get('sector'),
+                   account.get('average_revenue_cents'), account.get('professionals_count'),
+                   account.get('global_presence'), account.get('created_at')))
+        new_account_id = c.lastrowid
+
+        # Recria os contatos (clients), mapeando id antigo -> novo
+        client_id_map = {}
+        for cl in snap.get('clients', []):
+            c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+                      (cl.get('name'), name, cl.get('position'), cl.get('area_of_activity'), cl.get('email'),
+                       cl.get('phone'), cl.get('linkedin'), cl.get('photo_url'), cl.get('is_target', 0),
+                       cl.get('is_cold_contact', 0), cl.get('is_archived', 0), cl.get('created_at')))
+            client_id_map[cl.get('id')] = c.lastrowid
+
+        # Atividades dos contatos
+        activity_id_map = {}
+        for a in snap.get('client_activities', []):
+            new_cid = client_id_map.get(a.get('client_id'))
+            if not new_cid:
+                continue
+            c.execute('''INSERT INTO activities (client_id, contact_type, information, description, activity_date, created_at)
+                         VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))''',
+                      (new_cid, a.get('contact_type', 'Outro'), a.get('information'), a.get('description'),
+                       a.get('activity_date'), a.get('created_at')))
+            activity_id_map[a.get('id')] = c.lastrowid
+
+        # Compromissos (agenda)
+        for cm in snap.get('client_commitments', []):
+            new_cid = client_id_map.get(cm.get('client_id'))
+            if not new_cid:
+                continue
+            new_aid = activity_id_map.get(cm.get('activity_id')) if cm.get('activity_id') else None
+            c.execute('''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))''',
+                      (new_cid, new_aid, cm.get('title'), cm.get('notes'), cm.get('due_date'),
+                       cm.get('due_time'), cm.get('source_type', 'activity'), cm.get('created_at')))
+
+        # Respostas de mapeamento de ambiente
+        for er in snap.get('client_env_responses', []):
+            new_cid = client_id_map.get(er.get('client_id'))
+            if not new_cid:
+                continue
+            c.execute('INSERT OR IGNORE INTO environment_responses (card_id, client_id, response, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                      (er.get('card_id'), new_cid, er.get('response')))
+
+        # Pontos focais principais
+        for mc in snap.get('main_contacts', []):
+            new_cid = client_id_map.get(mc.get('client_id'))
+            if not new_cid:
+                continue
+            c.execute('INSERT OR IGNORE INTO account_main_contacts (account_id, client_id) VALUES (?, ?)', (new_account_id, new_cid))
+
+        # Presenças (serviços Stefanini)
+        presence_id_map = {}
+        for p in snap.get('presences', []):
+            focal = client_id_map.get(p.get('focal_client_id')) if p.get('focal_client_id') else None
+            c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+                      (new_account_id, p.get('delivery_name'), p.get('stf_owner'), p.get('delivery_cell'),
+                       p.get('service_id'), p.get('billing_type', 'Mensal'), p.get('validity_month'),
+                       p.get('contract_duration_months'), p.get('contract_end_date'), p.get('early_terminated', 0),
+                       p.get('current_revenue_cents'), focal, p.get('created_at')))
+            presence_id_map[p.get('id')] = c.lastrowid
+
+        # Eventos de renovação
+        for ev in snap.get('renewal_events', []):
+            new_pid = presence_id_map.get(ev.get('presence_id'))
+            if not new_pid:
+                continue
+            c.execute('INSERT OR IGNORE INTO account_renewal_events (account_id, presence_id, title, due_date, due_time, created_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))',
+                      (new_account_id, new_pid, ev.get('title'), ev.get('due_date'), ev.get('due_time', '09:00'), ev.get('created_at')))
+
+        # Atividades genéricas da conta
+        for aa in snap.get('account_activities', []):
+            c.execute('INSERT INTO account_activities (account_id, description, activity_date, created_at) VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))',
+                      (new_account_id, aa.get('description'), aa.get('activity_date'), aa.get('created_at')))
+
+        c.execute('DELETE FROM account_archives WHERE id = ?', (archive_id,))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Conta restaurada', 'account_id': new_account_id})
+    except Exception as e:
+        print(f'[ERROR] POST /api/accounts/archives/{archive_id}/restore: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/archives/<int:archive_id>', methods=['DELETE'])
+def delete_account_archive(archive_id):
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('DELETE FROM account_archives WHERE id = ?', (archive_id,))
+        conn.commit(); conn.close()
+        return jsonify({'message': 'Arquivo excluído'})
+    except Exception as e:
+        print(f'[ERROR] DELETE /api/accounts/archives/{archive_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 

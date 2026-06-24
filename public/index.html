@@ -3308,6 +3308,36 @@
         html[data-theme="blue-space"] .nav-item.active { box-shadow: 0 4px 15px rgba(87,84,168,0.45), 0 0 22px rgba(87,84,168,0.25) !important; }
         html[data-theme="blue-space"] .btn-primary { box-shadow: 0 4px 12px rgba(87,84,168,0.4), 0 0 18px rgba(87,84,168,0.2) !important; }
 
+        /* ── Relationship Report: bloco do nome do módulo segue o tema ── */
+        html[data-theme="black-cat"] .relreport-hero { background: linear-gradient(135deg, #2b2b2b, #1a1a1a) !important; box-shadow: 0 14px 40px rgba(0,0,0,0.45) !important; }
+        html[data-theme="blue-space"] .relreport-hero { background: linear-gradient(135deg, #1a2a6c, #0d1733) !important; box-shadow: 0 14px 40px rgba(10,20,60,0.5) !important; }
+        html[data-theme="baby-pink"] .relreport-hero { background: linear-gradient(135deg, #d4708a, #a0607a) !important; box-shadow: 0 14px 40px rgba(212,112,138,0.22) !important; }
+        html[data-theme="white-pearl"] .relreport-hero { background: linear-gradient(135deg, #a09880, #7c6d5f) !important; box-shadow: 0 14px 40px rgba(124,109,95,0.22) !important; }
+
+        /* ── Resumo LinkedIn (Preparar Reunião): manter o relatório legível nos temas escuros ── */
+        html[data-theme="black-cat"] #atLinkedinResumoCard .settings-card,
+        html[data-theme="blue-space"] #atLinkedinResumoCard .settings-card { background: #ffffff !important; border-color: #e5e7eb !important; }
+        html[data-theme="black-cat"] #atLinkedinResumoCard h2,
+        html[data-theme="black-cat"] #atLinkedinResumoCard strong,
+        html[data-theme="black-cat"] #atLinkedinResumoCard b,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h2,
+        html[data-theme="blue-space"] #atLinkedinResumoCard strong,
+        html[data-theme="blue-space"] #atLinkedinResumoCard b { color: #065f46 !important; }
+        html[data-theme="black-cat"] #atLinkedinResumoCard h3,
+        html[data-theme="black-cat"] #atLinkedinResumoCard h4,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h3,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h4 { color: #047857 !important; }
+        html[data-theme="black-cat"] #atLinkedinResumoCard p,
+        html[data-theme="black-cat"] #atLinkedinResumoCard ul,
+        html[data-theme="black-cat"] #atLinkedinResumoCard li,
+        html[data-theme="black-cat"] #atLinkedinResumoCard label,
+        html[data-theme="black-cat"] #atLinkedinResumoCard span,
+        html[data-theme="blue-space"] #atLinkedinResumoCard p,
+        html[data-theme="blue-space"] #atLinkedinResumoCard ul,
+        html[data-theme="blue-space"] #atLinkedinResumoCard li,
+        html[data-theme="blue-space"] #atLinkedinResumoCard label,
+        html[data-theme="blue-space"] #atLinkedinResumoCard span { color: #374151 !important; }
+
     </style>
 </head>
 <body>
@@ -3857,6 +3887,7 @@
             <div id="gestaoContaSubPanel_accounts" data-subtab="accounts">
                 <div style="margin-bottom:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
                     <button class="btn btn-primary" onclick="openAccountModal()"><i class="fas fa-plus"></i> Nova Conta</button>
+                    <button class="btn btn-secondary" onclick="openArchivedAccountsModal()"><i class="fas fa-box-archive"></i> Contas Arquivadas</button>
                     <label style="display:flex; align-items:center; gap:7px; font-size:13px; color:#fff; cursor:pointer; user-select:none;">
                         <input type="checkbox" id="showTerminatedPresences" onchange="loadAccounts()" style="accent-color:#f97316; width:14px; height:14px;">
                         <i class="fas fa-circle-xmark" style="color:#f97316; font-size:13px;"></i>
@@ -4181,45 +4212,6 @@
                     Importe emails do Outlook como atividades, detecte compromissos, atualize o status do cliente e mova cards do Kanban automaticamente.
                 </p>
 
-                <!-- Instalação do suplemento -->
-                <div style="background:#f0fdf4; border:1px solid #d1fae5; border-radius:10px; padding:14px; margin-bottom:16px;">
-                    <h4 style="margin-bottom:8px; color:#065f46; font-size:14px;"><i class="fas fa-puzzle-piece"></i> Suplemento do Outlook (instalação única)</h4>
-                    <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
-                        Instale o suplemento uma vez e sincronize com 2 cliques — sem timeouts, sem popups extras. Funciona com Exchange e Microsoft 365.
-                    </p>
-
-                    <!-- Método 1: URL (principal) -->
-                    <div style="margin-bottom:12px;">
-                        <p style="font-size:13px; font-weight:600; color:#065f46; margin-bottom:6px;">Método recomendado — adicionar pela URL (sem download)</p>
-                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-                            <code id="outlookAddinManifestUrlAT" style="background:#fff; border:1px solid #d1fae5; padding:6px 10px; border-radius:6px; font-size:12px; color:#065f46; flex:1; min-width:200px; word-break:break-all;"></code>
-                            <button class="btn btn-auto-mapping btn-small" onclick="copyOutlookManifestUrlAT()"><i class="fas fa-copy"></i> Copiar URL</button>
-                        </div>
-                        <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin:0; line-height:1.9;">
-                            <li>No Outlook: <strong>Página Inicial → Obter Suplementos</strong></li>
-                            <li>Clique em <strong>Meus suplementos → Suplemento Personalizado → Adicionar da URL</strong></li>
-                            <li>Cole a URL acima e clique em OK</li>
-                            <li>Ao abrir qualquer email, use o painel <strong>"Toca do Coelho"</strong> na ribbon para carregar e enviar emails</li>
-                        </ol>
-                    </div>
-
-                    <!-- Método 2: XML (alternativa) -->
-                    <details style="border-top:1px solid #d1fae5; padding-top:10px; margin-top:4px;">
-                        <summary style="cursor:pointer; font-size:13px; font-weight:600; color:#065f46; margin-bottom:8px;">Alternativa — baixar arquivo manifest.xml</summary>
-                        <p style="color:#4b5563; font-size:12px; margin-bottom:8px; line-height:1.6;">Se o Outlook não aceitar URL direta, baixe o manifest e adicione pelo arquivo.</p>
-                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-                            <a id="outlookAddinManifestDownloadLink" href="#" class="btn btn-secondary btn-small" onclick="downloadOutlookManifestXml(event)">
-                                <i class="fas fa-download"></i> Baixar manifest.xml
-                            </a>
-                        </div>
-                        <ol style="color:#4b5563; font-size:12px; padding-left:16px; margin:0; line-height:1.9;">
-                            <li>Clique em "Baixar manifest.xml" acima</li>
-                            <li>No Outlook: <strong>Obter Suplementos → Meus suplementos → Suplemento Personalizado → Adicionar do arquivo</strong></li>
-                            <li>Selecione o arquivo baixado</li>
-                        </ol>
-                    </details>
-                </div>
-
                 <!-- Microsoft 365 / Graph -->
                 <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:14px; margin-bottom:16px;">
                     <h4 style="margin-bottom:8px; color:#1e40af; font-size:14px;"><i class="fas fa-cloud"></i> Microsoft 365 — Sincronização direta (sem plugin)</h4>
@@ -4251,14 +4243,8 @@
                         <button class="btn btn-auto-mapping btn-small" id="outlookGraphSyncBtn" onclick="syncOutlookGraph()" style="display:none;">
                             <span class="ai-star-icon">✦</span> Sync Microsoft 365
                         </button>
-                        <button class="btn btn-secondary btn-small" id="outlookSyncBtn" onclick="syncOutlookEmails()">
-                            <span class="ai-star-icon">✦</span> Sync via PowerShell
-                        </button>
-                        <button class="btn btn-auto-mapping btn-small" id="outlookAddinCaptureBtn" onclick="captureOutlookAddin()" style="display:none; position:relative;">
-                            <span class="ai-star-icon">✦</span> Capturar do Add-in
-                            <span id="outlookAddinBadge" style="position:absolute;top:-5px;right:-5px;background:#ef4444;color:white;border-radius:99px;font-size:10px;width:16px;height:16px;display:flex;align-items:center;justify-content:center;font-weight:700;">!</span>
-                        </button>
                     </div>
+                    <p id="outlookSyncHint" style="font-size:12px; color:#9ca3af; margin-bottom:8px;">Conecte sua conta Microsoft 365 acima para habilitar a sincronização.</p>
                     <div id="outlookImportStatus" style="font-size:13px;"></div>
                 </div>
             </div>
@@ -4451,31 +4437,6 @@
                         </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar Integrações</button>
                     </form>
-                </section>
-
-                <section class="settings-card">
-                    <h3>Outlook Add-in (recomendado)</h3>
-                    <p style="margin-bottom:12px; color:#4b5563; font-size:13px;">
-                        Instale o add-in no Outlook para exportar emails diretamente para o Toca — sem timeout, sem janelas extras.
-                        Funciona com qualquer conta Exchange ou Microsoft 365.
-                    </p>
-                    <ol style="color:#4b5563; font-size:13px; padding-left:18px; margin-bottom:16px; line-height:1.8;">
-                        <li>Abra o Outlook → <strong>Página Inicial → Obter Suplementos</strong></li>
-                        <li>Vá em <strong>Meus suplementos → Suplemento Personalizado → Adicionar da URL</strong></li>
-                        <li>Cole a URL abaixo e clique em OK</li>
-                        <li>Ao ler qualquer email, clique em <strong>"Toca do Coelho"</strong> na ribbon</li>
-                        <li>Selecione o período, clique <strong>"Carregar emails"</strong> e depois <strong>"Enviar para Toca"</strong></li>
-                        <li>No Toca, clique em <strong>"Capturar do Add-in"</strong> (aparece automaticamente)</li>
-                    </ol>
-                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                        <code id="outlookAddinManifestUrl" style="background:#f0fdf4; border:1px solid #d1fae5; padding:6px 10px; border-radius:6px; font-size:12px; color:#065f46; flex:1; min-width:200px; word-break:break-all;"></code>
-                        <button class="btn btn-secondary btn-small" onclick="copyOutlookManifestUrl()" title="Copiar URL">
-                            <i class="fas fa-copy"></i> Copiar
-                        </button>
-                    </div>
-                    <small style="color:#9ca3af; display:block; margin-top:8px;">
-                        A URL muda conforme a porta (3000 produção / 3001 testes). Instale uma vez por máquina.
-                    </small>
                 </section>
 
                 <!-- 9. Logs de Depuração -->
@@ -4850,12 +4811,39 @@
     <!-- Outlook — Modal de Progresso do Import -->
     <div id="outlookImportProgressModal" class="modal" style="display:none;">
         <div class="modal-content" style="max-width:460px;">
-            <div class="modal-header">
-                <h2><i class="fas fa-brain" style="margin-right:8px;color:#10b981;"></i>Importando e analisando...</h2>
+            <div class="modal-header" style="display:flex;align-items:center;justify-content:space-between;">
+                <h2 style="margin:0;"><i class="fas fa-brain" style="margin-right:8px;color:#10b981;"></i>Importando e analisando...</h2>
+                <button onclick="_minimizeOutlookImport()" title="Minimizar — continua em segundo plano"
+                    style="background:none;border:none;cursor:pointer;font-size:20px;line-height:1;color:#6b7280;padding:0 4px;"
+                    onmouseover="this.style.color='#374151'" onmouseout="this.style.color='#6b7280'">⊟</button>
             </div>
             <div id="outlookImportProgressArea" style="padding:20px;">
                 <div class="outlook-progress-track"><div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;"></div></div>
                 <p id="outlookImportStep" style="font-size:13px;color:#374151;margin:8px 0 0;">Iniciando...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Outlook — Indicador minimizado (flutuante) -->
+    <div id="outlookImportMini" style="display:none;position:fixed;bottom:24px;right:24px;background:#065f46;color:#fff;padding:10px 18px;border-radius:12px;font-size:13px;cursor:pointer;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.35);align-items:center;gap:10px;"
+         onclick="_restoreOutlookImport()" title="Clique para ver progresso">
+        <span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0;"></span>
+        <span id="outlookImportMiniStep">Importando...</span>
+    </div>
+
+    <!-- Outlook — Modal de Resultado do Import -->
+    <div id="outlookImportResultModal" class="modal" style="display:none;" onclick="if(event.target===this)closeOutlookImportResult()">
+        <div class="modal-content" style="max-width:520px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-check-circle" style="margin-right:8px;color:#10b981;"></i>Resultado da importação</h2>
+                <button class="modal-close" onclick="closeOutlookImportResult()">×</button>
+            </div>
+            <div style="padding:20px;">
+                <p id="outlookImportResultMsg" style="font-size:14px;color:#065f46;background:#d1fae5;padding:10px 14px;border-radius:8px;margin:0 0 16px;"></p>
+                <div id="outlookImportResultBody"></div>
+                <div style="text-align:right;margin-top:16px;">
+                    <button class="btn btn-primary" onclick="closeOutlookImportResult()">OK</button>
+                </div>
             </div>
         </div>
     </div>
@@ -5437,7 +5425,7 @@
             }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') { loadActivities(); }
-            else if (tabName === 'autotoca') { loadAutoToca(); _addinStartPolling(); _initOutlookAddinManifestUrl(); }
+            else if (tabName === 'autotoca') { loadAutoToca(); }
 
             else if (tabName === 'reports') loadReports();
             else if (tabName === 'agenda') loadAgenda();
@@ -5479,36 +5467,9 @@
 
         async function loadSettings() {
             setupSettingsCards();
-            _initOutlookAddinManifestUrl();
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig(), loadStartupConfig(), loadThemeConfig()]);
             loadDebugLogsConfig();
             renderSettings();
-        }
-
-        function _initOutlookAddinManifestUrl() {
-            const manifestUrl = `${window.location.origin}/api/outlook/manifest.xml`;
-            const el = document.getElementById('outlookAddinManifestUrl');
-            if (el) el.textContent = manifestUrl;
-            const elAT = document.getElementById('outlookAddinManifestUrlAT');
-            if (elAT) elAT.textContent = manifestUrl;
-            const dlLink = document.getElementById('outlookAddinManifestDownloadLink');
-            if (dlLink) dlLink.href = `${manifestUrl}?download=1`;
-        }
-
-        function _copyManifestUrl() {
-            const url = `${window.location.origin}/api/outlook/manifest.xml`;
-            const btn = event.target.closest('button');
-            navigator.clipboard.writeText(url).then(() => {
-                if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<i class="fas fa-check"></i> Copiado!'; setTimeout(() => btn.innerHTML = orig, 2000); }
-            }).catch(() => { prompt('Copie a URL do manifest:', url); });
-        }
-
-        function copyOutlookManifestUrl() { _copyManifestUrl(); }
-        function copyOutlookManifestUrlAT() { _copyManifestUrl(); }
-
-        function downloadOutlookManifestXml(e) {
-            e.preventDefault();
-            window.location.href = `${window.location.origin}/api/outlook/manifest.xml?download=1`;
         }
 
         // ── Microsoft Graph OAuth ─────────────────────────────────────────────
@@ -5521,15 +5482,18 @@
                 const connectedArea = document.getElementById('graphConnectedArea');
                 const emailEl = document.getElementById('graphConnectedEmail');
                 const graphSyncBtn = document.getElementById('outlookGraphSyncBtn');
+                const hint = document.getElementById('outlookSyncHint');
                 if (data.connected) {
                     if (statusArea) statusArea.style.display = 'none';
                     if (connectedArea) connectedArea.style.display = '';
                     if (emailEl) emailEl.textContent = data.email || 'conta conectada';
                     if (graphSyncBtn) graphSyncBtn.style.display = '';
+                    if (hint) hint.style.display = 'none';
                 } else {
                     if (statusArea) statusArea.style.display = '';
                     if (connectedArea) connectedArea.style.display = 'none';
                     if (graphSyncBtn) graphSyncBtn.style.display = 'none';
+                    if (hint) hint.style.display = '';
                 }
             } catch (e) { /* silently ignore */ }
         }
@@ -5556,8 +5520,8 @@
             loadOutlookGraphStatus();
         }
 
-        async function syncOutlookGraph() {
-            const days = parseInt(document.getElementById('outlookSyncDays')?.value || '30');
+        async function syncOutlookGraph(daysOverride) {
+            const days = parseInt(daysOverride || document.getElementById('outlookSyncDays')?.value || '30');
             const statusEl = document.getElementById('outlookImportStatus');
             const btn = document.getElementById('outlookGraphSyncBtn');
             if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ai-star-icon">✦</span> Lendo emails...'; }
@@ -5588,23 +5552,50 @@
             };
         }
 
-        // Checa se voltamos de um OAuth callback e mostra notificação
-        (function _checkGraphOAuthReturn() {
+        // Navega até o painel de Sync Outlook do AutoToca
+        function _gotoSyncOutlookPanel() {
+            try {
+                switchTab(null, 'autotoca');
+                toggleAutoTocaAutomation('sync-outlook');
+            } catch (e) { /* ignore */ }
+        }
+
+        // Trata mensagens vindas da janela popup de conexão (outlook-connected.html)
+        function _handleOutlookPopupMessage(payload) {
+            if (!payload || !payload.action) return;
+            if (payload.action === 'connected') {
+                loadOutlookGraphStatus();
+                const statusArea = document.getElementById('autotocaExtensionStatus');
+                if (statusArea) {
+                    statusArea.style.display = '';
+                    statusArea.textContent = 'Microsoft 365 conectado com sucesso! Use o botão "Sync Microsoft 365" para importar emails.';
+                    setTimeout(() => { statusArea.style.display = 'none'; }, 6000);
+                }
+            } else if (payload.action === 'start-sync') {
+                const sel = document.getElementById('outlookSyncDays');
+                if (sel && payload.days) sel.value = String(payload.days);
+                _gotoSyncOutlookPanel();
+                setTimeout(() => syncOutlookGraph(payload.days), 250);
+            }
+        }
+
+        (function _initOutlookPopupBridge() {
+            // Canal moderno (mesma origem) entre o popup de conexão e a janela principal
+            try {
+                const ch = new BroadcastChannel('toca-outlook');
+                ch.onmessage = (e) => _handleOutlookPopupMessage(e.data);
+            } catch (e) { /* navegador sem BroadcastChannel — usa fallback abaixo */ }
+
+            // Fallback via localStorage (dispara em outras janelas da mesma origem)
+            window.addEventListener('storage', (e) => {
+                if (e.key === 'toca-outlook-msg' && e.newValue) {
+                    try { _handleOutlookPopupMessage(JSON.parse(e.newValue)); } catch (_) {}
+                }
+            });
+
+            // Compatibilidade: se algum fluxo antigo cair em /?graph_error
             const params = new URLSearchParams(window.location.search);
-            if (params.has('graph_connected')) {
-                history.replaceState(null, '', window.location.pathname);
-                setTimeout(() => {
-                    loadOutlookGraphStatus();
-                    const statusArea = document.getElementById('autotocaExtensionStatus');
-                    if (statusArea) {
-                        statusArea.style.display = '';
-                        statusArea.textContent = 'Microsoft 365 conectado com sucesso! Use o botão "Sync Microsoft 365" para importar emails.';
-                        setTimeout(() => { statusArea.style.display = 'none'; }, 6000);
-                    }
-                    switchTab(null, 'autotoca');
-                    toggleAutoTocaAutomation('sync-outlook');
-                }, 300);
-            } else if (params.has('graph_error')) {
+            if (params.has('graph_error')) {
                 const err = params.get('graph_error');
                 history.replaceState(null, '', window.location.pathname);
                 setTimeout(() => uiConfirm(decodeURIComponent(err), 'Erro na autenticação Microsoft 365'), 300);
@@ -5880,7 +5871,7 @@
                         <span class="outlook-review-date">${escapeHtml(dateStr)}</span>
                         <span class="outlook-review-dir">${dirIcon} ${escapeHtml(act.counterpart_label)}: ${escapeHtml(act.counterpart_name)}</span>
                     </div>
-                    <div class="outlook-review-subject">${escapeHtml(act.subject || '(sem assunto)')}</div>
+                    <div class="outlook-review-subject">${escapeHtml(act.subject || '(sem assunto)')}${(act.email_count > 1) ? ` <span style="font-size:11px;font-weight:600;color:#2563eb;background:#eff6ff;border:1px solid #bfdbfe;border-radius:99px;padding:1px 7px;margin-left:4px;">🧵 ${act.email_count} emails</span>` : ''}</div>
                     ${preview ? `<div class="outlook-review-preview">${escapeHtml(preview)}</div>` : ''}
                 </div>
             </div>`;
@@ -5917,6 +5908,7 @@
         function _openOutlookReviewModal(data) {
             _outlookPendingActivities = data.activities || [];
             _outlookUnmatchedItems = data.unmatched || [];
+            if (data.all_clients) _outlookAllClients = data.all_clients;
             const modal = document.getElementById('outlookReviewModal');
             const summary = document.getElementById('outlookReviewSummary');
             const list = document.getElementById('outlookReviewList');
@@ -5972,6 +5964,81 @@
             if (modal) modal.style.display = 'none';
             _outlookPendingActivities = [];
             _outlookUnmatchedItems = [];
+        }
+
+        // ── Importação — minimizar/restaurar e resultado detalhado ───────────
+        let _outlookImportMinimized = false;
+
+        function _minimizeOutlookImport() {
+            document.getElementById('outlookImportProgressModal').style.display = 'none';
+            const mini = document.getElementById('outlookImportMini');
+            if (mini) { mini.style.display = 'flex'; }
+            _outlookImportMinimized = true;
+        }
+
+        function _restoreOutlookImport() {
+            document.getElementById('outlookImportProgressModal').style.display = 'flex';
+            const mini = document.getElementById('outlookImportMini');
+            if (mini) mini.style.display = 'none';
+            _outlookImportMinimized = false;
+        }
+
+        function _hideOutlookImportUI() {
+            document.getElementById('outlookImportProgressModal').style.display = 'none';
+            const mini = document.getElementById('outlookImportMini');
+            if (mini) mini.style.display = 'none';
+            _outlookImportMinimized = false;
+        }
+
+        function closeOutlookImportResult() {
+            const modal = document.getElementById('outlookImportResultModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function _showOutlookImportResult(result) {
+            const modal = document.getElementById('outlookImportResultModal');
+            const msgEl = document.getElementById('outlookImportResultMsg');
+            const bodyEl = document.getElementById('outlookImportResultBody');
+            if (!modal || !msgEl || !bodyEl) return;
+
+            msgEl.textContent = result.message || '';
+
+            const imported = result.imported_items || [];
+            const skipped = result.skipped_items || [];
+            let html = '';
+
+            if (imported.length) {
+                html += `<div style="margin-bottom:14px;">
+                    <div style="font-size:12px;font-weight:700;color:#065f46;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+                        ✓ Registradas (${imported.length})
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:4px;">`;
+                for (const it of imported) {
+                    html += `<div style="display:flex;gap:8px;font-size:13px;padding:6px 10px;background:#f0fdf4;border-radius:6px;align-items:flex-start;">
+                        <span style="color:#10b981;flex-shrink:0;">✓</span>
+                        <span><strong>${escapeHtml(it.client_name)}</strong> — ${escapeHtml(it.subject)}${it.date ? ` <span style="color:#9ca3af;">(${it.date})</span>` : ''}</span>
+                    </div>`;
+                }
+                html += `</div></div>`;
+            }
+
+            if (skipped.length) {
+                html += `<div>
+                    <div style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+                        ↩ Ignoradas — já existiam (${skipped.length})
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:4px;">`;
+                for (const it of skipped) {
+                    html += `<div style="display:flex;gap:8px;font-size:13px;padding:6px 10px;background:#fffbeb;border-radius:6px;align-items:flex-start;">
+                        <span style="color:#d97706;flex-shrink:0;">↩</span>
+                        <span><strong>${escapeHtml(it.client_name)}</strong> — ${escapeHtml(it.subject)}</span>
+                    </div>`;
+                }
+                html += `</div></div>`;
+            }
+
+            bodyEl.innerHTML = html;
+            modal.style.display = 'flex';
         }
 
         function closeOutlookSuggestions() {
@@ -6094,10 +6161,12 @@
             closeOutlookReview();
 
             // Mostrar modal de progresso de import
-            const importModal = document.getElementById('outlookImportProgressModal');
             const importFill = document.getElementById('outlookImportFill');
             const importStep = document.getElementById('outlookImportStep');
-            if (importModal) importModal.style.display = 'flex';
+            const importMiniStep = document.getElementById('outlookImportMiniStep');
+            _outlookImportMinimized = false;
+            document.getElementById('outlookImportProgressModal').style.display = 'flex';
+            document.getElementById('outlookImportMini').style.display = 'none';
             if (importFill) importFill.style.width = '5%';
             if (importStep) importStep.textContent = 'Iniciando...';
 
@@ -6120,6 +6189,7 @@
                             const taskData = await statusRes.json();
                             if (importFill) importFill.style.width = `${taskData.progress || 5}%`;
                             if (importStep) importStep.textContent = taskData.step || '';
+                            if (importMiniStep) importMiniStep.textContent = taskData.step || 'Importando...';
                             if (taskData.status === 'done') {
                                 clearInterval(poll);
                                 resolve(taskData.result);
@@ -6133,20 +6203,21 @@
                         }
                     }, 800);
                 }).then(result => {
-                    if (importModal) importModal.style.display = 'none';
+                    _hideOutlookImportUI();
                     const statusEl = document.getElementById('outlookImportStatus');
                     if (statusEl) statusEl.innerHTML = `<span style="color:#10b981;">✓ ${escapeHtml(result.message || '')}</span>`;
                     loadActivities();
+                    _showOutlookImportResult(result);
                     if ((result.status_suggestions || []).length || (result.kanban_suggestions || []).length) {
                         _openSuggestionsModal(result);
                     }
                 }).catch(err => {
-                    if (importModal) importModal.style.display = 'none';
+                    _hideOutlookImportUI();
                     const statusEl = document.getElementById('outlookImportStatus');
                     if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(err.message)}</span>`;
                 });
             } catch (e) {
-                if (importModal) importModal.style.display = 'none';
+                _hideOutlookImportUI();
                 const statusEl = document.getElementById('outlookImportStatus');
                 if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Erro: ${escapeHtml(e.message)}</span>`;
             }
@@ -6348,7 +6419,6 @@
         }
 
         async function loadAutoToca() {
-            _initOutlookAddinManifestUrl();
             loadOutlookGraphStatus();
             const response = await fetch(`${API_BASE}/autotoca/accounts`);
             const select = document.getElementById('autotocaConta');
@@ -8021,7 +8091,9 @@
                 document.getElementById('startupUpdateYesBtn').addEventListener('click', async () => {
                     overlay.remove();
                     await navigateTo('settings');
-                    setTimeout(() => downloadAndInstallUpdate(), 400);
+                    // skipConfirm=true: o popup de startup já é a confirmação do usuário,
+                    // não faz sentido pedir confirmação novamente 400ms depois.
+                    setTimeout(() => downloadAndInstallUpdate({ skipConfirm: true }), 800);
                 });
             }
         }
@@ -8113,10 +8185,12 @@
             if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         }
 
-        async function downloadAndInstallUpdate() {
+        async function downloadAndInstallUpdate(opts) {
             const info = window._pendingUpdate;
             if (!info || !info.url) { showError('Nenhum instalador disponível para esta release.'); return; }
-            if (!await uiConfirm('O Toca do Coelho vai baixar a nova versão e abrir o instalador. O aplicativo será fechado automaticamente para concluir a atualização e reaberto ao final. Deseja continuar?', 'Atualizar aplicativo')) return;
+            if (!(opts && opts.skipConfirm)) {
+                if (!await uiConfirm('O Toca do Coelho vai baixar a nova versão e abrir o instalador. O aplicativo será fechado automaticamente para concluir a atualização e reaberto ao final. Deseja continuar?', 'Atualizar aplicativo')) return;
+            }
 
             const btn = document.getElementById('autoUpdateBtn');
             if (btn) btn.disabled = true;
@@ -9825,7 +9899,7 @@
                 const data = await response.json();
                 clients = data;
 
-                let html = '<div style="background: linear-gradient(135deg, rgba(4,120,87,0.96), rgba(6,95,70,0.96)); color: white; padding: 24px; border-radius: 16px; box-shadow: 0 14px 40px rgba(4,120,87,0.16);">';
+                let html = '<div class="relreport-hero" style="background: linear-gradient(135deg, rgba(4,120,87,0.96), rgba(6,95,70,0.96)); color: white; padding: 24px; border-radius: 16px; box-shadow: 0 14px 40px rgba(4,120,87,0.16);">';
                 html += '<div style="max-width:680px;">';
                 html += '<h2 style="margin:0 0 8px 0; font-size:28px; font-weight:700;">Relationship Report</h2>';
                 html += '<p style="margin:0; font-size:14px; line-height:1.6; color:rgba(255,255,255,0.92);">Abra um report executivo visual no navegador com identidade da conta, foto do usuário, cards dos contatos, contexto relacional, leitura temática e botão para imprimir ou salvar em PDF.</p>';
@@ -15612,7 +15686,7 @@
             if (!account || account.error) return showError('Conta não encontrada');
             const sortedContacts = sortAccountContactsByRole(account.contacts || []);
             let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:860px;">`;
-            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-danger btn-small" onclick="deleteAccount(${account.id}, ${escapeHtml(JSON.stringify(account.name))})"><i class="fas fa-trash"></i> Excluir</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
             const mensalPresences = (account.presences || []).filter(p => (p.billing_type || 'Mensal') === 'Mensal' && !isPresenceTerminated(p));
             const unicoPresences = (account.presences || []).filter(p => p.billing_type === 'Unico' && !isPresenceTerminated(p));
@@ -15725,6 +15799,54 @@
         }
 
         function closeAccountViewModal(){ const m=document.getElementById('accountViewModal'); if(m)m.remove(); }
+
+        async function deleteAccount(accountId, accountName) {
+            const nome = accountName || 'esta conta';
+            if (!await uiConfirm(`Deseja realmente excluir a conta "${nome}"? Todos os contatos, atividades e dados serão arquivados e poderão ser restaurados depois em "Contas Arquivadas".`, 'Excluir Conta')) return;
+            const r = await fetch(`${API_BASE}/accounts/${accountId}`, { method: 'DELETE' });
+            if (!r.ok) {
+                const data = await r.json().catch(() => ({}));
+                return showError(data.error || 'Erro ao excluir conta');
+            }
+            closeAccountViewModal();
+            showSuccess('Conta arquivada e excluída com sucesso');
+            await loadAccounts();
+        }
+
+        async function openArchivedAccountsModal() {
+            const r = await fetch(`${API_BASE}/accounts/archives`);
+            const archives = r.ok ? await r.json() : [];
+            let html = `<div class="modal active" id="archivedAccountsModal" onclick="if(event.target===this) closeArchivedAccountsModal()"><div class="modal-content" style="max-width:640px;">`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;"><h2 style="color:#047857; margin:0;"><i class="fas fa-box-archive"></i> Contas Arquivadas</h2><button class="btn btn-secondary btn-small" onclick="closeArchivedAccountsModal()">Fechar</button></div>`;
+            if (!archives.length) {
+                html += `<div style="color:#6b7280;">Nenhuma conta arquivada.</div>`;
+            } else {
+                html += archives.map(a => `<div class='history-item' style='display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;'><div><div class='history-meta'>${escapeHtml(a.account_name)}</div><div style='font-size:12px; color:#6b7280;'>Arquivada em ${formatDateBr((a.archived_at||'').slice(0,10))} • ${a.contacts_count||0} contato(s) • ${a.activities_count||0} atividade(s)</div></div><div style='display:flex; gap:6px;'><button class='btn btn-primary btn-small' onclick='restoreAccountArchive(${a.id})'><i class="fas fa-rotate-left"></i> Restaurar</button><button class='btn btn-danger btn-small' onclick='deleteAccountArchive(${a.id})'><i class="fas fa-trash"></i></button></div></div>`).join('');
+            }
+            html += `</div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function closeArchivedAccountsModal(){ const m=document.getElementById('archivedAccountsModal'); if(m)m.remove(); }
+
+        async function restoreAccountArchive(archiveId) {
+            if (!await uiConfirm('Restaurar esta conta com todos os seus contatos e atividades?', 'Restaurar Conta')) return;
+            const r = await fetch(`${API_BASE}/accounts/archives/${archiveId}/restore`, { method: 'POST' });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) return showError(data.error || 'Erro ao restaurar conta');
+            showSuccess('Conta restaurada com sucesso');
+            closeArchivedAccountsModal();
+            await loadAccounts();
+        }
+
+        async function deleteAccountArchive(archiveId) {
+            if (!await uiConfirm('Excluir permanentemente esta conta arquivada? Esta ação não pode ser desfeita.', 'Excluir Arquivo')) return;
+            const r = await fetch(`${API_BASE}/accounts/archives/${archiveId}`, { method: 'DELETE' });
+            if (!r.ok) return showError('Erro ao excluir arquivo');
+            showSuccess('Arquivo excluído');
+            closeArchivedAccountsModal();
+            await openArchivedAccountsModal();
+        }
 
         function toggleMainContactSelection(clientId) {
             const hidden = document.getElementById('accountMainContactsHidden');
@@ -17748,13 +17870,15 @@
 
                 const photoImported = atLinkedinLastImportedPhotoUrl ? 'com foto do perfil' : 'sem foto detectada';
 
-                resultArea.innerHTML = `<div style="background:#ecfdf5; border:1px solid #6ee7b7; border-radius:8px; padding:10px 14px; font-size:13px; color:#065f46; margin-bottom:8px;">
-                    <i class="fas fa-check-circle" style="margin-right:6px;"></i>
-                    <strong>Perfil importado!</strong> Capturado em ${new Date(atLinkedinImportedAt).toLocaleTimeString('pt-BR')} (${photoImported}). Gerando resumo...
+                resultArea.innerHTML = `<div style="background:#ecfdf5; border:1px solid #6ee7b7; border-radius:8px; padding:12px 16px; font-size:13px; color:#065f46; margin-bottom:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <i class="fas fa-check-circle" style="margin-right:2px;"></i>
+                    <span><strong>Perfil importado!</strong> Capturado em ${new Date(atLinkedinImportedAt).toLocaleTimeString('pt-BR')} (${photoImported}). Revise os campos e clique em <strong>"Gerar Resumo Executivo"</strong> quando estiver pronto.</span>
+                    <button class="btn btn-auto-mapping btn-small" onclick="gerarResumoLinkedIn()" style="margin-left:auto;">
+                        <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
+                    </button>
                 </div>`;
 
-                // Dispara a geração do resumo automaticamente
-                await gerarResumoLinkedIn();
+                // Não dispara o resumo automaticamente — aguarda o usuário confirmar (clicar em "Gerar Resumo Executivo")
 
             } catch (e) {
                 resultArea.innerHTML = `<p style="color:#dc2626; background:#fee2e2; padding:10px; border-radius:8px; font-size:13px;">
