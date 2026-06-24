@@ -3372,6 +3372,10 @@
                 <i class="fas fa-table-columns"></i>
                 <span>Kanban</span>
             </button>
+            <button class="nav-item nav-campanha" onclick="switchTab(event, 'campanha')">
+                <i class="fas fa-crosshairs"></i>
+                <span>Campanha Ofensiva</span>
+            </button>
             <button class="nav-item nav-gestao-conta" onclick="switchTab(event, 'gestao-conta')">
                 <i class="fas fa-building-user"></i>
                 <span>Gestão de Conta</span>
@@ -3968,6 +3972,11 @@
                 </div>
                 <div id="iataContent"></div>
             </div>
+        </div>
+
+        <div id="campanha" class="tab-content">
+            <div id="campaignListView"></div>
+            <div id="campaignPlanView" style="display:none;"></div>
         </div>
 
         <div id="atividades" class="tab-content">
@@ -5432,6 +5441,7 @@
             else if (tabName === 'kanban') loadKanban();
             else if (tabName === 'gestao-conta') switchGestaoContaSubmodule(requestedGestaoContaSubTab || _gestaoContaCurrentSubTab || 'accounts');
             else if (tabName === 'portfolio') loadPortfolio();
+            else if (tabName === 'campanha') loadCampanha();
             else if (tabName === 'wikitoca') loadWikiTocaData();
             else if (tabName === 'configuracoes') loadSettings();
         }
@@ -16223,6 +16233,921 @@
         let portfolioOffers = [];
         const expandedPortfolioOffers = new Set();
         let _portfolioCurrentSubTab = 'stf';
+
+        // ═══════════════════════════════════════════════════════════════════
+        // CAMPANHA OFENSIVA — planejamento e plano de ação comercial (IA)
+        // ═══════════════════════════════════════════════════════════════════
+        let _campaignPlanData = null;
+        let _campaignExpanded = new Set();
+        let _cwData = {};
+
+        const CAMP_BLOCK_META = {
+            A: { n: '01', name: 'Pronto pra Ataque', icon: 'fa-bolt', color: '#10b981',
+                 desc: 'Decisor mapeado e solução aderente. Partir para a apresentação.' },
+            B: { n: '02', name: 'Aprofundar Relacionamento', icon: 'fa-user-plus', color: '#f59e0b',
+                 desc: 'Há contatos, mas é preciso mapear os decisores da área.' },
+            C: { n: '03', name: 'Iniciar do Zero', icon: 'fa-seedling', color: '#ef4444',
+                 desc: 'Sem mapeamento relevante. Prospecção e identificação de decisores.' },
+            D: { n: '04', name: 'Sem Solução no Portfólio', icon: 'fa-lightbulb', color: '#8b5cf6',
+                 desc: 'Relacionamento forte, mas sem oferta aderente. Explorar portfólio interno.' }
+        };
+        const CAMP_ACTION_META = {
+            apresentacao: { label: 'Apresentação', color: '#10b981', icon: 'fa-bullhorn' },
+            mapeamento:   { label: 'Mapeamento', color: '#f59e0b', icon: 'fa-sitemap' },
+            prospeccao:   { label: 'Prospecção', color: '#ef4444', icon: 'fa-magnifying-glass' },
+            portfolio:    { label: 'Portfólio', color: '#8b5cf6', icon: 'fa-box-open' },
+            outro:        { label: 'Ação', color: '#6b7280', icon: 'fa-flag' }
+        };
+        const CAMP_STATUS_META = {
+            pending:     { label: 'Pendente', icon: 'fa-circle', cls: 'camp-st-pending', next: 'in_progress' },
+            in_progress: { label: 'Em andamento', icon: 'fa-circle-half-stroke', cls: 'camp-st-prog', next: 'done' },
+            done:        { label: 'Concluída', icon: 'fa-circle-check', cls: 'camp-st-done', next: 'pending' }
+        };
+
+        function _campDate(iso) {
+            if (!iso) return '';
+            const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+            return m ? `${m[3]}/${m[2]}` : String(iso);
+        }
+        function _campActionMeta(t) { return CAMP_ACTION_META[t] || CAMP_ACTION_META.outro; }
+
+        function _campLogo(name, url, size = 40) {
+            const initials = (name || '?').trim().slice(0, 2).toUpperCase();
+            if (url) {
+                return `<img src="${escapeHtml(url)}" alt="" style="width:${size}px;height:${size}px;border-radius:10px;object-fit:cover;background:#fff;border:1px solid #e5e7eb;"
+                        onerror="this.outerHTML='<div class=&quot;camp-logo-fallback&quot; style=&quot;width:${size}px;height:${size}px;font-size:${Math.round(size*0.34)}px;&quot;>${escapeHtml(initials)}</div>'">`;
+            }
+            return `<div class="camp-logo-fallback" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.34)}px;">${escapeHtml(initials)}</div>`;
+        }
+
+        function _campChips(arr, cls) {
+            if (!arr || !arr.length) return '<span style="color:#9ca3af;font-size:12px;">—</span>';
+            return arr.map(a => `<span class="${cls}">${escapeHtml(a)}</span>`).join('');
+        }
+
+        function _campaignEnsureStyles() {
+            if (document.getElementById('campaign-styles')) return;
+            const style = document.createElement('style');
+            style.id = 'campaign-styles';
+            style.textContent = `
+                @keyframes camp-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-72%) scaleY(.85)} }
+                @keyframes camp-glow-pulse { 0%,100%{opacity:.55;transform:scale(1)} 50%{opacity:.9;transform:scale(1.06)} }
+                @keyframes camp-fade-up { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
+                .camp-bunny { position:absolute; right:-13px; top:50%; transform:translateY(-50%); font-size:17px; line-height:1; animation:camp-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
+
+                /* ── Hero ── */
+                .camp-hero { position:relative; overflow:hidden; border-radius:20px; padding:34px 36px;
+                    background:radial-gradient(120% 140% at 85% 20%, #3b2d6b 0%, #1f1b3a 45%, #12101f 100%);
+                    color:#fff; margin-bottom:20px; box-shadow:0 18px 50px -20px rgba(99,76,180,.6); }
+                .camp-hero-glow { position:absolute; right:60px; top:50%; transform:translateY(-50%); width:230px; height:230px; border-radius:50%;
+                    background:radial-gradient(circle, rgba(139,92,246,.55) 0%, rgba(59,130,246,.15) 45%, transparent 70%);
+                    animation:camp-glow-pulse 4s ease-in-out infinite; pointer-events:none; }
+                .camp-hero-rings { position:absolute; right:90px; top:50%; transform:translateY(-50%); pointer-events:none; opacity:.5; }
+                .camp-hero-rings i { position:absolute; border:1px solid rgba(255,255,255,.18); border-radius:50%; }
+                .camp-eyebrow { font-size:11px; letter-spacing:2px; text-transform:uppercase; color:#a99fe0; font-weight:700; }
+                .camp-hero h1 { font-size:30px; line-height:1.15; margin:8px 0 6px; max-width:560px; font-weight:800; }
+                .camp-hero h1 .accent { background:linear-gradient(90deg,#8b5cf6,#38bdf8); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+                .camp-hero p { color:#cdc8e6; font-size:14px; margin:0 0 18px; }
+                .camp-feature-row { display:flex; gap:10px; flex-wrap:wrap; max-width:600px; }
+                .camp-feature { display:flex; gap:10px; align-items:center; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
+                    border-radius:12px; padding:10px 14px; backdrop-filter:blur(6px); }
+                .camp-feature i { color:#a78bfa; font-size:15px; }
+                .camp-feature b { font-size:12.5px; display:block; }
+                .camp-feature span { font-size:11px; color:#aaa3cf; }
+
+                /* ── Portfolio reminder banner ── */
+                .camp-banner { display:flex; align-items:center; gap:14px; background:#fffbeb; border:1px solid #fde68a;
+                    border-radius:12px; padding:12px 16px; margin-bottom:18px; }
+                .camp-banner i.lead { color:#d97706; font-size:18px; }
+                .camp-banner .txt { flex:1; font-size:13px; color:#92400e; }
+                .camp-banner a { white-space:nowrap; }
+
+                /* ── List cards ── */
+                .camp-list-head { display:flex; align-items:center; justify-content:space-between; margin:6px 0 14px; }
+                .camp-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(330px,1fr)); gap:16px; }
+                .camp-card { background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:18px; cursor:pointer;
+                    transition:transform .15s ease, box-shadow .15s ease, border-color .15s; position:relative; animation:camp-fade-up .35s ease both; }
+                .camp-card:hover { transform:translateY(-3px); box-shadow:0 14px 34px -16px rgba(79,70,229,.45); border-color:#c7d2fe; }
+                .camp-card h3 { font-size:16px; margin:0 0 6px; color:#111827; padding-right:60px; }
+                .camp-card .camp-status-chip { position:absolute; top:16px; right:16px; }
+                .camp-card .meta { font-size:12px; color:#6b7280; margin-bottom:14px; }
+                .camp-card .meta b { color:#374151; }
+                .camp-status-chip { font-size:10.5px; font-weight:700; padding:3px 10px; border-radius:99px; text-transform:uppercase; letter-spacing:.4px; }
+                .camp-status-chip.ativo { background:#dcfce7; color:#166534; }
+                .camp-status-chip.concluido { background:#e0e7ff; color:#3730a3; }
+                .camp-status-chip.pausado { background:#fef3c7; color:#92400e; }
+                .camp-prog-track { height:8px; border-radius:99px; background:#eef2f7; overflow:hidden; }
+                .camp-prog-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,#6366f1,#8b5cf6,#38bdf8); transition:width .5s ease; }
+
+                /* ── Plan view ── */
+                .camp-sticky { position:sticky; top:0; z-index:30; background:rgba(18,16,31,.92); backdrop-filter:blur(10px);
+                    color:#fff; border-radius:14px; padding:14px 20px; margin-bottom:18px; display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+                    box-shadow:0 10px 30px -14px rgba(0,0,0,.5); }
+                .camp-sticky .title { font-size:17px; font-weight:700; }
+                .camp-sticky .sub { font-size:12px; color:#bcb6da; }
+                .camp-sticky .spacer { flex:1; }
+                .camp-mini-prog { min-width:160px; }
+                .camp-mini-prog .lbl { font-size:11px; color:#bcb6da; display:flex; justify-content:space-between; margin-bottom:4px; }
+
+                .camp-summary { background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:22px; margin-bottom:18px; }
+                .camp-summary h2 { font-size:13px; text-transform:uppercase; letter-spacing:1px; color:#6366f1; margin:0 0 10px; }
+                .camp-summary .obj { font-size:14.5px; color:#374151; line-height:1.55; margin-bottom:16px; }
+                .camp-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px 22px; }
+                .camp-sg-label { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; margin-bottom:6px; }
+                .camp-chip { display:inline-block; background:#eef2ff; color:#4338ca; font-size:12px; font-weight:600; padding:4px 10px; border-radius:8px; margin:0 5px 5px 0; }
+                .camp-chip.dec { background:#f0fdfa; color:#0f766e; }
+
+                .camp-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-bottom:18px; }
+                .camp-stat { background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:16px 18px; display:flex; align-items:center; gap:14px; }
+                .camp-stat .ic { width:42px; height:42px; border-radius:11px; display:flex; align-items:center; justify-content:center; font-size:17px; flex-shrink:0; }
+                .camp-stat .big { font-size:22px; font-weight:800; color:#111827; line-height:1; }
+                .camp-stat .cap { font-size:11.5px; color:#6b7280; margin-top:3px; }
+                .camp-ring { --p:0; width:70px; height:70px; border-radius:50%; flex-shrink:0;
+                    background:conic-gradient(#10b981 calc(var(--p)*1%), #eef2f7 0); display:flex; align-items:center; justify-content:center; }
+                .camp-ring .inner { width:54px; height:54px; border-radius:50%; background:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; color:#059669; }
+
+                /* ── Blocks ── */
+                .camp-block { background:#fff; border:1px solid #e5e7eb; border-left:5px solid var(--bc); border-radius:14px; margin-bottom:16px; overflow:hidden; }
+                .camp-block-head { display:flex; align-items:center; gap:14px; padding:16px 20px; cursor:pointer; user-select:none; }
+                .camp-block-head .num { font-size:22px; font-weight:800; color:var(--bc); opacity:.5; min-width:34px; }
+                .camp-block-head .bicon { width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#fff; background:var(--bc); font-size:16px; }
+                .camp-block-head h3 { margin:0; font-size:16px; color:#111827; }
+                .camp-block-head .bdesc { font-size:12px; color:#6b7280; margin-top:2px; }
+                .camp-block-count { margin-left:auto; background:var(--bc); color:#fff; font-size:12px; font-weight:700; padding:4px 12px; border-radius:99px; }
+                .camp-block-body { padding:0 16px 12px; }
+                .camp-acc { border:1px solid #eef0f4; border-radius:12px; margin-bottom:10px; overflow:hidden; }
+                .camp-acc-row { display:flex; align-items:center; gap:14px; padding:12px 14px; cursor:pointer; }
+                .camp-acc-row:hover { background:#fafbff; }
+                .camp-acc .nm { font-weight:700; color:#111827; font-size:14px; }
+                .camp-acc .rat { font-size:11.5px; color:#6b7280; margin-top:2px; max-width:520px; }
+                .camp-acc .col-next { min-width:190px; font-size:12px; color:#374151; }
+                .camp-acc .col-next .due { color:#9ca3af; font-size:11px; }
+                .camp-acc .col-prog { width:120px; }
+                .camp-acc .col-prog .pl { font-size:10.5px; color:#9ca3af; margin-bottom:3px; display:flex; justify-content:space-between; }
+                .camp-readiness { font-size:10px; font-weight:700; color:#fff; padding:2px 8px; border-radius:6px; }
+                .camp-act-type { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; }
+                .camp-status-btn { border:none; cursor:pointer; font-size:12px; font-weight:600; padding:6px 12px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; transition:filter .15s; }
+                .camp-status-btn:hover { filter:brightness(.96); }
+                .camp-st-pending { background:#f3f4f6; color:#6b7280; }
+                .camp-st-prog { background:#fef3c7; color:#b45309; }
+                .camp-st-done { background:#dcfce7; color:#166534; }
+                .camp-acc-detail { padding:4px 16px 16px 16px; background:#fafbff; border-top:1px solid #eef0f4; animation:camp-fade-up .25s ease both; }
+                .camp-acc-detail .desc { font-size:13px; color:#374151; line-height:1.55; margin:10px 0 14px; }
+                .camp-logs { list-style:none; padding:0; margin:0 0 12px; }
+                .camp-logs li { font-size:12.5px; color:#374151; padding:8px 12px; background:#fff; border:1px solid #eef0f4; border-radius:8px; margin-bottom:6px; }
+                .camp-logs li .ts { color:#9ca3af; font-size:10.5px; }
+                .camp-logs li.system { border-left:3px solid #8b5cf6; }
+                .camp-log-add { display:flex; gap:8px; }
+                .camp-log-add input { flex:1; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; }
+
+                /* ── Gantt ── */
+                .camp-gantt { background:radial-gradient(120% 140% at 90% 0%, #241f44 0%, #15131f 60%); color:#fff; border-radius:16px; padding:22px; margin-bottom:20px; }
+                .camp-gantt h2 { font-size:14px; margin:0 0 4px; }
+                .camp-gantt .gsub { font-size:12px; color:#a9a3cf; margin:0 0 16px; }
+                .camp-gantt-scroll { overflow-x:auto; padding-bottom:8px; }
+                .camp-gantt-track { display:flex; gap:12px; min-width:min-content; }
+                .camp-week { min-width:130px; flex:1; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:12px; }
+                .camp-week .wk { font-size:11px; color:#a9a3cf; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
+                .camp-week .dt { font-size:13px; font-weight:700; margin:2px 0 10px; }
+                .camp-week .dots { display:flex; flex-wrap:wrap; gap:5px; min-height:14px; }
+                .camp-week .dot { width:11px; height:11px; border-radius:50%; }
+                .camp-week .wtotal { font-size:11px; color:#cdc8e6; margin-top:10px; }
+                .camp-milestone { display:flex; align-items:center; gap:6px; font-size:10.5px; color:#fcd34d; margin-top:8px; }
+                .camp-legend { display:flex; gap:16px; flex-wrap:wrap; margin-top:16px; font-size:11.5px; color:#cdc8e6; }
+                .camp-legend span { display:inline-flex; align-items:center; gap:6px; }
+                .camp-legend i { width:10px; height:10px; border-radius:50%; display:inline-block; }
+
+                .camp-logo-fallback { border-radius:10px; background:linear-gradient(135deg,#6366f1,#8b5cf6); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; flex-shrink:0; }
+                .camp-gap-banner { display:flex; gap:14px; align-items:flex-start; background:#faf5ff; border:1px solid #e9d5ff; border-radius:14px; padding:16px 18px; margin-bottom:18px; }
+                .camp-gap-banner i.lead { color:#8b5cf6; font-size:20px; margin-top:2px; }
+
+                /* ── Wizard ── */
+                .cw-steps { display:flex; gap:8px; margin-bottom:18px; }
+                .cw-step-dot { flex:1; height:5px; border-radius:99px; background:#e5e7eb; transition:background .3s; }
+                .cw-step-dot.active { background:linear-gradient(90deg,#6366f1,#8b5cf6); }
+                .cw-areas-suggest { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
+                .cw-tag { font-size:12px; padding:5px 11px; border-radius:8px; border:1px solid #d1d5db; background:#fff; cursor:pointer; color:#374151; user-select:none; }
+                .cw-tag.on { background:#eef2ff; border-color:#a5b4fc; color:#4338ca; font-weight:600; }
+                .cw-confirm-box { background:#f8fafc; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:12px; }
+                .cw-confirm-box .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; margin-bottom:7px; }
+                .cw-acc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; max-height:280px; overflow-y:auto; padding:4px; margin-top:10px; }
+                .cw-acc-pick { border:2px solid #e5e7eb; border-radius:12px; padding:12px; cursor:pointer; text-align:center; transition:all .15s; position:relative; }
+                .cw-acc-pick:hover { border-color:#c7d2fe; }
+                .cw-acc-pick.sel { border-color:#6366f1; background:#eef2ff; }
+                .cw-acc-pick .check { position:absolute; top:6px; right:6px; color:#6366f1; opacity:0; }
+                .cw-acc-pick.sel .check { opacity:1; }
+                .cw-acc-pick .nm2 { font-size:12px; font-weight:600; color:#374151; margin-top:8px; word-break:break-word; }
+                .cw-acc-pick .tgt { font-size:9px; font-weight:700; color:#166534; background:#dcfce7; padding:1px 6px; border-radius:5px; }
+
+                @media print {
+                    .sidebar, .topbar, #campaignListView, .camp-no-print, .bg-task-indicator { display:none !important; }
+                    .main-content { margin:0 !important; padding:0 !important; width:100% !important; }
+                    .tab-content:not(.active) { display:none !important; }
+                    .camp-sticky { position:static !important; background:#1f1b3a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+                    .camp-block, .camp-summary, .camp-stat, .camp-gantt, .camp-acc-detail { break-inside:avoid; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+                    body { background:#fff !important; }
+                    .camp-acc-detail { display:block !important; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        function loadCampanha() {
+            _campaignEnsureStyles();
+            backToCampaignList();
+        }
+
+        function backToCampaignList() {
+            const planView = document.getElementById('campaignPlanView');
+            const listView = document.getElementById('campaignListView');
+            if (planView) { planView.style.display = 'none'; planView.innerHTML = ''; }
+            if (listView) listView.style.display = '';
+            _campaignPlanData = null;
+            _renderCampaignListShell();
+            _loadCampaignList();
+        }
+
+        function _renderCampaignListShell() {
+            const v = document.getElementById('campaignListView');
+            if (!v) return;
+            v.innerHTML = `
+                <div class="camp-hero">
+                    <div class="camp-hero-glow"></div>
+                    <div class="camp-hero-rings">
+                        <i style="width:90px;height:90px;left:-45px;top:-45px;"></i>
+                        <i style="width:150px;height:150px;left:-75px;top:-75px;"></i>
+                        <i style="width:215px;height:215px;left:-107px;top:-107px;"></i>
+                    </div>
+                    <div class="camp-eyebrow">Plano de Ação Comercial</div>
+                    <h1>Inteligência para atacar as <span class="accent">oportunidades certas</span>.</h1>
+                    <p>A IA cruza o seu desafio com o portfólio e o mapeamento das contas, e monta um plano de ataque com cronograma e execução guiada.</p>
+                    <div class="camp-feature-row">
+                        <div class="camp-feature"><i class="fas fa-brain"></i><div><b>IA Estratégica</b><span>Entende o desafio</span></div></div>
+                        <div class="camp-feature"><i class="fas fa-layer-group"></i><div><b>Alinhado ao Portfólio</b><span>Cruza com Soluções STF</span></div></div>
+                        <div class="camp-feature"><i class="fas fa-route"></i><div><b>Execução Guiada</b><span>Checklist + cronograma</span></div></div>
+                    </div>
+                </div>
+                <div class="camp-banner">
+                    <i class="fas fa-circle-info lead"></i>
+                    <div class="txt">Quanto mais completo o seu <b>Portfólio (Soluções STF)</b>, melhores as recomendações do plano. Cadastre suas ofertas para que a IA saiba o que você pode oferecer.</div>
+                    <a class="btn btn-secondary btn-small" href="#" onclick="event.preventDefault(); switchTab(null,'portfolio');"><i class="fas fa-arrow-up-right-from-square"></i> Cadastrar ofertas</a>
+                </div>
+                <div class="camp-list-head">
+                    <h2 style="margin:0;font-size:18px;color:#111827;">Minhas campanhas</h2>
+                    <button class="btn btn-auto-mapping" onclick="openCampaignWizard()"><span class="ai-star-icon">✦</span> Nova Campanha Ofensiva</button>
+                </div>
+                <div id="campaignCards"><p style="color:#6b7280;">Carregando campanhas...</p></div>`;
+        }
+
+        async function _loadCampaignList() {
+            const box = document.getElementById('campaignCards');
+            if (!box) return;
+            try {
+                const res = await fetch(`${API_BASE}/campaigns`);
+                const list = await res.json().catch(() => []);
+                if (!res.ok) throw new Error(list.error || 'Erro ao carregar campanhas.');
+                if (!Array.isArray(list) || !list.length) {
+                    box.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🎯</div><h3 style="color:#374151;">Nenhuma campanha ainda</h3><p style="color:#6b7280;">Crie sua primeira ofensiva comercial e deixe a IA montar o plano de ataque.</p><button class="btn btn-auto-mapping" onclick="openCampaignWizard()"><span class="ai-star-icon">✦</span> Nova Campanha Ofensiva</button></div>`;
+                    return;
+                }
+                box.innerHTML = `<div class="camp-grid">${list.map(_campCardHTML).join('')}</div>`;
+            } catch (e) {
+                box.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(e.message || 'Erro ao carregar campanhas.')}</div>`;
+            }
+        }
+
+        function _campCardHTML(c) {
+            const st = (c.status || 'Ativo').toLowerCase();
+            const stCls = st.includes('conclu') ? 'concluido' : (st.includes('paus') ? 'pausado' : 'ativo');
+            const areas = (c.areas || []).slice(0, 4);
+            return `
+                <div class="camp-card" onclick="openCampaignPlan(${c.id})">
+                    <span class="camp-status-chip ${stCls}">${escapeHtml(c.status || 'Ativo')}</span>
+                    <h3>${escapeHtml(c.title || 'Campanha')}</h3>
+                    <div class="meta"><b>${c.accounts_count || 0}</b> contas · início ${_campDate(c.start_date) || '—'} · ${escapeHtml((c.areas || []).slice(0,3).join(', ') || 'sem áreas')}</div>
+                    <div class="camp-prog-track"><div class="camp-prog-fill" style="width:${c.progress || 0}%"></div></div>
+                    <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:#6b7280;">
+                        <span>Progresso</span><span><b>${c.progress || 0}%</b></span>
+                    </div>
+                </div>`;
+        }
+
+        // ── Wizard ──────────────────────────────────────────────────────────
+        function openCampaignWizard() {
+            _campaignEnsureStyles();
+            _cwData = { step: 1, analysis: null, selectedAccounts: new Set(), selectableAccounts: [], areaTags: new Set() };
+            document.getElementById('campaignWizard')?.remove();
+            const html = `
+                <div class="modal active" id="campaignWizard" onclick="if(event.target===this) closeCampaignWizard()">
+                    <div class="modal-content" style="max-width:720px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title"><span class="ai-star-icon">✦</span> Nova Campanha Ofensiva</h2>
+                            <button class="modal-close" onclick="closeCampaignWizard()">&#215;</button>
+                        </div>
+                        <div class="cw-steps">
+                            <div class="cw-step-dot active" id="cwDot1"></div>
+                            <div class="cw-step-dot" id="cwDot2"></div>
+                            <div class="cw-step-dot" id="cwDot3"></div>
+                        </div>
+                        <div id="cwError" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;"></div>
+
+                        <div id="cwStep1">
+                            <p style="margin:0 0 8px;font-weight:600;color:#374151;">Descreva o desafio ou o objetivo comercial que você quer atacar</p>
+                            <textarea id="cwChallenge" rows="4" placeholder="Ex.: Quero aumentar a penetração da nossa solução de segurança digital em clientes do setor financeiro, atuando com os decisores de TI e Operações."
+                                style="width:100%;padding:11px 14px;border:1px solid #d1d5db;border-radius:10px;font-size:13.5px;resize:vertical;font-family:inherit;box-sizing:border-box;"></textarea>
+                            <p style="font-size:12px;color:#6b7280;margin:14px 0 0;">A IA vai identificar as áreas e decisores mais relevantes, e cruzar com o seu portfólio.</p>
+                        </div>
+
+                        <div id="cwProgress" style="display:none;padding:24px 4px 14px;">
+                            <div style="font-size:13px;color:#6b7280;margin-bottom:12px;text-align:center;" id="cwProgressStep">Iniciando...</div>
+                            <div style="position:relative;background:#ede9fe;border-radius:99px;height:12px;overflow:visible;margin:0 16px 6px;">
+                                <div id="cwProgressBar" style="position:relative;height:100%;width:5%;background:linear-gradient(90deg,#6366f1,#8b5cf6,#38bdf8);border-radius:99px;transition:width .6s ease;">
+                                    <span class="camp-bunny">🐇</span>
+                                </div>
+                            </div>
+                            <div style="text-align:right;padding:0 16px;font-size:11px;color:#8b5cf6;" id="cwProgressPct">5%</div>
+                        </div>
+
+                        <div id="cwStep2" style="display:none;"></div>
+                        <div id="cwStep3" style="display:none;"></div>
+
+                        <div id="cwFooter" style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">
+                            <button class="btn btn-secondary" onclick="closeCampaignWizard()">Cancelar</button>
+                            <button class="btn btn-auto-mapping" id="cwPrimaryBtn" onclick="_cwAnalyze()"><span class="ai-star-icon">✦</span> Analisar com IA</button>
+                        </div>
+                    </div>
+                </div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+        function closeCampaignWizard() { document.getElementById('campaignWizard')?.remove(); }
+        function _cwError(msg) {
+            const el = document.getElementById('cwError');
+            if (!el) return;
+            if (msg) { el.textContent = msg; el.style.display = ''; } else { el.style.display = 'none'; }
+        }
+        function _cwSetDots(n) {
+            [1,2,3].forEach(i => {
+                const d = document.getElementById('cwDot' + i);
+                if (d) d.classList.toggle('active', i <= n);
+            });
+        }
+        function _cwProgress(pct, step) {
+            const bar = document.getElementById('cwProgressBar');
+            const s = document.getElementById('cwProgressStep');
+            const p = document.getElementById('cwProgressPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (s) s.textContent = step || '';
+            if (p) p.textContent = Math.round(pct) + '%';
+        }
+        function _cwShowProgress(on) {
+            document.getElementById('cwStep1').style.display = on ? 'none' : '';
+            document.getElementById('cwProgress').style.display = on ? '' : 'none';
+            document.getElementById('cwFooter').style.display = on ? 'none' : '';
+        }
+
+        async function _cwAnalyze() {
+            _cwError('');
+            const challenge = (document.getElementById('cwChallenge').value || '').trim();
+            if (challenge.length < 12) { _cwError('Descreva o desafio com um pouco mais de detalhe.'); return; }
+            _cwData.challenge = challenge;
+            _cwShowProgress(true);
+            _cwProgress(10, 'Entendendo o desafio...');
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/analyze`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ challenge_text: challenge })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Falha ao analisar.');
+                const taskId = payload.task_id;
+                const poll = setInterval(async () => {
+                    try {
+                        const tr = await fetch(`${API_BASE}/tasks/${taskId}`);
+                        const task = await tr.json();
+                        if (task.progress) _cwProgress(task.progress, task.step || '');
+                        if (task.status === 'done') {
+                            clearInterval(poll);
+                            _cwData.analysis = task.result;
+                            _cwRenderStep2();
+                        } else if (task.status === 'error' || task.status === 'not_found') {
+                            clearInterval(poll);
+                            _cwShowProgress(false);
+                            _cwError(task.error || 'Erro ao analisar o desafio.');
+                        }
+                    } catch (e) { clearInterval(poll); _cwShowProgress(false); _cwError('Erro ao verificar status.'); }
+                }, 800);
+            } catch (e) { _cwShowProgress(false); _cwError(e.message); }
+        }
+
+        function _cwRenderStep2() {
+            const a = _cwData.analysis || {};
+            _cwShowProgress(false);
+            document.getElementById('cwStep1').style.display = 'none';
+            _cwSetDots(2);
+            const s2 = document.getElementById('cwStep2');
+            const offersHTML = (a.matched_offers && a.matched_offers.length)
+                ? a.matched_offers.map(o => `<span class="camp-chip">${escapeHtml(o.title)}</span>`).join('')
+                : '<span style="color:#9ca3af;font-size:12px;">Nenhuma oferta aderente encontrada</span>';
+            const noteHTML = a.portfolio_note
+                ? `<div class="camp-banner" style="margin:0 0 12px;"><i class="fas fa-triangle-exclamation lead"></i><div class="txt">${escapeHtml(a.portfolio_note)}</div><a class="btn btn-secondary btn-small" href="#" onclick="event.preventDefault(); closeCampaignWizard(); switchTab(null,'portfolio');">Abrir Portfólio</a></div>`
+                : '';
+            s2.innerHTML = `
+                ${noteHTML}
+                <div class="cw-confirm-box">
+                    <div class="lbl">Entendimento da IA <span style="color:#8b5cf6;">(${escapeHtml(a.llm_source || 'heurística')})</span></div>
+                    <div style="font-size:13.5px;color:#374151;line-height:1.55;">${escapeHtml(a.entendimento || '')}</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="cw-confirm-box"><div class="lbl">Áreas identificadas</div>${_campChips(a.areas, 'camp-chip')}</div>
+                    <div class="cw-confirm-box"><div class="lbl">Decisores</div>${_campChips(a.decisores, 'camp-chip dec')}</div>
+                </div>
+                <div class="cw-confirm-box"><div class="lbl">Soluções aderentes do portfólio</div>${offersHTML}</div>
+                <div class="cw-confirm-box" style="display:flex;align-items:center;gap:10px;">
+                    <i class="fas fa-bullseye" style="color:#6366f1;"></i>
+                    <span style="font-size:13px;color:#374151;"><b>${a.target_count || 0}</b> contas marcadas como <b>target</b> no sistema.</span>
+                </div>`;
+            s2.style.display = '';
+            const footer = document.getElementById('cwFooter');
+            footer.style.display = '';
+            footer.innerHTML = `
+                <button class="btn btn-secondary" onclick="_cwBackToStep1()"><i class="fas fa-arrow-left"></i> Refazer</button>
+                <button class="btn btn-auto-mapping" onclick="_cwRenderStep3()">Seguir para configuração <i class="fas fa-arrow-right"></i></button>`;
+        }
+        function _cwBackToStep1() {
+            _cwSetDots(1);
+            document.getElementById('cwStep2').style.display = 'none';
+            document.getElementById('cwStep1').style.display = '';
+            const footer = document.getElementById('cwFooter');
+            footer.innerHTML = `<button class="btn btn-secondary" onclick="closeCampaignWizard()">Cancelar</button>
+                <button class="btn btn-auto-mapping" onclick="_cwAnalyze()"><span class="ai-star-icon">✦</span> Analisar com IA</button>`;
+        }
+
+        function _cwRenderStep3() {
+            _cwSetDots(3);
+            document.getElementById('cwStep2').style.display = 'none';
+            const a = _cwData.analysis || {};
+            const today = new Date().toISOString().slice(0, 10);
+            const s3 = document.getElementById('cwStep3');
+            s3.innerHTML = `
+                <div class="cw-confirm-box">
+                    <div class="lbl">Título da campanha</div>
+                    <input id="cwTitle" value="${escapeHtml('Ofensiva: ' + ((a.areas && a.areas[0]) ? a.areas[0] : 'Comercial'))}"
+                        style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13.5px;box-sizing:border-box;">
+                </div>
+                <div class="cw-confirm-box">
+                    <div class="lbl">Quais contas atacar?</div>
+                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#374151;cursor:pointer;margin-bottom:8px;">
+                        <input type="radio" name="cwAccMode" value="targets" checked onchange="_cwToggleAccMode('targets')">
+                        Todas as contas <b>target</b> (${a.target_count || 0})
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#374151;cursor:pointer;">
+                        <input type="radio" name="cwAccMode" value="manual" onchange="_cwToggleAccMode('manual')">
+                        Selecionar contas uma a uma
+                    </label>
+                    <div id="cwAccGridWrap" style="display:none;">
+                        <div id="cwAccGrid" class="cw-acc-grid"><p style="color:#6b7280;font-size:12px;">Carregando contas...</p></div>
+                        <div style="font-size:11px;color:#6b7280;margin-top:6px;"><span id="cwAccCount">0</span> conta(s) selecionada(s)</div>
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="cw-confirm-box">
+                        <div class="lbl">Data de início das ações</div>
+                        <input type="date" id="cwStartDate" value="${today}" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13.5px;box-sizing:border-box;">
+                    </div>
+                    <div class="cw-confirm-box">
+                        <div class="lbl">Ações / apresentações por semana</div>
+                        <input type="number" id="cwCapacity" value="5" min="1" max="50" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13.5px;box-sizing:border-box;">
+                    </div>
+                </div>`;
+            s3.style.display = '';
+            const footer = document.getElementById('cwFooter');
+            footer.innerHTML = `
+                <button class="btn btn-secondary" onclick="_cwRenderStep2()"><i class="fas fa-arrow-left"></i> Voltar</button>
+                <button class="btn btn-auto-mapping" id="cwGenBtn" onclick="_cwGenerate()"><span class="ai-star-icon">✦</span> Gerar Plano de Ação</button>`;
+        }
+
+        async function _cwToggleAccMode(mode) {
+            const wrap = document.getElementById('cwAccGridWrap');
+            if (mode !== 'manual') { wrap.style.display = 'none'; return; }
+            wrap.style.display = '';
+            if (_cwData.selectableAccounts.length) { _cwRenderAccGrid(); return; }
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/selectable-accounts`);
+                const list = await res.json().catch(() => []);
+                _cwData.selectableAccounts = Array.isArray(list) ? list : [];
+                // preselect targets
+                _cwData.selectableAccounts.forEach(acc => { if (acc.is_target) _cwData.selectedAccounts.add(acc.id); });
+                _cwRenderAccGrid();
+            } catch (e) {
+                document.getElementById('cwAccGrid').innerHTML = `<p style="color:#b91c1c;font-size:12px;">Erro ao carregar contas.</p>`;
+            }
+        }
+        function _cwRenderAccGrid() {
+            const grid = document.getElementById('cwAccGrid');
+            if (!grid) return;
+            grid.innerHTML = _cwData.selectableAccounts.map(acc => {
+                const sel = _cwData.selectedAccounts.has(acc.id);
+                return `<div class="cw-acc-pick ${sel ? 'sel' : ''}" onclick="_cwToggleAcc(${acc.id})">
+                    <i class="fas fa-circle-check check"></i>
+                    ${_campLogo(acc.name, acc.logo_url, 44)}
+                    <div class="nm2">${escapeHtml(acc.name)}</div>
+                    ${acc.is_target ? '<span class="tgt">TARGET</span>' : ''}
+                    <div style="font-size:10px;color:#9ca3af;margin-top:3px;">${acc.contact_count || 0} contato(s)</div>
+                </div>`;
+            }).join('') || '<p style="color:#6b7280;font-size:12px;">Nenhuma conta cadastrada.</p>';
+            _cwUpdateCount();
+        }
+        function _cwToggleAcc(id) {
+            if (_cwData.selectedAccounts.has(id)) _cwData.selectedAccounts.delete(id);
+            else _cwData.selectedAccounts.add(id);
+            _cwRenderAccGrid();
+        }
+        function _cwUpdateCount() {
+            const el = document.getElementById('cwAccCount');
+            if (el) el.textContent = _cwData.selectedAccounts.size;
+        }
+
+        async function _cwGenerate() {
+            _cwError('');
+            const a = _cwData.analysis || {};
+            const mode = (document.querySelector('input[name="cwAccMode"]:checked') || {}).value || 'targets';
+            const title = (document.getElementById('cwTitle').value || '').trim() || 'Campanha Ofensiva';
+            const startDate = document.getElementById('cwStartDate').value || new Date().toISOString().slice(0,10);
+            const capacity = parseInt(document.getElementById('cwCapacity').value || '5', 10) || 5;
+            const accountIds = Array.from(_cwData.selectedAccounts);
+            if (mode === 'manual' && !accountIds.length) { _cwError('Selecione ao menos uma conta.'); return; }
+            if (mode === 'targets' && !(a.target_count > 0)) { _cwError('Não há contas marcadas como target. Selecione contas manualmente ou marque targets em Gestão de Conta.'); return; }
+
+            _cwShowProgress(true);
+            document.getElementById('cwStep3').style.display = 'none';
+            _cwProgress(15, 'Montando plano de ação...');
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/generate`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title, challenge_text: _cwData.challenge,
+                        areas: a.areas || [], decisores: a.decisores || [], offer_ids: a.offer_ids || [],
+                        account_mode: mode, account_ids: accountIds,
+                        start_date: startDate, weekly_capacity: capacity,
+                        llm_source: a.llm_source || '', summary: a.entendimento || '', portfolio_note: a.portfolio_note || ''
+                    })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Falha ao gerar plano.');
+                const taskId = payload.task_id;
+                const poll = setInterval(async () => {
+                    try {
+                        const tr = await fetch(`${API_BASE}/tasks/${taskId}`);
+                        const task = await tr.json();
+                        if (task.progress) _cwProgress(task.progress, task.step || '');
+                        if (task.status === 'done') {
+                            clearInterval(poll);
+                            closeCampaignWizard();
+                            openCampaignPlan(task.result.campaign_id);
+                        } else if (task.status === 'error' || task.status === 'not_found') {
+                            clearInterval(poll);
+                            _cwShowProgress(false); document.getElementById('cwStep3').style.display = '';
+                            _cwError(task.error || 'Erro ao gerar plano.');
+                        }
+                    } catch (e) { clearInterval(poll); _cwShowProgress(false); document.getElementById('cwStep3').style.display=''; _cwError('Erro ao verificar status.'); }
+                }, 800);
+            } catch (e) { _cwShowProgress(false); document.getElementById('cwStep3').style.display=''; _cwError(e.message); }
+        }
+
+        // ── Plano vivo ──────────────────────────────────────────────────────
+        async function openCampaignPlan(cid) {
+            _campaignEnsureStyles();
+            const listView = document.getElementById('campaignListView');
+            const planView = document.getElementById('campaignPlanView');
+            if (listView) listView.style.display = 'none';
+            if (planView) { planView.style.display = ''; planView.innerHTML = '<p style="color:#6b7280;padding:20px;">Carregando plano...</p>'; }
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/${cid}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Erro ao carregar o plano.');
+                _campaignPlanData = data;
+                _campaignExpanded = new Set();
+                _renderCampaignPlan();
+            } catch (e) {
+                if (planView) planView.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(e.message)}</div><button class="btn btn-secondary" onclick="backToCampaignList()">Voltar</button>`;
+            }
+        }
+
+        function _renderCampaignPlan() {
+            const data = _campaignPlanData;
+            const planView = document.getElementById('campaignPlanView');
+            if (!data || !planView) return;
+            const scrollEl = document.querySelector('.main-content');
+            const savedScroll = scrollEl ? scrollEl.scrollTop : window.scrollY;
+            const st = data.stats || {};
+            const ringColor = st.progress >= 100 ? '#10b981' : (st.progress >= 50 ? '#6366f1' : '#8b5cf6');
+
+            const blocksHTML = ['A','B','C','D'].map(bk => {
+                const accs = (data.blocks && data.blocks[bk]) || [];
+                if (!accs.length) return '';
+                return _campBlockHTML(bk, accs);
+            }).join('');
+
+            const gapBanner = !data.has_solution ? `
+                <div class="camp-gap-banner">
+                    <i class="fas fa-lightbulb lead"></i>
+                    <div>
+                        <div style="font-weight:700;color:#6b21a8;margin-bottom:3px;">Solução não encontrada no portfólio</div>
+                        <div style="font-size:13px;color:#6b21a8;">${escapeHtml(data.portfolio_note || 'Não há oferta aderente cadastrada para este desafio. Vale aprofundar as soluções da empresa para este segmento.')}</div>
+                        <button class="btn btn-secondary btn-small camp-no-print" style="margin-top:10px;" onclick="switchTab(null,'portfolio')"><i class="fas fa-box-open"></i> Explorar portfólio e oportunidades</button>
+                    </div>
+                </div>` : '';
+
+            planView.innerHTML = `
+                <div class="camp-sticky">
+                    <div>
+                        <div class="title">${escapeHtml(data.title || 'Campanha')}</div>
+                        <div class="sub">Criado em ${_campDate(data.created_at) || ''} · ${st.accounts_count || 0} contas · ${data.weekly_capacity || 5} ações/semana · ${st.weeks || 0} semanas</div>
+                    </div>
+                    <div class="spacer"></div>
+                    <div class="camp-mini-prog">
+                        <div class="lbl"><span>Progresso geral</span><span>${st.progress || 0}%</span></div>
+                        <div class="camp-prog-track" style="background:rgba(255,255,255,.15);"><div class="camp-prog-fill" style="width:${st.progress || 0}%"></div></div>
+                    </div>
+                    <div class="camp-no-print" style="display:flex;gap:8px;">
+                        <button class="btn btn-secondary btn-small" onclick="backToCampaignList()"><i class="fas fa-arrow-left"></i></button>
+                        <button class="btn btn-auto-mapping btn-small" onclick="regenerateCampaign(${data.id})"><span class="ai-star-icon">✦</span> Atualizar com IA</button>
+                        <button class="btn btn-secondary btn-small" onclick="exportCampaignPDF()"><i class="fas fa-file-pdf"></i> PDF</button>
+                        <button class="btn btn-secondary btn-small" onclick="deleteCampaign(${data.id})" title="Excluir campanha"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+
+                <div class="camp-summary">
+                    <h2>Resumo da estratégia</h2>
+                    <div class="obj">${escapeHtml(data.llm_summary || data.objective_text || '')}</div>
+                    <div class="camp-summary-grid">
+                        <div><div class="camp-sg-label">Áreas-alvo</div>${(data.areas||[]).map(x=>`<span class="camp-chip">${escapeHtml(x)}</span>`).join('') || '—'}</div>
+                        <div><div class="camp-sg-label">Decisores</div>${(data.decisores||[]).map(x=>`<span class="camp-chip dec">${escapeHtml(x)}</span>`).join('') || '—'}</div>
+                        <div><div class="camp-sg-label">Período</div><div style="font-size:14px;color:#374151;font-weight:600;">${_campDate(data.start_date)} → ${st.weeks||0} semanas</div></div>
+                    </div>
+                </div>
+
+                <div class="camp-stats">
+                    ${_campStat('fa-building','#6366f1','#eef2ff', st.accounts_count||0, 'Contas no plano')}
+                    ${_campStat('fa-bullhorn','#10b981','#dcfce7', data.weekly_capacity||5, 'Ações por semana')}
+                    ${_campStat('fa-calendar-week','#f59e0b','#fef3c7', st.weeks||0, 'Semanas de plano')}
+                    ${_campStat('fa-list-check','#8b5cf6','#f3e8ff', st.total_actions||0, 'Ações planejadas')}
+                    <div class="camp-stat">
+                        <div class="camp-ring" style="--p:${st.progress||0}; background:conic-gradient(${ringColor} calc(var(--p)*1%), #eef2f7 0);">
+                            <div class="inner" style="color:${ringColor};">${st.progress||0}%</div>
+                        </div>
+                        <div>
+                            <div style="font-size:12px;color:#16a34a;">✓ ${st.done||0} concluídas</div>
+                            <div style="font-size:12px;color:#b45309;">◐ ${st.in_progress||0} em andamento</div>
+                            <div style="font-size:12px;color:#6b7280;">○ ${st.pending||0} pendentes</div>
+                        </div>
+                    </div>
+                </div>
+
+                ${gapBanner}
+                ${blocksHTML || '<p style="color:#6b7280;">Nenhuma conta no plano.</p>'}
+                ${_campGanttHTML(data)}`;
+
+            if (scrollEl) scrollEl.scrollTop = savedScroll; else window.scrollTo(0, savedScroll);
+        }
+
+        function _campStat(icon, color, bg, big, cap) {
+            return `<div class="camp-stat"><div class="ic" style="background:${bg};color:${color};"><i class="fas ${icon}"></i></div><div><div class="big">${big}</div><div class="cap">${cap}</div></div></div>`;
+        }
+
+        function _campBlockHTML(bk, accs) {
+            const m = CAMP_BLOCK_META[bk];
+            const rows = accs.map(_campAccHTML).join('');
+            return `
+                <div class="camp-block" style="--bc:${m.color};">
+                    <div class="camp-block-head" onclick="this.parentElement.querySelector('.camp-block-body').classList.toggle('camp-collapsed'); var _c=this.querySelector('.chev'); _c.classList.toggle('fa-chevron-up'); _c.classList.toggle('fa-chevron-down');">
+                        <div class="num">${m.n}</div>
+                        <div class="bicon"><i class="fas ${m.icon}"></i></div>
+                        <div>
+                            <h3>${m.name}</h3>
+                            <div class="bdesc">${m.desc}</div>
+                        </div>
+                        <div class="camp-block-count">${accs.length} ${accs.length === 1 ? 'conta' : 'contas'}</div>
+                        <i class="fas fa-chevron-up chev" style="margin-left:12px;color:#9ca3af;"></i>
+                    </div>
+                    <div class="camp-block-body">${rows}</div>
+                </div>`;
+        }
+
+        function _campAccHTML(acc) {
+            const act = (acc.actions && acc.actions[0]) || null;
+            const expanded = _campaignExpanded.has(acc.id);
+            const am = act ? _campActionMeta(act.action_type) : _campActionMeta('outro');
+            const score = acc.readiness_score || 0;
+            const scoreColor = score >= 70 ? '#10b981' : (score >= 40 ? '#f59e0b' : '#ef4444');
+            const stm = act ? (CAMP_STATUS_META[act.status] || CAMP_STATUS_META.pending) : CAMP_STATUS_META.pending;
+            const detail = expanded ? _campAccDetailHTML(acc) : '';
+            return `
+                <div class="camp-acc">
+                    <div class="camp-acc-row" onclick="toggleCampaignAccountExpand(${acc.id})">
+                        ${_campLogo(acc.account_name, acc.logo_url, 40)}
+                        <div style="flex:1;min-width:160px;">
+                            <div class="nm">${escapeHtml(acc.account_name)} <span class="camp-readiness" style="background:${scoreColor};">${score}%</span></div>
+                            <div class="rat">${escapeHtml(acc.rationale || '')}</div>
+                        </div>
+                        <div class="col-next">
+                            <span class="camp-act-type" style="background:${am.color}22;color:${am.color};"><i class="fas ${am.icon}"></i> ${escapeHtml(act ? act.title : '—')}</span>
+                            <div class="due">${act && act.due_date ? 'até ' + _campDate(act.due_date) + ' · sem. ' + (act.scheduled_week||1) : ''}</div>
+                        </div>
+                        <div class="col-prog">
+                            <div class="pl"><span>Progresso</span><span>${acc.progress||0}%</span></div>
+                            <div class="camp-prog-track"><div class="camp-prog-fill" style="width:${acc.progress||0}%"></div></div>
+                        </div>
+                        ${act ? `<button class="camp-status-btn ${stm.cls}" onclick="event.stopPropagation(); toggleCampaignAction(${act.id})"><i class="fas ${stm.icon}"></i> ${stm.label}</button>` : ''}
+                        <i class="fas fa-chevron-${expanded ? 'up' : 'down'}" style="color:#cbd0da;"></i>
+                    </div>
+                    ${detail}
+                </div>`;
+        }
+
+        function _campAccDetailHTML(acc) {
+            const act = (acc.actions && acc.actions[0]) || null;
+            if (!act) return '';
+            const logs = (act.logs || []).map(l => `
+                <li class="${l.log_type === 'system' ? 'system' : ''}">
+                    ${l.log_type === 'system' ? '<i class="fas fa-robot" style="color:#8b5cf6;margin-right:5px;"></i>' : ''}${escapeHtml(l.log_text)}
+                    <div class="ts">${escapeHtml((l.created_at || '').replace('T',' ').slice(0,16))}</div>
+                </li>`).join('') || '<li style="color:#9ca3af;border:none;background:none;padding-left:0;">Nenhum update ainda.</li>';
+            const contact = act.contact_name ? `<span style="color:#6366f1;"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name)}</span>` : '';
+            return `
+                <div class="camp-acc-detail">
+                    <div class="desc"><b>Abordagem:</b> ${escapeHtml(act.description || '')} ${contact}</div>
+                    <div class="camp-sg-label">Updates / log de execução</div>
+                    <ul class="camp-logs">${logs}</ul>
+                    <div class="camp-log-add camp-no-print">
+                        <input type="text" id="camplog_${act.id}" placeholder="Escreva um update desta ação..." onkeydown="if(event.key==='Enter') addCampaignLog(${act.id})">
+                        <button class="btn btn-secondary btn-small" onclick="addCampaignLog(${act.id})"><i class="fas fa-plus"></i> Registrar</button>
+                    </div>
+                </div>`;
+        }
+
+        function _campGanttHTML(data) {
+            const weeks = data.timeline || [];
+            if (!weeks.length) return '';
+            const totalWeeks = weeks.length;
+            const midWeek = totalWeeks >= 4 ? Math.ceil(totalWeeks / 2) : 0;
+            const cols = weeks.map(w => {
+                const dots = Object.entries(w.counts || {}).map(([t, n]) => {
+                    const m = _campActionMeta(t);
+                    return Array.from({length: n}).map(() => `<span class="dot" style="background:${m.color};"></span>`).join('');
+                }).join('');
+                let milestone = '';
+                if (w.week === 1) milestone = '<div class="camp-milestone"><i class="fas fa-flag"></i> Kickoff do plano</div>';
+                else if (w.week === midWeek) milestone = '<div class="camp-milestone"><i class="fas fa-rotate"></i> Revisão de progresso</div>';
+                else if (w.week === totalWeeks) milestone = '<div class="camp-milestone"><i class="fas fa-trophy"></i> Fechamento do ciclo</div>';
+                return `
+                    <div class="camp-week">
+                        <div class="wk">Semana ${w.week}</div>
+                        <div class="dt">${w.start} – ${w.end}</div>
+                        <div class="dots">${dots || '<span style="font-size:11px;color:#6b6692;">—</span>'}</div>
+                        <div class="wtotal">${w.total} ${w.total === 1 ? 'ação' : 'ações'}</div>
+                        ${milestone}
+                    </div>`;
+            }).join('');
+            const legend = Object.values(CAMP_ACTION_META).filter(m => m.label !== 'Ação').map(m =>
+                `<span><i style="background:${m.color};"></i> ${m.label}</span>`).join('');
+            return `
+                <div class="camp-gantt">
+                    <h2><i class="fas fa-stream"></i> Cronograma Macro</h2>
+                    <p class="gsub">Distribuição das ações ao longo das semanas, respeitando a capacidade de ${data.weekly_capacity || 5} por semana.</p>
+                    <div class="camp-gantt-scroll"><div class="camp-gantt-track">${cols}</div></div>
+                    <div class="camp-legend">${legend}</div>
+                </div>`;
+        }
+
+        function toggleCampaignAccountExpand(caId) {
+            if (_campaignExpanded.has(caId)) _campaignExpanded.delete(caId);
+            else _campaignExpanded.add(caId);
+            _renderCampaignPlan();
+        }
+
+        async function toggleCampaignAction(actionId) {
+            // localizar a ação no estado
+            let target = null;
+            (_campaignPlanData.accounts || []).forEach(a => (a.actions || []).forEach(act => { if (act.id === actionId) target = { a, act }; }));
+            if (!target) return;
+            const next = (CAMP_STATUS_META[target.act.status] || CAMP_STATUS_META.pending).next;
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/actions/${actionId}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: next })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Erro ao atualizar status.');
+                target.act.status = next;
+                _campRecomputeStats();
+                _renderCampaignPlan();
+            } catch (e) { showError(e.message); }
+        }
+
+        function _campRecomputeStats() {
+            const data = _campaignPlanData;
+            if (!data) return;
+            let total = 0, done = 0, inprog = 0;
+            (data.accounts || []).forEach(a => {
+                let at = 0, ad = 0;
+                (a.actions || []).forEach(act => {
+                    total++; at++;
+                    if (act.status === 'done') { done++; ad++; }
+                    else if (act.status === 'in_progress') inprog++;
+                });
+                a.progress = at ? Math.round(100 * ad / at) : 0;
+            });
+            data.stats = Object.assign(data.stats || {}, {
+                total_actions: total, done, in_progress: inprog, pending: total - done - inprog,
+                progress: total ? Math.round(100 * done / total) : 0
+            });
+        }
+
+        async function addCampaignLog(actionId) {
+            const input = document.getElementById('camplog_' + actionId);
+            const text = (input && input.value || '').trim();
+            if (!text) { showError('Escreva um update antes de registrar.'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/actions/${actionId}/logs`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ log_text: text })
+                });
+                const log = await res.json();
+                if (!res.ok) throw new Error(log.error || 'Erro ao registrar update.');
+                (_campaignPlanData.accounts || []).forEach(a => (a.actions || []).forEach(act => {
+                    if (act.id === actionId) { act.logs = act.logs || []; act.logs.unshift(log); }
+                }));
+                _renderCampaignPlan();
+            } catch (e) { showError(e.message); }
+        }
+
+        async function regenerateCampaign(cid) {
+            if (!await uiConfirm('A IA vai reavaliar o portfólio e o mapeamento atuais e atualizar o plano. Seus checkmarks e updates manuais serão preservados.', 'Atualizar plano com IA')) return;
+            const planView = document.getElementById('campaignPlanView');
+            const overlay = document.createElement('div');
+            overlay.id = 'campRegenOverlay';
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(18,16,31,.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+            overlay.innerHTML = `<div style="background:#fff;border-radius:14px;padding:26px 30px;text-align:center;min-width:320px;">
+                <div style="font-size:30px;">🐇</div>
+                <div id="campRegenStep" style="font-size:13px;color:#6b7280;margin:10px 0;">Reanalisando...</div>
+                <div style="position:relative;background:#ede9fe;border-radius:99px;height:10px;margin:0 8px;"><div id="campRegenBar" style="height:100%;width:10%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:99px;transition:width .5s;"></div></div>
+            </div>`;
+            document.body.appendChild(overlay);
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/${cid}/regenerate`, { method: 'POST' });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Erro ao atualizar.');
+                const taskId = payload.task_id;
+                const poll = setInterval(async () => {
+                    try {
+                        const tr = await fetch(`${API_BASE}/tasks/${taskId}`);
+                        const task = await tr.json();
+                        const bar = document.getElementById('campRegenBar');
+                        const step = document.getElementById('campRegenStep');
+                        if (bar && task.progress) bar.style.width = task.progress + '%';
+                        if (step && task.step) step.textContent = task.step;
+                        if (task.status === 'done') {
+                            clearInterval(poll);
+                            document.getElementById('campRegenOverlay')?.remove();
+                            showSuccess('Plano atualizado pela IA.');
+                            openCampaignPlan(cid);
+                        } else if (task.status === 'error' || task.status === 'not_found') {
+                            clearInterval(poll);
+                            document.getElementById('campRegenOverlay')?.remove();
+                            showError(task.error || 'Erro ao atualizar plano.');
+                        }
+                    } catch (e) { clearInterval(poll); document.getElementById('campRegenOverlay')?.remove(); showError('Erro ao verificar status.'); }
+                }, 800);
+            } catch (e) { document.getElementById('campRegenOverlay')?.remove(); showError(e.message); }
+        }
+
+        async function deleteCampaign(cid) {
+            if (!await uiConfirm('Excluir esta campanha e todo o seu plano de ação? Esta ação não pode ser desfeita.', 'Excluir Campanha')) return;
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/${cid}`, { method: 'DELETE' });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Erro ao excluir.');
+                showSuccess('Campanha excluída.');
+                backToCampaignList();
+            } catch (e) { showError(e.message); }
+        }
+
+        function exportCampaignPDF() {
+            showSuccess('Abrindo impressão — escolha "Salvar como PDF".');
+            setTimeout(() => window.print(), 350);
+        }
+
+        // Permite colapsar o corpo de um bloco
+        (function(){
+            const s = document.getElementById('campaign-collapse-style');
+            if (!s) {
+                const el = document.createElement('style');
+                el.id = 'campaign-collapse-style';
+                el.textContent = '.camp-block-body.camp-collapsed{display:none;}';
+                document.head.appendChild(el);
+            }
+        })();
 
         function loadPortfolio() {
             switchPortfolioSubmodule(_portfolioCurrentSubTab || 'stf');
