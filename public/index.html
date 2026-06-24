@@ -16399,6 +16399,31 @@
                 .camp-logs li.system { border-left:3px solid #8b5cf6; }
                 .camp-log-add { display:flex; gap:8px; }
                 .camp-log-add input { flex:1; padding:8px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:13px; }
+                .camp-logs li .ts { display:flex; align-items:center; gap:8px; margin-top:4px; }
+                .camp-log-tools { display:inline-flex; gap:4px; margin-left:auto; }
+                .camp-log-tools button { border:none; background:#f3f4f6; color:#6b7280; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:10px; display:inline-flex; align-items:center; justify-content:center; transition:background .15s,color .15s; }
+                .camp-log-tools button:hover { background:#e5e7eb; color:#374151; }
+                .camp-log-text { white-space:pre-wrap; }
+
+                /* ── Múltiplas ações por conta ── */
+                .camp-action-card { background:#fff; border:1px solid #eef0f4; border-radius:12px; padding:14px 16px; margin-bottom:12px; }
+                .camp-action-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+                .camp-action-due { font-size:11.5px; color:#6b7280; }
+                .camp-angle-chip { font-size:10.5px; font-weight:700; color:#4338ca; background:#eef2ff; padding:2px 8px; border-radius:99px; text-transform:lowercase; }
+
+                /* ── Insight de mercado ── */
+                .camp-insight { background:linear-gradient(135deg,#f5f3ff,#eef2ff); border:1px solid #ddd6fe; border-radius:12px; padding:13px 16px; margin:10px 0 14px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+                .camp-insight-title { font-size:12px; font-weight:700; color:#6d28d9; margin-bottom:5px; display:flex; align-items:center; gap:6px; }
+                .camp-insight-body { font-size:13px; color:#374151; line-height:1.6; }
+                .camp-insight-src { font-size:11px; color:#8b5cf6; margin-top:7px; }
+                .camp-insight-src a { color:#7c3aed; text-decoration:none; }
+                .camp-insight-src a:hover { text-decoration:underline; }
+
+                /* ── Badge do usuário (visível na tela e no PDF) ── */
+                .camp-user-badge { display:flex; align-items:center; gap:8px; padding-left:10px; margin-left:4px; border-left:1px solid rgba(255,255,255,.18); }
+                .camp-user-badge img { width:36px; height:36px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,.3); }
+                .camp-user-badge .camp-user-initial { width:36px; height:36px; border-radius:50%; background:rgba(255,255,255,.18); display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; color:#fff; }
+                .camp-user-badge .camp-user-name { font-size:12.5px; font-weight:600; color:#fff; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
                 /* ── Gantt ── */
                 .camp-gantt { background:radial-gradient(120% 140% at 90% 0%, #241f44 0%, #15131f 60%); color:#fff; border-radius:16px; padding:22px; margin-bottom:20px; }
@@ -16444,9 +16469,10 @@
                     .main-content { margin:0 !important; padding:0 !important; width:100% !important; }
                     .tab-content:not(.active) { display:none !important; }
                     .camp-sticky { position:static !important; background:#1f1b3a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-                    .camp-block, .camp-summary, .camp-stat, .camp-gantt, .camp-acc-detail { break-inside:avoid; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+                    .camp-block, .camp-summary, .camp-stat, .camp-gantt, .camp-acc-detail, .camp-action-card, .camp-insight { break-inside:avoid; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
                     body { background:#fff !important; }
                     .camp-acc-detail { display:block !important; }
+                    .camp-user-badge { display:flex !important; border-left:1px solid rgba(255,255,255,.3); }
                 }
             `;
             document.head.appendChild(style);
@@ -16878,9 +16904,12 @@
 
             const _upPhoto = userProfile?.photo_url;
             const _upName = userProfile?.full_name || userProfile?.nickname || '';
-            const _upHTML = _upPhoto
-                ? `<img src="${escapeHtml(_upPhoto)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.3);" title="${escapeHtml(_upName)}">`
-                : (_upName ? `<div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;">${escapeHtml(_upName[0]||'?')}</div>` : '');
+            const _upAvatar = _upPhoto
+                ? `<img src="${escapeHtml(_upPhoto)}" alt="${escapeHtml(_upName)}">`
+                : (_upName ? `<div class="camp-user-initial">${escapeHtml(_upName[0] || '?')}</div>` : '');
+            const _upHTML = (_upAvatar || _upName)
+                ? `<div class="camp-user-badge" title="${escapeHtml(_upName)}">${_upAvatar}${_upName ? `<span class="camp-user-name">${escapeHtml(_upName)}</span>` : ''}</div>`
+                : '';
 
             planView.innerHTML = `
                 <div class="camp-sticky">
@@ -16898,8 +16927,8 @@
                         <button class="btn btn-auto-mapping btn-small" onclick="regenerateCampaign(${data.id})"><span class="ai-star-icon">✦</span> Atualizar com IA</button>
                         <button class="btn btn-secondary btn-small" onclick="exportCampaignPDF()"><i class="fas fa-file-pdf"></i> PDF</button>
                         <button class="btn btn-secondary btn-small" onclick="deleteCampaign(${data.id})" title="Excluir campanha"><i class="fas fa-trash"></i></button>
-                        ${_upHTML}
                     </div>
+                    ${_upHTML}
                 </div>
 
                 <div class="camp-summary">
@@ -16960,13 +16989,14 @@
         }
 
         function _campAccHTML(acc) {
-            const act = (acc.actions && acc.actions[0]) || null;
+            const actions = acc.actions || [];
+            const nextAct = actions.find(a => a.status !== 'done') || actions[0] || null;
             const expanded = _campaignExpanded.has(acc.id);
-            const am = act ? _campActionMeta(act.action_type) : _campActionMeta('outro');
+            const am = nextAct ? _campActionMeta(nextAct.action_type) : _campActionMeta('outro');
             const score = acc.readiness_score || 0;
             const scoreColor = score >= 70 ? '#10b981' : (score >= 40 ? '#f59e0b' : '#ef4444');
-            const stm = act ? (CAMP_STATUS_META[act.status] || CAMP_STATUS_META.pending) : CAMP_STATUS_META.pending;
             const detail = expanded ? _campAccDetailHTML(acc) : '';
+            const doneCount = actions.filter(a => a.status === 'done').length;
             return `
                 <div class="camp-acc">
                     <div class="camp-acc-row" onclick="toggleCampaignAccountExpand(${acc.id})">
@@ -16976,44 +17006,87 @@
                             <div class="rat">${escapeHtml(acc.rationale || '')}</div>
                         </div>
                         <div class="col-next">
-                            <span class="camp-act-type" style="background:${am.color}22;color:${am.color};"><i class="fas ${am.icon}"></i> ${escapeHtml(act ? act.title : '—')}</span>
-                            <div class="due">${act && act.due_date ? 'até ' + _campDate(act.due_date) + ' · sem. ' + (act.scheduled_week||1) : ''}</div>
+                            <span class="camp-act-type" style="background:${am.color}22;color:${am.color};"><i class="fas ${am.icon}"></i> ${escapeHtml(nextAct ? nextAct.title : '—')}</span>
+                            <div class="due">${actions.length} ${actions.length === 1 ? 'ação' : 'ações'}${nextAct && nextAct.due_date ? ' · próx. até ' + _campDate(nextAct.due_date) : ''}</div>
                         </div>
                         <div class="col-prog">
-                            <div class="pl"><span>Progresso</span><span>${acc.progress||0}%</span></div>
+                            <div class="pl"><span>${doneCount}/${actions.length} ações</span><span>${acc.progress||0}%</span></div>
                             <div class="camp-prog-track"><div class="camp-prog-fill" style="width:${acc.progress||0}%"></div></div>
                         </div>
-                        ${act ? `<button class="camp-status-btn ${stm.cls}" onclick="event.stopPropagation(); toggleCampaignAction(${act.id})"><i class="fas ${stm.icon}"></i> ${stm.label}</button>` : ''}
-                        <i class="fas fa-chevron-${expanded ? 'up' : 'down'}" style="color:#cbd0da;"></i>
+                        <i class="fas fa-chevron-${expanded ? 'up' : 'down'}" style="color:#cbd0da;margin-left:8px;"></i>
                     </div>
                     ${detail}
                 </div>`;
         }
 
-        function _campAccDetailHTML(acc) {
-            const act = (acc.actions && acc.actions[0]) || null;
-            if (!act) return '';
-            const logs = (act.logs || []).map(l => `
-                <li class="${l.log_type === 'system' ? 'system' : ''}">
-                    ${l.log_type === 'system' ? '<i class="fas fa-robot" style="color:#8b5cf6;margin-right:5px;"></i>' : ''}${escapeHtml(l.log_text)}
-                    <div class="ts">${escapeHtml((l.created_at || '').replace('T',' ').slice(0,16))}</div>
-                </li>`).join('') || '<li style="color:#9ca3af;border:none;background:none;padding-left:0;">Nenhum update ainda.</li>';
-            const contactHtml = act.contact_id
-                ? `<a href="#" onclick="event.preventDefault(); editClient(${act.contact_id})" style="color:#6366f1;text-decoration:none;cursor:pointer;" title="Abrir ficha do contato"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name || '')}</a>`
-                : (act.contact_name ? `<span style="color:#6366f1;"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name)}</span>` : '');
-            const offerHtml = acc.offer_id
-                ? `<a href="#" onclick="event.preventDefault(); openCampaignOfferModal(${acc.offer_id}, '${escapeHtml(acc.account_name||'')}', '${escapeHtml((_campaignPlanData||{}).objective_text||'')}')" style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;color:#6366f1;font-size:12px;text-decoration:none;cursor:pointer;" title="Ver detalhes da solução recomendada"><i class="fas fa-box-open"></i> ${escapeHtml(acc.offer_title || 'Solução recomendada')}</a>`
-                : '';
+        function _campLogHTML(l) {
+            const isSystem = l.log_type === 'system';
+            const ts = escapeHtml((l.created_at || '').replace('T', ' ').slice(0, 16));
+            const tools = isSystem ? '' : `
+                <span class="camp-log-tools camp-no-print">
+                    <button title="Editar" onclick="event.stopPropagation(); editCampaignLog(${l.id})"><i class="fas fa-pen"></i></button>
+                    <button title="Excluir" onclick="event.stopPropagation(); deleteCampaignLog(${l.id})"><i class="fas fa-trash"></i></button>
+                </span>`;
             return `
-                <div class="camp-acc-detail">
+                <li class="${isSystem ? 'system' : ''}" id="camplogli_${l.id}">
+                    ${isSystem ? '<i class="fas fa-robot" style="color:#8b5cf6;margin-right:5px;"></i>' : ''}<span class="camp-log-text">${escapeHtml(l.log_text)}</span>
+                    <div class="ts">${ts}${tools}</div>
+                </li>`;
+        }
+
+        function _campActionCardHTML(acc, act) {
+            const am = _campActionMeta(act.action_type);
+            const stm = CAMP_STATUS_META[act.status] || CAMP_STATUS_META.pending;
+            const logs = (act.logs || []).map(_campLogHTML).join('')
+                || '<li style="color:#9ca3af;border:none;background:none;padding-left:0;">Nenhum update ainda.</li>';
+            const contactHtml = act.contact_id
+                ? `<a href="#" onclick="event.preventDefault(); openCampaignContact(${act.contact_id})" style="color:#6366f1;text-decoration:none;cursor:pointer;" title="Ver ficha do contato"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name || '')}</a>`
+                : (act.contact_name ? `<span style="color:#6366f1;"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name)}</span>` : '');
+            const angle = act.angle_area ? `<span class="camp-angle-chip">ângulo: ${escapeHtml(act.angle_area)}</span>` : '';
+            return `
+                <div class="camp-action-card">
+                    <div class="camp-action-head">
+                        <span class="camp-act-type" style="background:${am.color}22;color:${am.color};"><i class="fas ${am.icon}"></i> ${escapeHtml(act.title)}</span>
+                        ${angle}
+                        ${act.due_date ? `<span class="camp-action-due">até ${_campDate(act.due_date)} · sem. ${act.scheduled_week || 1}</span>` : ''}
+                        <span style="flex:1;"></span>
+                        <button class="camp-status-btn ${stm.cls} camp-no-print" onclick="toggleCampaignAction(${act.id})"><i class="fas ${stm.icon}"></i> ${stm.label}</button>
+                    </div>
                     <div class="desc"><b>Abordagem:</b> ${escapeHtml(act.description || '')}${contactHtml ? ' · ' + contactHtml : ''}</div>
-                    ${offerHtml}
-                    <div class="camp-sg-label" style="margin-top:14px;">Updates / log de execução</div>
+                    <div class="camp-sg-label" style="margin-top:12px;">Updates / log de execução</div>
                     <ul class="camp-logs">${logs}</ul>
                     <div class="camp-log-add camp-no-print">
                         <input type="text" id="camplog_${act.id}" placeholder="Escreva um update desta ação..." onkeydown="if(event.key==='Enter'){ event.preventDefault(); addCampaignLog(${act.id}); }">
                         <button class="btn btn-secondary btn-small" onclick="addCampaignLog(${act.id})"><i class="fas fa-plus"></i> Registrar</button>
                     </div>
+                </div>`;
+        }
+
+        function _campAccDetailHTML(acc) {
+            const actions = acc.actions || [];
+            const challenge = (_campaignPlanData || {}).objective_text || '';
+            const insight = (acc.market_insight || '').trim();
+            const sources = acc.insight_sources || [];
+            const srcHtml = sources.length
+                ? `<div class="camp-insight-src camp-no-print">Fontes: ${sources.map(s => s.url ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml((s.title || s.url).slice(0, 40))}</a>` : '').filter(Boolean).join(' · ')}</div>`
+                : '';
+            const insightHtml = insight
+                ? `<div class="camp-insight">
+                       <div class="camp-insight-title"><i class="fas fa-chart-line"></i> Insight de mercado · motivo da abordagem</div>
+                       <div class="camp-insight-body">${escapeHtml(insight)}</div>
+                       ${srcHtml}
+                   </div>`
+                : '';
+            const offerHtml = acc.offer_id
+                ? `<a href="#" onclick="event.preventDefault(); openCampaignOfferModal(${acc.offer_id}, '${escapeHtml(acc.account_name||'')}', '${escapeHtml(challenge)}')" style="display:inline-flex;align-items:center;gap:5px;margin:4px 0 12px;color:#6366f1;font-size:12.5px;text-decoration:none;cursor:pointer;" title="Ver detalhes da solução recomendada"><i class="fas fa-box-open"></i> Solução recomendada: ${escapeHtml(acc.offer_title || '—')}</a>`
+                : '';
+            const cards = actions.map(act => _campActionCardHTML(acc, act)).join('')
+                || '<p style="color:#9ca3af;font-size:13px;">Nenhuma ação planejada.</p>';
+            return `
+                <div class="camp-acc-detail">
+                    ${insightHtml}
+                    ${offerHtml}
+                    ${cards}
                 </div>`;
         }
 
@@ -17197,6 +17270,53 @@
             } catch (e) { showError(e.message); }
         }
 
+        async function openCampaignContact(clientId) {
+            // Abre a ficha (visualização) do contato, não a edição.
+            if (!Array.isArray(clients) || !clients.find(c => Number(c.id) === Number(clientId))) {
+                try {
+                    const r = await fetch(`${API_BASE}/clientes`);
+                    clients = await r.json();
+                } catch (e) { /* segue; openProfileModal trata ausência */ }
+            }
+            openProfileModal(Number(clientId));
+        }
+
+        async function editCampaignLog(logId) {
+            let cur = '';
+            (_campaignPlanData.accounts || []).forEach(a => (a.actions || []).forEach(act => (act.logs || []).forEach(l => {
+                if (l.id === logId) cur = l.log_text || '';
+            })));
+            const next = await uiPrompt('Editar update de execução:', cur, 'Editar update');
+            if (next === null || next === false || next === undefined) return;
+            const text = (next || '').trim();
+            if (!text) { showError('O update não pode ficar vazio. Para remover, use excluir.'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/logs/${logId}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ log_text: text })
+                });
+                const updated = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(updated.error || 'Erro ao editar update.');
+                (_campaignPlanData.accounts || []).forEach(a => (a.actions || []).forEach(act => (act.logs || []).forEach(l => {
+                    if (l.id === logId) { l.log_text = updated.log_text; }
+                })));
+                _renderCampaignPlan();
+            } catch (e) { showError(e.message); }
+        }
+
+        async function deleteCampaignLog(logId) {
+            if (!await uiConfirm('Excluir este update de execução?', 'Excluir update')) return;
+            try {
+                const res = await fetch(`${API_BASE}/campaigns/logs/${logId}`, { method: 'DELETE' });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Erro ao excluir update.');
+                (_campaignPlanData.accounts || []).forEach(a => (a.actions || []).forEach(act => {
+                    if (Array.isArray(act.logs)) act.logs = act.logs.filter(l => l.id !== logId);
+                }));
+                _renderCampaignPlan();
+            } catch (e) { showError(e.message); }
+        }
+
         async function regenerateCampaign(cid) {
             if (!await uiConfirm('A IA vai reavaliar o portfólio e o mapeamento atuais e atualizar o plano. Seus checkmarks e updates manuais serão preservados.', 'Atualizar plano com IA')) return;
             const planView = document.getElementById('campaignPlanView');
@@ -17250,7 +17370,16 @@
 
         function exportCampaignPDF() {
             showSuccess('Abrindo impressão — escolha "Salvar como PDF".');
-            setTimeout(() => window.print(), 350);
+            // Expande todas as contas para que o PDF inclua insights e todas as ações.
+            const prevExpanded = _campaignExpanded;
+            _campaignExpanded = new Set((_campaignPlanData?.accounts || []).map(a => a.id));
+            _renderCampaignPlan();
+            setTimeout(() => {
+                window.print();
+                // Restaura o estado de expansão após a impressão.
+                _campaignExpanded = prevExpanded;
+                _renderCampaignPlan();
+            }, 400);
         }
 
         // Permite colapsar o corpo de um bloco

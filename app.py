@@ -1077,6 +1077,18 @@ def init_db():
             c.execute('ALTER TABLE wiki_documents ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
         if 'updated_at' not in wiki_doc_columns:
             c.execute('ALTER TABLE wiki_documents ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+
+        # Campanha Ofensiva — colunas adicionais (insight de mercado e ângulo da ação)
+        c.execute("PRAGMA table_info(campaign_accounts)")
+        camp_acc_cols = [col[1] for col in c.fetchall()]
+        if 'market_insight' not in camp_acc_cols:
+            c.execute('ALTER TABLE campaign_accounts ADD COLUMN market_insight TEXT')
+        if 'insight_sources' not in camp_acc_cols:
+            c.execute('ALTER TABLE campaign_accounts ADD COLUMN insight_sources TEXT')
+        c.execute("PRAGMA table_info(campaign_actions)")
+        camp_act_cols = [col[1] for col in c.fetchall()]
+        if 'angle_area' not in camp_act_cols:
+            c.execute('ALTER TABLE campaign_actions ADD COLUMN angle_area TEXT')
         conn.commit()
     except:
         pass
@@ -15760,11 +15772,20 @@ def _campaign_rationale(block, account_name, primary, areas, offer_title):
     return "Sem mapeamento relevante: iniciar relacionamento do zero."
 
 
-def _campaign_actions_for_block(block, primary, areas, offer_title, act_count=0, last_act_desc='', has_map=False, has_kan=False):
-    area_label = (areas[0] if areas else 'áreas decisoras')
-    pname = (primary or {}).get('name') or ''
-    pos = (primary or {}).get('position') or ''
+def _campaign_contacts_in_area(contacts, area_lower):
+    """Contatos cuja área de atuação OU cargo casa com a área-alvo, ordenados por senioridade."""
+    matched = []
+    for ct in contacts:
+        blob = ((ct.get('area_of_activity') or '') + ' ' + (ct.get('position') or '')).lower()
+        if area_lower and area_lower in blob:
+            matched.append(ct)
+    matched.sort(key=lambda ct: (_campaign_seniority_rank(ct.get('position')),
+                                  0 if ct.get('is_target') else 1,
+                                  1 if ct.get('is_cold_contact') else 0))
+    return matched
 
+
+def _campaign_rel_ctx(act_count, last_act_desc, has_map, has_kan):
     rel_parts = []
     if act_count > 0:
         rel_parts.append(f"{act_count} interação(ões) registrada(s)")
@@ -15772,41 +15793,128 @@ def _campaign_actions_for_block(block, primary, areas, offer_title, act_count=0,
         rel_parts.append("ambiente mapeado")
     if has_kan:
         rel_parts.append("oportunidade(s) no funil")
-    rel_ctx = (". Histórico: " + ", ".join(rel_parts) + ".") if rel_parts else "."
-
+    rel_ctx = (" Histórico: " + ", ".join(rel_parts) + ".") if rel_parts else ""
     if last_act_desc:
-        last_snippet = last_act_desc.strip()[:120]
+        snip = last_act_desc.strip()[:120]
         if len(last_act_desc.strip()) > 120:
-            last_snippet += "..."
-        rel_ctx += f" Última interação: \"{last_snippet}\""
+            snip += "..."
+        rel_ctx += f" Última interação: \"{snip}\""
+    return rel_ctx
 
-    if block == 'A':
-        who = f"para {pname} ({pos})" if pname and pos else (f"para {pname}" if pname else "com o decisor mapeado")
-        desc = (f"Conduzir apresentação executiva {who} em {area_label}. "
-                f"Apresentar {offer_title or 'a solução'} conectando diretamente à dor identificada" + rel_ctx)
-        return [{'type': 'apresentacao',
-                 'title': (f"Apresentar: {offer_title}" if offer_title else "Apresentação de portfólio"),
-                 'description': desc}]
-    if block == 'B':
-        who_ctx = f"Contato atual: {pname} ({pos}). " if pname else ""
-        desc = (f"{who_ctx}Aprofundar mapeamento de stakeholders em {area_label}. "
-                f"Objetivo: identificar o decisor (C-level/Diretor) e qualificar a dor antes de apresentar a solução" + rel_ctx)
-        return [{'type': 'mapeamento',
-                 'title': f"Aprofundar stakeholders em {area_label}",
-                 'description': desc}]
+
+def _campaign_build_actions(block, contacts, areas, offer_title, ctx):
+    """Gera UMA OU MAIS ações por conta — uma por ângulo (área/decisor) do desafio.
+
+    Para cada área-alvo da campanha, identifica o melhor decisor mapeado naquela área e
+    cria uma ação específica (apresentação se houver solução, ou aprofundamento). Áreas sem
+    decisor mapeado viram ações de mapeamento daquele ângulo. Assim o desafio multi-área
+    (ex.: CIO p/ tecnologia + CMO p/ jornada do paciente) vira ações distintas e justificadas.
+    Cada item retornado: {type, title, description, contact, angle_area}.
+    """
+    rel_ctx = _campaign_rel_ctx(ctx.get('act_count', 0), ctx.get('last_act_desc', ''),
+                                ctx.get('has_map', False), ctx.get('has_kan', False))
+    areas_eff = [a for a in (areas or []) if a] or ['área-alvo']
+
+    # Conta fria / sem contatos: prospecção única
+    if block == 'C' or not contacts:
+        area_label = areas_eff[0]
+        return [{'type': 'prospeccao', 'angle_area': area_label, 'contact': None,
+                 'title': "Iniciar prospecção e mapear decisores",
+                 'description': (f"Conta fria: sem mapeamento de contatos em {area_label}. "
+                                 f"Iniciar prospecção ativa — identificar organograma, decisores e dores "
+                                 f"antes de qualquer abordagem." + rel_ctx)}]
+
+    actions = []
+    seen = set()
+    for area in areas_eff:
+        pool = _campaign_contacts_in_area(contacts, area.lower())
+        dm = [ct for ct in pool if _campaign_seniority(ct.get('position')) in ('clevel', 'diretor') and not ct.get('is_cold_contact')]
+        warm = [ct for ct in pool if not ct.get('is_cold_contact')]
+        chosen = dm[0] if dm else (warm[0] if warm else (pool[0] if pool else None))
+
+        if chosen is None:
+            key = ('none', area.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            actions.append({'type': 'mapeamento', 'angle_area': area, 'contact': None,
+                            'title': f"Mapear decisor de {area}",
+                            'description': (f"Nenhum decisor de {area} mapeado nesta conta. Identificar e qualificar "
+                                            f"o responsável por {area} (C-level/Diretor) para abrir esta frente." + rel_ctx)})
+            continue
+
+        key = (chosen.get('id'), area.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        cpos = chosen.get('position') or ''
+        cname = chosen.get('name') or ''
+        who = f"{cname} ({cpos})" if cpos else cname
+        sen = _campaign_seniority(chosen.get('position'))
+        sen_label = {'clevel': 'C-level', 'diretor': 'Diretoria', 'gerente': 'Gerência'}.get(sen, 'contato')
+        why = f"Escolhido por ser {sen_label} responsável por {area}" + (" e contato target" if chosen.get('is_target') else "") + "."
+
+        if block == 'A' and offer_title:
+            actions.append({'type': 'apresentacao', 'angle_area': area, 'contact': chosen,
+                            'title': f"Apresentar {offer_title} — ângulo {area}",
+                            'description': (f"Conduzir apresentação executiva para {who}. {why} "
+                                            f"Conectar {offer_title} ao ângulo de {area}, alinhando a solução à dor "
+                                            f"específica desta frente." + rel_ctx)})
+        else:
+            actions.append({'type': 'mapeamento', 'angle_area': area, 'contact': chosen,
+                            'title': f"Aprofundar relacionamento em {area}",
+                            'description': (f"Frente de {area} com {who}. {why} Aprofundar a dor, validar fit e "
+                                            f"preparar terreno para apresentar a solução nesta frente." + rel_ctx)})
+
     if block == 'D':
-        who = f"com {pname} ({pos})" if pname else "com o decisor mapeado"
-        desc = (f"Relacionamento maduro {who}{rel_ctx} "
-                f"Não há solução aderente cadastrada para {area_label}. "
-                f"Explorar portfólio ou identificar parceiros que possam atender esta demanda.")
-        return [{'type': 'portfolio',
-                 'title': "Explorar portfólio para o desafio",
-                 'description': desc}]
-    desc = (f"Conta fria: sem mapeamento de contatos em {area_label}. "
-            f"Iniciar prospecção ativa: identificar organograma, decisores e dores antes de qualquer abordagem" + rel_ctx)
-    return [{'type': 'prospeccao',
-             'title': "Iniciar prospecção e mapear decisores",
-             'description': desc}]
+        prim = contacts[0] if contacts else None
+        d_area = areas_eff[0]
+        d_action = {'type': 'portfolio', 'angle_area': d_area, 'contact': prim,
+                    'title': "Explorar portfólio para o desafio",
+                    'description': (f"Relacionamento maduro, porém sem solução aderente cadastrada para {d_area}. "
+                                    f"Explorar portfólio interno ou identificar parceiros que atendam esta demanda." + rel_ctx)}
+        actions = [d_action] + actions
+
+    if not actions:
+        prim = contacts[0] if contacts else None
+        actions = [{'type': 'mapeamento', 'angle_area': areas_eff[0], 'contact': prim,
+                    'title': "Aprofundar mapeamento da conta",
+                    'description': ("Aprofundar mapeamento de stakeholders e qualificar a dor." + rel_ctx)}]
+    return actions
+
+
+def _campaign_market_insight(account_name, sector, challenge, areas, offer_title):
+    """Busca contexto de mercado real via Tavily e sintetiza um 'motivo de abordagem' via LLM.
+
+    Ordem: Tavily (dados reais) → LLM sintetiza com base nas evidências. Sem Tavily, o LLM faz
+    uma leitura objetiva do setor. Retorna (insight_text, sources_list)."""
+    evidence, sources = [], []
+    api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+    if api_key:
+        try:
+            areas_str = ', '.join(areas) if areas else ''
+            query = f'"{account_name}" {sector or ""} notícias investimentos estratégia movimentos {areas_str}'.strip()
+            results = _run_tavily_request(api_key, query, max_results=5)
+            evidence = _extract_tavily_evidence(results, max_items=5)
+            sources = [{'title': e.get('title'), 'url': e.get('url')} for e in evidence if e.get('url')][:4]
+        except Exception as e:
+            logger.warning(f'[Campaign][insight] Tavily falhou p/ {account_name}: {e}')
+
+    evidence_blob = '\n'.join(f"- {e.get('snippet','')[:300]}" for e in evidence if e.get('snippet'))
+    sys_p = ('Você é um analista de inteligência comercial B2B. Escreva em português do Brasil um parágrafo '
+             'curto (2 a 4 frases), direto e específico, sem markdown, sem títulos e sem citar URLs.')
+    base = (f"Conta: {account_name} (setor: {sector or 'n/d'}).\n"
+            f"Desafio comercial: {challenge}.\n"
+            f"Áreas-alvo: {', '.join(areas) or 'n/d'}. Solução considerada: {offer_title or 'a definir'}.\n\n")
+    if evidence_blob:
+        user_p = (base + f"Evidências de mercado encontradas:\n{evidence_blob}\n\n"
+                  "Com base NAS EVIDÊNCIAS acima, escreva o 'motivo da abordagem': o momento de mercado e os "
+                  "movimentos da conta que tornam ESTE plano relevante AGORA. Cite fatos concretos das evidências.")
+    else:
+        user_p = (base + "Escreva o 'motivo da abordagem': uma leitura objetiva e específica do provável momento "
+                  "de mercado do setor que torna este plano relevante agora. Evite generalidades vazias.")
+    text, _src = _campaign_llm_text(sys_p, user_p)
+    return (text or '').strip(), sources
 
 
 def _campaign_parse_date(s):
@@ -15892,7 +16000,7 @@ def _campaign_analyze_core(challenge_text):
     }
 
 
-def _campaign_generate_core(payload):
+def _campaign_generate_core(payload, progress_cb=None):
     title = payload['title']
     challenge = payload['challenge_text']
     areas = payload.get('areas') or []
@@ -15902,6 +16010,13 @@ def _campaign_generate_core(payload):
     capacity = max(1, int(payload.get('weekly_capacity') or 5))
     account_ids = payload['account_ids']
     llm_source = payload.get('llm_source', '')
+
+    def _emit(pct, step):
+        if progress_cb:
+            try:
+                progress_cb(pct, step)
+            except Exception:
+                pass
 
     conn = get_db()
     c = conn.cursor()
@@ -15913,7 +16028,8 @@ def _campaign_generate_core(payload):
     areas_lower = [a.lower() for a in areas if a]
 
     built = []
-    for aid in account_ids:
+    n_accs = len(account_ids)
+    for i, aid in enumerate(account_ids):
         c.execute('SELECT * FROM accounts WHERE id = ?', (aid,))
         acc = dict_from_row(c.fetchone())
         if not acc:
@@ -15933,10 +16049,17 @@ def _campaign_generate_core(payload):
         )
         _row = c.fetchone()
         last_act_desc = (_row[0] if _row else '') or ''
-        built.append({'acc': acc, 'block': block, 'score': score, 'primary': primary,
-                      'act_count': act_count, 'last_act_desc': last_act_desc,
-                      'has_map': has_map, 'has_kan': has_kan})
 
+        offer_title = primary_offer['title'] if (block == 'A' and primary_offer) else None
+        _emit(40 + int(45 * i / max(1, n_accs)), f"Pesquisando mercado: {acc['name']} ({i + 1}/{n_accs})")
+        insight, sources = _campaign_market_insight(acc['name'], acc.get('sector'), challenge, areas, offer_title)
+
+        built.append({'acc': acc, 'block': block, 'score': score, 'primary': primary,
+                      'contacts': contacts, 'act_count': act_count, 'last_act_desc': last_act_desc,
+                      'has_map': has_map, 'has_kan': has_kan,
+                      'market_insight': insight, 'insight_sources': sources})
+
+    _emit(88, 'Montando blocos e cronograma...')
     order_rank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
     built.sort(key=lambda b: (order_rank.get(b['block'], 9), -b['score'], (b['acc']['name'] or '').lower()))
 
@@ -15953,7 +16076,7 @@ def _campaign_generate_core(payload):
 
     start_dt = _campaign_parse_date(start_date)
     idx = 0
-    for b in built:
+    for ord_idx, b in enumerate(built):
         acc = b['acc']
         block = b['block']
         primary = b['primary']
@@ -15962,28 +16085,29 @@ def _campaign_generate_core(payload):
         rationale = _campaign_rationale(block, acc['name'], primary, areas, offer_title)
         c.execute(
             '''INSERT INTO campaign_accounts
-               (campaign_id, account_id, account_name, block_type, readiness_score, offer_id, offer_title, rationale, sort_order)
-               VALUES (?,?,?,?,?,?,?,?,?)''',
-            (campaign_id, acc['id'], acc['name'], block, b['score'], offer_id, offer_title, rationale, idx)
+               (campaign_id, account_id, account_name, block_type, readiness_score, offer_id, offer_title,
+                rationale, sort_order, market_insight, insight_sources)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+            (campaign_id, acc['id'], acc['name'], block, b['score'], offer_id, offer_title,
+             rationale, ord_idx, b.get('market_insight', ''),
+             json.dumps(b.get('insight_sources') or [], ensure_ascii=False))
         )
         ca_id = c.lastrowid
-        for a in _campaign_actions_for_block(
-            block, primary, areas, offer_title,
-            act_count=b.get('act_count', 0),
-            last_act_desc=b.get('last_act_desc', ''),
-            has_map=b.get('has_map', False),
-            has_kan=b.get('has_kan', False)
-        ):
+        ctx = {'act_count': b.get('act_count', 0), 'last_act_desc': b.get('last_act_desc', ''),
+               'has_map': b.get('has_map', False), 'has_kan': b.get('has_kan', False)}
+        actions = _campaign_build_actions(block, b.get('contacts') or [], areas, offer_title, ctx)
+        for a in actions:
+            ct = a.get('contact') or {}
             week = idx // capacity
             due = _campaign_add_weeks(start_dt, week)
             c.execute(
                 '''INSERT INTO campaign_actions
                    (campaign_account_id, title, description, action_type, contact_id, contact_name,
-                    scheduled_week, due_date, status, sort_order, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
+                    scheduled_week, due_date, status, sort_order, angle_area, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
                 (ca_id, a['title'], a['description'], a['type'],
-                 (primary or {}).get('id'), (primary or {}).get('name'),
-                 week + 1, due, 'pending', idx)
+                 ct.get('id'), ct.get('name'),
+                 week + 1, due, 'pending', idx, a.get('angle_area', ''))
             )
             idx += 1
 
@@ -15992,7 +16116,14 @@ def _campaign_generate_core(payload):
     return campaign_id
 
 
-def _campaign_regenerate_core(cid):
+def _campaign_regenerate_core(cid, progress_cb=None):
+    def _emit(pct, step):
+        if progress_cb:
+            try:
+                progress_cb(pct, step)
+            except Exception:
+                pass
+
     conn = get_db()
     c = conn.cursor()
     c.execute('SELECT * FROM campaigns WHERE id = ?', (cid,))
@@ -16017,7 +16148,10 @@ def _campaign_regenerate_core(cid):
 
     c.execute('SELECT * FROM campaign_accounts WHERE campaign_id = ? ORDER BY sort_order, id', (cid,))
     cas = [dict_from_row(r) for r in c.fetchall()]
-    for ca in cas:
+    n_cas = len(cas)
+    capacity = max(1, int(camp.get('weekly_capacity') or 5))
+    start_dt = _campaign_parse_date(camp.get('start_date') or '')
+    for ci, ca in enumerate(cas):
         contacts = _campaign_account_contacts(c, ca['account_name'])
         has_map = _campaign_has_mapping(c, ca['account_name'])
         has_kan = _campaign_has_kanban(c, ca['account_id'])
@@ -16037,34 +16171,75 @@ def _campaign_regenerate_core(cid):
         offer_title = primary_offer['title'] if (new_block == 'A' and primary_offer) else None
         offer_id = primary_offer['id'] if (new_block == 'A' and primary_offer) else None
         rationale = _campaign_rationale(new_block, ca['account_name'], primary, areas, offer_title)
+
+        _emit(40 + int(50 * ci / max(1, n_cas)), f"Reavaliando mercado: {ca['account_name']} ({ci + 1}/{n_cas})")
+        insight, sources = _campaign_market_insight(ca['account_name'], None, challenge, areas, offer_title)
         c.execute(
-            'UPDATE campaign_accounts SET block_type=?, readiness_score=?, offer_id=?, offer_title=?, rationale=? WHERE id=?',
-            (new_block, score, offer_id, offer_title, rationale, ca['id'])
+            'UPDATE campaign_accounts SET block_type=?, readiness_score=?, offer_id=?, offer_title=?, rationale=?, market_insight=?, insight_sources=? WHERE id=?',
+            (new_block, score, offer_id, offer_title, rationale, insight,
+             json.dumps(sources or [], ensure_ascii=False), ca['id'])
         )
-        na = _campaign_actions_for_block(new_block, primary, areas, offer_title,
-                                         act_count=act_count, last_act_desc=last_act_desc,
-                                         has_map=has_map, has_kan=has_kan)[0]
-        c.execute('SELECT * FROM campaign_actions WHERE campaign_account_id = ? ORDER BY sort_order, id LIMIT 1', (ca['id'],))
-        act = dict_from_row(c.fetchone())
-        if act:
-            c.execute(
-                'UPDATE campaign_actions SET title=?, description=?, action_type=?, contact_id=?, contact_name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',
-                (na['title'], na['description'], na['type'], (primary or {}).get('id'), (primary or {}).get('name'), act['id'])
-            )
-            if old_block != new_block:
-                msg = f"Plano atualizado pela IA: bloco {old_block} → {new_block}."
-                if offer_title:
-                    msg += f" Solução recomendada: {offer_title}."
-                c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'system')", (act['id'], msg))
-        else:
-            c.execute(
-                '''INSERT INTO campaign_actions
-                   (campaign_account_id, title, description, action_type, contact_id, contact_name,
-                    scheduled_week, due_date, status, sort_order, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
-                (ca['id'], na['title'], na['description'], na['type'],
-                 (primary or {}).get('id'), (primary or {}).get('name'), 1, camp.get('start_date'), 'pending', ca['sort_order'])
-            )
+
+        ctx = {'act_count': act_count, 'last_act_desc': last_act_desc, 'has_map': has_map, 'has_kan': has_kan}
+        desired = _campaign_build_actions(new_block, contacts, areas, offer_title, ctx)
+
+        # Ações existentes (preservar status/logs). Matching por (contact_id, angle_area).
+        c.execute('SELECT * FROM campaign_actions WHERE campaign_account_id = ? ORDER BY sort_order, id', (ca['id'],))
+        existing = [dict_from_row(r) for r in c.fetchall()]
+        used_existing = set()
+
+        def _match(want_cid, want_area):
+            # 1) match exato contato+ângulo; 2) só ângulo; 3) só contato; 4) qualquer não usada
+            for pref in (lambda a: a['id'] not in used_existing and (a.get('contact_id') or None) == (want_cid or None) and (a.get('angle_area') or '').lower() == (want_area or '').lower(),
+                         lambda a: a['id'] not in used_existing and (a.get('angle_area') or '').lower() == (want_area or '').lower(),
+                         lambda a: a['id'] not in used_existing and (a.get('contact_id') or None) == (want_cid or None),
+                         lambda a: a['id'] not in used_existing):
+                for a in existing:
+                    if pref(a):
+                        return a
+            return None
+
+        sort_base = ca['sort_order'] * 100
+        for k, want in enumerate(desired):
+            ct = want.get('contact') or {}
+            want_cid = ct.get('id')
+            want_area = want.get('angle_area', '')
+            match = _match(want_cid, want_area)
+            if match:
+                used_existing.add(match['id'])
+                c.execute(
+                    'UPDATE campaign_actions SET title=?, description=?, action_type=?, contact_id=?, contact_name=?, angle_area=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                    (want['title'], want['description'], want['type'], want_cid, ct.get('name'), want_area, match['id'])
+                )
+                if old_block != new_block:
+                    msg = f"Plano atualizado pela IA: bloco {old_block} → {new_block}."
+                    if offer_title:
+                        msg += f" Solução recomendada: {offer_title}."
+                    c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'system')", (match['id'], msg))
+            else:
+                week = (sort_base + k) // capacity
+                due = _campaign_add_weeks(start_dt, week)
+                c.execute(
+                    '''INSERT INTO campaign_actions
+                       (campaign_account_id, title, description, action_type, contact_id, contact_name,
+                        scheduled_week, due_date, status, sort_order, angle_area, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
+                    (ca['id'], want['title'], want['description'], want['type'],
+                     want_cid, ct.get('name'), week + 1, due, 'pending', sort_base + k, want_area)
+                )
+
+        # Ações antigas não correspondidas: preservar se tiverem trabalho do usuário, senão remover.
+        for a in existing:
+            if a['id'] in used_existing:
+                continue
+            c.execute('SELECT COUNT(*) FROM campaign_action_logs WHERE action_id=? AND log_type=?', (a['id'], 'user'))
+            has_user_log = (c.fetchone()[0] or 0) > 0
+            if has_user_log or a.get('status') != 'pending':
+                c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'system')",
+                          (a['id'], "A IA não priorizou mais esta frente nesta atualização, mas ela foi mantida por já ter execução registrada."))
+            else:
+                c.execute('DELETE FROM campaign_action_logs WHERE action_id=?', (a['id'],))
+                c.execute('DELETE FROM campaign_actions WHERE id=?', (a['id'],))
 
     new_offer_ids = [o['id'] for o in matched]
     portfolio_note = '' if has_solution else 'Nenhuma oferta aderente no portfólio. Registre soluções da empresa para este segmento.'
@@ -16118,6 +16293,10 @@ def _campaign_serialize(c, campaign_id):
         c.execute('SELECT logo_url FROM accounts WHERE id = ?', (a['account_id'],))
         row = c.fetchone()
         a['logo_url'] = row['logo_url'] if row else None
+        try:
+            a['insight_sources'] = json.loads(a.get('insight_sources') or '[]')
+        except Exception:
+            a['insight_sources'] = []
         c.execute('SELECT * FROM campaign_actions WHERE campaign_account_id = ? ORDER BY sort_order, id', (a['id'],))
         acts = [dict_from_row(r) for r in c.fetchall()]
         for act in acts:
@@ -16237,9 +16416,12 @@ def campaign_generate():
 
         def _run():
             try:
-                _bg_task_set(task_id, {'step': 'Classificando contas (A/B/C/D)...', 'progress': 50})
-                cid = _campaign_generate_core(payload)
-                _bg_task_set(task_id, {'step': 'Gerando cronograma...', 'progress': 85})
+                _bg_task_set(task_id, {'step': 'Classificando contas (A/B/C/D)...', 'progress': 40})
+
+                def _progress(pct, step):
+                    _bg_task_set(task_id, {'progress': max(40, min(95, int(pct))), 'step': step})
+
+                cid = _campaign_generate_core(payload, progress_cb=_progress)
                 _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': {'campaign_id': cid}})
             except Exception as e:
                 logger.exception(f'[Campaign][generate] {e}')
@@ -16374,8 +16556,12 @@ def campaign_regenerate(cid):
 
         def _run():
             try:
-                _bg_task_set(task_id, {'step': 'Reclassificando contas...', 'progress': 60})
-                _campaign_regenerate_core(cid)
+                _bg_task_set(task_id, {'step': 'Reclassificando contas...', 'progress': 40})
+
+                def _progress(pct, step):
+                    _bg_task_set(task_id, {'progress': max(40, min(95, int(pct))), 'step': step})
+
+                _campaign_regenerate_core(cid, progress_cb=_progress)
                 _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': {'campaign_id': cid}})
             except Exception as e:
                 logger.exception(f'[Campaign][regenerate] {e}')
@@ -16438,6 +16624,58 @@ def campaign_action_log(aid):
         return jsonify(log)
     except Exception as e:
         logger.exception(f'[Campaign] action log {aid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/logs/<int:lid>', methods=['PATCH'])
+def campaign_log_update(lid):
+    try:
+        data = request.get_json() or {}
+        text = (data.get('log_text') or '').strip()
+        if not text:
+            return jsonify({'error': 'Escreva um update.'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
+        log = dict_from_row(c.fetchone())
+        if not log:
+            conn.close()
+            return jsonify({'error': 'Update não encontrado.'}), 404
+        if (log.get('log_type') or 'user') != 'user':
+            conn.close()
+            return jsonify({'error': 'Apenas updates manuais podem ser editados.'}), 400
+        c.execute('UPDATE campaign_action_logs SET log_text=? WHERE id=?', (text, lid))
+        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (log['action_id'],))
+        conn.commit()
+        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
+        updated = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(updated)
+    except Exception as e:
+        logger.exception(f'[Campaign] log update {lid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/logs/<int:lid>', methods=['DELETE'])
+def campaign_log_delete(lid):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
+        log = dict_from_row(c.fetchone())
+        if not log:
+            conn.close()
+            return jsonify({'error': 'Update não encontrado.'}), 404
+        if (log.get('log_type') or 'user') != 'user':
+            conn.close()
+            return jsonify({'error': 'Apenas updates manuais podem ser excluídos.'}), 400
+        c.execute('DELETE FROM campaign_action_logs WHERE id=?', (lid,))
+        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (log['action_id'],))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.exception(f'[Campaign] log delete {lid}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
