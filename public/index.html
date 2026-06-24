@@ -16440,7 +16440,7 @@
                 .cw-acc-pick .tgt { font-size:9px; font-weight:700; color:#166534; background:#dcfce7; padding:1px 6px; border-radius:5px; }
 
                 @media print {
-                    .sidebar, .topbar, #campaignListView, .camp-no-print, .bg-task-indicator { display:none !important; }
+                    .sidebar, .main-topbar, #campaignListView, .camp-no-print, .bg-task-indicator { display:none !important; }
                     .main-content { margin:0 !important; padding:0 !important; width:100% !important; }
                     .tab-content:not(.active) { display:none !important; }
                     .camp-sticky { position:static !important; background:#1f1b3a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
@@ -16486,6 +16486,9 @@
                         <div class="camp-feature"><i class="fas fa-layer-group"></i><div><b>Alinhado ao Portfólio</b><span>Cruza com Soluções STF</span></div></div>
                         <div class="camp-feature"><i class="fas fa-route"></i><div><b>Execução Guiada</b><span>Checklist + cronograma</span></div></div>
                     </div>
+                    <div style="margin-top:28px;">
+                        <button class="btn btn-auto-mapping" style="font-size:15px;padding:13px 28px;" onclick="openCampaignWizard()"><span class="ai-star-icon">✦</span> Nova Campanha Ofensiva</button>
+                    </div>
                 </div>
                 <div class="camp-banner">
                     <i class="fas fa-circle-info lead"></i>
@@ -16494,7 +16497,6 @@
                 </div>
                 <div class="camp-list-head">
                     <h2 style="margin:0;font-size:18px;color:#111827;">Minhas campanhas</h2>
-                    <button class="btn btn-auto-mapping" onclick="openCampaignWizard()"><span class="ai-star-icon">✦</span> Nova Campanha Ofensiva</button>
                 </div>
                 <div id="campaignCards"><p style="color:#6b7280;">Carregando campanhas...</p></div>`;
         }
@@ -16538,7 +16540,7 @@
             _cwData = { step: 1, analysis: null, selectedAccounts: new Set(), selectableAccounts: [], areaTags: new Set() };
             document.getElementById('campaignWizard')?.remove();
             const html = `
-                <div class="modal active" id="campaignWizard" onclick="if(event.target===this) closeCampaignWizard()">
+                <div class="modal active" id="campaignWizard">
                     <div class="modal-content" style="max-width:720px;">
                         <div class="modal-header">
                             <h2 class="modal-title"><span class="ai-star-icon">✦</span> Nova Campanha Ofensiva</h2>
@@ -16705,8 +16707,12 @@
                         Selecionar contas uma a uma
                     </label>
                     <div id="cwAccGridWrap" style="display:none;">
+                        <div style="display:flex;gap:8px;margin:8px 0 6px;align-items:center;">
+                            <button class="btn btn-secondary btn-small" onclick="_cwSelectAll(true)"><i class="fas fa-check-square"></i> Selecionar Todos</button>
+                            <button class="btn btn-secondary btn-small" onclick="_cwSelectAll(false)"><i class="fas fa-square"></i> Desselecionar Todos</button>
+                            <span style="font-size:11px;color:#6b7280;margin-left:4px;"><span id="cwAccCount">0</span> selecionada(s)</span>
+                        </div>
                         <div id="cwAccGrid" class="cw-acc-grid"><p style="color:#6b7280;font-size:12px;">Carregando contas...</p></div>
-                        <div style="font-size:11px;color:#6b7280;margin-top:6px;"><span id="cwAccCount">0</span> conta(s) selecionada(s)</div>
                     </div>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -16735,8 +16741,6 @@
                 const res = await fetch(`${API_BASE}/campaigns/selectable-accounts`);
                 const list = await res.json().catch(() => []);
                 _cwData.selectableAccounts = Array.isArray(list) ? list : [];
-                // preselect targets
-                _cwData.selectableAccounts.forEach(acc => { if (acc.is_target) _cwData.selectedAccounts.add(acc.id); });
                 _cwRenderAccGrid();
             } catch (e) {
                 document.getElementById('cwAccGrid').innerHTML = `<p style="color:#b91c1c;font-size:12px;">Erro ao carregar contas.</p>`;
@@ -16760,6 +16764,14 @@
         function _cwToggleAcc(id) {
             if (_cwData.selectedAccounts.has(id)) _cwData.selectedAccounts.delete(id);
             else _cwData.selectedAccounts.add(id);
+            _cwRenderAccGrid();
+        }
+        function _cwSelectAll(select) {
+            if (select) {
+                _cwData.selectableAccounts.forEach(acc => _cwData.selectedAccounts.add(acc.id));
+            } else {
+                _cwData.selectedAccounts.clear();
+            }
             _cwRenderAccGrid();
         }
         function _cwUpdateCount() {
@@ -16825,6 +16837,12 @@
                 const res = await fetch(`${API_BASE}/campaigns/${cid}`);
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Erro ao carregar o plano.');
+                // Align blocks to reference the same objects as accounts so in-memory mutations propagate to render
+                const _accById = {};
+                (data.accounts || []).forEach(a => { _accById[a.id] = a; });
+                Object.keys(data.blocks || {}).forEach(bk => {
+                    data.blocks[bk] = (data.blocks[bk] || []).map(a => _accById[a.id] || a);
+                });
                 _campaignPlanData = data;
                 _campaignExpanded = new Set();
                 _renderCampaignPlan();
@@ -16858,6 +16876,12 @@
                     </div>
                 </div>` : '';
 
+            const _upPhoto = userProfile?.photo_url;
+            const _upName = userProfile?.full_name || userProfile?.nickname || '';
+            const _upHTML = _upPhoto
+                ? `<img src="${escapeHtml(_upPhoto)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.3);" title="${escapeHtml(_upName)}">`
+                : (_upName ? `<div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;">${escapeHtml(_upName[0]||'?')}</div>` : '');
+
             planView.innerHTML = `
                 <div class="camp-sticky">
                     <div>
@@ -16869,11 +16893,12 @@
                         <div class="lbl"><span>Progresso geral</span><span>${st.progress || 0}%</span></div>
                         <div class="camp-prog-track" style="background:rgba(255,255,255,.15);"><div class="camp-prog-fill" style="width:${st.progress || 0}%"></div></div>
                     </div>
-                    <div class="camp-no-print" style="display:flex;gap:8px;">
+                    <div class="camp-no-print" style="display:flex;gap:8px;align-items:center;">
                         <button class="btn btn-secondary btn-small" onclick="backToCampaignList()"><i class="fas fa-arrow-left"></i></button>
                         <button class="btn btn-auto-mapping btn-small" onclick="regenerateCampaign(${data.id})"><span class="ai-star-icon">✦</span> Atualizar com IA</button>
                         <button class="btn btn-secondary btn-small" onclick="exportCampaignPDF()"><i class="fas fa-file-pdf"></i> PDF</button>
                         <button class="btn btn-secondary btn-small" onclick="deleteCampaign(${data.id})" title="Excluir campanha"><i class="fas fa-trash"></i></button>
+                        ${_upHTML}
                     </div>
                 </div>
 
@@ -16973,17 +16998,107 @@
                     ${l.log_type === 'system' ? '<i class="fas fa-robot" style="color:#8b5cf6;margin-right:5px;"></i>' : ''}${escapeHtml(l.log_text)}
                     <div class="ts">${escapeHtml((l.created_at || '').replace('T',' ').slice(0,16))}</div>
                 </li>`).join('') || '<li style="color:#9ca3af;border:none;background:none;padding-left:0;">Nenhum update ainda.</li>';
-            const contact = act.contact_name ? `<span style="color:#6366f1;"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name)}</span>` : '';
+            const contactHtml = act.contact_id
+                ? `<a href="#" onclick="event.preventDefault(); editClient(${act.contact_id})" style="color:#6366f1;text-decoration:none;cursor:pointer;" title="Abrir ficha do contato"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name || '')}</a>`
+                : (act.contact_name ? `<span style="color:#6366f1;"><i class="fas fa-user"></i> ${escapeHtml(act.contact_name)}</span>` : '');
+            const offerHtml = acc.offer_id
+                ? `<a href="#" onclick="event.preventDefault(); openCampaignOfferModal(${acc.offer_id}, '${escapeHtml(acc.account_name||'')}', '${escapeHtml((_campaignPlanData||{}).objective_text||'')}')" style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;color:#6366f1;font-size:12px;text-decoration:none;cursor:pointer;" title="Ver detalhes da solução recomendada"><i class="fas fa-box-open"></i> ${escapeHtml(acc.offer_title || 'Solução recomendada')}</a>`
+                : '';
             return `
                 <div class="camp-acc-detail">
-                    <div class="desc"><b>Abordagem:</b> ${escapeHtml(act.description || '')} ${contact}</div>
-                    <div class="camp-sg-label">Updates / log de execução</div>
+                    <div class="desc"><b>Abordagem:</b> ${escapeHtml(act.description || '')}${contactHtml ? ' · ' + contactHtml : ''}</div>
+                    ${offerHtml}
+                    <div class="camp-sg-label" style="margin-top:14px;">Updates / log de execução</div>
                     <ul class="camp-logs">${logs}</ul>
                     <div class="camp-log-add camp-no-print">
-                        <input type="text" id="camplog_${act.id}" placeholder="Escreva um update desta ação..." onkeydown="if(event.key==='Enter') addCampaignLog(${act.id})">
+                        <input type="text" id="camplog_${act.id}" placeholder="Escreva um update desta ação..." onkeydown="if(event.key==='Enter'){ event.preventDefault(); addCampaignLog(${act.id}); }">
                         <button class="btn btn-secondary btn-small" onclick="addCampaignLog(${act.id})"><i class="fas fa-plus"></i> Registrar</button>
                     </div>
                 </div>`;
+        }
+
+        async function openCampaignOfferModal(offerId, accountName, challengeText) {
+            document.getElementById('campOfferModal')?.remove();
+            const el = document.createElement('div');
+            el.id = 'campOfferModal';
+            el.innerHTML = `
+                <div class="modal active" id="campOfferModalInner" style="z-index:10002;">
+                    <div class="modal-content" style="max-width:620px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title"><i class="fas fa-box-open" style="color:#6366f1;"></i> Solução recomendada</h2>
+                            <button class="modal-close" onclick="document.getElementById('campOfferModal')?.remove()">&#215;</button>
+                        </div>
+                        <div id="campOfferBody" style="padding:4px 0 8px;"><p style="color:#6b7280;">Carregando...</p></div>
+                    </div>
+                </div>`;
+            document.body.appendChild(el);
+            try {
+                const res = await fetch(`${API_BASE}/portfolio/offers/${offerId}`);
+                const offer = await res.json();
+                if (!res.ok) throw new Error(offer.error || 'Erro ao carregar oferta.');
+                const items = (offer.items || []).map(it => `
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
+                        <div style="font-size:12px;font-weight:700;color:#ef4444;margin-bottom:4px;"><i class="fas fa-exclamation-circle"></i> Dor</div>
+                        <div style="font-size:13px;color:#374151;margin-bottom:8px;">${escapeHtml(it.pain || '')}</div>
+                        <div style="font-size:12px;font-weight:700;color:#10b981;margin-bottom:4px;"><i class="fas fa-check-circle"></i> Solução</div>
+                        <div style="font-size:13px;color:#374151;">${escapeHtml(it.solution || '')}</div>
+                    </div>`).join('') || '<p style="color:#9ca3af;font-size:13px;">Sem itens cadastrados.</p>';
+                document.getElementById('campOfferBody').innerHTML = `
+                    <div style="margin-bottom:16px;">
+                        <div style="font-size:18px;font-weight:800;color:#111827;margin-bottom:6px;">${escapeHtml(offer.title || '')}</div>
+                        ${offer.summary ? `<div style="font-size:13.5px;color:#374151;line-height:1.6;">${escapeHtml(offer.summary)}</div>` : ''}
+                    </div>
+                    <div style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Dores e soluções</div>
+                    ${items}
+                    ${accountName ? `
+                    <div style="margin-top:16px;padding:12px 14px;background:#eef2ff;border-radius:10px;border:1px solid #c7d2fe;">
+                        <div style="font-size:12px;font-weight:700;color:#4338ca;margin-bottom:4px;"><span class="ai-star-icon">✦</span> Por que faz sentido para ${escapeHtml(accountName)}</div>
+                        <div id="campOfferRationale" style="font-size:13px;color:#374151;">
+                            <button class="btn btn-auto-mapping btn-small" onclick="generateCampaignOfferRationale(${offerId}, '${escapeHtml(accountName)}', '${escapeHtml(challengeText)}')"><span class="ai-star-icon">✦</span> Gerar análise de fit</button>
+                        </div>
+                    </div>` : ''}
+                    <div style="margin-top:14px;text-align:right;">
+                        <button class="btn btn-secondary btn-small" onclick="document.getElementById('campOfferModal')?.remove(); switchTab(null,'portfolio')"><i class="fas fa-arrow-up-right-from-square"></i> Abrir no Portfólio</button>
+                    </div>`;
+            } catch (e) {
+                const b = document.getElementById('campOfferBody');
+                if (b) b.innerHTML = `<p style="color:#b91c1c;">${escapeHtml(e.message)}</p>`;
+            }
+        }
+
+        async function generateCampaignOfferRationale(offerId, accountName, challengeText) {
+            const el = document.getElementById('campOfferRationale');
+            if (!el) return;
+            el.innerHTML = '<span style="color:#6b7280;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Gerando análise...</span>';
+            try {
+                const res = await fetch(`${API_BASE}/portfolio/offers/${offerId}`);
+                const offer = await res.json();
+                const itemTexts = (offer.items || []).map(it => `Dor: ${it.pain || ''}; Solução: ${it.solution || ''}`).join(' | ');
+                const prompt = `Você é um consultor de vendas B2B. Explique em 3 frases DIRETAS e ESPECÍFICAS por que a oferta "${offer.title}" (${offer.summary || ''}) faz sentido para a conta "${accountName}" no contexto do desafio: "${challengeText}". Itens: ${itemTexts}. Seja objetivo e mencione conexões concretas.`;
+                const analyzeRes = await fetch(`${API_BASE}/campaigns/analyze`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ challenge_text: `RATIONALE_REQUEST: ${prompt}` })
+                });
+                const taskData = await analyzeRes.json();
+                if (!analyzeRes.ok) throw new Error(taskData.error || 'Erro');
+                const poll = setInterval(async () => {
+                    try {
+                        const tr = await fetch(`${API_BASE}/tasks/${taskData.task_id}`);
+                        const task = await tr.json();
+                        if (task.status === 'done') {
+                            clearInterval(poll);
+                            const rationaleEl = document.getElementById('campOfferRationale');
+                            if (rationaleEl) rationaleEl.innerHTML = `<div style="font-size:13px;color:#374151;line-height:1.6;">${escapeHtml((task.result && task.result.entendimento) || 'Análise gerada com sucesso.')}</div>`;
+                        } else if (task.status === 'error' || task.status === 'not_found') {
+                            clearInterval(poll);
+                            const rationaleEl = document.getElementById('campOfferRationale');
+                            if (rationaleEl) rationaleEl.innerHTML = `<span style="color:#b91c1c;font-size:12px;">${escapeHtml(task.error || 'Erro ao gerar análise.')}</span>`;
+                        }
+                    } catch (e2) { clearInterval(poll); }
+                }, 900);
+            } catch (e) {
+                if (el) el.innerHTML = `<span style="color:#b91c1c;font-size:12px;">${escapeHtml(e.message)}</span>`;
+            }
         }
 
         function _campGanttHTML(data) {

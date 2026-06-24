@@ -12316,6 +12316,21 @@ def list_portfolio_offers():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/portfolio/offers/<int:offer_id>', methods=['GET'])
+def get_portfolio_offer(offer_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if not offer:
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        return jsonify(offer)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao buscar oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/portfolio/offers', methods=['POST'])
 def create_portfolio_offer():
     try:
@@ -15631,7 +15646,16 @@ def _campaign_keyword_match_offers(challenge, offers):
 
 def _campaign_seniority(position):
     p = (position or '').lower()
-    if any(k in p for k in ['ceo', 'cfo', 'cio', 'cto', 'coo', 'cmo', 'chief', 'presidente', 'president', 'vice-pres', 'vice pres', ' vp', 'c-level', 'board', 'sócio', 'socio', 'founder', 'fundador', 'owner', 'proprietár']):
+    clevel_keys = [
+        'ceo', 'cfo', 'cio', 'cto', 'coo', 'cmo', 'cdo', 'chro', 'cro', 'clo', 'cso', 'cpo',
+        'ciso', 'cao', 'cco', 'cxo', 'chief', 'presidente', 'president',
+        'vice-pres', 'vice pres', ' vp', 'c-level', 'board',
+        'sócio', 'socio', 'founder', 'fundador', 'owner', 'proprietár',
+        'managing director', 'managing partner', 'sócio-diretor', 'socio-diretor',
+        'diretor executivo', 'diretor-executivo', 'diretor geral', 'diretor-geral',
+        'partner', 'sócio gerente', 'socio gerente',
+    ]
+    if any(k in p for k in clevel_keys):
         return 'clevel'
     if any(k in p for k in ['diretor', 'director', 'head', 'superintend', 'vp']):
         return 'diretor'
@@ -15736,33 +15760,53 @@ def _campaign_rationale(block, account_name, primary, areas, offer_title):
     return "Sem mapeamento relevante: iniciar relacionamento do zero."
 
 
-def _campaign_actions_for_block(block, primary, areas, offer_title):
+def _campaign_actions_for_block(block, primary, areas, offer_title, act_count=0, last_act_desc='', has_map=False, has_kan=False):
     area_label = (areas[0] if areas else 'áreas decisoras')
-    pname = (primary or {}).get('name')
+    pname = (primary or {}).get('name') or ''
+    pos = (primary or {}).get('position') or ''
+
+    rel_parts = []
+    if act_count > 0:
+        rel_parts.append(f"{act_count} interação(ões) registrada(s)")
+    if has_map:
+        rel_parts.append("ambiente mapeado")
+    if has_kan:
+        rel_parts.append("oportunidade(s) no funil")
+    rel_ctx = (". Histórico: " + ", ".join(rel_parts) + ".") if rel_parts else "."
+
+    if last_act_desc:
+        last_snippet = last_act_desc.strip()[:120]
+        if len(last_act_desc.strip()) > 120:
+            last_snippet += "..."
+        rel_ctx += f" Última interação: \"{last_snippet}\""
+
     if block == 'A':
-        return [{
-            'type': 'apresentacao',
-            'title': (f"Apresentar: {offer_title}" if offer_title else "Apresentação de portfólio"),
-            'description': ((f"Conduzir apresentação executiva para {pname}. " if pname else "") +
-                            "Abordagem consultiva conectando a solução à dor mapeada.")
-        }]
+        who = f"para {pname} ({pos})" if pname and pos else (f"para {pname}" if pname else "com o decisor mapeado")
+        desc = (f"Conduzir apresentação executiva {who} em {area_label}. "
+                f"Apresentar {offer_title or 'a solução'} conectando diretamente à dor identificada" + rel_ctx)
+        return [{'type': 'apresentacao',
+                 'title': (f"Apresentar: {offer_title}" if offer_title else "Apresentação de portfólio"),
+                 'description': desc}]
     if block == 'B':
-        return [{
-            'type': 'mapeamento',
-            'title': f"Aprofundar stakeholders em {area_label}",
-            'description': "Mapear decisores (C-level/Diretores) da área e qualificar a dor antes de apresentar."
-        }]
+        who_ctx = f"Contato atual: {pname} ({pos}). " if pname else ""
+        desc = (f"{who_ctx}Aprofundar mapeamento de stakeholders em {area_label}. "
+                f"Objetivo: identificar o decisor (C-level/Diretor) e qualificar a dor antes de apresentar a solução" + rel_ctx)
+        return [{'type': 'mapeamento',
+                 'title': f"Aprofundar stakeholders em {area_label}",
+                 'description': desc}]
     if block == 'D':
-        return [{
-            'type': 'portfolio',
-            'title': "Explorar portfólio interno para o desafio",
-            'description': "Relacionamento maduro, mas sem solução aderente cadastrada. Buscar/registrar ofertas da empresa para este segmento."
-        }]
-    return [{
-        'type': 'prospeccao',
-        'title': "Iniciar prospecção e mapear decisores",
-        'description': "Sem mapeamento. Prospectar contatos, identificar o organograma e os decisores da área-alvo."
-    }]
+        who = f"com {pname} ({pos})" if pname else "com o decisor mapeado"
+        desc = (f"Relacionamento maduro {who}{rel_ctx} "
+                f"Não há solução aderente cadastrada para {area_label}. "
+                f"Explorar portfólio ou identificar parceiros que possam atender esta demanda.")
+        return [{'type': 'portfolio',
+                 'title': "Explorar portfólio para o desafio",
+                 'description': desc}]
+    desc = (f"Conta fria: sem mapeamento de contatos em {area_label}. "
+            f"Iniciar prospecção ativa: identificar organograma, decisores e dores antes de qualquer abordagem" + rel_ctx)
+    return [{'type': 'prospeccao',
+             'title': "Iniciar prospecção e mapear decisores",
+             'description': desc}]
 
 
 def _campaign_parse_date(s):
@@ -15878,7 +15922,20 @@ def _campaign_generate_core(payload):
         has_map = _campaign_has_mapping(c, acc['name'])
         has_kan = _campaign_has_kanban(c, acc['id'])
         block, score, primary = _campaign_classify(contacts, areas_lower, has_map, has_kan, has_solution)
-        built.append({'acc': acc, 'block': block, 'score': score, 'primary': primary})
+        c.execute(
+            "SELECT COUNT(*) FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
+            (acc['name'],)
+        )
+        act_count = c.fetchone()[0] or 0
+        c.execute(
+            "SELECT a.description FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?)) AND (a.description IS NOT NULL AND trim(a.description)<>'') ORDER BY a.activity_date DESC LIMIT 1",
+            (acc['name'],)
+        )
+        _row = c.fetchone()
+        last_act_desc = (_row[0] if _row else '') or ''
+        built.append({'acc': acc, 'block': block, 'score': score, 'primary': primary,
+                      'act_count': act_count, 'last_act_desc': last_act_desc,
+                      'has_map': has_map, 'has_kan': has_kan})
 
     order_rank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
     built.sort(key=lambda b: (order_rank.get(b['block'], 9), -b['score'], (b['acc']['name'] or '').lower()))
@@ -15910,7 +15967,13 @@ def _campaign_generate_core(payload):
             (campaign_id, acc['id'], acc['name'], block, b['score'], offer_id, offer_title, rationale, idx)
         )
         ca_id = c.lastrowid
-        for a in _campaign_actions_for_block(block, primary, areas, offer_title):
+        for a in _campaign_actions_for_block(
+            block, primary, areas, offer_title,
+            act_count=b.get('act_count', 0),
+            last_act_desc=b.get('last_act_desc', ''),
+            has_map=b.get('has_map', False),
+            has_kan=b.get('has_kan', False)
+        ):
             week = idx // capacity
             due = _campaign_add_weeks(start_dt, week)
             c.execute(
@@ -15959,6 +16022,17 @@ def _campaign_regenerate_core(cid):
         has_map = _campaign_has_mapping(c, ca['account_name'])
         has_kan = _campaign_has_kanban(c, ca['account_id'])
         new_block, score, primary = _campaign_classify(contacts, areas_lower, has_map, has_kan, has_solution)
+        c.execute(
+            "SELECT COUNT(*) FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
+            (ca['account_name'],)
+        )
+        act_count = c.fetchone()[0] or 0
+        c.execute(
+            "SELECT a.description FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?)) AND (a.description IS NOT NULL AND trim(a.description)<>'') ORDER BY a.activity_date DESC LIMIT 1",
+            (ca['account_name'],)
+        )
+        _row = c.fetchone()
+        last_act_desc = (_row[0] if _row else '') or ''
         old_block = ca['block_type']
         offer_title = primary_offer['title'] if (new_block == 'A' and primary_offer) else None
         offer_id = primary_offer['id'] if (new_block == 'A' and primary_offer) else None
@@ -15967,7 +16041,9 @@ def _campaign_regenerate_core(cid):
             'UPDATE campaign_accounts SET block_type=?, readiness_score=?, offer_id=?, offer_title=?, rationale=? WHERE id=?',
             (new_block, score, offer_id, offer_title, rationale, ca['id'])
         )
-        na = _campaign_actions_for_block(new_block, primary, areas, offer_title)[0]
+        na = _campaign_actions_for_block(new_block, primary, areas, offer_title,
+                                         act_count=act_count, last_act_desc=last_act_desc,
+                                         has_map=has_map, has_kan=has_kan)[0]
         c.execute('SELECT * FROM campaign_actions WHERE campaign_account_id = ? ORDER BY sort_order, id LIMIT 1', (ca['id'],))
         act = dict_from_row(c.fetchone())
         if act:
