@@ -34,6 +34,11 @@ Section "Instalar Toca do Coelho" SecApp
     ; (essencial para a atualização automática, que dispara o instalador com o app aberto).
     DetailPrint "Encerrando instância em execução do Toca do Coelho..."
     nsExec::Exec 'taskkill /F /IM TocaDoCoelho.exe /T'
+    ; O node.exe (WAHA-lite) é lançado como processo independente (não filho), então
+    ; o /T acima não o captura — é necessário encerrá-lo explicitamente para liberar
+    ; o arquivo antes que o instalador tente sobrescrevê-lo.
+    DetailPrint "Encerrando WAHA-lite (node.exe)..."
+    nsExec::Exec 'powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''*TocaDoCoelho*'' } | Stop-Process -Force"'
     Sleep 2500
 
     SetOutPath "$INSTDIR"
