@@ -4025,6 +4025,9 @@
                         <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()" title="Como usar a extensão no LinkedIn">
                             <i class="fas fa-question-circle"></i> Como usar
                         </button>
+                        <button class="btn btn-secondary btn-small" onclick="verLogsExtensao()" title="Ver logs de diagnóstico da extensão" style="opacity:0.7;">
+                            <i class="fas fa-bug"></i> Logs da Extensão
+                        </button>
                     </div>
                     <div id="atLinkedinResultArea"></div>
                 </div>
@@ -17909,6 +17912,59 @@
                 window.dispatchEvent(new CustomEvent('autotoca-extension-command', { detail }));
             });
         }
+
+        async function verLogsExtensao() {
+            const modal = document.getElementById('extensionLogsModal');
+            const body  = document.getElementById('extensionLogsBody');
+            modal.style.display = 'flex';
+            body.innerHTML = '<div style="color:#6b7280; text-align:center; padding:20px;"><i class="fas fa-circle-notch fa-spin"></i> Buscando logs...</div>';
+
+            const installed = await _checkAutoTocaExtensionInstalled();
+            if (!installed) {
+                body.innerHTML = '<div style="color:#dc2626; padding:12px; background:#fee2e2; border-radius:8px; font-size:13px;"><i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>Extensão não encontrada. Instale e recarregue a página do LinkedIn.</div>';
+                return;
+            }
+
+            try {
+                const result = await _sendAutoTocaCommand({ command: 'get_extension_logs' });
+                const logs = result?.logs || [];
+                if (logs.length === 0) {
+                    body.innerHTML = '<div style="color:#6b7280; padding:12px; font-size:13px;">Nenhum log registrado ainda. Navegue por um perfil no LinkedIn e volte aqui.</div>';
+                    return;
+                }
+
+                const levelColors = { info: '#065f46', warn: '#92400e', error: '#dc2626' };
+                const levelBg     = { info: '#f0fdf4', warn: '#fffbeb', error: '#fee2e2' };
+                const reversed = [...logs].reverse();
+                body.innerHTML = reversed.map(e => {
+                    const ts = new Date(e.ts).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+                    const extras = Object.entries(e).filter(([k]) => !['ts','level','msg','url'].includes(k));
+                    const extraHtml = extras.length ? `<div style="margin-top:4px; font-size:10px; color:#6b7280; font-family:monospace; background:#f3f4f6; padding:3px 6px; border-radius:4px; word-break:break-all;">${extras.map(([k,v])=>`${k}: ${JSON.stringify(v)}`).join(' | ')}</div>` : '';
+                    const urlShort = (e.url || '').replace('https://www.linkedin.com','').replace('https://','').slice(0, 60);
+                    return `<div style="padding:8px 10px; border-radius:6px; background:${levelBg[e.level]||'#f9fafb'}; border-left:3px solid ${levelColors[e.level]||'#9ca3af'}; margin-bottom:6px;">
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <span style="font-size:10px; color:#9ca3af; flex-shrink:0;">${ts}</span>
+                            <span style="font-size:10px; font-weight:700; color:${levelColors[e.level]||'#374151'}; text-transform:uppercase;">${e.level}</span>
+                            <span style="font-size:12px; color:#1f2937; font-weight:500;">${e.msg}</span>
+                        </div>
+                        ${urlShort ? `<div style="font-size:10px; color:#9ca3af; margin-top:2px;">${urlShort}</div>` : ''}
+                        ${extraHtml}
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                body.innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px;">Erro ao buscar logs: ${err.message}</div>`;
+            }
+        }
+
+        async function limparLogsExtensao() {
+            if (!await uiConfirm('Apagar todos os logs da extensão?', 'Limpar Logs')) return;
+            try {
+                await _sendAutoTocaCommand({ command: 'clear_extension_logs' });
+                document.getElementById('extensionLogsBody').innerHTML = '<div style="color:#6b7280; padding:12px; font-size:13px;">Logs apagados.</div>';
+            } catch (e) {
+                alert('Erro: ' + e.message);
+            }
+        }
     </script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
@@ -18117,6 +18173,30 @@
             <span><strong style="color:#374151;">Privacidade:</strong> A extensão lê apenas o perfil que você abriu e está visualizando. Os dados vão diretamente para o AutoToca (localhost) e não são enviados para nenhum servidor externo.</span>
           </div>
 
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Logs da Extensão AutoToca -->
+    <div id="extensionLogsModal" onclick="if(event.target===this)this.style.display='none'" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10000; align-items:center; justify-content:center; padding:16px;">
+      <div style="background:#fff; border-radius:16px; max-width:680px; width:100%; max-height:85vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.3); overflow:hidden;">
+        <div style="background:linear-gradient(135deg,#0f172a,#1e293b); padding:16px 20px; display:flex; align-items:center; gap:10px; flex-shrink:0;">
+          <i class="fas fa-bug" style="color:#34d399; font-size:16px;"></i>
+          <span style="color:#fff; font-weight:700; font-size:15px;">Logs da Extensão AutoToca</span>
+          <span style="color:#94a3b8; font-size:12px; margin-left:4px;">(mais recentes primeiro)</span>
+          <div style="margin-left:auto; display:flex; gap:8px;">
+            <button onclick="verLogsExtensao()" class="btn btn-secondary btn-small" style="font-size:11px;"><i class="fas fa-rotate-right"></i> Atualizar</button>
+            <button onclick="limparLogsExtensao()" class="btn btn-secondary btn-small" style="font-size:11px; color:#dc2626;"><i class="fas fa-trash"></i> Limpar</button>
+            <button onclick="document.getElementById('extensionLogsModal').style.display='none'" style="background:none; border:none; color:#94a3b8; font-size:20px; cursor:pointer; line-height:1; padding:0 2px;">&times;</button>
+          </div>
+        </div>
+        <div style="padding:14px; overflow-y:auto; flex:1; background:#f8fafc;">
+          <div id="extensionLogsBody" style="font-family:monospace;">
+            <div style="color:#6b7280; font-size:13px;">Carregando...</div>
+          </div>
+        </div>
+        <div style="padding:10px 16px; border-top:1px solid #e5e7eb; background:#f9fafb; font-size:11px; color:#9ca3af; flex-shrink:0;">
+          <i class="fas fa-info-circle" style="margin-right:4px;"></i>Os logs são gravados automaticamente pela extensão durante a navegação no LinkedIn. Máximo de 200 entradas.
         </div>
       </div>
     </div>

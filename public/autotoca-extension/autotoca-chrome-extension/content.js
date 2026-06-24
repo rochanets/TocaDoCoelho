@@ -5,7 +5,37 @@
   const WEB_RESULT_EVENT  = 'autotoca-extension-result';
   const STORAGE_KEY       = 'autotoca-extension-envelope';
   const LINKEDIN_KEY      = 'autotoca-linkedin-pending';
+  const LOG_KEY           = 'autotoca-extension-logs';
+  const MAX_LOG_ENTRIES   = 200;
   const FORMS_URL_PREFIX  = 'https://forms.office.com/Pages/ResponsePage.aspx';
+
+  // ---- Sistema de Logs -------------------------------------------------------
+
+  const _logBuffer = [];
+  let _logFlushTimer = null;
+
+  function _log(level, msg, data = {}) {
+    const entry = { ts: new Date().toISOString(), level, msg, url: window.location.href, ...data };
+    console.log(`[AutoToca Helper] [${level.toUpperCase()}] ${msg}`, Object.keys(data).length ? data : '');
+    _logBuffer.push(entry);
+    if (!_logFlushTimer) {
+      _logFlushTimer = setTimeout(_flushLogs, 400);
+    }
+  }
+
+  function _flushLogs() {
+    _logFlushTimer = null;
+    if (_logBuffer.length === 0) return;
+    const toWrite = _logBuffer.splice(0);
+    try {
+      chrome.storage.local.get(LOG_KEY).then(stored => {
+        const existing = Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
+        const merged = [...existing, ...toWrite];
+        while (merged.length > MAX_LOG_ENTRIES) merged.shift();
+        chrome.storage.local.set({ [LOG_KEY]: merged }).catch(() => {});
+      }).catch(() => {});
+    } catch (_) {}
+  }
 
   // ---- Helpers gerais -------------------------------------------------------
 
@@ -42,7 +72,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.3.0',
+        version: '0.4.0',
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -144,36 +174,29 @@
   function extractLinkedInText() {
     const parts = [];
 
-    // Nome (h1 principal do perfil)
     const name = document.querySelector('h1')?.innerText?.trim();
     if (name) parts.push(`Nome: ${name}`);
 
-    // Cargo/headline
     const headline = document.querySelector(
       '.text-body-medium.break-words, [data-generated-suggestion-target], .ph5 .mt2 .t-16'
     )?.innerText?.trim();
     if (headline) parts.push(`Cargo/Headline: ${headline}`);
 
-    // Localização
     const location = document.querySelector('.text-body-small.inline.t-black--light.break-words')?.innerText?.trim();
     if (location) parts.push(`Localização: ${location}`);
 
-    // Seguidores/conexões
     const connections = document.querySelector('.t-bold ~ span, [data-field="connections_count"]')?.innerText?.trim();
     if (connections) parts.push(`Conexões: ${connections}`);
 
-    // Seções principais: Sobre, Experiência, Formação, Habilidades, etc.
     document.querySelectorAll('section').forEach(section => {
       const heading = section.querySelector('h2, h3')?.innerText?.trim();
       const body    = section.innerText?.trim();
       if (!body || body.length < 20) return;
-      // Ignora seções de navegação, recomendações de pessoas, etc.
       if (section.closest('nav, header, footer, aside')) return;
       const label = heading ? `\n=== ${heading} ===\n` : '\n---\n';
       parts.push(label + body);
     });
 
-    // Fallback: texto do main se não capturou seções suficientes
     if (parts.length <= 2) {
       const main = document.querySelector('main, .scaffold-layout__main');
       if (main) {
@@ -186,21 +209,16 @@
   }
 
   function extractLinkedInPhotoUrl() {
-    // Seletores ordenados por especificidade/confiabilidade para a foto do perfil LinkedIn
     const selectors = [
-      // Seletores específicos do perfil
       '.pv-top-card-profile-picture__image--show',
       '.pv-top-card-profile-picture__image',
       '.profile-photo-edit__preview',
       '.ph5 img.pv-top-card-profile-picture__image',
-      // Seletores por aria-label (mais robusto a mudanças de classe)
       'button[aria-label*="foto de perfil"] img',
       'button[aria-label*="profile picture"] img',
       'button[aria-label*="Foto de perfil"] img',
-      // Seletores alternativos mais recentes
       '.pv-top-card__photo img',
       '.profile-header-section img',
-      // Por alt text
       'main img[alt*="foto de perfil"]',
       'main img[alt*="profile photo"]',
       'main img[alt*="Foto de"]',
@@ -209,13 +227,11 @@
     for (const selector of selectors) {
       const el = document.querySelector(selector);
       const src = el?.getAttribute('src')?.trim() || '';
-      // Garante que é uma URL real (não um ghost/placeholder)
       if (src && /^https?:\/\//i.test(src) && !src.includes('ghost') && !src.includes('data:')) {
         return src;
       }
     }
 
-    // Fallback robusto: procura a primeira imagem quadrada/circular de perfil no main
     const mainEl = document.querySelector('main, .scaffold-layout__main');
     if (mainEl) {
       const imgs = Array.from(mainEl.querySelectorAll('img'));
@@ -225,7 +241,6 @@
         if (src.includes('ghost') || src.includes('placeholder')) continue;
         const alt = (img.getAttribute('alt') || '').toLowerCase();
         if (alt.includes('profile') || alt.includes('perfil') || alt.includes('foto')) return src;
-        // Heurística: imagem quadrada (±10px) com tamanho entre 80-500px
         const w = img.naturalWidth || img.width;
         const h = img.naturalHeight || img.height;
         if (w >= 80 && w <= 500 && Math.abs(w - h) <= 20) return src;
@@ -235,11 +250,6 @@
     return null;
   }
 
-  /**
-   * Converte a foto de perfil para base64 usando fetch() com credenciais do browser.
-   * Funciona porque a extensão tem host_permissions para *.licdn.com e www.linkedin.com.
-   * Retorna null se falhar (cai no fallback de URL).
-   */
   async function fetchPhotoAsBase64(photoUrl) {
     if (!photoUrl) return null;
     try {
@@ -251,7 +261,6 @@
         const reader = new FileReader();
         reader.onload = () => {
           const result = reader.result;
-          // Valida que é uma imagem real (data:image/...)
           if (typeof result === 'string' && result.startsWith('data:image/')) {
             resolve(result);
           } else {
@@ -268,7 +277,12 @@
   }
 
   function injectLinkedInButton() {
-    if (document.getElementById('autotoca-li-btn')) return;
+    if (document.getElementById('autotoca-li-btn')) {
+      _log('info', 'Botão já existe no DOM, pulando injeção');
+      return;
+    }
+
+    _log('info', 'Injetando botão LinkedIn no DOM');
 
     const btn = document.createElement('button');
     btn.id = 'autotoca-li-btn';
@@ -297,6 +311,8 @@
     });
     btn.addEventListener('click', captureLinkedInProfile);
     document.body.appendChild(btn);
+
+    _log('info', 'Botão LinkedIn injetado com sucesso');
   }
 
   async function captureLinkedInProfile() {
@@ -307,17 +323,21 @@
       btn.disabled = true;
     }
 
+    _log('info', 'Iniciando captura de perfil LinkedIn');
+
     const profileText  = extractLinkedInText();
     const profileUrl   = window.location.href;
     const photoUrl     = extractLinkedInPhotoUrl();
 
-    // Tenta converter a foto para base64 (evita restrições cross-origin no TocaDoCoelho)
+    _log('info', 'Dados extraídos', {
+      textLen: profileText?.length || 0,
+      hasPhoto: !!photoUrl,
+    });
+
     let photoBase64 = null;
     let photoSource = 'none';
     if (photoUrl) {
-      if (btn) {
-        btn.innerHTML = '<span style="margin-right:6px;">📷</span> Capturando foto...';
-      }
+      if (btn) btn.innerHTML = '<span style="margin-right:6px;">📷</span> Capturando foto...';
       photoBase64 = await fetchPhotoAsBase64(photoUrl);
       photoSource = photoBase64 ? 'linkedin_extension_base64' : 'linkedin_extension_url';
     }
@@ -326,17 +346,16 @@
       schemaVersion: 3,
       text: profileText,
       url: profileUrl,
-      // Usa base64 se disponível (funciona fora do LinkedIn), senão URL original
       photoUrl: photoBase64 || photoUrl || null,
       photoSource,
       capturedAt: new Date().toISOString(),
     };
 
-    // Salva em chrome.storage.local (persistente entre tabs)
     try {
       await chrome.storage.local.set({ [LINKEDIN_KEY]: data });
+      _log('info', 'Perfil salvo no chrome.storage.local');
     } catch (e) {
-      // Firefox fallback: localStorage com prefixo
+      _log('warn', 'Falha ao salvar no chrome.storage, usando localStorage', { error: e.message });
       try { localStorage.setItem(LINKEDIN_KEY, JSON.stringify(data)); } catch (_) {}
     }
 
@@ -355,6 +374,93 @@
       }, 5000);
     }
   }
+
+  // ---- SPA URL Watcher -------------------------------------------------------
+
+  let _lastUrl = '';
+
+  function _onUrlChange(source) {
+    const current = window.location.href;
+    if (current === _lastUrl) return;
+    const prev = _lastUrl;
+    _lastUrl = current;
+
+    _log('info', 'URL mudou', { source, de: prev || '(inicial)', para: current });
+
+    // Remove botão de página anterior se ainda estiver no DOM
+    const existingBtn = document.getElementById('autotoca-li-btn');
+    if (existingBtn) {
+      existingBtn.remove();
+      _log('info', 'Botão removido após mudança de URL');
+    }
+
+    if (isLinkedInProfilePage()) {
+      _log('info', 'Página de perfil LinkedIn detectada após navegação');
+      _scheduleButtonInjection(0);
+    } else {
+      _log('info', 'Não é página de perfil LinkedIn', { pathname: window.location.pathname });
+    }
+  }
+
+  function _scheduleButtonInjection(attempt) {
+    const delays = [900, 2000, 3500, 5500, 8000, 12000];
+    if (attempt >= delays.length) {
+      _log('warn', 'Esgotadas todas as tentativas de injeção do botão LinkedIn', { totalTentativas: delays.length });
+      return;
+    }
+
+    const urlAtSchedule = window.location.href;
+    _log('info', `Tentativa ${attempt + 1} de ${delays.length} agendada`, { delay: delays[attempt] + 'ms' });
+
+    setTimeout(() => {
+      // Garante que o usuário ainda está na mesma URL
+      if (window.location.href !== urlAtSchedule) {
+        _log('info', `Tentativa ${attempt + 1} cancelada — URL mudou durante a espera`);
+        return;
+      }
+      if (!isLinkedInProfilePage()) {
+        _log('info', `Tentativa ${attempt + 1} cancelada — não é mais página de perfil`);
+        return;
+      }
+      if (document.getElementById('autotoca-li-btn')) {
+        _log('info', `Tentativa ${attempt + 1} desnecessária — botão já está no DOM`);
+        return;
+      }
+
+      const h1 = document.querySelector('h1');
+      const h1Text = h1?.innerText?.trim() || '';
+
+      if (h1 && h1Text) {
+        _log('info', `Tentativa ${attempt + 1}: h1 encontrado, injetando botão`, { h1: h1Text.slice(0, 60) });
+        injectLinkedInButton();
+      } else {
+        _log('warn', `Tentativa ${attempt + 1}: h1 não encontrado ou vazio, reagendando`);
+        _scheduleButtonInjection(attempt + 1);
+      }
+    }, delays[attempt]);
+  }
+
+  // Intercepta pushState/replaceState para detectar navegação SPA
+  (function patchHistory() {
+    try {
+      const origPush = history.pushState.bind(history);
+      history.pushState = function (...args) {
+        origPush(...args);
+        setTimeout(() => _onUrlChange('pushState'), 50);
+      };
+      const origReplace = history.replaceState.bind(history);
+      history.replaceState = function (...args) {
+        origReplace(...args);
+        setTimeout(() => _onUrlChange('replaceState'), 50);
+      };
+    } catch (e) {
+      _log('warn', 'Falha ao interceptar history API', { error: String(e) });
+    }
+    window.addEventListener('popstate', () => _onUrlChange('popstate'));
+  })();
+
+  // Polling como fallback para SPAs que não usam a history API padrão
+  setInterval(() => _onUrlChange('interval'), 1500);
 
   // ---- Command handler ------------------------------------------------------
 
@@ -426,9 +532,35 @@
       emitResult({ ok: true, command, message: 'Perfil capturado removido da extensão.' });
       return;
     }
+
+    if (command === 'get_extension_logs') {
+      let logs = [];
+      try {
+        const stored = await chrome.storage.local.get(LOG_KEY);
+        logs = Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
+      } catch (_) {}
+      emitResult({ ok: true, command, logs, count: logs.length });
+      return;
+    }
+
+    if (command === 'clear_extension_logs') {
+      try { await chrome.storage.local.remove(LOG_KEY); } catch (_) {}
+      _log('info', 'Logs apagados via comando');
+      emitResult({ ok: true, command, message: 'Logs da extensão apagados.' });
+      return;
+    }
   }
 
   // ---- Init -----------------------------------------------------------------
+
+  _lastUrl = window.location.href;
+
+  _log('info', 'Extensão AutoToca v0.4.0 carregada', {
+    isLinkedInProfile: isLinkedInProfilePage(),
+    isForms: isFormsPage(),
+    pathname: window.location.pathname,
+    hostname: window.location.hostname,
+  });
 
   window.addEventListener(WEB_PING_EVENT, emitPong);
   window.addEventListener(WEB_COMMAND_EVENT, event => {
@@ -444,11 +576,7 @@
   }
 
   if (isLinkedInProfilePage()) {
-    // Injeta botão após a página carregar completamente (LinkedIn é SPA)
-    const tryInject = () => {
-      if (document.querySelector('h1')) injectLinkedInButton();
-    };
-    setTimeout(tryInject, 1500);
-    setTimeout(tryInject, 3000); // segunda tentativa para SPAs lentas
+    _log('info', 'Página de perfil no carregamento inicial, iniciando injeção');
+    _scheduleButtonInjection(0);
   }
 })();
