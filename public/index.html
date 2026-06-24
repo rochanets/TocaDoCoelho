@@ -8091,7 +8091,9 @@
                 document.getElementById('startupUpdateYesBtn').addEventListener('click', async () => {
                     overlay.remove();
                     await navigateTo('settings');
-                    setTimeout(() => downloadAndInstallUpdate(), 400);
+                    // skipConfirm=true: o popup de startup já é a confirmação do usuário,
+                    // não faz sentido pedir confirmação novamente 400ms depois.
+                    setTimeout(() => downloadAndInstallUpdate({ skipConfirm: true }), 800);
                 });
             }
         }
@@ -8183,10 +8185,12 @@
             if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         }
 
-        async function downloadAndInstallUpdate() {
+        async function downloadAndInstallUpdate(opts) {
             const info = window._pendingUpdate;
             if (!info || !info.url) { showError('Nenhum instalador disponível para esta release.'); return; }
-            if (!await uiConfirm('O Toca do Coelho vai baixar a nova versão e abrir o instalador. O aplicativo será fechado automaticamente para concluir a atualização e reaberto ao final. Deseja continuar?', 'Atualizar aplicativo')) return;
+            if (!(opts && opts.skipConfirm)) {
+                if (!await uiConfirm('O Toca do Coelho vai baixar a nova versão e abrir o instalador. O aplicativo será fechado automaticamente para concluir a atualização e reaberto ao final. Deseja continuar?', 'Atualizar aplicativo')) return;
+            }
 
             const btn = document.getElementById('autoUpdateBtn');
             if (btn) btn.disabled = true;
