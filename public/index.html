@@ -2733,12 +2733,13 @@
         .home-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .home-row-3-balanced { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr); }
         .home-row-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .home-row-4-fat-mensal { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr); }
         @media (max-width: 1400px) {
             .home-row-3, .home-row-3-balanced { grid-template-columns: 1fr 1fr; }
-            .home-row-4 { grid-template-columns: 1fr 1fr; }
+            .home-row-4, .home-row-4-fat-mensal { grid-template-columns: 1fr 1fr; }
         }
         @media (max-width: 800px) {
-            .home-row-3, .home-row-3-balanced, .home-row-4 { grid-template-columns: 1fr; }
+            .home-row-3, .home-row-3-balanced, .home-row-4, .home-row-4-fat-mensal { grid-template-columns: 1fr; }
             .home-kpi-row { grid-template-columns: 1fr 1fr; }
         }
 
@@ -3541,10 +3542,14 @@
 
                 <div class="home-main-grid">
                     <div class="home-grid-area">
-                        <div class="home-row home-row-3">
+                        <div class="home-row home-row-4-fat-mensal">
                             <div class="home-card">
-                                <div class="home-card-head"><h3>Top 10 Contas por Faturamento</h3></div>
+                                <div class="home-card-head"><h3>Top 10 Faturamento Mensal</h3></div>
                                 <div class="home-chart" id="chartFaturamento"></div>
+                            </div>
+                            <div class="home-card">
+                                <div class="home-card-head"><h3>Top 10 Faturamento Único</h3></div>
+                                <div class="home-chart" id="chartFaturamentoUnico"></div>
                             </div>
                             <div class="home-card">
                                 <div class="home-card-head"><h3>Top 10 Contas com Mais Interações</h3></div>
@@ -8549,7 +8554,8 @@
             charts: {},
             chartOptions: {},
             chartTitles: {
-                chartFaturamento: 'Top 10 Contas por Faturamento',
+                chartFaturamento: 'Top 10 Faturamento Mensal',
+                chartFaturamentoUnico: 'Top 10 Faturamento Único',
                 chartInteracoes: 'Top 10 Contas com Mais Interações',
                 chartTargetMenor: 'Top 5 Contas Target com Menor Nível de Interação',
                 chartCargo: 'Interações por Cargo',
@@ -8875,6 +8881,7 @@
                 _renderHomeKpis(data.kpis || {});
                 _renderHomeUserCard();
                 _renderHomeFaturamento(data.top_faturamento || []);
+                _renderHomeFaturamentoUnico(data.top_faturamento_unico || []);
                 _renderHomeInteracoes(data.top_interacoes || []);
                 _renderHomeTargetMenor(data.target_menor_interacao || []);
                 _renderHomeCargo(data.interacoes_cargo || []);
@@ -9441,6 +9448,27 @@
             _homeBindBarClick(chart, reversed, 'account', 14, 'y');
         }
 
+        function _renderHomeFaturamentoUnico(rows) {
+            if (!rows.length) return _homeRenderEmpty('chartFaturamentoUnico', 'Sem dados de faturamento único cadastrado');
+            const chart = _homeInitChart('chartFaturamentoUnico');
+            if (!chart) return;
+            const reversed = rows.slice().reverse();
+            chart.setOption({
+                tooltip: { ..._homeBaseTooltip(), formatter: (p) => `<b>${p[0].name}</b><br>${_homeFmtBRL(p[0].value)}` },
+                grid: { left: 8, right: 36, top: 8, bottom: 8, containLabel: true },
+                xAxis: { type: 'value', axisLabel: { color: '#5e7390', fontSize: 10, formatter: v => _homeFmtBRL(v) }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }, axisLine: { show: false } },
+                yAxis: { type: 'category', data: reversed.map(r => _homeShortName(r.name, 14)), axisLabel: { color: '#cbd5e1', fontSize: 11, triggerEvent: true }, axisLine: { show: false }, axisTick: { show: false } },
+                series: [{
+                    type: 'bar',
+                    data: reversed.map(r => r.revenue_cents),
+                    itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#0f766e' }, { offset: 1, color: '#2dd4bf' }]), borderRadius: [0, 4, 4, 0] },
+                    barWidth: '60%',
+                    label: { show: true, position: 'right', color: '#cbd5e1', fontSize: 10, formatter: p => _homeFmtBRL(p.value) },
+                }],
+            });
+            _homeBindBarClick(chart, reversed, 'account', 14, 'y');
+        }
+
         function _renderHomeInteracoes(rows) {
             if (!rows.length) return _homeRenderEmpty('chartInteracoes', 'Nenhuma interação registrada');
             const chart = _homeInitChart('chartInteracoes');
@@ -9761,9 +9789,11 @@
                     <td style="white-space: nowrap;">${isArchived ? '<span style="color:#9ca3af;">Arquivado</span>' : `<span class="status-badge ${statusClass}"><i class="fas fa-circle"></i> ${statusText}</span>`}</td>
                     <td style="text-align: center;">
                         <div class="action-buttons">
-                            <button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
+                            ${isArchived
+                                ? `<button class="btn-icon-action" onclick="unarchiveClient(${client.id})" title="Desarquivar Contato"><i class="fas fa-box-open"></i></button>`
+                                : `<button class="btn-icon-action" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company)}')" title="Adicionar Atividade"><i class="fas fa-plus-circle"></i></button>
                             <button class="btn-icon-action" onclick="openWhatsAppMessageModal(${client.id})" title="Enviar mensagem no WhatsApp"><i class="fab fa-whatsapp"></i></button>
-                            <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>
+                            <button class="btn-icon-action" onclick="openEmailDraftModal(${client.id})" title="Criar e-mail no Outlook"><i class="fas fa-envelope"></i></button>`}
                         </div>
                     </td>
                 </tr>`;
@@ -13441,7 +13471,7 @@
                 const modalBody = `
                     <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
                         <button class="btn btn-primary btn-small" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company || '')}')"><i class="fas fa-plus-circle"></i> Registrar Atividade</button>
-                        ${archivedContact ? '' : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
+                        ${archivedContact ? `<button class="btn btn-small btn-archive-glass" onclick="unarchiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-box-open"></i> Desarquivar Contato</button>` : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
                         <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
@@ -13690,6 +13720,89 @@
                 window.__archiveDialogResolve = resolve;
                 document.body.insertAdjacentHTML('beforeend', html);
             });
+        }
+
+        async function openUnarchiveContactDialog(client) {
+            const needsCompany = !String(client?.company || '').trim();
+            let companyOptions = [];
+            if (needsCompany) {
+                try {
+                    const res = await fetch(`${API_BASE}/empresas`);
+                    companyOptions = res.ok ? await res.json() : [];
+                } catch (e) { companyOptions = []; }
+            }
+            return await new Promise((resolve) => {
+                const clientName = escapeHtml(client?.name || 'contato');
+                const companySelectHtml = needsCompany
+                    ? `<p style="margin-bottom:8px; color:#7c2d12;">Este contato não tem uma conta vinculada. Selecione a conta para a qual ele deve retornar:</p>
+                       <select id="unarchiveCompanySelect" style="width:100%; margin-bottom:4px;">
+                           <option value="">Selecione</option>
+                           ${companyOptions.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+                           <option value="__other__">Outros (digitar)</option>
+                       </select>
+                       <input type="text" id="unarchiveCompanyOther" placeholder="Digite a empresa" style="display:none; width:100%; margin-top:8px;">`
+                    : `<p>Deseja desarquivar <strong>${clientName}</strong>? Ele voltará para a conta <strong>${escapeHtml(client?.company || '')}</strong>.</p>`;
+                const html = `
+                    <div class="modal active" id="unarchiveContactDialog" onclick="if(event.target===this){ this.remove(); window.__unarchiveDialogResolve && window.__unarchiveDialogResolve({ confirmed:false, company:'' }); window.__unarchiveDialogResolve = null; }">
+                        <div class="modal-content" style="max-width:520px;">
+                            <div class="modal-header">
+                                <h2 style="color:#111827;">Desarquivar Contato</h2>
+                                <button class="modal-close" onclick="document.getElementById('unarchiveContactDialog')?.remove(); window.__unarchiveDialogResolve && window.__unarchiveDialogResolve({ confirmed:false, company:'' }); window.__unarchiveDialogResolve = null;">×</button>
+                            </div>
+                            <div style="padding:8px 0 4px 0; color:#374151;">
+                                ${needsCompany ? '<p style="margin-bottom:12px;">Desarquivar <strong>' + clientName + '</strong>.</p>' + companySelectHtml : companySelectHtml}
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn btn-secondary" onclick="document.getElementById('unarchiveContactDialog')?.remove(); window.__unarchiveDialogResolve && window.__unarchiveDialogResolve({ confirmed:false, company:'' }); window.__unarchiveDialogResolve = null;">Cancelar</button>
+                                <button class="btn btn-primary" onclick="(function(){
+                                    var sel = document.getElementById('unarchiveCompanySelect');
+                                    var other = document.getElementById('unarchiveCompanyOther');
+                                    var company = sel ? (sel.value === '__other__' ? (other?.value || '').trim() : sel.value) : '';
+                                    if (${needsCompany ? 'true' : 'false'} && !company) { showError('Selecione a conta de destino.'); return; }
+                                    document.getElementById('unarchiveContactDialog')?.remove();
+                                    window.__unarchiveDialogResolve && window.__unarchiveDialogResolve({ confirmed:true, company:company });
+                                    window.__unarchiveDialogResolve = null;
+                                })();">Desarquivar</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                window.__unarchiveDialogResolve = resolve;
+                document.body.insertAdjacentHTML('beforeend', html);
+                const sel = document.getElementById('unarchiveCompanySelect');
+                if (sel) sel.addEventListener('change', () => {
+                    const other = document.getElementById('unarchiveCompanyOther');
+                    if (other) other.style.display = sel.value === '__other__' ? 'block' : 'none';
+                });
+            });
+        }
+
+        async function unarchiveClient(id, options = {}) {
+            const client = clients.find(c => Number(c.id) === Number(id)) || {};
+            const choice = await openUnarchiveContactDialog(client);
+            if (!choice || !choice.confirmed) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/clientes/${id}/desarquivar`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ company: choice.company || '' })
+                });
+
+                if (response.ok) {
+                    if (options && options.closeProfileOnSuccess) {
+                        closeProfileModal();
+                    }
+                    showSuccess('Contato desarquivado com sucesso!');
+                    loadClients();
+                    loadDashboard();
+                } else {
+                    const d = await response.json().catch(() => ({}));
+                    showError(d.error || 'Erro ao desarquivar contato');
+                }
+            } catch (error) {
+                showError('Erro ao desarquivar contato');
+            }
         }
 
 
@@ -14997,7 +15110,8 @@
                 fetch(`${API_BASE}/clientes`),
                 fetch(`${API_BASE}/accounts`)
             ]);
-            const data = clientsRes.ok ? await clientsRes.json() : [];
+            const rawData = clientsRes.ok ? await clientsRes.json() : [];
+            const data = (rawData || []).filter(c => !isArchivedClient(c));
             const accounts = accountsRes.ok ? await accountsRes.json() : [];
             const accountFilterSelect = document.getElementById('orgAccountFilterSelect');
 
@@ -19837,6 +19951,8 @@
       if (counter) counter.innerHTML = '<span style="color:#059669; font-weight:600;">✓ ' + accepted + ' para incluir</span> &nbsp;·&nbsp; <span style="color:#9ca3af;">' + rejected + ' rejeitados</span>';
     }
 
+    let _waLastInsertedItems = [];
+
     async function _waConfirmSelection() {
       var accepted = _waReviewItems.filter(function(i){ return i.state === 'accept'; });
       if (accepted.length === 0) {
@@ -19850,6 +19966,7 @@
         .then(function(r){ return r.json(); })
         .then(function(d){
           if (d.ok) {
+            _waLastInsertedItems = accepted;
             _waShowFinalResult(d.inserted, _waReviewItems.length, d.commitments || 0);
           } else {
             alert('Erro ao inserir atividades: ' + (d.error || 'Erro desconhecido'));
@@ -19872,9 +19989,41 @@
       var fupLine = (commitments && commitments > 0)
         ? '<div style="color:#1e40af; margin-top:6px; font-size:13px;">📅 ' + commitments + ' follow-up(s) adicionado(s) ao calendário do sistema.</div>'
         : '';
-      box.innerHTML = '<div style="font-weight:700; color:#065f46; margin-bottom:8px;"><i class="fas fa-check-circle" style="margin-right:6px;"></i>Atividades inseridas!</div><div style="color:#374151;">' + inserted + ' atividade(s) inserida(s) no CRM com sucesso.</div>' + fupLine;
+      box.innerHTML = '<div style="font-weight:700; color:#065f46; margin-bottom:8px;"><i class="fas fa-check-circle" style="margin-right:6px;"></i>Atividades inseridas!</div><div style="color:#374151;"><a href="javascript:void(0)" onclick="_waShowDetailsModal()" style="color:#065f46; font-weight:600; text-decoration:underline;">' + inserted + ' atividade(s) inserida(s) no CRM com sucesso.</a></div>' + fupLine;
       reviewContainer.style.display = 'none';
       noItemsFooter.style.display = '';
+    }
+
+    function _waShowDetailsModal() {
+      const items = _waLastInsertedItems || [];
+      const rows = items.map(function(item) {
+        const fup = (item.followup_enabled && item.followup_date)
+          ? '<div style="margin-top:4px; font-size:12px; color:#1e40af;">📅 Compromisso: ' + escapeHtml(item.followup_title || 'Follow-up') + ' — ' + escapeHtml(item.followup_date) + '</div>'
+          : '<div style="margin-top:4px; font-size:12px; color:#9ca3af;">Sem compromisso criado</div>';
+        return '<div style="border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; margin-bottom:8px;">'
+          + '<div style="font-weight:600; color:#111827;">' + escapeHtml(item.client_name || 'Contato') + '</div>'
+          + '<div style="font-size:12px; color:#6b7280; margin-top:2px;">Atividade registrada em ' + escapeHtml(item.activity_date || '') + '</div>'
+          + '<div style="font-size:13px; color:#374151; margin-top:6px; white-space:pre-wrap;">' + escapeHtml(item.summary || '') + '</div>'
+          + fup
+          + '</div>';
+      }).join('') || '<div style="color:#9ca3af;">Nenhum detalhe disponível.</div>';
+
+      const modalHtml = `
+        <div class="modal active" id="waDetailsModal" onclick="if(event.target===this) document.getElementById('waDetailsModal')?.remove();">
+          <div class="modal-content" style="max-width:620px;">
+            <div class="modal-header">
+              <h2 style="color:#111827;">Detalhes da Sincronização WhatsApp</h2>
+              <button class="modal-close" onclick="document.getElementById('waDetailsModal')?.remove();">×</button>
+            </div>
+            <div style="max-height:60vh; overflow-y:auto; padding:4px 2px;">${rows}</div>
+            <div class="modal-footer" style="justify-content:flex-end; margin-top:14px;">
+              <button class="btn btn-secondary" onclick="document.getElementById('waDetailsModal')?.remove();">Fechar</button>
+            </div>
+          </div>
+        </div>`;
+      const existing = document.getElementById('waDetailsModal');
+      if (existing) existing.remove();
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
     }
 
     function _waShowResultError(error) {
