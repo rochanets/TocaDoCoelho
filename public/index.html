@@ -17436,6 +17436,7 @@
         let atLinkedinLastImportedPhotoSource = '';
         let atLinkedinImportedAt = null;
         let atLinkedinLastImportedProfileUrl = '';
+        let atLinkedinForcedAccountId = null;
 
         function _renderLinkedInResult(data, resultArea) {
             if (!resultArea) return;
@@ -17447,7 +17448,9 @@
                    </div>`
                 : '';
             if (s) {
-                resultArea.innerHTML = limitedDataWarning + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source);
+                resultArea.innerHTML = limitedDataWarning
+                    + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source)
+                    + _renderAccountContext(data.account_context);
             } else if (data.raw) {
                 resultArea.innerHTML = limitedDataWarning + `
                     <div class="settings-card">
@@ -17520,7 +17523,8 @@
                         linkedin_url: url,
                         profile_text: profileText,
                         meeting_context: meetingCtx,
-                        extension_photo_url: shouldUseImportedPhoto ? atLinkedinLastImportedPhotoUrl : ''
+                        extension_photo_url: shouldUseImportedPhoto ? atLinkedinLastImportedPhotoUrl : '',
+                        account_id: atLinkedinForcedAccountId
                     })
                 });
                 const payload = await resp.json().catch(() => ({}));
@@ -17582,7 +17586,8 @@
             const photoSourceLabelMap = {
                 extension_profile_photo: 'foto da extensão',
                 linkedin_og_image: 'foto og:image',
-                web_search_fallback: 'foto de busca web (fallback)'
+                web_search_fallback: 'foto de busca web (fallback)',
+                system_contact_photo: 'foto do contato no sistema'
             };
             const photoBadge = photoSource
                 ? `<span style="background:#ede9fe; color:#5b21b6; font-size:11px; padding:2px 8px; border-radius:12px;"><i class="fas fa-image"></i> ${_escHtml(photoSourceLabelMap[photoSource] || photoSource)}</span>`
@@ -17655,6 +17660,61 @@
                 <h4 style="color:#047857; margin:0 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-theater-masks" style="margin-right:6px;"></i>Tom Sugerido para a Reunião</h4>
                 <p style="margin:0; font-size:14px; color:#065f46; font-weight:500;">${_escHtml(s.tom_sugerido)}</p>
             </div>` : ''}
+            </div>`;
+        }
+
+        function _renderAccountContext(ac) {
+            if (!ac || !ac.account) return '';
+            const accName = _escHtml(ac.account.name || 'Conta');
+
+            // Bloco a) momento de mercado
+            const marketHtml = ac.market_moment
+                ? `<p style="margin:0; font-size:13px; color:#374151; line-height:1.6;">${_escHtml(ac.market_moment)}</p>`
+                : `<p style="margin:0; font-size:13px; color:#9ca3af;">Momento de mercado indisponível no momento.</p>`;
+
+            // Bloco c) serviços Stefanini
+            let svcHtml;
+            if (Array.isArray(ac.stefanini_services) && ac.stefanini_services.length) {
+                svcHtml = '<ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">'
+                    + ac.stefanini_services.map(s => {
+                        const owner = s.stf_owner ? ` <span style="color:#6b7280;">(${_escHtml(s.stf_owner)})</span>` : '';
+                        const rev = s.revenue ? ` — <strong>${_escHtml(s.revenue)}</strong>` : '';
+                        return `<li style="margin-bottom:4px;">${_escHtml(s.delivery_name)}${owner}${rev}</li>`;
+                    }).join('')
+                    + '</ul>';
+            } else {
+                svcHtml = '<p style="margin:0; font-size:13px; color:#9ca3af;">Nenhum serviço Stefanini mapeado para esta conta.</p>';
+            }
+
+            // Bloco b) relacionamento com o contato (condicional)
+            let relHtml = '';
+            if (ac.contact_found && ac.relationship_summary) {
+                relHtml = `
+                    <div style="margin-bottom:16px;">
+                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-handshake" style="margin-right:6px;"></i>Relacionamento com o Contato</h4>
+                        <p style="margin:0; font-size:13px; color:#374151; line-height:1.6;">${_escHtml(ac.relationship_summary)}</p>
+                    </div>`;
+            } else if (!ac.contact_found) {
+                relHtml = `
+                    <div style="margin-bottom:16px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px;">
+                        <span style="font-size:12px; color:#92400e;"><i class="fas fa-info-circle" style="margin-right:6px;"></i>Contato não vinculado a um contato cadastrado no sistema — exibindo apenas o contexto da conta.</span>
+                    </div>`;
+            }
+
+            return `
+            <div class="settings-card" style="margin-bottom:16px; border-left:4px solid #6366f1;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+                    <h3 style="color:#3730a3; margin:0; font-size:15px;"><i class="fas fa-building" style="margin-right:8px;"></i>Contexto da Conta: ${accName}</h3>
+                </div>
+                ${relHtml}
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-chart-line" style="margin-right:6px;"></i>Momento de Mercado</h4>
+                    ${marketHtml}
+                </div>
+                <div>
+                    <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-briefcase" style="margin-right:6px;"></i>O que temos na conta (Serviços Stefanini)</h4>
+                    ${svcHtml}
+                </div>
             </div>`;
         }
 
