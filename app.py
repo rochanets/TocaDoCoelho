@@ -13073,6 +13073,62 @@ def _linkedin_parse_summary(raw):
     return None
 
 
+def _normalize_linkedin_url(url):
+    """Normaliza URL de LinkedIn para comparação: minúsculas, sem protocolo/www/querystring/trailing slash."""
+    if not url:
+        return ''
+    u = str(url).strip().lower()
+    u = u.split('?', 1)[0].split('#', 1)[0]
+    u = re.sub(r'^https?://', '', u)
+    u = re.sub(r'^www\.', '', u)
+    return u.rstrip('/')
+
+
+def _linkedin_find_contact_and_account(linkedin_url, contact_name):
+    """Localiza o contato (por linkedin, depois por nome) e a conta mapeada vinculada
+    via clients.company == accounts.name. Retorna (contact|None, account|None)."""
+    conn = get_db()
+    c = conn.cursor()
+    contact = None
+    norm = _normalize_linkedin_url(linkedin_url)
+    if norm:
+        c.execute("SELECT * FROM clients WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''")
+        for row in c.fetchall():
+            r = dict_from_row(row)
+            if _normalize_linkedin_url(r.get('linkedin')) == norm:
+                contact = r
+                break
+    if not contact and contact_name and contact_name.strip():
+        c.execute("SELECT * FROM clients WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) ORDER BY id LIMIT 1",
+                  (contact_name.strip(),))
+        row = c.fetchone()
+        if row:
+            contact = dict_from_row(row)
+    account = None
+    if contact and (contact.get('company') or '').strip():
+        c.execute("SELECT * FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) ORDER BY id LIMIT 1",
+                  (contact['company'].strip(),))
+        row = c.fetchone()
+        if row:
+            account = dict_from_row(row)
+    conn.close()
+    return contact, account
+
+
+def _linkedin_resolve_account(account_id):
+    """Carrega uma conta por id (usado quando o usuário força a conta no dropdown)."""
+    try:
+        aid = int(account_id)
+    except (TypeError, ValueError):
+        return None
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM accounts WHERE id = ? LIMIT 1", (aid,))
+    row = c.fetchone()
+    conn.close()
+    return dict_from_row(row) if row else None
+
+
 def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url):
     try:
         _bg_task_set(task_id, {'step': 'Buscando perfil público...', 'progress': 15})
