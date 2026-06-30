@@ -964,8 +964,77 @@ def init_db():
         )
     ''')
 
+    # ── Campanha Ofensiva (planejamento + plano de ação comercial) ──────────
+    # Uma campanha = uma ofensiva comercial sobre um conjunto de contas, cruzando
+    # o desafio do usuário com o portfólio (Soluções STF) e o mapeamento de contatos.
+    c.execute('''CREATE TABLE IF NOT EXISTS campaigns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        objective_text TEXT,
+        llm_summary TEXT,
+        areas_json TEXT,
+        decision_levels_json TEXT,
+        offer_ids_json TEXT,
+        has_solution INTEGER DEFAULT 1,
+        portfolio_note TEXT,
+        start_date TEXT,
+        weekly_capacity INTEGER DEFAULT 5,
+        llm_source TEXT,
+        status TEXT DEFAULT 'Ativo',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Contas selecionadas para a campanha, já classificadas por bloco (A/B/C/D).
+    c.execute('''CREATE TABLE IF NOT EXISTS campaign_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        account_name TEXT NOT NULL,
+        block_type TEXT NOT NULL DEFAULT 'C',
+        readiness_score INTEGER DEFAULT 0,
+        offer_id INTEGER,
+        offer_title TEXT,
+        rationale TEXT,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(campaign_id, account_id)
+    )''')
+
+    # Ações individuais do plano (apresentação, mapeamento, prospecção, portfólio).
+    c.execute('''CREATE TABLE IF NOT EXISTS campaign_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_account_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        action_type TEXT DEFAULT 'apresentacao',
+        contact_id INTEGER,
+        contact_name TEXT,
+        scheduled_week INTEGER DEFAULT 1,
+        due_date TEXT,
+        status TEXT DEFAULT 'pending',
+        sort_order INTEGER DEFAULT 0,
+        completed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(campaign_account_id) REFERENCES campaign_accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY(contact_id) REFERENCES clients(id) ON DELETE SET NULL
+    )''')
+
+    # Logs/updates manuais das ações — append-only (nunca deletados em update do plano).
+    c.execute('''CREATE TABLE IF NOT EXISTS campaign_action_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action_id INTEGER NOT NULL,
+        log_text TEXT NOT NULL,
+        log_type TEXT DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(action_id) REFERENCES campaign_actions(id) ON DELETE CASCADE
+    )''')
+
     conn.commit()
-    
+
     # Migração: adicionar colunas se não existirem
     try:
         c.execute("PRAGMA table_info(user_profile)")
@@ -1008,6 +1077,18 @@ def init_db():
             c.execute('ALTER TABLE wiki_documents ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
         if 'updated_at' not in wiki_doc_columns:
             c.execute('ALTER TABLE wiki_documents ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+
+        # Campanha Ofensiva — colunas adicionais (insight de mercado e ângulo da ação)
+        c.execute("PRAGMA table_info(campaign_accounts)")
+        camp_acc_cols = [col[1] for col in c.fetchall()]
+        if 'market_insight' not in camp_acc_cols:
+            c.execute('ALTER TABLE campaign_accounts ADD COLUMN market_insight TEXT')
+        if 'insight_sources' not in camp_acc_cols:
+            c.execute('ALTER TABLE campaign_accounts ADD COLUMN insight_sources TEXT')
+        c.execute("PRAGMA table_info(campaign_actions)")
+        camp_act_cols = [col[1] for col in c.fetchall()]
+        if 'angle_area' not in camp_act_cols:
+            c.execute('ALTER TABLE campaign_actions ADD COLUMN angle_area TEXT')
         conn.commit()
     except:
         pass
@@ -12247,6 +12328,21 @@ def list_portfolio_offers():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/portfolio/offers/<int:offer_id>', methods=['GET'])
+def get_portfolio_offer(offer_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        offer = _portfolio_fetch_offer(c, offer_id)
+        conn.close()
+        if not offer:
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        return jsonify(offer)
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao buscar oferta {offer_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/portfolio/offers', methods=['POST'])
 def create_portfolio_offer():
     try:
@@ -15465,6 +15561,1123 @@ def get_system_config():
         'env': os.environ.get('TOCA_ENV', 'production'),
         'version': APP_VERSION
     })
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CAMPANHA OFENSIVA — planejamento e plano de ação comercial assistido por IA
+# Cruza o desafio do vendedor (texto livre) com o Portfólio (Soluções STF) e o
+# mapeamento de contatos/contas, classificando em 4 blocos:
+#   A = Pronto pra Ataque  (decisor mapeado + solução aderente)
+#   B = Aprofundar Relacionamento  (há contatos, faltam decisores na área)
+#   C = Iniciar do Zero  (sem mapeamento relevante)
+#   D = Sem Solução no Portfólio  (relacionamento forte, mas sem oferta aderente)
+# A classificação é determinística (funciona sem LLM); o LLM enriquece o
+# entendimento, as áreas/decisores e a aderência semântica das ofertas.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _campaign_llm_text(system_prompt, user_prompt):
+    """Chama o LLM seguindo a ordem padrão do projeto: OpenRouter primeiro, SAI fallback.
+    Retorna (texto_bruto, fonte) ou (None, 'heuristic') se nenhum LLM responder."""
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        try:
+            or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+            model = (or_settings.get('openrouter_model') or 'stepfun/step-3.5-flash:free').strip() or 'stepfun/step-3.5-flash:free'
+            site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
+            app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
+            payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt}
+                ],
+                'temperature': 0.2
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            content = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            if content and str(content).strip():
+                return content, 'OpenRouter'
+        except Exception as e:
+            logger.warning(f'[Campaign][OpenRouter] falha: {e}')
+    raw = _sai_simple_prompt(f"{system_prompt}\n\n{user_prompt}")
+    if raw and str(raw).strip():
+        return raw, 'SAI'
+    return None, 'heuristic'
+
+
+def _campaign_llm_json(system_prompt, user_prompt):
+    text, source = _campaign_llm_text(system_prompt, user_prompt)
+    if not text:
+        return None, source
+    parsed = _extract_json_object_from_text(text)
+    return (parsed if isinstance(parsed, dict) else None), source
+
+
+def _campaign_load_offers(c):
+    c.execute('SELECT * FROM portfolio_offers ORDER BY id')
+    offers = [dict_from_row(r) for r in c.fetchall()]
+    for o in offers:
+        c.execute('SELECT pain, solution FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order, id', (o['id'],))
+        o['items'] = [dict_from_row(r) for r in c.fetchall()]
+    return offers
+
+
+def _campaign_offer_blob(offer):
+    parts = [offer.get('title') or '', offer.get('summary') or '']
+    for it in (offer.get('items') or []):
+        parts.append((it.get('pain') or '') + ' ' + (it.get('solution') or ''))
+    return ' '.join(parts).lower()
+
+
+def _campaign_keyword_match_offers(challenge, offers):
+    """Fallback determinístico: casa palavras do desafio contra o texto das ofertas."""
+    words = set(re.findall(r'[a-zá-úâ-û0-9]{4,}', (challenge or '').lower()))
+    stop = {'para', 'como', 'mais', 'nossa', 'nosso', 'clientes', 'cliente', 'setor', 'area', 'área', 'quero', 'aumentar', 'penetração', 'penetracao', 'atuando', 'soluções', 'solucoes', 'solução', 'solucao'}
+    words = {w for w in words if w not in stop}
+    scored = []
+    for off in offers:
+        blob = _campaign_offer_blob(off)
+        hits = sum(1 for w in words if w in blob)
+        if hits >= 2:
+            scored.append((hits, off))
+    scored.sort(key=lambda x: -x[0])
+    return [off for _, off in scored]
+
+
+def _campaign_seniority(position):
+    p = (position or '').lower()
+    clevel_keys = [
+        'ceo', 'cfo', 'cio', 'cto', 'coo', 'cmo', 'cdo', 'chro', 'cro', 'clo', 'cso', 'cpo',
+        'ciso', 'cao', 'cco', 'cxo', 'chief', 'presidente', 'president',
+        'vice-pres', 'vice pres', ' vp', 'c-level', 'board',
+        'sócio', 'socio', 'founder', 'fundador', 'owner', 'proprietár',
+        'managing director', 'managing partner', 'sócio-diretor', 'socio-diretor',
+        'diretor executivo', 'diretor-executivo', 'diretor geral', 'diretor-geral',
+        'partner', 'sócio gerente', 'socio gerente',
+    ]
+    if any(k in p for k in clevel_keys):
+        return 'clevel'
+    if any(k in p for k in ['diretor', 'director', 'head', 'superintend', 'vp']):
+        return 'diretor'
+    if any(k in p for k in ['gerente', 'manager', 'coordenad', 'supervisor', 'líder', 'lider', 'lead']):
+        return 'gerente'
+    return 'outro'
+
+
+def _campaign_seniority_rank(position):
+    return {'clevel': 0, 'diretor': 1, 'gerente': 2, 'outro': 3}.get(_campaign_seniority(position), 3)
+
+
+def _campaign_area_match(contact, areas_lower):
+    if not areas_lower:
+        return True
+    blob = ((contact.get('area_of_activity') or '') + ' ' + (contact.get('position') or '')).lower()
+    return any(a and a in blob for a in areas_lower)
+
+
+def _campaign_account_contacts(c, account_name):
+    c.execute("SELECT * FROM clients WHERE COALESCE(is_archived,0)=0 AND lower(trim(company))=lower(trim(?))", (account_name,))
+    return [dict_from_row(r) for r in c.fetchall()]
+
+
+def _campaign_has_mapping(c, account_name):
+    c.execute(
+        """SELECT COUNT(*) FROM environment_responses er
+           JOIN clients cl ON cl.id = er.client_id
+           WHERE er.response IS NOT NULL AND trim(er.response) <> ''
+             AND lower(trim(cl.company)) = lower(trim(?))""",
+        (account_name,)
+    )
+    return (c.fetchone()[0] or 0) > 0
+
+
+def _campaign_has_kanban(c, account_id):
+    c.execute('SELECT COUNT(*) FROM kanban_cards WHERE account_id = ?', (account_id,))
+    return (c.fetchone()[0] or 0) > 0
+
+
+def _campaign_classify(contacts, areas_lower, has_mapping, has_kanban, has_solution):
+    """Classificação determinística por força de mapeamento. Retorna (bloco, score, contato_primário)."""
+    non_cold = [c for c in contacts if not c.get('is_cold_contact')]
+    in_area = [c for c in contacts if _campaign_area_match(c, areas_lower)]
+    targets = [c for c in contacts if c.get('is_target')]
+    decisionmakers = [c for c in contacts if _campaign_seniority(c.get('position')) in ('clevel', 'diretor')]
+    strong_pool = [
+        c for c in contacts
+        if (c.get('is_target') or _campaign_seniority(c.get('position')) in ('clevel', 'diretor'))
+        and _campaign_area_match(c, areas_lower)
+        and not c.get('is_cold_contact')
+    ]
+
+    score = 0
+    if contacts:
+        score += 15
+    if in_area:
+        score += 20
+    if targets:
+        score += 25
+    if decisionmakers:
+        score += 20
+    if has_mapping:
+        score += 10
+    if has_kanban:
+        score += 10
+    score = min(score, 100)
+
+    if strong_pool:
+        block = 'A' if has_solution else 'D'
+    elif non_cold:
+        block = 'B'
+    else:
+        block = 'C'
+
+    if strong_pool:
+        strong_pool.sort(key=lambda c: (_campaign_seniority_rank(c.get('position')), 0 if c.get('is_target') else 1))
+        primary = strong_pool[0]
+    elif in_area:
+        primary = sorted(in_area, key=lambda c: _campaign_seniority_rank(c.get('position')))[0]
+    elif non_cold:
+        primary = sorted(non_cold, key=lambda c: _campaign_seniority_rank(c.get('position')))[0]
+    elif contacts:
+        primary = contacts[0]
+    else:
+        primary = None
+    return block, score, primary
+
+
+def _campaign_rationale(block, account_name, primary, areas, offer_title):
+    pos = (primary or {}).get('position') or ''
+    pname = (primary or {}).get('name') or ''
+    area_label = (areas[0] if areas else 'área-alvo')
+    if block == 'A':
+        who = f"{pname} ({pos})" if pname else "decisor mapeado"
+        return f"Relacionamento forte: {who}. Solução aderente: {offer_title or 'a definir'}."
+    if block == 'B':
+        return f"Mapeamento parcial: há contatos, mas é preciso aprofundar decisores em {area_label}."
+    if block == 'D':
+        who = f"{pname} ({pos})" if pname else "decisores mapeados"
+        return f"Relacionamento forte ({who}), porém sem solução aderente no portfólio para este desafio."
+    return "Sem mapeamento relevante: iniciar relacionamento do zero."
+
+
+def _campaign_contacts_in_area(contacts, area_lower):
+    """Contatos cuja área de atuação OU cargo casa com a área-alvo, ordenados por senioridade."""
+    matched = []
+    for ct in contacts:
+        blob = ((ct.get('area_of_activity') or '') + ' ' + (ct.get('position') or '')).lower()
+        if area_lower and area_lower in blob:
+            matched.append(ct)
+    matched.sort(key=lambda ct: (_campaign_seniority_rank(ct.get('position')),
+                                  0 if ct.get('is_target') else 1,
+                                  1 if ct.get('is_cold_contact') else 0))
+    return matched
+
+
+def _campaign_rel_ctx(act_count, last_act_desc, has_map, has_kan):
+    rel_parts = []
+    if act_count > 0:
+        rel_parts.append(f"{act_count} interação(ões) registrada(s)")
+    if has_map:
+        rel_parts.append("ambiente mapeado")
+    if has_kan:
+        rel_parts.append("oportunidade(s) no funil")
+    rel_ctx = (" Histórico: " + ", ".join(rel_parts) + ".") if rel_parts else ""
+    if last_act_desc:
+        snip = last_act_desc.strip()[:120]
+        if len(last_act_desc.strip()) > 120:
+            snip += "..."
+        rel_ctx += f" Última interação: \"{snip}\""
+    return rel_ctx
+
+
+def _campaign_build_actions(block, contacts, areas, offer_title, ctx):
+    """Gera UMA OU MAIS ações por conta — uma por ângulo (área/decisor) do desafio.
+
+    Para cada área-alvo da campanha, identifica o melhor decisor mapeado naquela área e
+    cria uma ação específica (apresentação se houver solução, ou aprofundamento). Áreas sem
+    decisor mapeado viram ações de mapeamento daquele ângulo. Assim o desafio multi-área
+    (ex.: CIO p/ tecnologia + CMO p/ jornada do paciente) vira ações distintas e justificadas.
+    Cada item retornado: {type, title, description, contact, angle_area}.
+    """
+    rel_ctx = _campaign_rel_ctx(ctx.get('act_count', 0), ctx.get('last_act_desc', ''),
+                                ctx.get('has_map', False), ctx.get('has_kan', False))
+    areas_eff = [a for a in (areas or []) if a] or ['área-alvo']
+
+    # Conta fria / sem contatos: prospecção única
+    if block == 'C' or not contacts:
+        area_label = areas_eff[0]
+        return [{'type': 'prospeccao', 'angle_area': area_label, 'contact': None,
+                 'title': "Iniciar prospecção e mapear decisores",
+                 'description': (f"Conta fria: sem mapeamento de contatos em {area_label}. "
+                                 f"Iniciar prospecção ativa — identificar organograma, decisores e dores "
+                                 f"antes de qualquer abordagem." + rel_ctx)}]
+
+    actions = []
+    seen = set()
+    for area in areas_eff:
+        pool = _campaign_contacts_in_area(contacts, area.lower())
+        dm = [ct for ct in pool if _campaign_seniority(ct.get('position')) in ('clevel', 'diretor') and not ct.get('is_cold_contact')]
+        warm = [ct for ct in pool if not ct.get('is_cold_contact')]
+        chosen = dm[0] if dm else (warm[0] if warm else (pool[0] if pool else None))
+
+        if chosen is None:
+            key = ('none', area.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            actions.append({'type': 'mapeamento', 'angle_area': area, 'contact': None,
+                            'title': f"Mapear decisor de {area}",
+                            'description': (f"Nenhum decisor de {area} mapeado nesta conta. Identificar e qualificar "
+                                            f"o responsável por {area} (C-level/Diretor) para abrir esta frente." + rel_ctx)})
+            continue
+
+        key = (chosen.get('id'), area.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        cpos = chosen.get('position') or ''
+        cname = chosen.get('name') or ''
+        who = f"{cname} ({cpos})" if cpos else cname
+        sen = _campaign_seniority(chosen.get('position'))
+        sen_label = {'clevel': 'C-level', 'diretor': 'Diretoria', 'gerente': 'Gerência'}.get(sen, 'contato')
+        why = f"Escolhido por ser {sen_label} responsável por {area}" + (" e contato target" if chosen.get('is_target') else "") + "."
+
+        if block == 'A' and offer_title:
+            actions.append({'type': 'apresentacao', 'angle_area': area, 'contact': chosen,
+                            'title': f"Apresentar {offer_title} — ângulo {area}",
+                            'description': (f"Conduzir apresentação executiva para {who}. {why} "
+                                            f"Conectar {offer_title} ao ângulo de {area}, alinhando a solução à dor "
+                                            f"específica desta frente." + rel_ctx)})
+        else:
+            actions.append({'type': 'mapeamento', 'angle_area': area, 'contact': chosen,
+                            'title': f"Aprofundar relacionamento em {area}",
+                            'description': (f"Frente de {area} com {who}. {why} Aprofundar a dor, validar fit e "
+                                            f"preparar terreno para apresentar a solução nesta frente." + rel_ctx)})
+
+    if block == 'D':
+        prim = contacts[0] if contacts else None
+        d_area = areas_eff[0]
+        d_action = {'type': 'portfolio', 'angle_area': d_area, 'contact': prim,
+                    'title': "Explorar portfólio para o desafio",
+                    'description': (f"Relacionamento maduro, porém sem solução aderente cadastrada para {d_area}. "
+                                    f"Explorar portfólio interno ou identificar parceiros que atendam esta demanda." + rel_ctx)}
+        actions = [d_action] + actions
+
+    if not actions:
+        prim = contacts[0] if contacts else None
+        actions = [{'type': 'mapeamento', 'angle_area': areas_eff[0], 'contact': prim,
+                    'title': "Aprofundar mapeamento da conta",
+                    'description': ("Aprofundar mapeamento de stakeholders e qualificar a dor." + rel_ctx)}]
+    return actions
+
+
+def _campaign_market_insight(account_name, sector, challenge, areas, offer_title):
+    """Busca contexto de mercado real via Tavily e sintetiza um 'motivo de abordagem' via LLM.
+
+    Ordem: Tavily (dados reais) → LLM sintetiza com base nas evidências. Sem Tavily, o LLM faz
+    uma leitura objetiva do setor. Retorna (insight_text, sources_list)."""
+    evidence, sources = [], []
+    api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+    if api_key:
+        try:
+            areas_str = ', '.join(areas) if areas else ''
+            query = f'"{account_name}" {sector or ""} notícias investimentos estratégia movimentos {areas_str}'.strip()
+            results = _run_tavily_request(api_key, query, max_results=5)
+            evidence = _extract_tavily_evidence(results, max_items=5)
+            sources = [{'title': e.get('title'), 'url': e.get('url')} for e in evidence if e.get('url')][:4]
+        except Exception as e:
+            logger.warning(f'[Campaign][insight] Tavily falhou p/ {account_name}: {e}')
+
+    evidence_blob = '\n'.join(f"- {e.get('snippet','')[:300]}" for e in evidence if e.get('snippet'))
+    sys_p = ('Você é um analista de inteligência comercial B2B. Escreva em português do Brasil um parágrafo '
+             'curto (2 a 4 frases), direto e específico, sem markdown, sem títulos e sem citar URLs.')
+    base = (f"Conta: {account_name} (setor: {sector or 'n/d'}).\n"
+            f"Desafio comercial: {challenge}.\n"
+            f"Áreas-alvo: {', '.join(areas) or 'n/d'}. Solução considerada: {offer_title or 'a definir'}.\n\n")
+    if evidence_blob:
+        user_p = (base + f"Evidências de mercado encontradas:\n{evidence_blob}\n\n"
+                  "Com base NAS EVIDÊNCIAS acima, escreva o 'motivo da abordagem': o momento de mercado e os "
+                  "movimentos da conta que tornam ESTE plano relevante AGORA. Cite fatos concretos das evidências.")
+    else:
+        user_p = (base + "Escreva o 'motivo da abordagem': uma leitura objetiva e específica do provável momento "
+                  "de mercado do setor que torna este plano relevante agora. Evite generalidades vazias.")
+    text, _src = _campaign_llm_text(sys_p, user_p)
+    return (text or '').strip(), sources
+
+
+def _campaign_parse_date(s):
+    try:
+        return datetime.strptime((s or '').strip(), '%Y-%m-%d')
+    except Exception:
+        return datetime.now()
+
+
+def _campaign_add_weeks(start_dt, weeks):
+    return (start_dt + timedelta(weeks=weeks)).strftime('%Y-%m-%d')
+
+
+def _campaign_analyze_core(challenge_text):
+    conn = get_db()
+    c = conn.cursor()
+    offers = _campaign_load_offers(c)
+    c.execute("SELECT DISTINCT area_of_activity FROM clients WHERE area_of_activity IS NOT NULL AND trim(area_of_activity) <> ''")
+    known_areas = [r[0] for r in c.fetchall()]
+    c.execute("SELECT id, name, logo_url, sector FROM accounts WHERE is_target = 1 ORDER BY name")
+    target_accounts = [dict_from_row(r) for r in c.fetchall()]
+    conn.close()
+
+    offers_brief = '; '.join(f"#{o['id']} {o['title']}" for o in offers[:40]) or '(nenhuma oferta cadastrada)'
+    sys_p = 'Você é um consultor comercial estratégico B2B sênior. Responda SEMPRE e SOMENTE com um JSON válido, sem markdown.'
+    user_p = (
+        f"Desafio comercial do vendedor: \"{challenge_text}\".\n"
+        f"Áreas de cliente já conhecidas no sistema: {', '.join(known_areas) or 'nenhuma'}.\n"
+        f"Ofertas do portfólio (id e título): {offers_brief}.\n\n"
+        "Tarefas:\n"
+        "1) Identifique as ÁREAS do cliente a atacar (ex.: TI, Operações, Financeiro, Jurídico, Marketing, Infraestrutura, Manufatura, Sistemas, Segurança da Informação).\n"
+        "2) Identifique os NÍVEIS DECISORES relevantes (ex.: C-level, Diretores, Gerentes, e cargos específicos como CIO, CTO).\n"
+        "3) Aponte quais OFERTAS do portfólio (pelos ids) são aderentes ao desafio.\n"
+        "4) Escreva um ENTENDIMENTO resumido em 2 a 3 frases.\n\n"
+        'Retorne EXATAMENTE: {"entendimento":"...","areas":["..."],"decisores":["..."],"oferta_ids":[1,2],"tem_solucao":true}'
+    )
+    parsed, source = _campaign_llm_json(sys_p, user_p)
+
+    entendimento, areas, decisores, offer_ids = '', [], [], []
+    if parsed:
+        entendimento = (parsed.get('entendimento') or '').strip()
+        areas = [a.strip() for a in (parsed.get('areas') or []) if isinstance(a, str) and a.strip()]
+        decisores = [d.strip() for d in (parsed.get('decisores') or []) if isinstance(d, str) and d.strip()]
+        valid_ids = {o['id'] for o in offers}
+        for i in (parsed.get('oferta_ids') or []):
+            try:
+                iv = int(i)
+                if iv in valid_ids:
+                    offer_ids.append(iv)
+            except Exception:
+                continue
+
+    if not offer_ids:
+        offer_ids = [o['id'] for o in _campaign_keyword_match_offers(challenge_text, offers)[:5]]
+    has_solution = bool(offer_ids)
+    if not areas:
+        cl = (challenge_text or '').lower()
+        areas = [a for a in known_areas if a and a.lower() in cl][:6]
+    if not decisores:
+        decisores = ['C-level', 'Diretores', 'Gerentes']
+    if not entendimento:
+        entendimento = f"Atacar o desafio descrito: {(challenge_text or '').strip()[:240]}"
+
+    portfolio_note = ''
+    if not offers:
+        portfolio_note = 'Você ainda não cadastrou ofertas no Portfólio (Soluções STF). Cadastre para que o plano recomende soluções específicas.'
+    elif not has_solution:
+        portfolio_note = 'Nenhuma oferta cadastrada parece aderente a este desafio. Considere aprofundar/registrar soluções da empresa para este segmento.'
+
+    offers_by_id = {o['id']: o for o in offers}
+    matched_offers = [{'id': i, 'title': offers_by_id[i]['title']} for i in offer_ids if i in offers_by_id]
+    return {
+        'entendimento': entendimento,
+        'areas': areas,
+        'decisores': decisores,
+        'offer_ids': offer_ids,
+        'matched_offers': matched_offers,
+        'has_solution': has_solution,
+        'portfolio_note': portfolio_note,
+        'target_accounts': target_accounts,
+        'target_count': len(target_accounts),
+        'llm_source': source,
+    }
+
+
+def _campaign_generate_core(payload, progress_cb=None):
+    title = payload['title']
+    challenge = payload['challenge_text']
+    areas = payload.get('areas') or []
+    decisores = payload.get('decisores') or []
+    offer_ids = payload.get('offer_ids') or []
+    start_date = payload['start_date']
+    capacity = max(1, int(payload.get('weekly_capacity') or 5))
+    account_ids = payload['account_ids']
+    llm_source = payload.get('llm_source', '')
+
+    def _emit(pct, step):
+        if progress_cb:
+            try:
+                progress_cb(pct, step)
+            except Exception:
+                pass
+
+    conn = get_db()
+    c = conn.cursor()
+    offers = _campaign_load_offers(c)
+    offers_by_id = {o['id']: o for o in offers}
+    matched_offers = [offers_by_id[i] for i in offer_ids if i in offers_by_id]
+    has_solution = bool(matched_offers)
+    primary_offer = matched_offers[0] if matched_offers else None
+    areas_lower = [a.lower() for a in areas if a]
+
+    built = []
+    n_accs = len(account_ids)
+    for i, aid in enumerate(account_ids):
+        c.execute('SELECT * FROM accounts WHERE id = ?', (aid,))
+        acc = dict_from_row(c.fetchone())
+        if not acc:
+            continue
+        contacts = _campaign_account_contacts(c, acc['name'])
+        has_map = _campaign_has_mapping(c, acc['name'])
+        has_kan = _campaign_has_kanban(c, acc['id'])
+        block, score, primary = _campaign_classify(contacts, areas_lower, has_map, has_kan, has_solution)
+        c.execute(
+            "SELECT COUNT(*) FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
+            (acc['name'],)
+        )
+        act_count = c.fetchone()[0] or 0
+        c.execute(
+            "SELECT a.description FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?)) AND (a.description IS NOT NULL AND trim(a.description)<>'') ORDER BY a.activity_date DESC LIMIT 1",
+            (acc['name'],)
+        )
+        _row = c.fetchone()
+        last_act_desc = (_row[0] if _row else '') or ''
+
+        offer_title = primary_offer['title'] if (block == 'A' and primary_offer) else None
+        _emit(40 + int(45 * i / max(1, n_accs)), f"Pesquisando mercado: {acc['name']} ({i + 1}/{n_accs})")
+        insight, sources = _campaign_market_insight(acc['name'], acc.get('sector'), challenge, areas, offer_title)
+
+        built.append({'acc': acc, 'block': block, 'score': score, 'primary': primary,
+                      'contacts': contacts, 'act_count': act_count, 'last_act_desc': last_act_desc,
+                      'has_map': has_map, 'has_kan': has_kan,
+                      'market_insight': insight, 'insight_sources': sources})
+
+    _emit(88, 'Montando blocos e cronograma...')
+    order_rank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
+    built.sort(key=lambda b: (order_rank.get(b['block'], 9), -b['score'], (b['acc']['name'] or '').lower()))
+
+    c.execute(
+        '''INSERT INTO campaigns
+           (title, objective_text, llm_summary, areas_json, decision_levels_json, offer_ids_json,
+            has_solution, portfolio_note, start_date, weekly_capacity, llm_source, status, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
+        (title, challenge, payload.get('summary', ''),
+         json.dumps(areas, ensure_ascii=False), json.dumps(decisores, ensure_ascii=False), json.dumps(offer_ids),
+         1 if has_solution else 0, payload.get('portfolio_note', ''), start_date, capacity, llm_source, 'Ativo')
+    )
+    campaign_id = c.lastrowid
+
+    start_dt = _campaign_parse_date(start_date)
+    idx = 0
+    for ord_idx, b in enumerate(built):
+        acc = b['acc']
+        block = b['block']
+        primary = b['primary']
+        offer_title = primary_offer['title'] if (block == 'A' and primary_offer) else None
+        offer_id = primary_offer['id'] if (block == 'A' and primary_offer) else None
+        rationale = _campaign_rationale(block, acc['name'], primary, areas, offer_title)
+        c.execute(
+            '''INSERT INTO campaign_accounts
+               (campaign_id, account_id, account_name, block_type, readiness_score, offer_id, offer_title,
+                rationale, sort_order, market_insight, insight_sources)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+            (campaign_id, acc['id'], acc['name'], block, b['score'], offer_id, offer_title,
+             rationale, ord_idx, b.get('market_insight', ''),
+             json.dumps(b.get('insight_sources') or [], ensure_ascii=False))
+        )
+        ca_id = c.lastrowid
+        ctx = {'act_count': b.get('act_count', 0), 'last_act_desc': b.get('last_act_desc', ''),
+               'has_map': b.get('has_map', False), 'has_kan': b.get('has_kan', False)}
+        actions = _campaign_build_actions(block, b.get('contacts') or [], areas, offer_title, ctx)
+        for a in actions:
+            ct = a.get('contact') or {}
+            week = idx // capacity
+            due = _campaign_add_weeks(start_dt, week)
+            c.execute(
+                '''INSERT INTO campaign_actions
+                   (campaign_account_id, title, description, action_type, contact_id, contact_name,
+                    scheduled_week, due_date, status, sort_order, angle_area, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
+                (ca_id, a['title'], a['description'], a['type'],
+                 ct.get('id'), ct.get('name'),
+                 week + 1, due, 'pending', idx, a.get('angle_area', ''))
+            )
+            idx += 1
+
+    conn.commit()
+    conn.close()
+    return campaign_id
+
+
+def _campaign_regenerate_core(cid, progress_cb=None):
+    def _emit(pct, step):
+        if progress_cb:
+            try:
+                progress_cb(pct, step)
+            except Exception:
+                pass
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT * FROM campaigns WHERE id = ?', (cid,))
+    camp = dict_from_row(c.fetchone())
+    if not camp:
+        conn.close()
+        raise RuntimeError('Campanha não encontrada.')
+    areas = json.loads(camp.get('areas_json') or '[]')
+    challenge = camp.get('objective_text') or ''
+    areas_lower = [a.lower() for a in areas if a]
+
+    offers = _campaign_load_offers(c)
+    offers_by_id = {o['id']: o for o in offers}
+    stored_ids = set(json.loads(camp.get('offer_ids_json') or '[]'))
+    kw_matched = _campaign_keyword_match_offers(challenge, offers)
+    matched = [offers_by_id[i] for i in stored_ids if i in offers_by_id]
+    for o in kw_matched:
+        if o['id'] not in stored_ids:
+            matched.append(o)
+    has_solution = bool(matched)
+    primary_offer = matched[0] if matched else None
+
+    c.execute('SELECT * FROM campaign_accounts WHERE campaign_id = ? ORDER BY sort_order, id', (cid,))
+    cas = [dict_from_row(r) for r in c.fetchall()]
+    n_cas = len(cas)
+    capacity = max(1, int(camp.get('weekly_capacity') or 5))
+    start_dt = _campaign_parse_date(camp.get('start_date') or '')
+    for ci, ca in enumerate(cas):
+        contacts = _campaign_account_contacts(c, ca['account_name'])
+        has_map = _campaign_has_mapping(c, ca['account_name'])
+        has_kan = _campaign_has_kanban(c, ca['account_id'])
+        new_block, score, primary = _campaign_classify(contacts, areas_lower, has_map, has_kan, has_solution)
+        c.execute(
+            "SELECT COUNT(*) FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
+            (ca['account_name'],)
+        )
+        act_count = c.fetchone()[0] or 0
+        c.execute(
+            "SELECT a.description FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?)) AND (a.description IS NOT NULL AND trim(a.description)<>'') ORDER BY a.activity_date DESC LIMIT 1",
+            (ca['account_name'],)
+        )
+        _row = c.fetchone()
+        last_act_desc = (_row[0] if _row else '') or ''
+        old_block = ca['block_type']
+        offer_title = primary_offer['title'] if (new_block == 'A' and primary_offer) else None
+        offer_id = primary_offer['id'] if (new_block == 'A' and primary_offer) else None
+        rationale = _campaign_rationale(new_block, ca['account_name'], primary, areas, offer_title)
+
+        _emit(40 + int(50 * ci / max(1, n_cas)), f"Reavaliando mercado: {ca['account_name']} ({ci + 1}/{n_cas})")
+        insight, sources = _campaign_market_insight(ca['account_name'], None, challenge, areas, offer_title)
+        c.execute(
+            'UPDATE campaign_accounts SET block_type=?, readiness_score=?, offer_id=?, offer_title=?, rationale=?, market_insight=?, insight_sources=? WHERE id=?',
+            (new_block, score, offer_id, offer_title, rationale, insight,
+             json.dumps(sources or [], ensure_ascii=False), ca['id'])
+        )
+
+        ctx = {'act_count': act_count, 'last_act_desc': last_act_desc, 'has_map': has_map, 'has_kan': has_kan}
+        desired = _campaign_build_actions(new_block, contacts, areas, offer_title, ctx)
+
+        # Ações existentes (preservar status/logs). Matching por (contact_id, angle_area).
+        c.execute('SELECT * FROM campaign_actions WHERE campaign_account_id = ? ORDER BY sort_order, id', (ca['id'],))
+        existing = [dict_from_row(r) for r in c.fetchall()]
+        used_existing = set()
+
+        def _match(want_cid, want_area):
+            # 1) match exato contato+ângulo; 2) só ângulo; 3) só contato; 4) qualquer não usada
+            for pref in (lambda a: a['id'] not in used_existing and (a.get('contact_id') or None) == (want_cid or None) and (a.get('angle_area') or '').lower() == (want_area or '').lower(),
+                         lambda a: a['id'] not in used_existing and (a.get('angle_area') or '').lower() == (want_area or '').lower(),
+                         lambda a: a['id'] not in used_existing and (a.get('contact_id') or None) == (want_cid or None),
+                         lambda a: a['id'] not in used_existing):
+                for a in existing:
+                    if pref(a):
+                        return a
+            return None
+
+        sort_base = ca['sort_order'] * 100
+        for k, want in enumerate(desired):
+            ct = want.get('contact') or {}
+            want_cid = ct.get('id')
+            want_area = want.get('angle_area', '')
+            match = _match(want_cid, want_area)
+            if match:
+                used_existing.add(match['id'])
+                c.execute(
+                    'UPDATE campaign_actions SET title=?, description=?, action_type=?, contact_id=?, contact_name=?, angle_area=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                    (want['title'], want['description'], want['type'], want_cid, ct.get('name'), want_area, match['id'])
+                )
+                if old_block != new_block:
+                    msg = f"Plano atualizado pela IA: bloco {old_block} → {new_block}."
+                    if offer_title:
+                        msg += f" Solução recomendada: {offer_title}."
+                    c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'system')", (match['id'], msg))
+            else:
+                week = (sort_base + k) // capacity
+                due = _campaign_add_weeks(start_dt, week)
+                c.execute(
+                    '''INSERT INTO campaign_actions
+                       (campaign_account_id, title, description, action_type, contact_id, contact_name,
+                        scheduled_week, due_date, status, sort_order, angle_area, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
+                    (ca['id'], want['title'], want['description'], want['type'],
+                     want_cid, ct.get('name'), week + 1, due, 'pending', sort_base + k, want_area)
+                )
+
+        # Ações antigas não correspondidas: preservar se tiverem trabalho do usuário, senão remover.
+        for a in existing:
+            if a['id'] in used_existing:
+                continue
+            c.execute('SELECT COUNT(*) FROM campaign_action_logs WHERE action_id=? AND log_type=?', (a['id'], 'user'))
+            has_user_log = (c.fetchone()[0] or 0) > 0
+            if has_user_log or a.get('status') != 'pending':
+                c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'system')",
+                          (a['id'], "A IA não priorizou mais esta frente nesta atualização, mas ela foi mantida por já ter execução registrada."))
+            else:
+                c.execute('DELETE FROM campaign_action_logs WHERE action_id=?', (a['id'],))
+                c.execute('DELETE FROM campaign_actions WHERE id=?', (a['id'],))
+
+    new_offer_ids = [o['id'] for o in matched]
+    portfolio_note = '' if has_solution else 'Nenhuma oferta aderente no portfólio. Registre soluções da empresa para este segmento.'
+    c.execute(
+        'UPDATE campaigns SET has_solution=?, offer_ids_json=?, portfolio_note=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',
+        (1 if has_solution else 0, json.dumps(new_offer_ids), portfolio_note, cid)
+    )
+
+    c.execute('SELECT id, block_type, readiness_score, account_name FROM campaign_accounts WHERE campaign_id = ?', (cid,))
+    rows = [dict_from_row(r) for r in c.fetchall()]
+    order_rank = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
+    rows.sort(key=lambda r: (order_rank.get(r['block_type'], 9), -(r['readiness_score'] or 0), (r['account_name'] or '').lower()))
+    for i, r in enumerate(rows):
+        c.execute('UPDATE campaign_accounts SET sort_order=? WHERE id=?', (i, r['id']))
+
+    conn.commit()
+    conn.close()
+
+
+def _campaign_timeline(camp, accs):
+    start_dt = _campaign_parse_date(camp.get('start_date') or '')
+    weeks_count = camp['stats']['weeks'] or 1
+    weeks = []
+    for w in range(weeks_count):
+        ws = start_dt + timedelta(weeks=w)
+        we = ws + timedelta(days=6)
+        weeks.append({'week': w + 1, 'start': ws.strftime('%d/%m'), 'end': we.strftime('%d/%m'), 'counts': {}, 'total': 0})
+    for a in accs:
+        for act in a['actions']:
+            wi = (act.get('scheduled_week') or 1) - 1
+            if 0 <= wi < len(weeks):
+                t = act.get('action_type') or 'outro'
+                weeks[wi]['counts'][t] = weeks[wi]['counts'].get(t, 0) + 1
+                weeks[wi]['total'] += 1
+    return weeks
+
+
+def _campaign_serialize(c, campaign_id):
+    c.execute('SELECT * FROM campaigns WHERE id = ?', (campaign_id,))
+    camp = dict_from_row(c.fetchone())
+    if not camp:
+        return None
+    camp['areas'] = json.loads(camp.get('areas_json') or '[]')
+    camp['decisores'] = json.loads(camp.get('decision_levels_json') or '[]')
+    camp['offer_ids'] = json.loads(camp.get('offer_ids_json') or '[]')
+
+    c.execute('SELECT * FROM campaign_accounts WHERE campaign_id = ? ORDER BY sort_order, id', (campaign_id,))
+    accs = [dict_from_row(r) for r in c.fetchall()]
+    total = done = in_prog = 0
+    for a in accs:
+        c.execute('SELECT logo_url FROM accounts WHERE id = ?', (a['account_id'],))
+        row = c.fetchone()
+        a['logo_url'] = row['logo_url'] if row else None
+        try:
+            a['insight_sources'] = json.loads(a.get('insight_sources') or '[]')
+        except Exception:
+            a['insight_sources'] = []
+        c.execute('SELECT * FROM campaign_actions WHERE campaign_account_id = ? ORDER BY sort_order, id', (a['id'],))
+        acts = [dict_from_row(r) for r in c.fetchall()]
+        for act in acts:
+            c.execute('SELECT * FROM campaign_action_logs WHERE action_id = ? ORDER BY datetime(created_at) DESC, id DESC', (act['id'],))
+            act['logs'] = [dict_from_row(l) for l in c.fetchall()]
+            total += 1
+            if act['status'] == 'done':
+                done += 1
+            elif act['status'] == 'in_progress':
+                in_prog += 1
+        a['actions'] = acts
+        a_total = len(acts)
+        a_done = sum(1 for x in acts if x['status'] == 'done')
+        a['progress'] = round(100 * a_done / a_total) if a_total else 0
+
+    blocks = {'A': [], 'B': [], 'C': [], 'D': []}
+    for a in accs:
+        blocks.setdefault(a['block_type'], []).append(a)
+    all_weeks = [act['scheduled_week'] for a in accs for act in a['actions']]
+    camp['stats'] = {
+        'total_actions': total, 'done': done, 'in_progress': in_prog, 'pending': total - done - in_prog,
+        'progress': round(100 * done / total) if total else 0,
+        'accounts_count': len(accs),
+        'weeks': max(all_weeks) if all_weeks else 0,
+    }
+    camp['blocks'] = blocks
+    camp['accounts'] = accs
+    camp['timeline'] = _campaign_timeline(camp, accs)
+    return camp
+
+
+@app.route('/api/campaigns/selectable-accounts', methods=['GET'])
+def campaign_selectable_accounts():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            """SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
+                      (SELECT COUNT(*) FROM clients cl
+                        WHERE lower(trim(cl.company)) = lower(trim(a.name)) AND COALESCE(cl.is_archived,0)=0) AS contact_count
+               FROM accounts a ORDER BY a.is_target DESC, a.name"""
+        )
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        logger.exception(f'[Campaign] selectable-accounts: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/analyze', methods=['POST'])
+def campaign_analyze():
+    data = request.get_json() or {}
+    challenge = (data.get('challenge_text') or '').strip()
+    if not challenge:
+        return jsonify({'error': 'Descreva o desafio comercial.'}), 400
+    task_id = uuid.uuid4().hex
+    _bg_task_set(task_id, {'status': 'processing', 'step': 'Entendendo o desafio...', 'progress': 10})
+
+    def _run():
+        try:
+            _bg_task_set(task_id, {'step': 'Cruzando com portfólio e contatos...', 'progress': 45})
+            result = _campaign_analyze_core(challenge)
+            _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': result})
+        except Exception as e:
+            logger.exception(f'[Campaign][analyze] {e}')
+            _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+        finally:
+            _bg_task_cleanup(task_id)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
+
+
+@app.route('/api/campaigns/generate', methods=['POST'])
+def campaign_generate():
+    try:
+        data = request.get_json() or {}
+        challenge = (data.get('challenge_text') or '').strip()
+        if not challenge:
+            return jsonify({'error': 'Desafio é obrigatório.'}), 400
+        title = (data.get('title') or '').strip() or 'Campanha Ofensiva'
+        start_date = (data.get('start_date') or '').strip() or datetime.now().strftime('%Y-%m-%d')
+        try:
+            capacity = max(1, min(50, int(data.get('weekly_capacity') or 5)))
+        except Exception:
+            capacity = 5
+        mode = (data.get('account_mode') or 'targets').strip()
+        raw_account_ids = data.get('account_ids') or []
+
+        conn = get_db()
+        c = conn.cursor()
+        if mode == 'manual' and raw_account_ids:
+            ids = [int(i) for i in raw_account_ids if str(i).isdigit()]
+        else:
+            c.execute('SELECT id FROM accounts WHERE is_target = 1')
+            ids = [r['id'] for r in c.fetchall()]
+        conn.close()
+        if not ids:
+            return jsonify({'error': 'Nenhuma conta selecionada. Marque contas como target ou selecione manualmente.'}), 400
+
+        payload = {
+            'title': title,
+            'challenge_text': challenge,
+            'areas': data.get('areas') or [],
+            'decisores': data.get('decisores') or [],
+            'offer_ids': [int(i) for i in (data.get('offer_ids') or []) if str(i).isdigit()],
+            'start_date': start_date,
+            'weekly_capacity': capacity,
+            'account_ids': ids,
+            'llm_source': data.get('llm_source', ''),
+            'summary': data.get('summary', '') or data.get('entendimento', ''),
+            'portfolio_note': data.get('portfolio_note', ''),
+        }
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Montando plano de ação...', 'progress': 15})
+
+        def _run():
+            try:
+                _bg_task_set(task_id, {'step': 'Classificando contas (A/B/C/D)...', 'progress': 40})
+
+                def _progress(pct, step):
+                    _bg_task_set(task_id, {'progress': max(40, min(95, int(pct))), 'step': step})
+
+                cid = _campaign_generate_core(payload, progress_cb=_progress)
+                _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': {'campaign_id': cid}})
+            except Exception as e:
+                logger.exception(f'[Campaign][generate] {e}')
+                _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+            finally:
+                _bg_task_cleanup(task_id)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[Campaign] generate start: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns', methods=['GET'])
+def campaign_list():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM campaigns ORDER BY datetime(created_at) DESC, id DESC')
+        camps = [dict_from_row(r) for r in c.fetchall()]
+        for camp in camps:
+            c.execute('SELECT COUNT(*) FROM campaign_accounts WHERE campaign_id = ?', (camp['id'],))
+            camp['accounts_count'] = c.fetchone()[0] or 0
+            c.execute(
+                """SELECT COUNT(*) total, SUM(CASE WHEN ca.status='done' THEN 1 ELSE 0 END) done
+                   FROM campaign_actions ca
+                   JOIN campaign_accounts cc ON cc.id = ca.campaign_account_id
+                   WHERE cc.campaign_id = ?""",
+                (camp['id'],)
+            )
+            row = c.fetchone()
+            total = row['total'] or 0
+            done = row['done'] or 0
+            camp['progress'] = round(100 * done / total) if total else 0
+            camp['areas'] = json.loads(camp.get('areas_json') or '[]')
+        conn.close()
+        return jsonify(camps)
+    except Exception as e:
+        logger.exception(f'[Campaign] list: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/<int:cid>', methods=['GET'])
+def campaign_detail(cid):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        data = _campaign_serialize(c, cid)
+        conn.close()
+        if not data:
+            return jsonify({'error': 'Campanha não encontrada.'}), 404
+        return jsonify(data)
+    except Exception as e:
+        logger.exception(f'[Campaign] detail {cid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/<int:cid>', methods=['PUT'])
+def campaign_update(cid):
+    try:
+        data = request.get_json() or {}
+        fields, vals = [], []
+        if 'title' in data:
+            fields.append('title=?')
+            vals.append((data.get('title') or '').strip() or 'Campanha Ofensiva')
+        if 'status' in data:
+            fields.append('status=?')
+            vals.append((data.get('status') or 'Ativo').strip())
+        if 'objective_text' in data:
+            fields.append('objective_text=?')
+            vals.append((data.get('objective_text') or '').strip())
+        if not fields:
+            return jsonify({'error': 'Nada para atualizar.'}), 400
+        fields.append('updated_at=CURRENT_TIMESTAMP')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM campaigns WHERE id = ?', (cid,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Campanha não encontrada.'}), 404
+        c.execute(f"UPDATE campaigns SET {', '.join(fields)} WHERE id = ?", (*vals, cid))
+        conn.commit()
+        data = _campaign_serialize(c, cid)
+        conn.close()
+        return jsonify(data)
+    except Exception as e:
+        logger.exception(f'[Campaign] update {cid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/<int:cid>', methods=['DELETE'])
+def campaign_delete(cid):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM campaign_accounts WHERE campaign_id = ?', (cid,))
+        ca_ids = [r['id'] for r in c.fetchall()]
+        if ca_ids:
+            qs = ','.join('?' * len(ca_ids))
+            c.execute(f'SELECT id FROM campaign_actions WHERE campaign_account_id IN ({qs})', ca_ids)
+            act_ids = [r['id'] for r in c.fetchall()]
+            if act_ids:
+                qs2 = ','.join('?' * len(act_ids))
+                c.execute(f'DELETE FROM campaign_action_logs WHERE action_id IN ({qs2})', act_ids)
+                c.execute(f'DELETE FROM campaign_actions WHERE id IN ({qs2})', act_ids)
+            c.execute(f'DELETE FROM campaign_accounts WHERE id IN ({qs})', ca_ids)
+        c.execute('DELETE FROM campaigns WHERE id = ?', (cid,))
+        deleted = c.rowcount
+        conn.commit()
+        conn.close()
+        if not deleted:
+            return jsonify({'error': 'Campanha não encontrada.'}), 404
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.exception(f'[Campaign] delete {cid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/<int:cid>/regenerate', methods=['POST'])
+def campaign_regenerate(cid):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM campaigns WHERE id = ?', (cid,))
+        exists = c.fetchone()
+        conn.close()
+        if not exists:
+            return jsonify({'error': 'Campanha não encontrada.'}), 404
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Reanalisando portfólio e mapeamento...', 'progress': 25})
+
+        def _run():
+            try:
+                _bg_task_set(task_id, {'step': 'Reclassificando contas...', 'progress': 40})
+
+                def _progress(pct, step):
+                    _bg_task_set(task_id, {'progress': max(40, min(95, int(pct))), 'step': step})
+
+                _campaign_regenerate_core(cid, progress_cb=_progress)
+                _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': {'campaign_id': cid}})
+            except Exception as e:
+                logger.exception(f'[Campaign][regenerate] {e}')
+                _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+            finally:
+                _bg_task_cleanup(task_id)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[Campaign] regenerate start {cid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/actions/<int:aid>', methods=['PATCH'])
+def campaign_action_update(aid):
+    try:
+        data = request.get_json() or {}
+        status = (data.get('status') or '').strip()
+        if status not in ('pending', 'in_progress', 'done'):
+            return jsonify({'error': 'Status inválido.'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM campaign_actions WHERE id = ?', (aid,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Ação não encontrada.'}), 404
+        if status == 'done':
+            c.execute('UPDATE campaign_actions SET status=?, completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?', (status, aid))
+        else:
+            c.execute('UPDATE campaign_actions SET status=?, completed_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?', (status, aid))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'status': status})
+    except Exception as e:
+        logger.exception(f'[Campaign] action update {aid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/actions/<int:aid>/logs', methods=['POST'])
+def campaign_action_log(aid):
+    try:
+        data = request.get_json() or {}
+        text = (data.get('log_text') or '').strip()
+        if not text:
+            return jsonify({'error': 'Escreva um update.'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id FROM campaign_actions WHERE id = ?', (aid,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({'error': 'Ação não encontrada.'}), 404
+        c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'user')", (aid, text))
+        log_id = c.lastrowid
+        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (aid,))
+        conn.commit()
+        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (log_id,))
+        log = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(log)
+    except Exception as e:
+        logger.exception(f'[Campaign] action log {aid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/logs/<int:lid>', methods=['PATCH'])
+def campaign_log_update(lid):
+    try:
+        data = request.get_json() or {}
+        text = (data.get('log_text') or '').strip()
+        if not text:
+            return jsonify({'error': 'Escreva um update.'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
+        log = dict_from_row(c.fetchone())
+        if not log:
+            conn.close()
+            return jsonify({'error': 'Update não encontrado.'}), 404
+        if (log.get('log_type') or 'user') != 'user':
+            conn.close()
+            return jsonify({'error': 'Apenas updates manuais podem ser editados.'}), 400
+        c.execute('UPDATE campaign_action_logs SET log_text=? WHERE id=?', (text, lid))
+        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (log['action_id'],))
+        conn.commit()
+        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
+        updated = dict_from_row(c.fetchone())
+        conn.close()
+        return jsonify(updated)
+    except Exception as e:
+        logger.exception(f'[Campaign] log update {lid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/campaigns/logs/<int:lid>', methods=['DELETE'])
+def campaign_log_delete(lid):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
+        log = dict_from_row(c.fetchone())
+        if not log:
+            conn.close()
+            return jsonify({'error': 'Update não encontrado.'}), 404
+        if (log.get('log_type') or 'user') != 'user':
+            conn.close()
+            return jsonify({'error': 'Apenas updates manuais podem ser excluídos.'}), 400
+        c.execute('DELETE FROM campaign_action_logs WHERE id=?', (lid,))
+        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (log['action_id'],))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.exception(f'[Campaign] log delete {lid}: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/')
 def index():
