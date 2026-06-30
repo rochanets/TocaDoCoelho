@@ -13222,7 +13222,7 @@ def _linkedin_build_account_context(account, contact):
     }
 
 
-def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url):
+def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url, forced_account_id=None):
     try:
         _bg_task_set(task_id, {'step': 'Buscando perfil público...', 'progress': 15})
         fetched_text = None
@@ -13241,8 +13241,13 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             return
 
         parsed = _linkedin_parse_summary(raw)
+        contact_name = (parsed or {}).get('nome') or ''
 
-        _bg_task_set(task_id, {'step': 'Buscando foto do perfil...', 'progress': 75})
+        # Detecção de contato/conta
+        contact, detected_account = _linkedin_find_contact_and_account(linkedin_url, contact_name)
+        account = _linkedin_resolve_account(forced_account_id) if forced_account_id else detected_account
+
+        _bg_task_set(task_id, {'step': 'Buscando foto do perfil...', 'progress': 70})
         photo_url = None
         photo_source = None
         if extension_photo_url:
@@ -13261,6 +13266,11 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao usar og:image: {e}')
 
+        # Fallback (item d): foto do contato cadastrado no sistema
+        if not photo_url and contact and (contact.get('photo_url') or '').strip():
+            photo_url = contact['photo_url'].strip()
+            photo_source = 'system_contact_photo'
+
         if not photo_url and parsed and parsed.get('nome'):
             try:
                 nome = parsed['nome']
@@ -13273,6 +13283,15 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao buscar/baixar foto: {e}')
 
+        # Contexto da conta (a/b/c)
+        account_context = None
+        if account:
+            _bg_task_set(task_id, {'step': 'Analisando conta mapeada...', 'progress': 88})
+            try:
+                account_context = _linkedin_build_account_context(account, contact)
+            except Exception as e:
+                logger.warning(f'[LinkedIn] Falha ao montar contexto da conta: {e}')
+
         result = {
             'summary': parsed,
             'raw': raw if not parsed else None,
@@ -13280,7 +13299,8 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             'fetched_from_url': fetched_text is not None,
             'limited_data': not data_is_rich,
             'photo_url': photo_url,
-            'photo_source': photo_source
+            'photo_source': photo_source,
+            'account_context': account_context
         }
         _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': result})
     except Exception as e:
@@ -13299,6 +13319,7 @@ def linkedin_summarize():
         profile_text = (data.get('profile_text') or '').strip()
         meeting_context = (data.get('meeting_context') or '').strip()
         extension_photo_url = (data.get('extension_photo_url') or '').strip()
+        forced_account_id = data.get('account_id')
 
         if not linkedin_url and not profile_text:
             return jsonify({'error': 'Informe a URL do LinkedIn ou cole o texto do perfil.'}), 400
@@ -13307,7 +13328,7 @@ def linkedin_summarize():
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
         threading.Thread(
             target=_linkedin_process_async,
-            args=(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url),
+            args=(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url, forced_account_id),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
