@@ -15296,6 +15296,19 @@ def home_overview():
         """, fat_params)
         top_faturamento = [{'name': r['name'], 'revenue_cents': r['receita']} for r in c.fetchall()]
 
+        c.execute(f"""
+            SELECT a.name, COALESCE(SUM(p.current_revenue_cents), 0) AS receita
+            FROM accounts a
+            LEFT JOIN account_presences p ON p.account_id = a.id
+                AND p.billing_type = 'Unico'
+                {fat_contract_clause}
+            GROUP BY a.id, a.name
+            HAVING receita > 0
+            ORDER BY receita DESC
+            LIMIT 10
+        """, fat_params)
+        top_faturamento_unico = [{'name': r['name'], 'revenue_cents': r['receita']} for r in c.fetchall()]
+
         # --- Top 10 contas com mais interações no período ---
         c.execute(f"""
             WITH client_acts AS (
@@ -15624,6 +15637,7 @@ def home_overview():
                 'cobertura_pct': cobertura_pct,
             },
             'top_faturamento': top_faturamento,
+            'top_faturamento_unico': top_faturamento_unico,
             'top_interacoes': top_interacoes,
             'target_menor_interacao': target_menor_interacao,
             'interacoes_cargo': interacoes_cargo,
