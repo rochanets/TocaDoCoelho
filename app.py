@@ -9350,6 +9350,49 @@ def archive_client(client_id):
         print(f'[ERROR] POST /api/clients/{client_id}/archive: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/clientes/<int:client_id>/desarquivar', methods=['POST'])
+def unarchive_client(client_id):
+    try:
+        payload = request.get_json(silent=True) or {}
+        new_company = (payload.get('company') or '').strip()
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, company FROM clients WHERE id = ?', (client_id,))
+        existing = dict_from_row(c.fetchone())
+        if not existing:
+            conn.close()
+            return jsonify({'error': 'Cliente nao encontrado'}), 404
+
+        current_company = (existing.get('company') or '').strip()
+        if not current_company and not new_company:
+            conn.close()
+            return jsonify({'error': 'Informe a conta para desarquivar este contato'}), 400
+
+        if new_company and new_company != current_company:
+            c.execute('''UPDATE clients
+                         SET company = ?, is_archived = 0, updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?''', (new_company, client_id))
+            c.execute(
+                '''INSERT INTO activities (client_id, contact_type, information, description)
+                   VALUES (?, ?, ?, ?)''',
+                (
+                    client_id,
+                    'Sistema',
+                    f'Usuario desarquivado. Empresa atribuida: {new_company}',
+                    'Registro automático de desarquivamento'
+                )
+            )
+        else:
+            c.execute('''UPDATE clients
+                         SET is_archived = 0, updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?''', (client_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Contato desarquivado'})
+    except Exception as e:
+        print(f'[ERROR] POST /api/clientes/{client_id}/desarquivar: {e}')
+        return jsonify({'error': str(e)}), 500
+
 # API - Atividades (rotas alternativas para compatibilidade)
 @app.route('/api/atividades', methods=['GET'])
 def get_atividades():
