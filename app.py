@@ -13129,6 +13129,99 @@ def _linkedin_resolve_account(account_id):
     return dict_from_row(row) if row else None
 
 
+def _linkedin_build_account_context(account, contact):
+    """Monta o contexto da conta para o Preparar Reunião.
+    Retorna dict com: account, market_moment, relationship_summary,
+    stefanini_services, contact_found, contact_photo_url."""
+    account_name = (account.get('name') or '').strip()
+
+    # a) Momento de mercado (fresco a cada execução)
+    market_moment = None
+    try:
+        market_moment = _relation_report_fetch_market_context(account_name)
+    except Exception as e:
+        logger.warning(f'[LinkedIn] Falha ao buscar momento de mercado: {e}')
+
+    # c) Serviços Stefanini mapeados na conta
+    stefanini_services = []
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT delivery_name, stf_owner, current_revenue_cents
+                     FROM account_presences WHERE account_id = ?
+                     ORDER BY delivery_name COLLATE NOCASE""", (account['id'],))
+        for r in c.fetchall():
+            row = dict_from_row(r)
+            stefanini_services.append({
+                'delivery_name': row.get('delivery_name') or '',
+                'stf_owner': row.get('stf_owner') or '',
+                'revenue': format_currency_br(row.get('current_revenue_cents')) if row.get('current_revenue_cents') else None,
+            })
+        conn.close()
+    except Exception as e:
+        logger.warning(f'[LinkedIn] Falha ao listar serviços Stefanini: {e}')
+
+    # b) Resumo do relacionamento com o contato (só se o contato existir)
+    relationship_summary = None
+    contact_found = bool(contact)
+    contact_photo_url = (contact.get('photo_url') or '').strip() if contact else ''
+    if contact:
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute("""SELECT activity_date, contact_type, description, information
+                         FROM activities WHERE client_id = ?
+                         ORDER BY datetime(activity_date) DESC, id DESC LIMIT 20""", (contact['id'],))
+            acts = [dict_from_row(r) for r in c.fetchall()]
+            c.execute("""SELECT activity_date, description FROM account_activities
+                         WHERE account_id = ?
+                         ORDER BY datetime(activity_date) DESC, created_at DESC LIMIT 15""", (account['id'],))
+            acc_acts = [dict_from_row(r) for r in c.fetchall()]
+            conn.close()
+
+            contact_lines = []
+            for a in acts:
+                txt = (a.get('description') or a.get('information') or '').strip().replace('\n', ' ')
+                if txt:
+                    contact_lines.append(f"- {a.get('activity_date') or 's/data'} [{a.get('contact_type') or 'atividade'}]: {txt[:240]}")
+            account_lines = []
+            for a in acc_acts:
+                txt = (a.get('description') or '').strip().replace('\n', ' ')
+                if txt:
+                    account_lines.append(f"- {a.get('activity_date') or 's/data'}: {txt[:240]}")
+
+            if contact_lines or account_lines:
+                user_msg = (
+                    f"Contato: {contact.get('name')} ({contact.get('position') or 'cargo não informado'}) "
+                    f"da conta {account_name}.\n\n"
+                    "HISTÓRICO DE ATIVIDADES DO CONTATO:\n"
+                    + ('\n'.join(contact_lines) if contact_lines else '(sem registros diretos do contato)')
+                    + "\n\nCONTEXTO DO RELACIONAMENTO DA CONTA:\n"
+                    + ('\n'.join(account_lines) if account_lines else '(sem registros da conta)')
+                    + "\n\nEscreva um resumo executivo do relacionamento com este contato em 2-4 frases, "
+                    "priorizando o histórico do contato e complementando com o contexto da conta quando o "
+                    "histórico direto for escasso. Não invente fatos não listados."
+                )
+                raw, _src = _iata_call_llm(
+                    'Você é um assistente comercial. Responda em português (Brasil), apenas o resumo, sem markdown.',
+                    user_msg,
+                    'linkedin_relationship'
+                )
+                if raw and str(raw).strip():
+                    relationship_summary = str(raw).strip()
+        except Exception as e:
+            logger.warning(f'[LinkedIn] Falha ao resumir relacionamento: {e}')
+
+    return {
+        'account': {'id': account['id'], 'name': account_name},
+        'market_moment': market_moment,
+        'relationship_summary': relationship_summary,
+        'stefanini_services': stefanini_services,
+        'contact_found': contact_found,
+        'contact_photo_url': contact_photo_url,
+    }
+
+
 def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url):
     try:
         _bg_task_set(task_id, {'step': 'Buscando perfil público...', 'progress': 15})
