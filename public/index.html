@@ -17451,6 +17451,9 @@
                 resultArea.innerHTML = limitedDataWarning
                     + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source)
                     + _renderAccountContext(data.account_context);
+                if (data.account_context && data.account_context.account) {
+                    _populateAccountContextSelect(data.account_context.account.id);
+                }
             } else if (data.raw) {
                 resultArea.innerHTML = limitedDataWarning + `
                     <div class="settings-card">
@@ -17705,6 +17708,9 @@
             <div class="settings-card" style="margin-bottom:16px; border-left:4px solid #6366f1;">
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
                     <h3 style="color:#3730a3; margin:0; font-size:15px;"><i class="fas fa-building" style="margin-right:8px;"></i>Contexto da Conta: ${accName}</h3>
+                    <select id="atAccountContextSelect" onchange="onAtAccountContextChange(this.value)" style="font-size:12px; padding:4px 8px; border:1px solid #d1d5db; border-radius:6px; background:white; max-width:220px;">
+                        <option value="${ac.account.id}" selected>${accName}</option>
+                    </select>
                 </div>
                 ${relHtml}
                 <div style="margin-bottom:16px;">
@@ -17716,6 +17722,29 @@
                     ${svcHtml}
                 </div>
             </div>`;
+        }
+
+        async function _populateAccountContextSelect(currentAccountId) {
+            const select = document.getElementById('atAccountContextSelect');
+            if (!select) return;
+            try {
+                const resp = await fetch(`${API_BASE}/accounts`);
+                if (!resp.ok) return;
+                const accounts = await resp.json();
+                const options = ['<option value="">Nenhuma conta (limpar)</option>'];
+                (Array.isArray(accounts) ? accounts : []).forEach(acc => {
+                    const selected = String(acc.id) === String(currentAccountId) ? ' selected' : '';
+                    options.push(`<option value="${acc.id}"${selected}>${_escHtml(acc.name || 'Conta sem nome')}</option>`);
+                });
+                select.innerHTML = options.join('');
+            } catch (e) {
+                // Mantém o select com a opção única já renderizada se a busca falhar
+            }
+        }
+
+        function onAtAccountContextChange(value) {
+            atLinkedinForcedAccountId = value ? value : null;
+            gerarResumoLinkedIn();
         }
 
         function confirmarFotoLinkedIn() {
