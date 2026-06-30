@@ -13409,7 +13409,156 @@ def _linkedin_parse_summary(raw):
     return None
 
 
-def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url):
+def _normalize_linkedin_url(url):
+    """Normaliza URL de LinkedIn para comparação: minúsculas, sem protocolo/www/querystring/trailing slash."""
+    if not url:
+        return ''
+    u = str(url).strip().lower()
+    u = u.split('?', 1)[0].split('#', 1)[0]
+    u = re.sub(r'^https?://', '', u)
+    u = re.sub(r'^www\.', '', u)
+    return u.rstrip('/')
+
+
+def _linkedin_find_contact_and_account(linkedin_url, contact_name):
+    """Localiza o contato (por linkedin, depois por nome) e a conta mapeada vinculada
+    via clients.company == accounts.name. Retorna (contact|None, account|None)."""
+    conn = get_db()
+    c = conn.cursor()
+    contact = None
+    norm = _normalize_linkedin_url(linkedin_url)
+    if norm:
+        c.execute("SELECT * FROM clients WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''")
+        for row in c.fetchall():
+            r = dict_from_row(row)
+            if _normalize_linkedin_url(r.get('linkedin')) == norm:
+                contact = r
+                break
+    if not contact and contact_name and contact_name.strip():
+        c.execute("SELECT * FROM clients WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) ORDER BY id LIMIT 1",
+                  (contact_name.strip(),))
+        row = c.fetchone()
+        if row:
+            contact = dict_from_row(row)
+    account = None
+    if contact and (contact.get('company') or '').strip():
+        c.execute("SELECT * FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) ORDER BY id LIMIT 1",
+                  (contact['company'].strip(),))
+        row = c.fetchone()
+        if row:
+            account = dict_from_row(row)
+    conn.close()
+    return contact, account
+
+
+def _linkedin_resolve_account(account_id):
+    """Carrega uma conta por id (usado quando o usuário força a conta no dropdown)."""
+    try:
+        aid = int(account_id)
+    except (TypeError, ValueError):
+        return None
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM accounts WHERE id = ? LIMIT 1", (aid,))
+    row = c.fetchone()
+    conn.close()
+    return dict_from_row(row) if row else None
+
+
+def _linkedin_build_account_context(account, contact):
+    """Monta o contexto da conta para o Preparar Reunião.
+    Retorna dict com: account, market_moment, relationship_summary,
+    stefanini_services, contact_found, contact_photo_url."""
+    account_name = (account.get('name') or '').strip()
+
+    # a) Momento de mercado (fresco a cada execução)
+    market_moment = None
+    try:
+        market_moment = _relation_report_fetch_market_context(account_name)
+    except Exception as e:
+        logger.warning(f'[LinkedIn] Falha ao buscar momento de mercado: {e}')
+
+    # c) Serviços Stefanini mapeados na conta
+    stefanini_services = []
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT delivery_name, stf_owner, current_revenue_cents
+                     FROM account_presences WHERE account_id = ?
+                     ORDER BY delivery_name COLLATE NOCASE""", (account['id'],))
+        for r in c.fetchall():
+            row = dict_from_row(r)
+            stefanini_services.append({
+                'delivery_name': row.get('delivery_name') or '',
+                'stf_owner': row.get('stf_owner') or '',
+                'revenue': format_currency_br(row.get('current_revenue_cents')) if row.get('current_revenue_cents') else None,
+            })
+        conn.close()
+    except Exception as e:
+        logger.warning(f'[LinkedIn] Falha ao listar serviços Stefanini: {e}')
+
+    # b) Resumo do relacionamento com o contato (só se o contato existir)
+    relationship_summary = None
+    contact_found = bool(contact)
+    contact_photo_url = (contact.get('photo_url') or '').strip() if contact else ''
+    if contact:
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute("""SELECT activity_date, contact_type, description, information
+                         FROM activities WHERE client_id = ?
+                         ORDER BY datetime(activity_date) DESC, id DESC LIMIT 20""", (contact['id'],))
+            acts = [dict_from_row(r) for r in c.fetchall()]
+            c.execute("""SELECT activity_date, description FROM account_activities
+                         WHERE account_id = ?
+                         ORDER BY datetime(activity_date) DESC, created_at DESC LIMIT 15""", (account['id'],))
+            acc_acts = [dict_from_row(r) for r in c.fetchall()]
+            conn.close()
+
+            contact_lines = []
+            for a in acts:
+                txt = (a.get('description') or a.get('information') or '').strip().replace('\n', ' ')
+                if txt:
+                    contact_lines.append(f"- {a.get('activity_date') or 's/data'} [{a.get('contact_type') or 'atividade'}]: {txt[:240]}")
+            account_lines = []
+            for a in acc_acts:
+                txt = (a.get('description') or '').strip().replace('\n', ' ')
+                if txt:
+                    account_lines.append(f"- {a.get('activity_date') or 's/data'}: {txt[:240]}")
+
+            if contact_lines or account_lines:
+                user_msg = (
+                    f"Contato: {contact.get('name')} ({contact.get('position') or 'cargo não informado'}) "
+                    f"da conta {account_name}.\n\n"
+                    "HISTÓRICO DE ATIVIDADES DO CONTATO:\n"
+                    + ('\n'.join(contact_lines) if contact_lines else '(sem registros diretos do contato)')
+                    + "\n\nCONTEXTO DO RELACIONAMENTO DA CONTA:\n"
+                    + ('\n'.join(account_lines) if account_lines else '(sem registros da conta)')
+                    + "\n\nEscreva um resumo executivo do relacionamento com este contato em 2-4 frases, "
+                    "priorizando o histórico do contato e complementando com o contexto da conta quando o "
+                    "histórico direto for escasso. Não invente fatos não listados."
+                )
+                raw, _src = _iata_call_llm(
+                    'Você é um assistente comercial. Responda em português (Brasil), apenas o resumo, sem markdown.',
+                    user_msg,
+                    'linkedin_relationship'
+                )
+                if raw and str(raw).strip():
+                    relationship_summary = str(raw).strip()
+        except Exception as e:
+            logger.warning(f'[LinkedIn] Falha ao resumir relacionamento: {e}')
+
+    return {
+        'account': {'id': account['id'], 'name': account_name},
+        'market_moment': market_moment,
+        'relationship_summary': relationship_summary,
+        'stefanini_services': stefanini_services,
+        'contact_found': contact_found,
+        'contact_photo_url': contact_photo_url,
+    }
+
+
+def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url, forced_account_id=None):
     try:
         _bg_task_set(task_id, {'step': 'Buscando perfil público...', 'progress': 15})
         fetched_text = None
@@ -13428,8 +13577,13 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             return
 
         parsed = _linkedin_parse_summary(raw)
+        contact_name = (parsed or {}).get('nome') or ''
 
-        _bg_task_set(task_id, {'step': 'Buscando foto do perfil...', 'progress': 75})
+        # Detecção de contato/conta
+        contact, detected_account = _linkedin_find_contact_and_account(linkedin_url, contact_name)
+        account = _linkedin_resolve_account(forced_account_id) if forced_account_id else detected_account
+
+        _bg_task_set(task_id, {'step': 'Buscando foto do perfil...', 'progress': 70})
         photo_url = None
         photo_source = None
         if extension_photo_url:
@@ -13448,6 +13602,11 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao usar og:image: {e}')
 
+        # Fallback (item d): foto do contato cadastrado no sistema
+        if not photo_url and contact and (contact.get('photo_url') or '').strip():
+            photo_url = contact['photo_url'].strip()
+            photo_source = 'system_contact_photo'
+
         if not photo_url and parsed and parsed.get('nome'):
             try:
                 nome = parsed['nome']
@@ -13460,6 +13619,15 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao buscar/baixar foto: {e}')
 
+        # Contexto da conta (a/b/c)
+        account_context = None
+        if account:
+            _bg_task_set(task_id, {'step': 'Analisando conta mapeada...', 'progress': 88})
+            try:
+                account_context = _linkedin_build_account_context(account, contact)
+            except Exception as e:
+                logger.warning(f'[LinkedIn] Falha ao montar contexto da conta: {e}')
+
         result = {
             'summary': parsed,
             'raw': raw if not parsed else None,
@@ -13467,7 +13635,8 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
             'fetched_from_url': fetched_text is not None,
             'limited_data': not data_is_rich,
             'photo_url': photo_url,
-            'photo_source': photo_source
+            'photo_source': photo_source,
+            'account_context': account_context
         }
         _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': result})
     except Exception as e:
@@ -13486,6 +13655,7 @@ def linkedin_summarize():
         profile_text = (data.get('profile_text') or '').strip()
         meeting_context = (data.get('meeting_context') or '').strip()
         extension_photo_url = (data.get('extension_photo_url') or '').strip()
+        forced_account_id = data.get('account_id')
 
         if not linkedin_url and not profile_text:
             return jsonify({'error': 'Informe a URL do LinkedIn ou cole o texto do perfil.'}), 400
@@ -13494,7 +13664,7 @@ def linkedin_summarize():
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
         threading.Thread(
             target=_linkedin_process_async,
-            args=(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url),
+            args=(task_id, linkedin_url, profile_text, meeting_context, extension_photo_url, forced_account_id),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
