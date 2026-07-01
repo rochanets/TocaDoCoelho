@@ -1,6 +1,6 @@
 (() => {
   // Confirmação visível no DevTools (F12 → Console) para diagnóstico
-  console.log('[AutoToca Helper] content.js v0.6.0 carregado em:', window.location.href);
+  console.log('[AutoToca Helper] content.js v0.7.0 carregado em:', window.location.href);
 
   const WEB_PING_EVENT    = 'autotoca-extension-ping';
   const WEB_PONG_EVENT    = 'autotoca-extension-pong';
@@ -75,7 +75,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.6.0',
+        version: '0.7.0',
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -354,12 +354,22 @@
       capturedAt: new Date().toISOString(),
     };
 
+    // Salva via background service worker — único contexto compartilhado entre abas
     try {
-      await chrome.storage.local.set({ [LINKEDIN_KEY]: data });
-      _log('info', 'Perfil salvo no chrome.storage.local');
+      const resp = await chrome.runtime.sendMessage({ type: 'save_linkedin_profile', data });
+      if (resp?.ok) {
+        _log('info', 'Perfil salvo via background service worker (relay)');
+      } else {
+        throw new Error(resp?.error || 'background retornou erro');
+      }
     } catch (e) {
-      _log('warn', 'Falha ao salvar no chrome.storage, usando localStorage', { error: e.message });
-      try { localStorage.setItem(LINKEDIN_KEY, JSON.stringify(data)); } catch (_) {}
+      _log('warn', 'Falha no background relay, usando chrome.storage.local direto', { error: e.message });
+      try {
+        await chrome.storage.local.set({ [LINKEDIN_KEY]: data });
+        _log('info', 'Perfil salvo diretamente no chrome.storage.local (fallback)');
+      } catch (e2) {
+        _log('error', 'Ambos os métodos de salvamento falharam', { error: e2.message });
+      }
     }
 
     if (btn) {
@@ -576,12 +586,27 @@
 
     if (command === 'get_linkedin_profile') {
       let pending = null;
+
+      // Busca via background service worker (relay confiável entre abas)
       try {
-        const stored = await chrome.storage.local.get(LINKEDIN_KEY);
-        pending = stored[LINKEDIN_KEY] || null;
-      } catch (_) {
-        try { pending = JSON.parse(localStorage.getItem(LINKEDIN_KEY) || 'null'); } catch (__) {}
+        const resp = await chrome.runtime.sendMessage({ type: 'get_linkedin_profile' });
+        if (resp?.ok && resp?.data) {
+          pending = resp.data;
+          _log('info', 'Perfil recuperado via background service worker');
+        }
+      } catch (e) {
+        _log('warn', 'Falha no background relay (leitura), tentando storage direto', { error: e.message });
       }
+
+      // Fallback: leitura direta do chrome.storage.local
+      if (!pending) {
+        try {
+          const stored = await chrome.storage.local.get(LINKEDIN_KEY);
+          pending = stored[LINKEDIN_KEY] || null;
+          if (pending) _log('info', 'Perfil recuperado via chrome.storage.local (fallback)');
+        } catch (_) {}
+      }
+
       if (!pending) {
         emitResult({ ok: false, command, reason: 'no_pending_profile', message: 'Nenhum perfil LinkedIn capturado ainda. Abra um perfil no LinkedIn e clique em "Analisar com AutoToca".' });
         return;
@@ -600,9 +625,8 @@
     }
 
     if (command === 'clear_linkedin_profile') {
-      try { await chrome.storage.local.remove(LINKEDIN_KEY); } catch (_) {
-        try { localStorage.removeItem(LINKEDIN_KEY); } catch (__) {}
-      }
+      try { await chrome.runtime.sendMessage({ type: 'clear_linkedin_profile' }); } catch (_) {}
+      try { await chrome.storage.local.remove(LINKEDIN_KEY); } catch (_) {}
       emitResult({ ok: true, command, message: 'Perfil capturado removido da extensão.' });
       return;
     }
@@ -629,7 +653,7 @@
 
   _lastUrl = window.location.href;
 
-  _log('info', 'Extensão AutoToca v0.6.0 carregada', {
+  _log('info', 'Extensão AutoToca v0.7.0 carregada', {
     isLinkedInProfile: isLinkedInProfilePage(),
     isForms: isFormsPage(),
     pathname: window.location.pathname,
