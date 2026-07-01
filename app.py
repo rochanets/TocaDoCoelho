@@ -13304,14 +13304,14 @@ def _linkedin_try_fetch_public(url):
         # Se LinkedIn redirecionou para login, o conteúdo tem pouca informação útil
         if len(clean) < 300 or 'Sign in' in clean or 'authwall' in url:
             return None
-        return clean[:8000]  # Limita para não exceder contexto do LLM
+        return clean[:16000]  # Limita para não exceder contexto do LLM
     except Exception as e:
         logger.debug(f'[LinkedIn] Falha ao buscar URL pública: {e}')
         return None
 
 
 def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data_is_rich=True):
-    """Gera resumo executivo do perfil LinkedIn via LLM (SAI → OpenRouter)."""
+    """Gera resumo executivo do perfil LinkedIn via LLM (SAI)."""
     ctx_part = f'\n\nCONTEXTO DA REUNIÃO: {meeting_context}' if meeting_context.strip() else ''
 
     if data_is_rich:
@@ -13331,11 +13331,17 @@ def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data
     llm_prompt = (
         'Analise as informações abaixo de um perfil profissional do LinkedIn e gere um resumo executivo '
         f'para preparar uma reunião de negócios com esta pessoa. {quality_instruction}'
-        f'PERFIL LINKEDIN:\n{profile_content}{ctx_part}\n\n'
+        'IMPORTANTE SOBRE A TRAJETÓRIA: monte a lista "trajetoria" com TODAS as experiências profissionais '
+        'mencionadas no perfil (não apenas o cargo atual) — inclua cada empresa/cargo/período encontrado no texto, '
+        'da mais recente para a mais antiga, sem limite fixo de itens. Se a pessoa teve mais de um cargo na mesma '
+        'empresa (ex.: promoção interna), mencione isso explicitamente (ex.: "CEO desde 2025 (na empresa desde 2012, '
+        'anteriormente Diretor Financeiro)"). No campo "cargo_atual", se o perfil indicar uma data de início no cargo '
+        'diferente da data de início na empresa, mencione as duas (ex.: "CEO na Dasa desde 2025 — na empresa desde 2012").'
+        f'\n\nPERFIL LINKEDIN:\n{profile_content}{ctx_part}\n\n'
         'Retorne SOMENTE um JSON válido, sem texto adicional, com exatamente estes campos: '
         '{"nome": "Nome completo da pessoa", '
-        '"cargo_atual": "Cargo exato e empresa atual", '
-        '"trajetoria": ["experiência específica 1 com empresa e período", "experiência 2", "experiência 3"], '
+        '"cargo_atual": "Cargo exato e empresa atual, com tempo de casa se diferente do tempo no cargo", '
+        '"trajetoria": ["experiência específica 1 com empresa, cargo e período", "experiência 2", "experiência 3", "... (todas as experiências do perfil)"], '
         '"formacao": ["curso, instituição e ano se disponível", "outra formação"], '
         '"competencias": ["competência específica 1", "competência 2", "competência 3", "competência 4", "competência 5"], '
         '"pontos_conversa": ["ponto de conversa concreto 1", "ponto 2", "ponto 3", "ponto 4"], '
@@ -13344,48 +13350,10 @@ def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data
         'Use null para campos não encontrados. Responda em português (BR).'
     )
 
-    # Tentativa 1: SAI
     raw = _sai_simple_prompt(llm_prompt)
     if raw:
         logger.info('[LinkedIn][SAI] Resumo gerado com sucesso')
         return raw, 'SAI'
-
-    # Tentativa 2: OpenRouter
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if or_key:
-        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        try:
-            or_payload = {
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': 'Você é um analista de inteligência executiva. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
-                    {'role': 'user', 'content': llm_prompt}
-                ],
-                'temperature': 0.3
-            }
-            req = urllib.request.Request(
-                'https://openrouter.ai/api/v1/chat/completions',
-                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {or_key}',
-                    'HTTP-Referer': site_url,
-                    'X-Title': app_name
-                },
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            choices = data.get('choices') or []
-            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
-            if raw:
-                logger.info('[LinkedIn][OpenRouter] Resumo gerado com sucesso')
-                return raw, 'OpenRouter'
-        except Exception as e:
-            logger.warning(f'[LinkedIn][OpenRouter] Falha: {e}')
 
     return None, 'sem_llm'
 
@@ -13573,7 +13541,7 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
         _bg_task_set(task_id, {'step': 'Gerando resumo executivo com IA...', 'progress': 35})
         raw, source = _linkedin_generate_summary_via_llm(profile_content, meeting_context, data_is_rich=data_is_rich)
         if not raw:
-            _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'})
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Serviço de IA (SAI) não configurado ou indisponível no momento.'})
             return
 
         parsed = _linkedin_parse_summary(raw)
