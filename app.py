@@ -1214,21 +1214,34 @@ def _sai_simple_prompt(question: str) -> str | None:
         return None
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
     template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
-    try:
-        resp = requests.post(
-            f'{base_url}/api/templates/{template_id}/execute',
-            json={'inputs': {'question': question}},
-            headers={'X-Api-Key': api_key},
-            timeout=45
-        )
-        if resp.status_code == 200:
-            logger.info(f'[SAI][simple_prompt] OK ({len(resp.text)} chars)')
-            return resp.text
-        logger.warning(f'[SAI][simple_prompt] HTTP {resp.status_code}: {resp.text[:200]}')
-        return None
-    except Exception as e:
-        logger.warning(f'[SAI][simple_prompt] falha: {e}')
-        return None
+
+    # O template SAI é compartilhado por várias features do app e pode sofrer rate limit
+    # (HTTP 429) sob uso concorrente. Como esse limite é transitório, tenta novamente
+    # algumas vezes com backoff antes de desistir.
+    max_attempts = 3
+    backoff_seconds = (2, 4)
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                f'{base_url}/api/templates/{template_id}/execute',
+                json={'inputs': {'question': question}},
+                headers={'X-Api-Key': api_key},
+                timeout=45
+            )
+            if resp.status_code == 200:
+                logger.info(f'[SAI][simple_prompt] OK ({len(resp.text)} chars)')
+                return resp.text
+            if resp.status_code == 429 and attempt < max_attempts - 1:
+                wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
+                logger.warning(f'[SAI][simple_prompt] HTTP 429 (rate limit), tentativa {attempt + 1}/{max_attempts}, aguardando {wait}s...')
+                time.sleep(wait)
+                continue
+            logger.warning(f'[SAI][simple_prompt] HTTP {resp.status_code}: {resp.text[:200]}')
+            return None
+        except Exception as e:
+            logger.warning(f'[SAI][simple_prompt] falha: {e}')
+            return None
+    return None
 
 
 def api_error(status, code, message, details=None, hint=None):
