@@ -1,4 +1,7 @@
 (() => {
+  // Confirmação visível no DevTools (F12 → Console) para diagnóstico
+  console.log('[AutoToca Helper] content.js v0.7.0 carregado em:', window.location.href);
+
   const WEB_PING_EVENT    = 'autotoca-extension-ping';
   const WEB_PONG_EVENT    = 'autotoca-extension-pong';
   const WEB_COMMAND_EVENT = 'autotoca-extension-command';
@@ -72,7 +75,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.4.0',
+        version: '0.7.0',
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -351,12 +354,22 @@
       capturedAt: new Date().toISOString(),
     };
 
+    // Salva via background service worker — único contexto compartilhado entre abas
     try {
-      await chrome.storage.local.set({ [LINKEDIN_KEY]: data });
-      _log('info', 'Perfil salvo no chrome.storage.local');
+      const resp = await chrome.runtime.sendMessage({ type: 'save_linkedin_profile', data });
+      if (resp?.ok) {
+        _log('info', 'Perfil salvo via background service worker (relay)');
+      } else {
+        throw new Error(resp?.error || 'background retornou erro');
+      }
     } catch (e) {
-      _log('warn', 'Falha ao salvar no chrome.storage, usando localStorage', { error: e.message });
-      try { localStorage.setItem(LINKEDIN_KEY, JSON.stringify(data)); } catch (_) {}
+      _log('warn', 'Falha no background relay, usando chrome.storage.local direto', { error: e.message });
+      try {
+        await chrome.storage.local.set({ [LINKEDIN_KEY]: data });
+        _log('info', 'Perfil salvo diretamente no chrome.storage.local (fallback)');
+      } catch (e2) {
+        _log('error', 'Ambos os métodos de salvamento falharam', { error: e2.message });
+      }
     }
 
     if (btn) {
@@ -402,18 +415,62 @@
     }
   }
 
+  // Verifica se a página de perfil LinkedIn tem conteúdo suficiente renderizado.
+  // O LinkedIn mudou sua estrutura e o nome do perfil pode não estar mais em <h1>.
+  function _isLinkedInProfileRendered() {
+    // Sinal 1: h1 com texto (estrutura antiga do LinkedIn)
+    const h1Text = document.querySelector('h1')?.innerText?.trim();
+    if (h1Text) return { ready: true, signal: 'h1', value: h1Text.slice(0, 50) };
+
+    // Sinal 2: qualquer heading (h2, h3) com texto — LinkedIn usa várias hierarquias
+    for (const tag of ['h2', 'h3']) {
+      const el = document.querySelector(`main ${tag}, .scaffold-layout__main ${tag}`);
+      const txt = el?.innerText?.trim();
+      if (txt) return { ready: true, signal: tag, value: txt.slice(0, 50) };
+    }
+
+    // Sinal 3: foto de perfil carregada (elemento comum em todas as versões)
+    const photoSelectors = [
+      '.pv-top-card-profile-picture__image',
+      '.profile-photo-edit__preview',
+      'button[aria-label*="foto"] img',
+      'button[aria-label*="profile"] img',
+      'button[aria-label*="Foto"] img',
+      '.pv-top-card__photo img',
+    ];
+    for (const sel of photoSelectors) {
+      if (document.querySelector(sel)) return { ready: true, signal: 'foto', value: sel };
+    }
+
+    // Sinal 4: card principal do perfil (artdeco-card é presente em todas as versões)
+    if (document.querySelector('.artdeco-card .ph5, .pv-top-card')) {
+      return { ready: true, signal: 'artdeco-card' };
+    }
+
+    // Sinal 5: na segunda tentativa em diante, a página deve ter main com conteúdo
+    const mainEl = document.querySelector('main, .scaffold-layout__main');
+    if (mainEl && mainEl.children.length > 2) {
+      return { ready: true, signal: 'main-children', value: mainEl.children.length };
+    }
+
+    return { ready: false };
+  }
+
   function _scheduleButtonInjection(attempt) {
-    const delays = [900, 2000, 3500, 5500, 8000, 12000];
+    const delays = [900, 2000, 3500, 5500, 8000];
     if (attempt >= delays.length) {
-      _log('warn', 'Esgotadas todas as tentativas de injeção do botão LinkedIn', { totalTentativas: delays.length });
+      // Última chance: injeta de qualquer forma se ainda estiver no perfil
+      if (isLinkedInProfilePage() && !document.getElementById('autotoca-li-btn')) {
+        _log('warn', 'Tentativas esgotadas — injeção forçada');
+        injectLinkedInButton();
+      }
       return;
     }
 
     const urlAtSchedule = window.location.href;
-    _log('info', `Tentativa ${attempt + 1} de ${delays.length} agendada`, { delay: delays[attempt] + 'ms' });
+    _log('info', `Tentativa ${attempt + 1} de ${delays.length + 1} agendada`, { delay: delays[attempt] + 'ms' });
 
     setTimeout(() => {
-      // Garante que o usuário ainda está na mesma URL
       if (window.location.href !== urlAtSchedule) {
         _log('info', `Tentativa ${attempt + 1} cancelada — URL mudou durante a espera`);
         return;
@@ -427,14 +484,17 @@
         return;
       }
 
-      const h1 = document.querySelector('h1');
-      const h1Text = h1?.innerText?.trim() || '';
+      const { ready, signal, value } = _isLinkedInProfileRendered();
 
-      if (h1 && h1Text) {
-        _log('info', `Tentativa ${attempt + 1}: h1 encontrado, injetando botão`, { h1: h1Text.slice(0, 60) });
+      if (ready) {
+        _log('info', `Tentativa ${attempt + 1}: página pronta (${signal}), injetando botão`, value ? { value } : {});
+        injectLinkedInButton();
+      } else if (attempt >= 2) {
+        // A partir da 3ª tentativa: injeta mesmo sem confirmação (evita não aparecer nunca)
+        _log('warn', `Tentativa ${attempt + 1}: página não detectada, injetando mesmo assim (fallback)`);
         injectLinkedInButton();
       } else {
-        _log('warn', `Tentativa ${attempt + 1}: h1 não encontrado ou vazio, reagendando`);
+        _log('warn', `Tentativa ${attempt + 1}: página não pronta, reagendando`);
         _scheduleButtonInjection(attempt + 1);
       }
     }, delays[attempt]);
@@ -461,6 +521,30 @@
 
   // Polling como fallback para SPAs que não usam a history API padrão
   setInterval(() => _onUrlChange('interval'), 1500);
+
+  // Guardian: re-injeta o botão se ele sumir do DOM enquanto estiver numa página de perfil.
+  setInterval(() => {
+    if (!isLinkedInProfilePage()) return;
+    if (document.getElementById('autotoca-li-btn')) return;
+    // Usa os mesmos múltiplos sinais — não depende mais apenas de h1
+    const { ready, signal } = _isLinkedInProfileRendered();
+    if (ready) {
+      _log('warn', 'Guardian: botão ausente no DOM, re-injetando', { signal });
+      injectLinkedInButton();
+    }
+  }, 2000);
+
+  // MutationObserver no <title> do documento: o LinkedIn atualiza o título da aba
+  // a cada navegação SPA — mais confiável que history.pushState num isolated world.
+  (function watchTitleChanges() {
+    const titleEl = document.querySelector('title');
+    if (!titleEl) return;
+    const observer = new MutationObserver(() => {
+      // Pequena espera para o URL estar atualizado junto com o título
+      setTimeout(() => _onUrlChange('titleMutation'), 100);
+    });
+    observer.observe(titleEl, { childList: true });
+  })();
 
   // ---- Command handler ------------------------------------------------------
 
@@ -502,12 +586,27 @@
 
     if (command === 'get_linkedin_profile') {
       let pending = null;
+
+      // Busca via background service worker (relay confiável entre abas)
       try {
-        const stored = await chrome.storage.local.get(LINKEDIN_KEY);
-        pending = stored[LINKEDIN_KEY] || null;
-      } catch (_) {
-        try { pending = JSON.parse(localStorage.getItem(LINKEDIN_KEY) || 'null'); } catch (__) {}
+        const resp = await chrome.runtime.sendMessage({ type: 'get_linkedin_profile' });
+        if (resp?.ok && resp?.data) {
+          pending = resp.data;
+          _log('info', 'Perfil recuperado via background service worker');
+        }
+      } catch (e) {
+        _log('warn', 'Falha no background relay (leitura), tentando storage direto', { error: e.message });
       }
+
+      // Fallback: leitura direta do chrome.storage.local
+      if (!pending) {
+        try {
+          const stored = await chrome.storage.local.get(LINKEDIN_KEY);
+          pending = stored[LINKEDIN_KEY] || null;
+          if (pending) _log('info', 'Perfil recuperado via chrome.storage.local (fallback)');
+        } catch (_) {}
+      }
+
       if (!pending) {
         emitResult({ ok: false, command, reason: 'no_pending_profile', message: 'Nenhum perfil LinkedIn capturado ainda. Abra um perfil no LinkedIn e clique em "Analisar com AutoToca".' });
         return;
@@ -526,9 +625,8 @@
     }
 
     if (command === 'clear_linkedin_profile') {
-      try { await chrome.storage.local.remove(LINKEDIN_KEY); } catch (_) {
-        try { localStorage.removeItem(LINKEDIN_KEY); } catch (__) {}
-      }
+      try { await chrome.runtime.sendMessage({ type: 'clear_linkedin_profile' }); } catch (_) {}
+      try { await chrome.storage.local.remove(LINKEDIN_KEY); } catch (_) {}
       emitResult({ ok: true, command, message: 'Perfil capturado removido da extensão.' });
       return;
     }
@@ -555,7 +653,7 @@
 
   _lastUrl = window.location.href;
 
-  _log('info', 'Extensão AutoToca v0.4.0 carregada', {
+  _log('info', 'Extensão AutoToca v0.7.0 carregada', {
     isLinkedInProfile: isLinkedInProfilePage(),
     isForms: isFormsPage(),
     pathname: window.location.pathname,
