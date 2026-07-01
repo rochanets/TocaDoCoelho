@@ -927,6 +927,8 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_simple_template_id', '69bc155d7462bf7c702e9295'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_geral_claude_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_geral_claude_template_id', '6a45658f1615d7b89d76c4ac'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_url', 'http://localhost:3001'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_key', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_session_name', 'default'))
@@ -1193,31 +1195,9 @@ def _resolve_setting(secret_key, env_key):
     return (os.environ.get(env_key, '') or '').strip()
 
 
-def _sai_simple_prompt(question: str) -> str | None:
-    """Envia uma pergunta ao template SAI de prompt simples e retorna o texto da resposta.
-
-    Este é o helper padrão para chamar o LLM via SAI no TocaDoCoelho.
-    Use esta função sempre que precisar de uma resposta de LLM para uma pergunta livre.
-    A chave e a URL base são lidas automaticamente das configurações do app (itoca_sai_api_key,
-    itoca_sai_base_url). O template usado é o 'simple prompt' (itoca_sai_simple_template_id),
-    que aceita apenas o campo 'question' como entrada.
-
-    Retorna o texto bruto da resposta do LLM, ou None se o SAI não estiver configurado
-    ou se ocorrer algum erro de comunicação.
-
-    Exemplo de uso:
-        raw = _sai_simple_prompt("Qual o faturamento anual da Petrobras? Responda em JSON.")
-        # raw pode ser '{"faturamento": 500000000000}' ou None
-    """
-    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
-    if not api_key:
-        return None
-    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-    template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
-
-    # O template SAI é compartilhado por várias features do app e pode sofrer rate limit
-    # (HTTP 429) sob uso concorrente. Como esse limite é transitório, tenta novamente
-    # algumas vezes com backoff antes de desistir.
+def _sai_execute_question_template(base_url, template_id, api_key, question, log_tag):
+    """Executa um template SAI que aceita {"inputs": {"question": ...}} com retry em HTTP 429
+    (rate limit transitório). Retorna o texto da resposta ou None."""
     max_attempts = 3
     backoff_seconds = (2, 4)
     for attempt in range(max_attempts):
@@ -1229,18 +1209,59 @@ def _sai_simple_prompt(question: str) -> str | None:
                 timeout=45
             )
             if resp.status_code == 200:
-                logger.info(f'[SAI][simple_prompt] OK ({len(resp.text)} chars)')
+                logger.info(f'[SAI][{log_tag}] OK ({len(resp.text)} chars)')
                 return resp.text
             if resp.status_code == 429 and attempt < max_attempts - 1:
                 wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
-                logger.warning(f'[SAI][simple_prompt] HTTP 429 (rate limit), tentativa {attempt + 1}/{max_attempts}, aguardando {wait}s...')
+                logger.warning(f'[SAI][{log_tag}] HTTP 429 (rate limit), tentativa {attempt + 1}/{max_attempts}, aguardando {wait}s...')
                 time.sleep(wait)
                 continue
-            logger.warning(f'[SAI][simple_prompt] HTTP {resp.status_code}: {resp.text[:200]}')
+            logger.warning(f'[SAI][{log_tag}] HTTP {resp.status_code}: {resp.text[:200]}')
             return None
         except Exception as e:
-            logger.warning(f'[SAI][simple_prompt] falha: {e}')
+            logger.warning(f'[SAI][{log_tag}] falha: {e}')
             return None
+    return None
+
+
+def _sai_simple_prompt(question: str) -> str | None:
+    """Envia uma pergunta ao template SAI de prompt simples e retorna o texto da resposta.
+
+    Este é o helper padrão para chamar o LLM via SAI no TocaDoCoelho.
+    Use esta função sempre que precisar de uma resposta de LLM para uma pergunta livre.
+    A chave e a URL base são lidas automaticamente das configurações do app (itoca_sai_api_key,
+    itoca_sai_base_url). O template usado é o 'simple prompt' (itoca_sai_simple_template_id),
+    que aceita apenas o campo 'question' como entrada.
+
+    Como esse template é compartilhado por muitas features do app e pode saturar sua cota de
+    uso (HTTP 429) sob carga concorrente, esta função tenta primeiro o template 'simple prompt'
+    (com retry em 429) e, se ele falhar, cai automaticamente para o template SAI 'Geral Claude'
+    (itoca_sai_geral_claude_template_id) — uma integração SAI separada com chave e cota próprias,
+    pensada exatamente como alternativa de uso geral ao SAI Simple.
+
+    Retorna o texto bruto da resposta do LLM, ou None se nenhum dos dois estiver configurado
+    ou disponível.
+
+    Exemplo de uso:
+        raw = _sai_simple_prompt("Qual o faturamento anual da Petrobras? Responda em JSON.")
+        # raw pode ser '{"faturamento": 500000000000}' ou None
+    """
+    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
+
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if api_key:
+        template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
+        result = _sai_execute_question_template(base_url, template_id, api_key, question, 'simple_prompt')
+        if result:
+            return result
+
+    geral_claude_key = _resolve_setting('itoca_sai_geral_claude_api_key', 'ITOCA_SAI_GERAL_CLAUDE_API_KEY') or 'fuBoUPGL+UmrErevVE6VWQ'
+    if geral_claude_key:
+        geral_claude_template_id = (_load_app_settings_map(['itoca_sai_geral_claude_template_id']).get('itoca_sai_geral_claude_template_id') or '').strip() or '6a45658f1615d7b89d76c4ac'
+        result = _sai_execute_question_template(base_url, geral_claude_template_id, geral_claude_key, question, 'geral_claude')
+        if result:
+            return result
+
     return None
 
 

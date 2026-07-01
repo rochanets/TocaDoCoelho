@@ -84,7 +84,10 @@ raw = _sai_simple_prompt("Pergunta livre aqui. Instrua o formato da resposta no 
 - Template ID padrão: `69bc155d7462bf7c702e9295` (setting `itoca_sai_simple_template_id`)
 - Aceita apenas o campo `question` como entrada — coloque todo o contexto necessário dentro da pergunta
 - Retorna `None` silenciosamente se SAI não estiver configurado (não lança exceção)
-- Timeout de 45 segundos
+- Timeout de 45 segundos, com retry automático em HTTP 429 (rate limit)
+- Se o template "simple prompt" falhar (ex.: cota estourada), cai automaticamente para o
+  template SAI dedicado **Geral Claude** (`itoca_sai_geral_claude_template_id` /
+  `itoca_sai_geral_claude_api_key`, integração separada com cota própria) antes de desistir
 
 **Padrão de uso com JSON:**
 ```python
@@ -121,6 +124,7 @@ Veja `_account_autofill_via_sai()` em `app.py` como exemplo completo do padrão 
 | `itoca_sai_template_id` | `69ac3c87024adc2d2bdc19f5` | iToca chat (pergunta + context_sources) |
 | `itoca_action_detector_template_id` | `69b1c662485ca1e93db65015` | Detecção de intenção do usuário |
 | `itoca_sai_simple_template_id` | `69bc155d7462bf7c702e9295` | **Prompt simples — USE ESTE** |
+| `itoca_sai_geral_claude_template_id` | `6a45658f1615d7b89d76c4ac` | Fallback automático do prompt simples (chave/cota próprias via `itoca_sai_geral_claude_api_key`) — não chamar diretamente, é usado internamente por `_sai_simple_prompt` |
 
 ---
 
