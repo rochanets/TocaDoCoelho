@@ -4128,7 +4128,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
-                <button class="btn btn-auto-mapping" onclick="openWhatsappUpdateWithWarning()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
+                <button id="autoTocaBtn_whatsapp-update" class="btn btn-auto-mapping" onclick="openWhatsappUpdateWithWarning()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
                 <button id="autoTocaBtn_sync-outlook" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('sync-outlook')"><span class="ai-star-icon">✦</span> Sync Outlook</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
@@ -6461,6 +6461,33 @@
             await loadAutoTocaMailingData();
         }
 
+        // Todos os botões de módulo do AutoToca (inclui o WhatsApp Update, que abre modal em vez de painel inline)
+        const AUTOTOCA_MODULE_BUTTON_IDS = [
+            'autoTocaBtn_chamado-juridico',
+            'autoTocaBtn_mala-direta',
+            'autoTocaBtn_whatsapp-update',
+            'autoTocaBtn_sync-outlook'
+        ];
+
+        function resetAutoTocaModuleButtons() {
+            AUTOTOCA_MODULE_BUTTON_IDS.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.classList.remove('btn-auto-mapping');
+                    btn.classList.add('btn-secondary');
+                }
+            });
+        }
+
+        function setActiveAutoTocaModuleButton(id) {
+            resetAutoTocaModuleButtons();
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.classList.remove('btn-secondary');
+                btn.classList.add('btn-auto-mapping');
+            }
+        }
+
         function toggleAutoTocaAutomation(key) {
             const panels = {
                 'chamado-juridico': 'autoTocaChamadoJuridico',
@@ -6478,23 +6505,15 @@
             if (!target) return;
             const isOpening = target.style.display === 'none';
             // Fecha todos os painéis
-            Object.entries(panels).forEach(([panelKey, id]) => {
+            Object.entries(panels).forEach(([, id]) => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
-                const btn = document.getElementById(buttons[panelKey]);
-                if (btn) {
-                    btn.classList.remove('btn-auto-mapping');
-                    btn.classList.add('btn-secondary');
-                }
             });
+            resetAutoTocaModuleButtons();
             // Abre o selecionado (toggle)
             if (isOpening) {
                 target.style.display = 'block';
-                const activeBtn = document.getElementById(buttons[key]);
-                if (activeBtn) {
-                    activeBtn.classList.remove('btn-secondary');
-                    activeBtn.classList.add('btn-auto-mapping');
-                }
+                setActiveAutoTocaModuleButton(buttons[key]);
             }
         }
 
@@ -19693,6 +19712,7 @@
     let _waReviewItems = [];
 
     function openWhatsappUpdateWithWarning() {
+      setActiveAutoTocaModuleButton('autoTocaBtn_whatsapp-update');
       if (localStorage.getItem('wa_ban_warning_ok') === '1') {
         openWhatsappSyncModal();
         return;
@@ -19704,6 +19724,7 @@
 
     function closeWaBanWarning() {
       document.getElementById('waBanWarningModal').style.display = 'none';
+      resetAutoTocaModuleButtons();
     }
 
     function confirmWaBanWarning() {
@@ -19724,6 +19745,7 @@
       document.getElementById('whatsappSyncModal').style.display = 'none';
       if (_waQrPollInterval) { clearInterval(_waQrPollInterval); _waQrPollInterval = null; }
       if (typeof _waStatusRetryTimer !== 'undefined' && _waStatusRetryTimer) { clearTimeout(_waStatusRetryTimer); _waStatusRetryTimer = null; }
+      resetAutoTocaModuleButtons();
     }
 
     function _waShowSection(name) {
