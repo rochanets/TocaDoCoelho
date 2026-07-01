@@ -245,6 +245,14 @@
   }
 
   function extractLinkedInPhotoUrl() {
+    // Fonte mais confiável: o próprio LinkedIn define a meta og:image como a foto de
+    // perfil oficial da página (usada para compartilhamento), o que evita ter que
+    // adivinhar a classe CSS certa em meio a um DOM que muda com frequência.
+    const ogImage = document.querySelector('meta[property="og:image"]')?.getAttribute('content')?.trim();
+    if (ogImage && /^https?:\/\//i.test(ogImage) && !ogImage.includes('ghost') && !ogImage.includes('placeholder') && !ogImage.includes('data:')) {
+      return ogImage;
+    }
+
     const selectors = [
       '.pv-top-card-profile-picture__image--show',
       '.pv-top-card-profile-picture__image',

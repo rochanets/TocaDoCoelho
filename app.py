@@ -2029,21 +2029,33 @@ def _relation_report_fetch_market_context(account_name: str) -> str | None:
         return None
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
     search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
-    try:
-        resp = requests.post(
-            f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
-            json={'inputs': {'search': search}},
-            headers={'X-Api-Key': api_key},
-            timeout=45,
-        )
-        resp.raise_for_status()
-        text = resp.text.strip()
-        if not text or len(text) < 30:
+
+    # Esse template SAI dedicado também pode sofrer rate limit (HTTP 429) sob uso
+    # concorrente de outras chamadas SAI do app. Tenta novamente com backoff antes de desistir.
+    max_attempts = 3
+    backoff_seconds = (2, 4)
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
+                json={'inputs': {'search': search}},
+                headers={'X-Api-Key': api_key},
+                timeout=45,
+            )
+            if resp.status_code == 429 and attempt < max_attempts - 1:
+                wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
+                logger.warning(f'[RelationReport] HTTP 429 (rate limit) no contexto de mercado, tentativa {attempt + 1}/{max_attempts}, aguardando {wait}s...')
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            text = resp.text.strip()
+            if not text or len(text) < 30:
+                return None
+            return text
+        except Exception as e:
+            logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
             return None
-        return text
-    except Exception as e:
-        logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
-        return None
+    return None
 
 
 def _relation_report_generate_highlights(report_data: dict) -> list[str]:
@@ -13605,7 +13617,14 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
         _bg_task_set(task_id, {'step': 'Buscando foto do perfil...', 'progress': 70})
         photo_url = None
         photo_source = None
-        if extension_photo_url:
+
+        # Prioridade 1: foto já cadastrada no sistema para este contato — mais confiável
+        # que qualquer captura automática do LinkedIn (evita pegar foto de capa/banner errada).
+        if contact and (contact.get('photo_url') or '').strip():
+            photo_url = contact['photo_url'].strip()
+            photo_source = 'system_contact_photo'
+
+        if not photo_url and extension_photo_url:
             try:
                 photo_url = _download_remote_image_to_uploads(extension_photo_url, prefix='linkedin-profile-ext')
                 photo_source = 'extension_profile_photo'
@@ -13620,11 +13639,6 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
                     photo_source = 'linkedin_og_image'
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao usar og:image: {e}')
-
-        # Fallback (item d): foto do contato cadastrado no sistema
-        if not photo_url and contact and (contact.get('photo_url') or '').strip():
-            photo_url = contact['photo_url'].strip()
-            photo_source = 'system_contact_photo'
 
         if not photo_url and parsed and parsed.get('nome'):
             try:

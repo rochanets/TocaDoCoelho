@@ -3316,12 +3316,18 @@
         html[data-theme="white-pearl"] .relreport-hero { background: linear-gradient(135deg, #a09880, #7c6d5f) !important; box-shadow: 0 14px 40px rgba(124,109,95,0.22) !important; }
 
         /* ── Resumo LinkedIn (Preparar Reunião): relatório sempre com fundo branco e texto
-           preto nos bulletpoints, independente do tema ativo; títulos seguem a cor do tema. ── */
+           preto, independente do tema ativo; títulos seguem a cor do tema (mais escura).
+           !important é necessário aqui porque os temas escuros (black-cat/blue-space) têm
+           regras !important em ".settings-card p/strong/etc" que, sem isso, sobrescreveriam
+           a cor inline definida no HTML gerado. ── */
         #atLinkedinResumoCard .settings-card.atld-white { background: #ffffff !important; border-color: #e5e7eb !important; }
-        #atLinkedinResumoCard h2, #atLinkedinResumoCard h3, #atLinkedinResumoCard h4,
-        #atLinkedinResumoCard strong, #atLinkedinResumoCard b { color: var(--t-primary) !important; }
+        #atLinkedinResumoCard h2, #atLinkedinResumoCard h3, #atLinkedinResumoCard h4 {
+            color: color-mix(in srgb, var(--t-primary) 70%, black 30%) !important;
+        }
         #atLinkedinResumoCard p, #atLinkedinResumoCard ul, #atLinkedinResumoCard li,
-        #atLinkedinResumoCard label, #atLinkedinResumoCard span { color: #111827; }
+        #atLinkedinResumoCard label, #atLinkedinResumoCard strong, #atLinkedinResumoCard b {
+            color: #111827 !important;
+        }
 
     </style>
 </head>
@@ -19232,10 +19238,22 @@
                 }
             }
 
+            // Limita a largura final da exportação a 1200px (reduz o tamanho do arquivo)
+            const MAX_EXPORT_WIDTH = 1200;
+            let finalCanvas = canvas;
+            if (canvas.width > MAX_EXPORT_WIDTH) {
+                const ratio = MAX_EXPORT_WIDTH / canvas.width;
+                const resized = document.createElement('canvas');
+                resized.width = MAX_EXPORT_WIDTH;
+                resized.height = Math.round(canvas.height * ratio);
+                resized.getContext('2d').drawImage(canvas, 0, 0, resized.width, resized.height);
+                finalCanvas = resized;
+            }
+
             if (formato === 'jpeg') {
                 const link = document.createElement('a');
                 link.download = `${nomeArq}.jpg`;
-                link.href = canvas.toDataURL('image/jpeg', 0.92);
+                link.href = finalCanvas.toDataURL('image/jpeg', 0.92);
                 link.click();
             } else {
                 // PDF via jsPDF
@@ -19245,13 +19263,13 @@
                 }
                 const { jsPDF } = window.jspdf;
                 const imgW = 210; // A4 largura em mm
-                const imgH = (canvas.height * imgW) / canvas.width;
+                const imgH = (finalCanvas.height * imgW) / finalCanvas.width;
                 const pdf = new jsPDF({ orientation: imgH > imgW ? 'p' : 'l', unit: 'mm', format: 'a4' });
                 const pageH = pdf.internal.pageSize.getHeight();
                 let yPos = 0;
                 while (yPos < imgH) {
                     if (yPos > 0) pdf.addPage();
-                    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -yPos, imgW, imgH);
+                    pdf.addImage(finalCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -yPos, imgW, imgH);
                     yPos += pageH;
                 }
                 pdf.save(`${nomeArq}.pdf`);
