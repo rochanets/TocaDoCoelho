@@ -1,4 +1,7 @@
 (() => {
+  // Confirmação visível no DevTools (F12 → Console) para diagnóstico
+  console.log('[AutoToca Helper] content.js v0.5.0 carregado em:', window.location.href);
+
   const WEB_PING_EVENT    = 'autotoca-extension-ping';
   const WEB_PONG_EVENT    = 'autotoca-extension-pong';
   const WEB_COMMAND_EVENT = 'autotoca-extension-command';
@@ -72,7 +75,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.4.0',
+        version: '0.5.0',
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -462,6 +465,30 @@
   // Polling como fallback para SPAs que não usam a history API padrão
   setInterval(() => _onUrlChange('interval'), 1500);
 
+  // Guardian: re-injeta o botão se ele sumir do DOM enquanto estiver numa página de perfil.
+  // Cobre casos onde o React/SPA do LinkedIn remove elementos externos injetados.
+  setInterval(() => {
+    if (!isLinkedInProfilePage()) return;
+    if (document.getElementById('autotoca-li-btn')) return;
+    const h1Text = document.querySelector('h1')?.innerText?.trim();
+    if (h1Text) {
+      _log('warn', 'Guardian: botão ausente no DOM, re-injetando', { h1: h1Text.slice(0, 50) });
+      injectLinkedInButton();
+    }
+  }, 2000);
+
+  // MutationObserver no <title> do documento: o LinkedIn atualiza o título da aba
+  // a cada navegação SPA — mais confiável que history.pushState num isolated world.
+  (function watchTitleChanges() {
+    const titleEl = document.querySelector('title');
+    if (!titleEl) return;
+    const observer = new MutationObserver(() => {
+      // Pequena espera para o URL estar atualizado junto com o título
+      setTimeout(() => _onUrlChange('titleMutation'), 100);
+    });
+    observer.observe(titleEl, { childList: true });
+  })();
+
   // ---- Command handler ------------------------------------------------------
 
   async function handleCommand(detail) {
@@ -555,7 +582,7 @@
 
   _lastUrl = window.location.href;
 
-  _log('info', 'Extensão AutoToca v0.4.0 carregada', {
+  _log('info', 'Extensão AutoToca v0.5.0 carregada', {
     isLinkedInProfile: isLinkedInProfilePage(),
     isForms: isFormsPage(),
     pathname: window.location.pathname,
