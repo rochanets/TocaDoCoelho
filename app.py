@@ -927,6 +927,8 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_base_url', 'https://sai-library.saiapplications.com'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_action_detector_template_id', '69b1c662485ca1e93db65015'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_simple_template_id', '69bc155d7462bf7c702e9295'))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_geral_claude_api_key', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_geral_claude_template_id', '6a45658f1615d7b89d76c4ac'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_url', 'http://localhost:3001'))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_api_key', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_session_name', 'default'))
@@ -1193,6 +1195,35 @@ def _resolve_setting(secret_key, env_key):
     return (os.environ.get(env_key, '') or '').strip()
 
 
+def _sai_execute_question_template(base_url, template_id, api_key, question, log_tag):
+    """Executa um template SAI que aceita {"inputs": {"question": ...}} com retry em HTTP 429
+    (rate limit transitório). Retorna o texto da resposta ou None."""
+    max_attempts = 3
+    backoff_seconds = (2, 4)
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                f'{base_url}/api/templates/{template_id}/execute',
+                json={'inputs': {'question': question}},
+                headers={'X-Api-Key': api_key},
+                timeout=45
+            )
+            if resp.status_code == 200:
+                logger.info(f'[SAI][{log_tag}] OK ({len(resp.text)} chars)')
+                return resp.text
+            if resp.status_code == 429 and attempt < max_attempts - 1:
+                wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
+                logger.warning(f'[SAI][{log_tag}] HTTP 429 (rate limit), tentativa {attempt + 1}/{max_attempts}, aguardando {wait}s...')
+                time.sleep(wait)
+                continue
+            logger.warning(f'[SAI][{log_tag}] HTTP {resp.status_code}: {resp.text[:200]}')
+            return None
+        except Exception as e:
+            logger.warning(f'[SAI][{log_tag}] falha: {e}')
+            return None
+    return None
+
+
 def _sai_simple_prompt(question: str) -> str | None:
     """Envia uma pergunta ao template SAI de prompt simples e retorna o texto da resposta.
 
@@ -1202,33 +1233,35 @@ def _sai_simple_prompt(question: str) -> str | None:
     itoca_sai_base_url). O template usado é o 'simple prompt' (itoca_sai_simple_template_id),
     que aceita apenas o campo 'question' como entrada.
 
-    Retorna o texto bruto da resposta do LLM, ou None se o SAI não estiver configurado
-    ou se ocorrer algum erro de comunicação.
+    Como o template 'simple prompt' é compartilhado por muitas features do app e pode saturar
+    sua cota de uso (HTTP 429) sob carga concorrente, esta função tenta primeiro o template SAI
+    'Geral Claude' (itoca_sai_geral_claude_template_id) — uma integração SAI separada com chave
+    e cota próprias — e só cai para o 'simple prompt' (com retry em 429) se o Geral Claude falhar.
+
+    Retorna o texto bruto da resposta do LLM, ou None se nenhum dos dois estiver configurado
+    ou disponível.
 
     Exemplo de uso:
         raw = _sai_simple_prompt("Qual o faturamento anual da Petrobras? Responda em JSON.")
         # raw pode ser '{"faturamento": 500000000000}' ou None
     """
-    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
-    if not api_key:
-        return None
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-    template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
-    try:
-        resp = requests.post(
-            f'{base_url}/api/templates/{template_id}/execute',
-            json={'inputs': {'question': question}},
-            headers={'X-Api-Key': api_key},
-            timeout=45
-        )
-        if resp.status_code == 200:
-            logger.info(f'[SAI][simple_prompt] OK ({len(resp.text)} chars)')
-            return resp.text
-        logger.warning(f'[SAI][simple_prompt] HTTP {resp.status_code}: {resp.text[:200]}')
-        return None
-    except Exception as e:
-        logger.warning(f'[SAI][simple_prompt] falha: {e}')
-        return None
+
+    geral_claude_key = _resolve_setting('itoca_sai_geral_claude_api_key', 'ITOCA_SAI_GERAL_CLAUDE_API_KEY') or 'fuBoUPGL+UmrErevVE6VWQ'
+    if geral_claude_key:
+        geral_claude_template_id = (_load_app_settings_map(['itoca_sai_geral_claude_template_id']).get('itoca_sai_geral_claude_template_id') or '').strip() or '6a45658f1615d7b89d76c4ac'
+        result = _sai_execute_question_template(base_url, geral_claude_template_id, geral_claude_key, question, 'geral_claude')
+        if result:
+            return result
+
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if api_key:
+        template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
+        result = _sai_execute_question_template(base_url, template_id, api_key, question, 'simple_prompt')
+        if result:
+            return result
+
+    return None
 
 
 def api_error(status, code, message, details=None, hint=None):
@@ -2010,27 +2043,90 @@ def _relation_report_build_topic_evidence(report_data):
     return '\n\n'.join(sections)
 
 
+def _openrouter_web_prompt(question: str) -> str | None:
+    """Envia uma pergunta ao OpenRouter com o plugin de busca web ativado (necessário para
+    informações atuais como notícias/momento de mercado — os templates SAI não têm acesso
+    à web em tempo real, então não servem para esse tipo de pergunta).
+    Retorna o texto da resposta, ou None se o OpenRouter não estiver configurado ou falhar."""
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if not or_key:
+        return None
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    try:
+        payload = {
+            'model': model,
+            'messages': [{'role': 'user', 'content': question}],
+            'plugins': [{'id': 'web', 'max_results': 3}],
+            'temperature': 0.2
+        }
+        req = urllib.request.Request(
+            'https://openrouter.ai/api/v1/chat/completions',
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        if raw and raw.strip():
+            logger.info('[OpenRouter][web] Resposta gerada com sucesso')
+            return raw.strip()
+    except Exception as e:
+        logger.warning(f'[OpenRouter][web] Falha: {e}')
+    return None
+
+
 def _relation_report_fetch_market_context(account_name: str) -> str | None:
+    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
+
+    # OpenRouter (com busca web) é a fonte primária aqui: o momento de mercado precisa de
+    # dados atuais/recentes, e os templates SAI não têm acesso à web em tempo real.
+    or_result = _openrouter_web_prompt(search)
+    if or_result and len(or_result) >= 30:
+        return or_result
+
+    # Fallback: template SAI dedicado (pode não trazer dados atualizados, mas é melhor
+    # que deixar o bloco vazio caso o OpenRouter não esteja configurado/disponível).
     api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
     if not api_key:
         return None
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
-    try:
-        resp = requests.post(
-            f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
-            json={'inputs': {'search': search}},
-            headers={'X-Api-Key': api_key},
-            timeout=45,
-        )
-        resp.raise_for_status()
-        text = resp.text.strip()
-        if not text or len(text) < 30:
+
+    # Esse template SAI dedicado também pode sofrer rate limit (HTTP 429) sob uso
+    # concorrente de outras chamadas SAI do app. Tenta novamente com backoff antes de desistir.
+    max_attempts = 3
+    backoff_seconds = (2, 4)
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
+                json={'inputs': {'search': search}},
+                headers={'X-Api-Key': api_key},
+                timeout=45,
+            )
+            if resp.status_code == 429 and attempt < max_attempts - 1:
+                wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
+                logger.warning(f'[RelationReport] HTTP 429 (rate limit) no contexto de mercado, tentativa {attempt + 1}/{max_attempts}, aguardando {wait}s...')
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            text = resp.text.strip()
+            if not text or len(text) < 30:
+                return None
+            return text
+        except Exception as e:
+            logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
             return None
-        return text
-    except Exception as e:
-        logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
-        return None
+    return None
 
 
 def _relation_report_generate_highlights(report_data: dict) -> list[str]:
@@ -13304,7 +13400,7 @@ def _linkedin_try_fetch_public(url):
         # Se LinkedIn redirecionou para login, o conteúdo tem pouca informação útil
         if len(clean) < 300 or 'Sign in' in clean or 'authwall' in url:
             return None
-        return clean[:8000]  # Limita para não exceder contexto do LLM
+        return clean[:16000]  # Limita para não exceder contexto do LLM
     except Exception as e:
         logger.debug(f'[LinkedIn] Falha ao buscar URL pública: {e}')
         return None
@@ -13331,11 +13427,17 @@ def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data
     llm_prompt = (
         'Analise as informações abaixo de um perfil profissional do LinkedIn e gere um resumo executivo '
         f'para preparar uma reunião de negócios com esta pessoa. {quality_instruction}'
-        f'PERFIL LINKEDIN:\n{profile_content}{ctx_part}\n\n'
+        'IMPORTANTE SOBRE A TRAJETÓRIA: monte a lista "trajetoria" com TODAS as experiências profissionais '
+        'mencionadas no perfil (não apenas o cargo atual) — inclua cada empresa/cargo/período encontrado no texto, '
+        'da mais recente para a mais antiga, sem limite fixo de itens. Se a pessoa teve mais de um cargo na mesma '
+        'empresa (ex.: promoção interna), mencione isso explicitamente (ex.: "CEO desde 2025 (na empresa desde 2012, '
+        'anteriormente Diretor Financeiro)"). No campo "cargo_atual", se o perfil indicar uma data de início no cargo '
+        'diferente da data de início na empresa, mencione as duas (ex.: "CEO na Dasa desde 2025 — na empresa desde 2012").'
+        f'\n\nPERFIL LINKEDIN:\n{profile_content}{ctx_part}\n\n'
         'Retorne SOMENTE um JSON válido, sem texto adicional, com exatamente estes campos: '
         '{"nome": "Nome completo da pessoa", '
-        '"cargo_atual": "Cargo exato e empresa atual", '
-        '"trajetoria": ["experiência específica 1 com empresa e período", "experiência 2", "experiência 3"], '
+        '"cargo_atual": "Cargo exato e empresa atual, com tempo de casa se diferente do tempo no cargo", '
+        '"trajetoria": ["experiência específica 1 com empresa, cargo e período", "experiência 2", "experiência 3", "... (todas as experiências do perfil)"], '
         '"formacao": ["curso, instituição e ano se disponível", "outra formação"], '
         '"competencias": ["competência específica 1", "competência 2", "competência 3", "competência 4", "competência 5"], '
         '"pontos_conversa": ["ponto de conversa concreto 1", "ponto 2", "ponto 3", "ponto 4"], '
@@ -13344,13 +13446,13 @@ def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data
         'Use null para campos não encontrados. Responda em português (BR).'
     )
 
-    # Tentativa 1: SAI
     raw = _sai_simple_prompt(llm_prompt)
     if raw:
         logger.info('[LinkedIn][SAI] Resumo gerado com sucesso')
         return raw, 'SAI'
 
-    # Tentativa 2: OpenRouter
+    # Fallback: OpenRouter (o template SAI compartilhado pode estourar o limite de uso
+    # sob carga concorrente de outras features do app; sem fallback a feature ficava sem resposta)
     or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
     if or_key:
         or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
@@ -13573,7 +13675,7 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
         _bg_task_set(task_id, {'step': 'Gerando resumo executivo com IA...', 'progress': 35})
         raw, source = _linkedin_generate_summary_via_llm(profile_content, meeting_context, data_is_rich=data_is_rich)
         if not raw:
-            _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhum serviço de IA configurado (SAI ou OpenRouter).'})
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhum serviço de IA configurado ou disponível no momento (SAI e OpenRouter falharam).'})
             return
 
         parsed = _linkedin_parse_summary(raw)
@@ -13586,7 +13688,14 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
         _bg_task_set(task_id, {'step': 'Buscando foto do perfil...', 'progress': 70})
         photo_url = None
         photo_source = None
-        if extension_photo_url:
+
+        # Prioridade 1: foto já cadastrada no sistema para este contato — mais confiável
+        # que qualquer captura automática do LinkedIn (evita pegar foto de capa/banner errada).
+        if contact and (contact.get('photo_url') or '').strip():
+            photo_url = contact['photo_url'].strip()
+            photo_source = 'system_contact_photo'
+
+        if not photo_url and extension_photo_url:
             try:
                 photo_url = _download_remote_image_to_uploads(extension_photo_url, prefix='linkedin-profile-ext')
                 photo_source = 'extension_profile_photo'
@@ -13601,11 +13710,6 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
                     photo_source = 'linkedin_og_image'
             except Exception as e:
                 logger.debug(f'[LinkedIn] Falha ao usar og:image: {e}')
-
-        # Fallback (item d): foto do contato cadastrado no sistema
-        if not photo_url and contact and (contact.get('photo_url') or '').strip():
-            photo_url = contact['photo_url'].strip()
-            photo_source = 'system_contact_photo'
 
         if not photo_url and parsed and parsed.get('nome'):
             try:

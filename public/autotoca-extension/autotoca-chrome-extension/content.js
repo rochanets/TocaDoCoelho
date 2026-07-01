@@ -208,29 +208,67 @@
       }
     }
 
-    return parts.join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 10000);
+    return parts.join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 20000);
+  }
+
+  // LinkedIn renderiza a seção "Experiência" de forma preguiçosa (lazy) —
+  // parte do histórico só entra no DOM depois que a seção passa pelo viewport.
+  // Rola a página até o fim antes de capturar para garantir a trajetória completa.
+  async function _ensureFullProfileRendered() {
+    const scrollRoot = document.scrollingElement || document.documentElement;
+    const totalHeight = scrollRoot.scrollHeight;
+    const step = Math.max(window.innerHeight, 400);
+    for (let y = 0; y <= totalHeight; y += step) {
+      window.scrollTo(0, y);
+      await new Promise(r => setTimeout(r, 180));
+    }
+    window.scrollTo(0, 0);
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  // Palavras que indicam foto de capa/banner (não é a foto de perfil).
+  const _COVER_PHOTO_HINTS = ['background', 'banner', 'cover', 'capa', 'fundo', 'bg-image'];
+
+  function _looksLikeCoverPhoto(img) {
+    const haystack = [
+      img.getAttribute('src') || '',
+      img.getAttribute('alt') || '',
+      img.className || '',
+      img.closest('[class]')?.className || '',
+    ].join(' ').toLowerCase();
+    if (_COVER_PHOTO_HINTS.some(hint => haystack.includes(hint))) return true;
+    // Banners de capa são bem mais largos que altos; foto de perfil é ~quadrada.
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (w && h && w / h > 1.6) return true;
+    return false;
   }
 
   function extractLinkedInPhotoUrl() {
+    // Fonte mais confiável: o próprio LinkedIn define a meta og:image como a foto de
+    // perfil oficial da página (usada para compartilhamento), o que evita ter que
+    // adivinhar a classe CSS certa em meio a um DOM que muda com frequência.
+    const ogImage = document.querySelector('meta[property="og:image"]')?.getAttribute('content')?.trim();
+    if (ogImage && /^https?:\/\//i.test(ogImage) && !ogImage.includes('ghost') && !ogImage.includes('placeholder') && !ogImage.includes('data:')) {
+      return ogImage;
+    }
+
     const selectors = [
       '.pv-top-card-profile-picture__image--show',
       '.pv-top-card-profile-picture__image',
+      'img.pv-top-card-profile-picture__image',
       '.profile-photo-edit__preview',
       '.ph5 img.pv-top-card-profile-picture__image',
       'button[aria-label*="foto de perfil"] img',
       'button[aria-label*="profile picture"] img',
       'button[aria-label*="Foto de perfil"] img',
-      '.pv-top-card__photo img',
-      '.profile-header-section img',
-      'main img[alt*="foto de perfil"]',
-      'main img[alt*="profile photo"]',
-      'main img[alt*="Foto de"]',
+      'img[class*="profile-picture"]',
     ];
 
     for (const selector of selectors) {
       const el = document.querySelector(selector);
       const src = el?.getAttribute('src')?.trim() || '';
-      if (src && /^https?:\/\//i.test(src) && !src.includes('ghost') && !src.includes('data:')) {
+      if (src && /^https?:\/\//i.test(src) && !src.includes('ghost') && !src.includes('data:') && !_looksLikeCoverPhoto(el)) {
         return src;
       }
     }
@@ -242,6 +280,7 @@
         const src = (img.getAttribute('src') || '').trim();
         if (!src.startsWith('http')) continue;
         if (src.includes('ghost') || src.includes('placeholder')) continue;
+        if (_looksLikeCoverPhoto(img)) continue;
         const alt = (img.getAttribute('alt') || '').toLowerCase();
         if (alt.includes('profile') || alt.includes('perfil') || alt.includes('foto')) return src;
         const w = img.naturalWidth || img.width;
@@ -327,6 +366,9 @@
     }
 
     _log('info', 'Iniciando captura de perfil LinkedIn');
+
+    if (btn) btn.innerHTML = '<span style="margin-right:6px;">⏳</span> Carregando perfil completo...';
+    await _ensureFullProfileRendered();
 
     const profileText  = extractLinkedInText();
     const profileUrl   = window.location.href;

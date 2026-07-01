@@ -3315,29 +3315,32 @@
         html[data-theme="baby-pink"] .relreport-hero { background: linear-gradient(135deg, #d4708a, #a0607a) !important; box-shadow: 0 14px 40px rgba(212,112,138,0.22) !important; }
         html[data-theme="white-pearl"] .relreport-hero { background: linear-gradient(135deg, #a09880, #7c6d5f) !important; box-shadow: 0 14px 40px rgba(124,109,95,0.22) !important; }
 
-        /* ── Resumo LinkedIn (Preparar Reunião): manter o relatório legível nos temas escuros ── */
-        html[data-theme="black-cat"] #atLinkedinResumoCard .settings-card,
-        html[data-theme="blue-space"] #atLinkedinResumoCard .settings-card { background: #ffffff !important; border-color: #e5e7eb !important; }
+        /* ── Resumo LinkedIn (Preparar Reunião): relatório sempre com fundo branco e texto
+           preto, independente do tema ativo; títulos seguem a cor do tema (mais escura).
+           !important é necessário aqui porque os temas escuros (black-cat/blue-space) têm
+           regras !important em ".settings-card p/strong/etc" que, sem isso, sobrescreveriam
+           a cor inline definida no HTML gerado.
+           Cores fixas em hex (não color-mix()) porque o html2canvas usado na exportação em
+           JPEG/PDF não interpreta funções CSS modernas como color-mix() — usar essa função
+           quebrava a exportação silenciosamente. ── */
+        #atLinkedinResumoCard .settings-card.atld-white { background: #ffffff !important; border-color: #e5e7eb !important; }
+        #atLinkedinResumoCard h2, #atLinkedinResumoCard h3, #atLinkedinResumoCard h4 { color: #03523b !important; }
+        html[data-theme="baby-pink"] #atLinkedinResumoCard h2,
+        html[data-theme="baby-pink"] #atLinkedinResumoCard h3,
+        html[data-theme="baby-pink"] #atLinkedinResumoCard h4 { color: #6d4153 !important; }
         html[data-theme="black-cat"] #atLinkedinResumoCard h2,
-        html[data-theme="black-cat"] #atLinkedinResumoCard strong,
-        html[data-theme="black-cat"] #atLinkedinResumoCard b,
-        html[data-theme="blue-space"] #atLinkedinResumoCard h2,
-        html[data-theme="blue-space"] #atLinkedinResumoCard strong,
-        html[data-theme="blue-space"] #atLinkedinResumoCard b { color: #065f46 !important; }
         html[data-theme="black-cat"] #atLinkedinResumoCard h3,
-        html[data-theme="black-cat"] #atLinkedinResumoCard h4,
+        html[data-theme="black-cat"] #atLinkedinResumoCard h4 { color: #6b6b6b !important; }
+        html[data-theme="white-pearl"] #atLinkedinResumoCard h2,
+        html[data-theme="white-pearl"] #atLinkedinResumoCard h3,
+        html[data-theme="white-pearl"] #atLinkedinResumoCard h4 { color: #544a41 !important; }
+        html[data-theme="blue-space"] #atLinkedinResumoCard h2,
         html[data-theme="blue-space"] #atLinkedinResumoCard h3,
-        html[data-theme="blue-space"] #atLinkedinResumoCard h4 { color: #047857 !important; }
-        html[data-theme="black-cat"] #atLinkedinResumoCard p,
-        html[data-theme="black-cat"] #atLinkedinResumoCard ul,
-        html[data-theme="black-cat"] #atLinkedinResumoCard li,
-        html[data-theme="black-cat"] #atLinkedinResumoCard label,
-        html[data-theme="black-cat"] #atLinkedinResumoCard span,
-        html[data-theme="blue-space"] #atLinkedinResumoCard p,
-        html[data-theme="blue-space"] #atLinkedinResumoCard ul,
-        html[data-theme="blue-space"] #atLinkedinResumoCard li,
-        html[data-theme="blue-space"] #atLinkedinResumoCard label,
-        html[data-theme="blue-space"] #atLinkedinResumoCard span { color: #374151 !important; }
+        html[data-theme="blue-space"] #atLinkedinResumoCard h4 { color: #6b768d !important; }
+        #atLinkedinResumoCard p, #atLinkedinResumoCard ul, #atLinkedinResumoCard li,
+        #atLinkedinResumoCard label, #atLinkedinResumoCard strong, #atLinkedinResumoCard b {
+            color: #111827 !important;
+        }
 
     </style>
 </head>
@@ -18843,8 +18846,10 @@
                 : '';
             if (s) {
                 resultArea.innerHTML = limitedDataWarning
+                    + `<div id="atLinkedinResumoCard">`
                     + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source)
-                    + _renderAccountContext(data.account_context);
+                    + _renderAccountContext(data.account_context)
+                    + `</div>`;
                 if (data.account_context && data.account_context.account) {
                     _populateAccountContextSelect(data.account_context.account.id);
                 }
@@ -18974,11 +18979,18 @@
         }
 
         function _renderLinkedInSummary(s, source, fetchedFromUrl, photoUrl, photoSource = '') {
-            const listItems = (arr) => (Array.isArray(arr) && arr.length)
-                ? arr.map(i => `<li style="margin-bottom:4px;">${_escHtml(i)}</li>`).join('')
-                : '<li style="color:#9ca3af;">Não identificado</li>';
+            const listItems = (arr) => {
+                const clean = Array.isArray(arr) ? arr.filter(i => i !== null && i !== undefined && String(i).trim()) : [];
+                return clean.length
+                    ? clean.map(i => `<li style="margin-bottom:4px;">${_escHtml(i)}</li>`).join('')
+                    : '<li style="color:#9ca3af;">Não identificado</li>';
+            };
 
-            const badge = `<span style="background:#d1fae5; color:#065f46; font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600;">${_escHtml(source)}</span>`;
+            // O selo de origem da IA só é exibido quando gerado via SAI (mecanismo primário);
+            // quando cai no fallback OpenRouter o selo fica oculto para o usuário.
+            const badge = source === 'SAI'
+                ? `<span style="background:#d1fae5; color:var(--t-primary); font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600;">${_escHtml(source)}</span>`
+                : '';
             const fetchBadge = fetchedFromUrl ? `<span style="background:#dbeafe; color:#1e40af; font-size:11px; padding:2px 8px; border-radius:12px;"><i class="fas fa-link"></i> dados da URL</span>` : '';
             const photoSourceLabelMap = {
                 extension_profile_photo: 'foto da extensão',
@@ -18992,17 +19004,16 @@
 
             const photoHtml = photoUrl
                 ? `<img src="${_escHtml(photoUrl)}" alt="Foto de perfil"
-                      style="width:80px; height:80px; border-radius:50%; object-fit:cover; border:3px solid #6ee7b7; flex-shrink:0;"
+                      style="width:80px; height:80px; border-radius:50%; object-fit:cover; border:3px solid var(--t-accent); flex-shrink:0;"
                       onerror="this.style.display='none'">`
-                : `<div style="width:80px; height:80px; border-radius:50%; background:#d1fae5; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                       <i class="fas fa-user" style="font-size:32px; color:#6ee7b7;"></i>
+                : `<div style="width:80px; height:80px; border-radius:50%; background:#f3f4f6; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                       <i class="fas fa-user" style="font-size:32px; color:var(--t-accent);"></i>
                    </div>`;
 
             return `
-            <div id="atLinkedinResumoCard">
-            <div class="settings-card" style="margin-bottom:16px;">
-                <div style="margin-bottom:12px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <span style="font-size:12px; color:#374151; font-weight:600;">Validação da foto:</span>
+            <div class="settings-card atld-white" style="margin-bottom:16px;">
+                <div class="atld-no-export" style="margin-bottom:12px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <span style="font-size:12px; color:#111827; font-weight:600;">Validação da foto:</span>
                     <button type="button" class="btn btn-secondary btn-small" onclick="confirmarFotoLinkedIn()"><i class="fas fa-check"></i> Confirmar foto</button>
                     <button type="button" class="btn btn-secondary btn-small" onclick="trocarFotoLinkedIn()"><i class="fas fa-link"></i> Trocar URL</button>
                     <button type="button" class="btn btn-secondary btn-small" onclick="removerFotoLinkedIn()"><i class="fas fa-user-slash"></i> Sem foto</button>
@@ -19011,11 +19022,11 @@
                 <div style="display:flex; align-items:center; gap:16px; margin-bottom:20px; flex-wrap:wrap;">
                     ${photoHtml}
                     <div style="flex:1; min-width:0;">
-                        <h2 style="color:#065f46; margin:0 0 4px; font-size:20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${_escHtml(s.nome || '—')}</h2>
-                        <p style="color:#6b7280; margin:0 0 8px; font-size:14px;">${_escHtml(s.cargo_atual || '')}</p>
+                        <h2 style="color:var(--t-primary); margin:0 0 4px; font-size:20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${_escHtml(s.nome || '—')}</h2>
+                        <p style="color:#111827; margin:0 0 8px; font-size:14px;">${_escHtml(s.cargo_atual || '')}</p>
                         <div style="display:flex; gap:6px; flex-wrap:wrap;">${badge}${fetchBadge}${photoBadge}</div>
                     </div>
-                    <div style="display:flex; gap:8px; flex-shrink:0; flex-wrap:wrap;">
+                    <div class="atld-no-export" style="display:flex; gap:8px; flex-shrink:0; flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-small" onclick="exportarResumoLinkedIn('jpeg')" title="Exportar como imagem JPEG">
                             <i class="fas fa-image"></i> JPEG
                         </button>
@@ -19027,37 +19038,36 @@
                 <!-- Trajetória + Competências -->
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
                     <div>
-                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-route" style="margin-right:6px;"></i>Trajetória</h4>
-                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.trajetoria)}</ul>
+                        <h4 style="color:var(--t-primary); margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-route" style="margin-right:6px;"></i>Trajetória</h4>
+                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#111827;">${listItems(s.trajetoria)}</ul>
                     </div>
                     <div>
-                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-star" style="margin-right:6px;"></i>Competências-chave</h4>
-                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.competencias)}</ul>
+                        <h4 style="color:var(--t-primary); margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-star" style="margin-right:6px;"></i>Competências-chave</h4>
+                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#111827;">${listItems(s.competencias)}</ul>
                     </div>
                 </div>
                 <!-- Insights + Formação (formação mais abaixo) -->
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
                     <div>
-                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-lightbulb" style="margin-right:6px;"></i>Insights</h4>
-                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.insights)}</ul>
+                        <h4 style="color:var(--t-primary); margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-lightbulb" style="margin-right:6px;"></i>Insights</h4>
+                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#111827;">${listItems(s.insights)}</ul>
                     </div>
                     <div>
-                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-graduation-cap" style="margin-right:6px;"></i>Formação</h4>
-                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.formacao)}</ul>
+                        <h4 style="color:var(--t-primary); margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-graduation-cap" style="margin-right:6px;"></i>Formação</h4>
+                        <ul style="margin:0; padding-left:18px; font-size:13px; color:#111827;">${listItems(s.formacao)}</ul>
                     </div>
                 </div>
             </div>
             <!-- Pontos de conversa -->
-            <div class="settings-card" style="margin-bottom:16px; border-left:4px solid #10b981;">
-                <h4 style="color:#047857; margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-comments" style="margin-right:6px;"></i>Pontos de Conversa para a Reunião</h4>
-                <ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">${listItems(s.pontos_conversa)}</ul>
+            <div class="settings-card atld-white" style="margin-bottom:16px; border-left:4px solid var(--t-primary);">
+                <h4 style="color:var(--t-primary); margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-comments" style="margin-right:6px;"></i>Pontos de Conversa para a Reunião</h4>
+                <ul style="margin:0; padding-left:18px; font-size:13px; color:#111827;">${listItems(s.pontos_conversa)}</ul>
             </div>
             ${s.tom_sugerido ? `
-            <div class="settings-card" style="background:linear-gradient(135deg,#f0fdf4,#ecfdf5); border:1.5px solid #6ee7b7;">
-                <h4 style="color:#047857; margin:0 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-theater-masks" style="margin-right:6px;"></i>Tom Sugerido para a Reunião</h4>
-                <p style="margin:0; font-size:14px; color:#065f46; font-weight:500;">${_escHtml(s.tom_sugerido)}</p>
-            </div>` : ''}
-            </div>`;
+            <div class="settings-card atld-white" style="border:1.5px solid var(--t-accent);">
+                <h4 style="color:var(--t-primary); margin:0 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-theater-masks" style="margin-right:6px;"></i>Tom Sugerido para a Reunião</h4>
+                <p style="margin:0; font-size:14px; color:#111827; font-weight:500;">${_escHtml(s.tom_sugerido)}</p>
+            </div>` : ''}`;
         }
 
         function _renderAccountContext(ac) {
@@ -19066,14 +19076,17 @@
 
             // Bloco a) momento de mercado
             const marketHtml = ac.market_moment
-                ? `<p style="margin:0; font-size:13px; color:#374151; line-height:1.6;">${_escHtml(ac.market_moment)}</p>`
+                ? `<p style="margin:0; font-size:13px; color:#111827; line-height:1.6;">${_escHtml(ac.market_moment)}</p>`
                 : `<p style="margin:0; font-size:13px; color:#9ca3af;">Momento de mercado indisponível no momento.</p>`;
 
             // Bloco c) serviços Stefanini
             let svcHtml;
-            if (Array.isArray(ac.stefanini_services) && ac.stefanini_services.length) {
-                svcHtml = '<ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">'
-                    + ac.stefanini_services.map(s => {
+            const services = Array.isArray(ac.stefanini_services)
+                ? ac.stefanini_services.filter(s => s && String(s.delivery_name || '').trim())
+                : [];
+            if (services.length) {
+                svcHtml = '<ul style="margin:0; padding-left:18px; font-size:13px; color:#111827;">'
+                    + services.map(s => {
                         const owner = s.stf_owner ? ` <span style="color:#6b7280;">(${_escHtml(s.stf_owner)})</span>` : '';
                         const rev = s.revenue ? ` — <strong>${_escHtml(s.revenue)}</strong>` : '';
                         return `<li style="margin-bottom:4px;">${_escHtml(s.delivery_name)}${owner}${rev}</li>`;
@@ -19088,8 +19101,8 @@
             if (ac.contact_found && ac.relationship_summary) {
                 relHtml = `
                     <div style="margin-bottom:16px;">
-                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-handshake" style="margin-right:6px;"></i>Relacionamento com o Contato</h4>
-                        <p style="margin:0; font-size:13px; color:#374151; line-height:1.6;">${_escHtml(ac.relationship_summary)}</p>
+                        <h4 style="color:var(--t-primary); margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-handshake" style="margin-right:6px;"></i>Relacionamento com o Contato</h4>
+                        <p style="margin:0; font-size:13px; color:#111827; line-height:1.6;">${_escHtml(ac.relationship_summary)}</p>
                     </div>`;
             } else if (!ac.contact_found) {
                 relHtml = `
@@ -19099,20 +19112,20 @@
             }
 
             return `
-            <div class="settings-card" style="margin-bottom:16px; border-left:4px solid #6366f1;">
+            <div class="settings-card atld-white" style="margin-bottom:16px; border-left:4px solid var(--t-primary);">
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
-                    <h3 style="color:#3730a3; margin:0; font-size:15px;"><i class="fas fa-building" style="margin-right:8px;"></i>Contexto da Conta: ${accName}</h3>
-                    <select id="atAccountContextSelect" onchange="onAtAccountContextChange(this.value)" style="font-size:12px; padding:4px 8px; border:1px solid #d1d5db; border-radius:6px; background:white; max-width:220px;">
+                    <h3 style="color:var(--t-primary); margin:0; font-size:15px;"><i class="fas fa-building" style="margin-right:8px;"></i>Contexto da Conta: ${accName}</h3>
+                    <select id="atAccountContextSelect" class="atld-no-export" onchange="onAtAccountContextChange(this.value)" style="font-size:12px; padding:4px 8px; border:1px solid #d1d5db; border-radius:6px; background:white; color:#111827; max-width:220px;">
                         <option value="${ac.account.id}" selected>${accName}</option>
                     </select>
                 </div>
                 ${relHtml}
                 <div style="margin-bottom:16px;">
-                    <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-chart-line" style="margin-right:6px;"></i>Momento de Mercado</h4>
+                    <h4 style="color:var(--t-primary); margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-chart-line" style="margin-right:6px;"></i>Momento de Mercado</h4>
                     ${marketHtml}
                 </div>
                 <div>
-                    <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-briefcase" style="margin-right:6px;"></i>O que temos na conta (Serviços Stefanini)</h4>
+                    <h4 style="color:var(--t-primary); margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-briefcase" style="margin-right:6px;"></i>O que temos na conta (Serviços Stefanini)</h4>
                     ${svcHtml}
                 </div>
             </div>`;
@@ -19160,6 +19173,17 @@
             gerarResumoLinkedIn();
         }
 
+        function _loadImageEl(src) {
+            return new Promise((resolve) => {
+                if (!src) { resolve(null); return; }
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => resolve(img);
+                img.onerror = () => resolve(null);
+                img.src = src;
+            });
+        }
+
         async function exportarResumoLinkedIn(formato) {
             const card = document.getElementById('atLinkedinResumoCard');
             if (!card) return;
@@ -19169,39 +19193,112 @@
                 return;
             }
 
-            const nomeEl = card.querySelector('h2');
-            const nomeArq = (nomeEl?.textContent || 'resumo-linkedin').trim().replace(/\s+/g, '-').toLowerCase();
+            const btn = (typeof event !== 'undefined' && event) ? event.currentTarget : null;
+            const btnOriginalHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Exportando...';
+            }
 
-            const canvas = await html2canvas(card, {
-                scale: 2,
-                useCORS: true,
-                backgroundColor: '#ffffff',
-                logging: false
-            });
+            // Esconde elementos de interação (validação de foto, botões de export, seletor de conta)
+            const hiddenEls = Array.from(card.querySelectorAll('.atld-no-export'));
+            const prevDisplay = hiddenEls.map(el => el.style.display);
+            hiddenEls.forEach(el => { el.style.display = 'none'; });
 
-            if (formato === 'jpeg') {
-                const link = document.createElement('a');
-                link.download = `${nomeArq}.jpg`;
-                link.href = canvas.toDataURL('image/jpeg', 0.92);
-                link.click();
-            } else {
-                // PDF via jsPDF
-                if (typeof window.jspdf === 'undefined') {
-                    alert('Biblioteca PDF ainda carregando. Aguarde um instante e tente novamente.');
-                    return;
+            try {
+                const nomeEl = card.querySelector('h2');
+                const nomeArq = (nomeEl?.textContent || 'resumo-linkedin').trim().replace(/\s+/g, '-').toLowerCase();
+
+                const canvas = await html2canvas(card, {
+                    scale: 2,
+                    useCORS: true,
+                    backgroundColor: '#ffffff',
+                    logging: false
+                });
+
+                // Marca d'água: logo Toca do Coelho (inferior direita) + usuário logado (superior direita)
+                const ctx = canvas.getContext('2d');
+                const scale = canvas.width / card.offsetWidth;
+                const pad = 14 * scale;
+
+                const [logoImg, userImg] = await Promise.all([
+                    _loadImageEl('/logo-coelho.png'),
+                    _loadImageEl((typeof userProfile === 'object' && userProfile && userProfile.photo_url) || '')
+                ]);
+
+                if (logoImg && logoImg.naturalHeight) {
+                    const logoH = 40 * scale;
+                    const logoW = logoH * (logoImg.naturalWidth / logoImg.naturalHeight);
+                    ctx.drawImage(logoImg, canvas.width - logoW - pad, canvas.height - logoH - pad, logoW, logoH);
                 }
-                const { jsPDF } = window.jspdf;
-                const imgW = 210; // A4 largura em mm
-                const imgH = (canvas.height * imgW) / canvas.width;
-                const pdf = new jsPDF({ orientation: imgH > imgW ? 'p' : 'l', unit: 'mm', format: 'a4' });
-                const pageH = pdf.internal.pageSize.getHeight();
-                let yPos = 0;
-                while (yPos < imgH) {
-                    if (yPos > 0) pdf.addPage();
-                    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -yPos, imgW, imgH);
-                    yPos += pageH;
+
+                const userName = (typeof userProfile === 'object' && userProfile && (userProfile.nickname || userProfile.full_name)) || '';
+                if (userImg || userName) {
+                    const avatarSize = 40 * scale;
+                    const avX = canvas.width - avatarSize - pad;
+                    const avY = pad;
+                    if (userImg && userImg.naturalHeight) {
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(avX + avatarSize / 2, avY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+                        ctx.closePath();
+                        ctx.clip();
+                        ctx.drawImage(userImg, avX, avY, avatarSize, avatarSize);
+                        ctx.restore();
+                    }
+                    if (userName) {
+                        ctx.font = `${11 * scale}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+                        ctx.fillStyle = '#111827';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(userName, avX + avatarSize / 2, avY + avatarSize + 16 * scale);
+                    }
                 }
-                pdf.save(`${nomeArq}.pdf`);
+
+                // Limita a largura final da exportação a 1200px (reduz o tamanho do arquivo)
+                const MAX_EXPORT_WIDTH = 1200;
+                let finalCanvas = canvas;
+                if (canvas.width > MAX_EXPORT_WIDTH) {
+                    const ratio = MAX_EXPORT_WIDTH / canvas.width;
+                    const resized = document.createElement('canvas');
+                    resized.width = MAX_EXPORT_WIDTH;
+                    resized.height = Math.round(canvas.height * ratio);
+                    resized.getContext('2d').drawImage(canvas, 0, 0, resized.width, resized.height);
+                    finalCanvas = resized;
+                }
+
+                if (formato === 'jpeg') {
+                    const link = document.createElement('a');
+                    link.download = `${nomeArq}.jpg`;
+                    link.href = finalCanvas.toDataURL('image/jpeg', 0.92);
+                    link.click();
+                } else {
+                    // PDF via jsPDF
+                    if (typeof window.jspdf === 'undefined') {
+                        alert('Biblioteca PDF ainda carregando. Aguarde um instante e tente novamente.');
+                        return;
+                    }
+                    const { jsPDF } = window.jspdf;
+                    const imgW = 210; // A4 largura em mm
+                    const imgH = (finalCanvas.height * imgW) / finalCanvas.width;
+                    const pdf = new jsPDF({ orientation: imgH > imgW ? 'p' : 'l', unit: 'mm', format: 'a4' });
+                    const pageH = pdf.internal.pageSize.getHeight();
+                    let yPos = 0;
+                    while (yPos < imgH) {
+                        if (yPos > 0) pdf.addPage();
+                        pdf.addImage(finalCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -yPos, imgW, imgH);
+                        yPos += pageH;
+                    }
+                    pdf.save(`${nomeArq}.pdf`);
+                }
+            } catch (e) {
+                console.error('[exportarResumoLinkedIn] erro:', e);
+                alert('Falha ao exportar o relatório: ' + (e?.message || e));
+            } finally {
+                hiddenEls.forEach((el, i) => { el.style.display = prevDisplay[i] || ''; });
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = btnOriginalHtml;
+                }
             }
         }
 
