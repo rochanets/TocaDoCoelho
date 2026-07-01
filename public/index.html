@@ -3319,11 +3319,24 @@
            preto, independente do tema ativo; títulos seguem a cor do tema (mais escura).
            !important é necessário aqui porque os temas escuros (black-cat/blue-space) têm
            regras !important em ".settings-card p/strong/etc" que, sem isso, sobrescreveriam
-           a cor inline definida no HTML gerado. ── */
+           a cor inline definida no HTML gerado.
+           Cores fixas em hex (não color-mix()) porque o html2canvas usado na exportação em
+           JPEG/PDF não interpreta funções CSS modernas como color-mix() — usar essa função
+           quebrava a exportação silenciosamente. ── */
         #atLinkedinResumoCard .settings-card.atld-white { background: #ffffff !important; border-color: #e5e7eb !important; }
-        #atLinkedinResumoCard h2, #atLinkedinResumoCard h3, #atLinkedinResumoCard h4 {
-            color: color-mix(in srgb, var(--t-primary) 70%, black 30%) !important;
-        }
+        #atLinkedinResumoCard h2, #atLinkedinResumoCard h3, #atLinkedinResumoCard h4 { color: #03523b !important; }
+        html[data-theme="baby-pink"] #atLinkedinResumoCard h2,
+        html[data-theme="baby-pink"] #atLinkedinResumoCard h3,
+        html[data-theme="baby-pink"] #atLinkedinResumoCard h4 { color: #6d4153 !important; }
+        html[data-theme="black-cat"] #atLinkedinResumoCard h2,
+        html[data-theme="black-cat"] #atLinkedinResumoCard h3,
+        html[data-theme="black-cat"] #atLinkedinResumoCard h4 { color: #6b6b6b !important; }
+        html[data-theme="white-pearl"] #atLinkedinResumoCard h2,
+        html[data-theme="white-pearl"] #atLinkedinResumoCard h3,
+        html[data-theme="white-pearl"] #atLinkedinResumoCard h4 { color: #544a41 !important; }
+        html[data-theme="blue-space"] #atLinkedinResumoCard h2,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h3,
+        html[data-theme="blue-space"] #atLinkedinResumoCard h4 { color: #6b768d !important; }
         #atLinkedinResumoCard p, #atLinkedinResumoCard ul, #atLinkedinResumoCard li,
         #atLinkedinResumoCard label, #atLinkedinResumoCard strong, #atLinkedinResumoCard b {
             color: #111827 !important;
@@ -19180,99 +19193,112 @@
                 return;
             }
 
-            const nomeEl = card.querySelector('h2');
-            const nomeArq = (nomeEl?.textContent || 'resumo-linkedin').trim().replace(/\s+/g, '-').toLowerCase();
+            const btn = (typeof event !== 'undefined' && event) ? event.currentTarget : null;
+            const btnOriginalHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Exportando...';
+            }
 
             // Esconde elementos de interação (validação de foto, botões de export, seletor de conta)
             const hiddenEls = Array.from(card.querySelectorAll('.atld-no-export'));
             const prevDisplay = hiddenEls.map(el => el.style.display);
             hiddenEls.forEach(el => { el.style.display = 'none'; });
 
-            let canvas;
             try {
-                canvas = await html2canvas(card, {
+                const nomeEl = card.querySelector('h2');
+                const nomeArq = (nomeEl?.textContent || 'resumo-linkedin').trim().replace(/\s+/g, '-').toLowerCase();
+
+                const canvas = await html2canvas(card, {
                     scale: 2,
                     useCORS: true,
                     backgroundColor: '#ffffff',
                     logging: false
                 });
+
+                // Marca d'água: logo Toca do Coelho (inferior direita) + usuário logado (superior direita)
+                const ctx = canvas.getContext('2d');
+                const scale = canvas.width / card.offsetWidth;
+                const pad = 14 * scale;
+
+                const [logoImg, userImg] = await Promise.all([
+                    _loadImageEl('/logo-coelho.png'),
+                    _loadImageEl((typeof userProfile === 'object' && userProfile && userProfile.photo_url) || '')
+                ]);
+
+                if (logoImg && logoImg.naturalHeight) {
+                    const logoH = 40 * scale;
+                    const logoW = logoH * (logoImg.naturalWidth / logoImg.naturalHeight);
+                    ctx.drawImage(logoImg, canvas.width - logoW - pad, canvas.height - logoH - pad, logoW, logoH);
+                }
+
+                const userName = (typeof userProfile === 'object' && userProfile && (userProfile.nickname || userProfile.full_name)) || '';
+                if (userImg || userName) {
+                    const avatarSize = 40 * scale;
+                    const avX = canvas.width - avatarSize - pad;
+                    const avY = pad;
+                    if (userImg && userImg.naturalHeight) {
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(avX + avatarSize / 2, avY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+                        ctx.closePath();
+                        ctx.clip();
+                        ctx.drawImage(userImg, avX, avY, avatarSize, avatarSize);
+                        ctx.restore();
+                    }
+                    if (userName) {
+                        ctx.font = `${11 * scale}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+                        ctx.fillStyle = '#111827';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(userName, avX + avatarSize / 2, avY + avatarSize + 16 * scale);
+                    }
+                }
+
+                // Limita a largura final da exportação a 1200px (reduz o tamanho do arquivo)
+                const MAX_EXPORT_WIDTH = 1200;
+                let finalCanvas = canvas;
+                if (canvas.width > MAX_EXPORT_WIDTH) {
+                    const ratio = MAX_EXPORT_WIDTH / canvas.width;
+                    const resized = document.createElement('canvas');
+                    resized.width = MAX_EXPORT_WIDTH;
+                    resized.height = Math.round(canvas.height * ratio);
+                    resized.getContext('2d').drawImage(canvas, 0, 0, resized.width, resized.height);
+                    finalCanvas = resized;
+                }
+
+                if (formato === 'jpeg') {
+                    const link = document.createElement('a');
+                    link.download = `${nomeArq}.jpg`;
+                    link.href = finalCanvas.toDataURL('image/jpeg', 0.92);
+                    link.click();
+                } else {
+                    // PDF via jsPDF
+                    if (typeof window.jspdf === 'undefined') {
+                        alert('Biblioteca PDF ainda carregando. Aguarde um instante e tente novamente.');
+                        return;
+                    }
+                    const { jsPDF } = window.jspdf;
+                    const imgW = 210; // A4 largura em mm
+                    const imgH = (finalCanvas.height * imgW) / finalCanvas.width;
+                    const pdf = new jsPDF({ orientation: imgH > imgW ? 'p' : 'l', unit: 'mm', format: 'a4' });
+                    const pageH = pdf.internal.pageSize.getHeight();
+                    let yPos = 0;
+                    while (yPos < imgH) {
+                        if (yPos > 0) pdf.addPage();
+                        pdf.addImage(finalCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -yPos, imgW, imgH);
+                        yPos += pageH;
+                    }
+                    pdf.save(`${nomeArq}.pdf`);
+                }
+            } catch (e) {
+                console.error('[exportarResumoLinkedIn] erro:', e);
+                alert('Falha ao exportar o relatório: ' + (e?.message || e));
             } finally {
                 hiddenEls.forEach((el, i) => { el.style.display = prevDisplay[i] || ''; });
-            }
-
-            // Marca d'água: logo Toca do Coelho (inferior direita) + usuário logado (superior direita)
-            const ctx = canvas.getContext('2d');
-            const scale = canvas.width / card.offsetWidth;
-            const pad = 14 * scale;
-
-            const [logoImg, userImg] = await Promise.all([
-                _loadImageEl('/logo-coelho.png'),
-                _loadImageEl((typeof userProfile === 'object' && userProfile && userProfile.photo_url) || '')
-            ]);
-
-            if (logoImg && logoImg.naturalHeight) {
-                const logoH = 40 * scale;
-                const logoW = logoH * (logoImg.naturalWidth / logoImg.naturalHeight);
-                ctx.drawImage(logoImg, canvas.width - logoW - pad, canvas.height - logoH - pad, logoW, logoH);
-            }
-
-            const userName = (typeof userProfile === 'object' && userProfile && (userProfile.nickname || userProfile.full_name)) || '';
-            if (userImg || userName) {
-                const avatarSize = 40 * scale;
-                const avX = canvas.width - avatarSize - pad;
-                const avY = pad;
-                if (userImg && userImg.naturalHeight) {
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.arc(avX + avatarSize / 2, avY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
-                    ctx.closePath();
-                    ctx.clip();
-                    ctx.drawImage(userImg, avX, avY, avatarSize, avatarSize);
-                    ctx.restore();
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = btnOriginalHtml;
                 }
-                if (userName) {
-                    ctx.font = `${11 * scale}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-                    ctx.fillStyle = '#111827';
-                    ctx.textAlign = 'center';
-                    ctx.fillText(userName, avX + avatarSize / 2, avY + avatarSize + 16 * scale);
-                }
-            }
-
-            // Limita a largura final da exportação a 1200px (reduz o tamanho do arquivo)
-            const MAX_EXPORT_WIDTH = 1200;
-            let finalCanvas = canvas;
-            if (canvas.width > MAX_EXPORT_WIDTH) {
-                const ratio = MAX_EXPORT_WIDTH / canvas.width;
-                const resized = document.createElement('canvas');
-                resized.width = MAX_EXPORT_WIDTH;
-                resized.height = Math.round(canvas.height * ratio);
-                resized.getContext('2d').drawImage(canvas, 0, 0, resized.width, resized.height);
-                finalCanvas = resized;
-            }
-
-            if (formato === 'jpeg') {
-                const link = document.createElement('a');
-                link.download = `${nomeArq}.jpg`;
-                link.href = finalCanvas.toDataURL('image/jpeg', 0.92);
-                link.click();
-            } else {
-                // PDF via jsPDF
-                if (typeof window.jspdf === 'undefined') {
-                    alert('Biblioteca PDF ainda carregando. Aguarde um instante e tente novamente.');
-                    return;
-                }
-                const { jsPDF } = window.jspdf;
-                const imgW = 210; // A4 largura em mm
-                const imgH = (finalCanvas.height * imgW) / finalCanvas.width;
-                const pdf = new jsPDF({ orientation: imgH > imgW ? 'p' : 'l', unit: 'mm', format: 'a4' });
-                const pageH = pdf.internal.pageSize.getHeight();
-                let yPos = 0;
-                while (yPos < imgH) {
-                    if (yPos > 0) pdf.addPage();
-                    pdf.addImage(finalCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -yPos, imgW, imgH);
-                    yPos += pageH;
-                }
-                pdf.save(`${nomeArq}.pdf`);
             }
         }
 
