@@ -3361,9 +3361,9 @@
                 <i class="fas fa-th-large"></i>
                 <span>Dashboard</span>
             </button>
-            <button class="nav-item nav-reports" onclick="switchTab(event, 'reports')">
-                <i class="fas fa-chart-bar"></i>
-                <span>Reports</span>
+            <button class="nav-item nav-autotoca" onclick="switchTab(event, 'autotoca')">
+                <i class="fas fa-wand-magic-sparkles"></i>
+                <span>AutoToca</span>
             </button>
             <button class="nav-item nav-wikitoca" onclick="switchTab(event, 'wikitoca')">
                 <i class="fas fa-book-open"></i>
@@ -3384,10 +3384,6 @@
             <button class="nav-item nav-portfolio" onclick="switchTab(event, 'portfolio')">
                 <i class="fas fa-briefcase"></i>
                 <span>Portifólio</span>
-            </button>
-            <button class="nav-item nav-autotoca" onclick="switchTab(event, 'autotoca')">
-                <i class="fas fa-wand-magic-sparkles"></i>
-                <span>AutoToca</span>
             </button>
             <button class="nav-item nav-atividades" onclick="switchTab(event, 'atividades')">
                 <i class="fas fa-chart-line"></i>
@@ -3655,7 +3651,7 @@
                                     <div><span>Meta:</span> <strong>80%</strong></div>
                                     <div><span>Atual:</span> <strong id="insCobAtual">—</strong></div>
                                 </div>
-                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); switchTab(event, 'reports')">Ver análise <i class="fas fa-arrow-right"></i></a>
+                                <a class="home-insight-link" href="#" onclick="event.preventDefault(); switchTab(event, 'autotoca')">Ver análise <i class="fas fa-arrow-right"></i></a>
                             </div>
                         </div>
                     </aside>
@@ -3999,58 +3995,6 @@
             <div id="activitiesList"></div>
         </div>
 
-        <!-- Reports Tab -->
-        <div id="reports" class="tab-content">
-            <div class="page-header">
-                <h1>Reports</h1>
-                <p>Relatórios executivos e ferramentas de análise comercial</p>
-            </div>
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
-                <button id="reportsBtn_preparar-reuniao" class="btn btn-secondary" onclick="toggleReportsPanel('preparar-reuniao')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
-                <button id="reportsBtn_relationship-report" class="btn btn-secondary" onclick="toggleReportsPanel('relationship-report')"><i class="fas fa-chart-line" style="margin-right:5px;"></i> Relationship Report</button>
-            </div>
-            <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
-                <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
-                <p style="margin-bottom:16px; color:#4b5563; font-size:13px;">Cole o texto do perfil LinkedIn e gere um resumo executivo estruturado para sua reunião.</p>
-                <div style="display:flex; flex-direction:column; gap:14px;">
-                    <div class="form-group" style="margin:0;">
-                        <label style="font-weight:600; font-size:13px;">URL do Perfil LinkedIn</label>
-                        <input type="url" id="atLinkedinUrl" placeholder="https://www.linkedin.com/in/nome-da-pessoa"
-                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
-                        <span style="font-size:11px; color:#9ca3af;"><i class="fas fa-info-circle"></i> O LinkedIn bloqueia scraping — se o resumo ficar genérico, cole o texto abaixo.</span>
-                    </div>
-                    <div class="form-group" style="margin:0;">
-                        <label style="font-weight:600; font-size:13px;">Texto do Perfil <span style="font-weight:400; color:#9ca3af;">(cole o conteúdo copiado do LinkedIn)</span></label>
-                        <textarea id="atLinkedinProfileText" rows="7" placeholder="Cole aqui o texto do perfil: nome, cargo, experiências, formação, habilidades..."
-                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
-                    </div>
-                    <div class="form-group" style="margin:0;">
-                        <label style="font-weight:600; font-size:13px;">Contexto da Reunião <span style="font-weight:400; color:#9ca3af;">(opcional)</span></label>
-                        <input type="text" id="atLinkedinMeetingContext" placeholder="Ex: apresentar proposta de consultoria de TI, renovar contrato, primeiro contato..."
-                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
-                    </div>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                        <button class="btn btn-auto-mapping" onclick="gerarResumoLinkedIn()" id="atLinkedinSummarizeBtn">
-                            <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
-                        </button>
-                        <button class="btn btn-auto-mapping" onclick="importarPerfilLinkedIn()" id="atLinkedinImportBtn" title="Importa perfil capturado pela extensão do Chrome/Firefox">
-                            <i class="fab fa-linkedin" style="margin-right:5px;"></i> Importar da Extensão
-                        </button>
-                        <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()" title="Como usar a extensão no LinkedIn">
-                            <i class="fas fa-question-circle"></i> Como usar
-                        </button>
-                        <button class="btn btn-secondary btn-small" onclick="verLogsExtensao()" title="Ver logs de diagnóstico da extensão" style="opacity:0.7;">
-                            <i class="fas fa-bug"></i> Logs da Extensão
-                        </button>
-                    </div>
-                    <div id="atLinkedinResultArea"></div>
-                </div>
-            </div>
-            <div id="reportsPanel_relationship-report" style="display:none;">
-                <div id="reportsRelationshipContent"></div>
-            </div>
-        </div>
-
         <div id="agenda" class="tab-content">
             <div class="page-header">
                 <h1>Agenda</h1>
@@ -4126,6 +4070,8 @@
             </div>
             <div id="autotocaExtensionStatus" style="display:none; margin-bottom:16px; background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46; border-radius:12px; padding:12px 16px; font-size:13px;"></div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+                <button id="reportsBtn_preparar-reuniao" class="btn btn-auto-mapping" onclick="toggleReportsPanel('preparar-reuniao')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
+                <button id="reportsBtn_relationship-report" class="btn btn-auto-mapping" onclick="toggleReportsPanel('relationship-report')"><i class="fas fa-chart-line" style="margin-right:5px;"></i> Relationship Report</button>
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
                 <button id="autoTocaBtn_whatsapp-update" class="btn btn-auto-mapping" onclick="openWhatsappUpdateWithWarning()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
@@ -4264,6 +4210,43 @@
                     <p id="outlookSyncHint" style="font-size:12px; color:#9ca3af; margin-bottom:8px;">Conecte sua conta Microsoft 365 acima para habilitar a sincronização.</p>
                     <div id="outlookImportStatus" style="font-size:13px;"></div>
                 </div>
+            </div>
+            <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
+                <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>
+                <p style="margin-bottom:16px; color:#4b5563; font-size:13px;">Cole o texto do perfil LinkedIn e gere um resumo executivo estruturado para sua reunião.</p>
+                <div style="display:flex; flex-direction:column; gap:14px;">
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">URL do Perfil LinkedIn</label>
+                        <input type="url" id="atLinkedinUrl" placeholder="https://www.linkedin.com/in/nome-da-pessoa"
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+                        <span style="font-size:11px; color:#9ca3af;"><i class="fas fa-info-circle"></i> O LinkedIn bloqueia scraping — se o resumo ficar genérico, cole o texto abaixo.</span>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">Texto do Perfil <span style="font-weight:400; color:#9ca3af;">(cole o conteúdo copiado do LinkedIn)</span></label>
+                        <textarea id="atLinkedinProfileText" rows="7" placeholder="Cole aqui o texto do perfil: nome, cargo, experiências, formação, habilidades..."
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; resize:vertical; font-family:inherit; box-sizing:border-box;"></textarea>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-weight:600; font-size:13px;">Contexto da Reunião <span style="font-weight:400; color:#9ca3af;">(opcional)</span></label>
+                        <input type="text" id="atLinkedinMeetingContext" placeholder="Ex: apresentar proposta de consultoria de TI, renovar contrato, primeiro contato..."
+                            style="width:100%; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                        <button class="btn btn-auto-mapping" onclick="gerarResumoLinkedIn()" id="atLinkedinSummarizeBtn">
+                            <span class="ai-star-icon">✦</span> Gerar Resumo Executivo
+                        </button>
+                        <button class="btn btn-auto-mapping" onclick="importarPerfilLinkedIn()" id="atLinkedinImportBtn" title="Importa perfil capturado pela extensão do Chrome/Firefox">
+                            <i class="fab fa-linkedin" style="margin-right:5px;"></i> Importar da Extensão
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="abrirGuiaLinkedIn()" title="Como usar a extensão no LinkedIn">
+                            <i class="fas fa-question-circle"></i> Como usar
+                        </button>
+                    </div>
+                    <div id="atLinkedinResultArea"></div>
+                </div>
+            </div>
+            <div id="reportsPanel_relationship-report" style="display:none;">
+                <div id="reportsRelationshipContent"></div>
             </div>
         </div>
 
@@ -5442,9 +5425,7 @@
             }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') { loadActivities(); }
-            else if (tabName === 'autotoca') { loadAutoToca(); }
-
-            else if (tabName === 'reports') loadReports();
+            else if (tabName === 'autotoca') { loadAutoToca(); loadReports(); _addinStartPolling(); _initOutlookAddinManifestUrl(); }
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'kanban') loadKanban();
             else if (tabName === 'gestao-conta') switchGestaoContaSubmodule(requestedGestaoContaSubTab || _gestaoContaCurrentSubTab || 'accounts');
@@ -6503,6 +6484,15 @@
             if (!targetId) return;
             const target = document.getElementById(targetId);
             if (!target) return;
+            // Fecha também os painéis de Reports
+            ['reportsPanel_preparar-reuniao', 'reportsPanel_relationship-report'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+            ['reportsBtn_preparar-reuniao', 'reportsBtn_relationship-report'].forEach(id => {
+                const b = document.getElementById(id);
+                if (b) { b.classList.remove('btn-auto-mapping'); b.classList.add('btn-secondary'); }
+            });
             const isOpening = target.style.display === 'none';
             // Fecha todos os painéis
             Object.entries(panels).forEach(([, id]) => {
@@ -6530,6 +6520,15 @@
             if (!targetId) return;
             const target = document.getElementById(targetId);
             if (!target) return;
+            // Fecha também os painéis de automação do AutoToca
+            ['autoTocaChamadoJuridico', 'autoTocaMalaDireta', 'autoTocaSyncOutlook'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+            ['autoTocaBtn_chamado-juridico', 'autoTocaBtn_mala-direta', 'autoTocaBtn_sync-outlook'].forEach(id => {
+                const b = document.getElementById(id);
+                if (b) { b.classList.remove('btn-auto-mapping'); b.classList.add('btn-secondary'); }
+            });
             const isOpening = target.style.display === 'none';
             // Fecha todos os painéis
             Object.entries(panels).forEach(([panelKey, id]) => {
@@ -18831,6 +18830,7 @@
         let atLinkedinLastImportedPhotoSource = '';
         let atLinkedinImportedAt = null;
         let atLinkedinLastImportedProfileUrl = '';
+        let atLinkedinForcedAccountId = null;
 
         function _renderLinkedInResult(data, resultArea) {
             if (!resultArea) return;
@@ -18842,7 +18842,12 @@
                    </div>`
                 : '';
             if (s) {
-                resultArea.innerHTML = limitedDataWarning + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source);
+                resultArea.innerHTML = limitedDataWarning
+                    + _renderLinkedInSummary(s, data.source, data.fetched_from_url, data.photo_url, data.photo_source)
+                    + _renderAccountContext(data.account_context);
+                if (data.account_context && data.account_context.account) {
+                    _populateAccountContextSelect(data.account_context.account.id);
+                }
             } else if (data.raw) {
                 resultArea.innerHTML = limitedDataWarning + `
                     <div class="settings-card">
@@ -18915,7 +18920,8 @@
                         linkedin_url: url,
                         profile_text: profileText,
                         meeting_context: meetingCtx,
-                        extension_photo_url: shouldUseImportedPhoto ? atLinkedinLastImportedPhotoUrl : ''
+                        extension_photo_url: shouldUseImportedPhoto ? atLinkedinLastImportedPhotoUrl : '',
+                        account_id: atLinkedinForcedAccountId
                     })
                 });
                 const payload = await resp.json().catch(() => ({}));
@@ -18977,7 +18983,8 @@
             const photoSourceLabelMap = {
                 extension_profile_photo: 'foto da extensão',
                 linkedin_og_image: 'foto og:image',
-                web_search_fallback: 'foto de busca web (fallback)'
+                web_search_fallback: 'foto de busca web (fallback)',
+                system_contact_photo: 'foto do contato no sistema'
             };
             const photoBadge = photoSource
                 ? `<span style="background:#ede9fe; color:#5b21b6; font-size:11px; padding:2px 8px; border-radius:12px;"><i class="fas fa-image"></i> ${_escHtml(photoSourceLabelMap[photoSource] || photoSource)}</span>`
@@ -19051,6 +19058,87 @@
                 <p style="margin:0; font-size:14px; color:#065f46; font-weight:500;">${_escHtml(s.tom_sugerido)}</p>
             </div>` : ''}
             </div>`;
+        }
+
+        function _renderAccountContext(ac) {
+            if (!ac || !ac.account) return '';
+            const accName = _escHtml(ac.account.name || 'Conta');
+
+            // Bloco a) momento de mercado
+            const marketHtml = ac.market_moment
+                ? `<p style="margin:0; font-size:13px; color:#374151; line-height:1.6;">${_escHtml(ac.market_moment)}</p>`
+                : `<p style="margin:0; font-size:13px; color:#9ca3af;">Momento de mercado indisponível no momento.</p>`;
+
+            // Bloco c) serviços Stefanini
+            let svcHtml;
+            if (Array.isArray(ac.stefanini_services) && ac.stefanini_services.length) {
+                svcHtml = '<ul style="margin:0; padding-left:18px; font-size:13px; color:#374151;">'
+                    + ac.stefanini_services.map(s => {
+                        const owner = s.stf_owner ? ` <span style="color:#6b7280;">(${_escHtml(s.stf_owner)})</span>` : '';
+                        const rev = s.revenue ? ` — <strong>${_escHtml(s.revenue)}</strong>` : '';
+                        return `<li style="margin-bottom:4px;">${_escHtml(s.delivery_name)}${owner}${rev}</li>`;
+                    }).join('')
+                    + '</ul>';
+            } else {
+                svcHtml = '<p style="margin:0; font-size:13px; color:#9ca3af;">Nenhum serviço Stefanini mapeado para esta conta.</p>';
+            }
+
+            // Bloco b) relacionamento com o contato (condicional)
+            let relHtml = '';
+            if (ac.contact_found && ac.relationship_summary) {
+                relHtml = `
+                    <div style="margin-bottom:16px;">
+                        <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-handshake" style="margin-right:6px;"></i>Relacionamento com o Contato</h4>
+                        <p style="margin:0; font-size:13px; color:#374151; line-height:1.6;">${_escHtml(ac.relationship_summary)}</p>
+                    </div>`;
+            } else if (!ac.contact_found) {
+                relHtml = `
+                    <div style="margin-bottom:16px; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px;">
+                        <span style="font-size:12px; color:#92400e;"><i class="fas fa-info-circle" style="margin-right:6px;"></i>Contato não vinculado a um contato cadastrado no sistema — exibindo apenas o contexto da conta.</span>
+                    </div>`;
+            }
+
+            return `
+            <div class="settings-card" style="margin-bottom:16px; border-left:4px solid #6366f1;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+                    <h3 style="color:#3730a3; margin:0; font-size:15px;"><i class="fas fa-building" style="margin-right:8px;"></i>Contexto da Conta: ${accName}</h3>
+                    <select id="atAccountContextSelect" onchange="onAtAccountContextChange(this.value)" style="font-size:12px; padding:4px 8px; border:1px solid #d1d5db; border-radius:6px; background:white; max-width:220px;">
+                        <option value="${ac.account.id}" selected>${accName}</option>
+                    </select>
+                </div>
+                ${relHtml}
+                <div style="margin-bottom:16px;">
+                    <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-chart-line" style="margin-right:6px;"></i>Momento de Mercado</h4>
+                    ${marketHtml}
+                </div>
+                <div>
+                    <h4 style="color:#047857; margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-briefcase" style="margin-right:6px;"></i>O que temos na conta (Serviços Stefanini)</h4>
+                    ${svcHtml}
+                </div>
+            </div>`;
+        }
+
+        async function _populateAccountContextSelect(currentAccountId) {
+            const select = document.getElementById('atAccountContextSelect');
+            if (!select) return;
+            try {
+                const resp = await fetch(`${API_BASE}/accounts`);
+                if (!resp.ok) return;
+                const accounts = await resp.json();
+                const options = ['<option value="">Nenhuma conta (limpar)</option>'];
+                (Array.isArray(accounts) ? accounts : []).forEach(acc => {
+                    const selected = String(acc.id) === String(currentAccountId) ? ' selected' : '';
+                    options.push(`<option value="${acc.id}"${selected}>${_escHtml(acc.name || 'Conta sem nome')}</option>`);
+                });
+                select.innerHTML = options.join('');
+            } catch (e) {
+                // Mantém o select com a opção única já renderizada se a busca falhar
+            }
+        }
+
+        function onAtAccountContextChange(value) {
+            atLinkedinForcedAccountId = value ? value : null;
+            gerarResumoLinkedIn();
         }
 
         function confirmarFotoLinkedIn() {
