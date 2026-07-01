@@ -18967,7 +18967,11 @@
                     : '<li style="color:#9ca3af;">Não identificado</li>';
             };
 
-            const badge = `<span style="background:#d1fae5; color:var(--t-primary); font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600;">${_escHtml(source)}</span>`;
+            // O selo de origem da IA só é exibido quando gerado via SAI (mecanismo primário);
+            // quando cai no fallback OpenRouter o selo fica oculto para o usuário.
+            const badge = source === 'SAI'
+                ? `<span style="background:#d1fae5; color:var(--t-primary); font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600;">${_escHtml(source)}</span>`
+                : '';
             const fetchBadge = fetchedFromUrl ? `<span style="background:#dbeafe; color:#1e40af; font-size:11px; padding:2px 8px; border-radius:12px;"><i class="fas fa-link"></i> dados da URL</span>` : '';
             const photoSourceLabelMap = {
                 extension_profile_photo: 'foto da extensão',

@@ -13324,7 +13324,7 @@ def _linkedin_try_fetch_public(url):
 
 
 def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data_is_rich=True):
-    """Gera resumo executivo do perfil LinkedIn via LLM (SAI)."""
+    """Gera resumo executivo do perfil LinkedIn via LLM (SAI → OpenRouter)."""
     ctx_part = f'\n\nCONTEXTO DA REUNIÃO: {meeting_context}' if meeting_context.strip() else ''
 
     if data_is_rich:
@@ -13367,6 +13367,44 @@ def _linkedin_generate_summary_via_llm(profile_content, meeting_context='', data
     if raw:
         logger.info('[LinkedIn][SAI] Resumo gerado com sucesso')
         return raw, 'SAI'
+
+    # Fallback: OpenRouter (o template SAI compartilhado pode estourar o limite de uso
+    # sob carga concorrente de outras features do app; sem fallback a feature ficava sem resposta)
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+        try:
+            or_payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': 'Você é um analista de inteligência executiva. Responda SEMPRE e SOMENTE com um JSON válido, sem texto adicional.'},
+                    {'role': 'user', 'content': llm_prompt}
+                ],
+                'temperature': 0.3
+            }
+            req = urllib.request.Request(
+                'https://openrouter.ai/api/v1/chat/completions',
+                data=json.dumps(or_payload, ensure_ascii=False).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            if raw:
+                logger.info('[LinkedIn][OpenRouter] Resumo gerado com sucesso')
+                return raw, 'OpenRouter'
+        except Exception as e:
+            logger.warning(f'[LinkedIn][OpenRouter] Falha: {e}')
 
     return None, 'sem_llm'
 
@@ -13554,7 +13592,7 @@ def _linkedin_process_async(task_id, linkedin_url, profile_text, meeting_context
         _bg_task_set(task_id, {'step': 'Gerando resumo executivo com IA...', 'progress': 35})
         raw, source = _linkedin_generate_summary_via_llm(profile_content, meeting_context, data_is_rich=data_is_rich)
         if not raw:
-            _bg_task_set(task_id, {'status': 'error', 'error': 'Serviço de IA (SAI) não configurado ou indisponível no momento.'})
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhum serviço de IA configurado ou disponível no momento (SAI e OpenRouter falharam).'})
             return
 
         parsed = _linkedin_parse_summary(raw)
