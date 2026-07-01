@@ -85,9 +85,12 @@ raw = _sai_simple_prompt("Pergunta livre aqui. Instrua o formato da resposta no 
 - Aceita apenas o campo `question` como entrada — coloque todo o contexto necessário dentro da pergunta
 - Retorna `None` silenciosamente se SAI não estiver configurado (não lança exceção)
 - Timeout de 45 segundos, com retry automático em HTTP 429 (rate limit)
-- Se o template "simple prompt" falhar (ex.: cota estourada), cai automaticamente para o
-  template SAI dedicado **Geral Claude** (`itoca_sai_geral_claude_template_id` /
-  `itoca_sai_geral_claude_api_key`, integração separada com cota própria) antes de desistir
+- Ordem de tentativa: primeiro o template SAI dedicado **Geral Claude**
+  (`itoca_sai_geral_claude_template_id` / `itoca_sai_geral_claude_api_key`, integração
+  separada com cota própria), depois o template "simple prompt" compartilhado como fallback
+- **Nenhum template SAI tem acesso à web em tempo real** — para perguntas que dependem de
+  dados atuais/recentes (notícias, momento de mercado, etc.), use `_openrouter_web_prompt()`
+  em vez de `_sai_simple_prompt()`
 
 **Padrão de uso com JSON:**
 ```python

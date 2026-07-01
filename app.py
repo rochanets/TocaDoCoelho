@@ -1233,11 +1233,10 @@ def _sai_simple_prompt(question: str) -> str | None:
     itoca_sai_base_url). O template usado é o 'simple prompt' (itoca_sai_simple_template_id),
     que aceita apenas o campo 'question' como entrada.
 
-    Como esse template é compartilhado por muitas features do app e pode saturar sua cota de
-    uso (HTTP 429) sob carga concorrente, esta função tenta primeiro o template 'simple prompt'
-    (com retry em 429) e, se ele falhar, cai automaticamente para o template SAI 'Geral Claude'
-    (itoca_sai_geral_claude_template_id) — uma integração SAI separada com chave e cota próprias,
-    pensada exatamente como alternativa de uso geral ao SAI Simple.
+    Como o template 'simple prompt' é compartilhado por muitas features do app e pode saturar
+    sua cota de uso (HTTP 429) sob carga concorrente, esta função tenta primeiro o template SAI
+    'Geral Claude' (itoca_sai_geral_claude_template_id) — uma integração SAI separada com chave
+    e cota próprias — e só cai para o 'simple prompt' (com retry em 429) se o Geral Claude falhar.
 
     Retorna o texto bruto da resposta do LLM, ou None se nenhum dos dois estiver configurado
     ou disponível.
@@ -1248,17 +1247,17 @@ def _sai_simple_prompt(question: str) -> str | None:
     """
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
-    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
-    if api_key:
-        template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
-        result = _sai_execute_question_template(base_url, template_id, api_key, question, 'simple_prompt')
-        if result:
-            return result
-
     geral_claude_key = _resolve_setting('itoca_sai_geral_claude_api_key', 'ITOCA_SAI_GERAL_CLAUDE_API_KEY') or 'fuBoUPGL+UmrErevVE6VWQ'
     if geral_claude_key:
         geral_claude_template_id = (_load_app_settings_map(['itoca_sai_geral_claude_template_id']).get('itoca_sai_geral_claude_template_id') or '').strip() or '6a45658f1615d7b89d76c4ac'
         result = _sai_execute_question_template(base_url, geral_claude_template_id, geral_claude_key, question, 'geral_claude')
+        if result:
+            return result
+
+    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
+    if api_key:
+        template_id = (_load_app_settings_map(['itoca_sai_simple_template_id']).get('itoca_sai_simple_template_id') or '').strip() or '69bc155d7462bf7c702e9295'
+        result = _sai_execute_question_template(base_url, template_id, api_key, question, 'simple_prompt')
         if result:
             return result
 
@@ -2044,12 +2043,63 @@ def _relation_report_build_topic_evidence(report_data):
     return '\n\n'.join(sections)
 
 
+def _openrouter_web_prompt(question: str) -> str | None:
+    """Envia uma pergunta ao OpenRouter com o plugin de busca web ativado (necessário para
+    informações atuais como notícias/momento de mercado — os templates SAI não têm acesso
+    à web em tempo real, então não servem para esse tipo de pergunta).
+    Retorna o texto da resposta, ou None se o OpenRouter não estiver configurado ou falhar."""
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if not or_key:
+        return None
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+    try:
+        payload = {
+            'model': model,
+            'messages': [{'role': 'user', 'content': question}],
+            'plugins': [{'id': 'web', 'max_results': 3}],
+            'temperature': 0.2
+        }
+        req = urllib.request.Request(
+            'https://openrouter.ai/api/v1/chat/completions',
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        if raw and raw.strip():
+            logger.info('[OpenRouter][web] Resposta gerada com sucesso')
+            return raw.strip()
+    except Exception as e:
+        logger.warning(f'[OpenRouter][web] Falha: {e}')
+    return None
+
+
 def _relation_report_fetch_market_context(account_name: str) -> str | None:
+    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
+
+    # OpenRouter (com busca web) é a fonte primária aqui: o momento de mercado precisa de
+    # dados atuais/recentes, e os templates SAI não têm acesso à web em tempo real.
+    or_result = _openrouter_web_prompt(search)
+    if or_result and len(or_result) >= 30:
+        return or_result
+
+    # Fallback: template SAI dedicado (pode não trazer dados atualizados, mas é melhor
+    # que deixar o bloco vazio caso o OpenRouter não esteja configurado/disponível).
     api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
     if not api_key:
         return None
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
 
     # Esse template SAI dedicado também pode sofrer rate limit (HTTP 429) sob uso
     # concorrente de outras chamadas SAI do app. Tenta novamente com backoff antes de desistir.
