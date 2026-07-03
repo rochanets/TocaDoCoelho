@@ -3211,10 +3211,26 @@
             --t-rule-bg:           #faf8f5;
             --t-rule-border:       rgba(160, 152, 128, 0.18);
         }
+        /* ─ White Pearl: fundo (--t-behind) é claro, então todo texto que por padrão
+           é claro (pensado para os temas escuros) precisa virar escuro para não sumir ── */
         html[data-theme="white-pearl"] .page-header h1,
-        html[data-theme="white-pearl"] .topbar-module-title h1 { color: #efeeea; }
+        html[data-theme="white-pearl"] .topbar-module-title h1 { color: #3a2e24 !important; }
         html[data-theme="white-pearl"] .page-header p,
-        html[data-theme="white-pearl"] .topbar-module-title p  { color: rgba(239,238,234,0.84); }
+        html[data-theme="white-pearl"] .topbar-module-title p  { color: rgba(58,46,36,0.75) !important; }
+        html[data-theme="white-pearl"] .nav-item { color: #5c5044 !important; }
+        html[data-theme="white-pearl"] .nav-item:hover { color: #3a2e24 !important; background: rgba(124,109,95,0.12) !important; }
+        html[data-theme="white-pearl"] .sidebar-footer { color: rgba(58,46,36,0.7) !important; }
+        html[data-theme="white-pearl"] .sidebar-logo-text p { color: rgba(58,46,36,0.6) !important; }
+        html[data-theme="white-pearl"] .topbar-settings-btn { color: #3a2e24 !important; border-color: rgba(58,46,36,0.25) !important; background: rgba(58,46,36,0.06) !important; }
+        html[data-theme="white-pearl"] .topbar-bell { color: #3a2e24 !important; }
+        html[data-theme="white-pearl"] [style*="color:#e2dfd5"],
+        html[data-theme="white-pearl"] [style*="color: #e2dfd5"],
+        html[data-theme="white-pearl"] [style*="color:#efeeea"],
+        html[data-theme="white-pearl"] [style*="color: #efeeea"],
+        html[data-theme="white-pearl"] [style*="rgba(226, 223, 213"],
+        html[data-theme="white-pearl"] [style*="rgba(226,223,213"],
+        html[data-theme="white-pearl"] [style*="rgba(239, 238, 234"],
+        html[data-theme="white-pearl"] [style*="rgba(239,238,234"] { color: #3a2e24 !important; }
 
         /* ── 5. Blue Space ── */
         html[data-theme="blue-space"] {
@@ -3303,7 +3319,10 @@
         html[data-theme="blue-space"] .theme-option-btn { background: rgba(10,20,50,0.7); color: #9eadcf; }
         html[data-theme="blue-space"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
         html[data-theme="blue-space"] select,
-        html[data-theme="blue-space"] textarea { background: #0d1a35 !important; color: #c8d4e8 !important; border-color: rgba(87,84,168,0.4) !important; }
+        html[data-theme="blue-space"] textarea { background: #0d1a35 !important; color: #ffffff !important; border-color: rgba(87,84,168,0.4) !important; }
+        html[data-theme="blue-space"] input::placeholder,
+        html[data-theme="blue-space"] textarea::placeholder { color: rgba(255,255,255,0.45) !important; }
+        html[data-theme="blue-space"] select option { background: #0d1a35 !important; color: #ffffff !important; }
         html[data-theme="blue-space"] .btn-secondary { background: #1a2a5e !important; color: #9eadcf !important; }
         html[data-theme="blue-space"] .btn-secondary:hover { background: #1e3270 !important; }
         html[data-theme="blue-space"] .nav-item.active { box-shadow: 0 4px 15px rgba(87,84,168,0.45), 0 0 22px rgba(87,84,168,0.25) !important; }
@@ -6528,10 +6547,7 @@
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });
-            ['autoTocaBtn_chamado-juridico', 'autoTocaBtn_mala-direta', 'autoTocaBtn_sync-outlook'].forEach(id => {
-                const b = document.getElementById(id);
-                if (b) { b.classList.remove('btn-auto-mapping'); b.classList.add('btn-secondary'); }
-            });
+            resetAutoTocaModuleButtons();
             const isOpening = target.style.display === 'none';
             // Fecha todos os painéis
             Object.entries(panels).forEach(([panelKey, id]) => {
