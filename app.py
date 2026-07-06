@@ -111,11 +111,12 @@ except ImportError:
 
 try:
     from PIL import Image as PILImage
-    from PIL import ImageOps
+    from PIL import ImageOps, ImageFilter
     PIL_AVAILABLE = True
 except ImportError:
     PILImage = None
     ImageOps = None
+    ImageFilter = None
     PIL_AVAILABLE = False
 
 REPORTLAB_IMPORT_ERROR = None
@@ -1609,6 +1610,30 @@ def _relation_report_safe_image(image_path, max_width=220, max_height=120):
         return ImageReader(background.convert('RGB'))
     except Exception:
         return None
+
+
+def _save_avatar_photo(file_storage, filepath, size=320):
+    """Salva uma foto de avatar já redimensionada e nitidificada.
+
+    Fotos de celular chegam em resolução muito maior que o círculo de
+    avatar exibido na tela (ex.: 44-56px). O downscale "cru" feito pelo
+    navegador nessa proporção (>15x) borra detalhes finos (cabelo, barba)
+    porque não aplica nenhum sharpening pós-redução. Pré-processar aqui
+    evita esse borrão em qualquer lugar do app onde o avatar apareça.
+    """
+    if not PIL_AVAILABLE:
+        file_storage.save(str(filepath))
+        return
+    try:
+        img = PILImage.open(file_storage.stream)
+        img = ImageOps.exif_transpose(img)
+        img = img.convert('RGB')
+        img = ImageOps.fit(img, (size, size), PILImage.LANCZOS)
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))
+        img.save(str(filepath), format='JPEG', quality=90, optimize=True)
+    except Exception:
+        file_storage.stream.seek(0)
+        file_storage.save(str(filepath))
 
 
 def _relation_report_parse_dt(value):
@@ -9200,9 +9225,9 @@ def save_profile_config():
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
-                filename = secure_filename(file.filename)
+                filename = f'profile-{uuid.uuid4().hex}.jpg'
                 filepath = UPLOAD_DIR / filename
-                file.save(str(filepath))
+                _save_avatar_photo(file, filepath)
                 photo_url = f'/uploads/{filename}'
 
         if not photo_url:
