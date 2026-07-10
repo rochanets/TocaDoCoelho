@@ -1193,6 +1193,18 @@ SCHEMA_MIGRATIONS = [
         'CREATE INDEX IF NOT EXISTS idx_inbound_pending ON inbound_messages(responded_at, received_at)',
         'CREATE INDEX IF NOT EXISTS idx_inbound_client ON inbound_messages(client_id, channel)',
     ]),
+    (7, 'whatsapp_sends', [
+        '''CREATE TABLE IF NOT EXISTS whatsapp_sends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            phone TEXT,
+            message TEXT,
+            status TEXT NOT NULL DEFAULT 'sent',
+            error TEXT,
+            sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        "CREATE INDEX IF NOT EXISTS idx_wa_sends_date ON whatsapp_sends(sent_at)",
+    ]),
 ]
 
 

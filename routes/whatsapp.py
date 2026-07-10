@@ -374,3 +374,164 @@ def inbound_scan_now():
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/inbound/scan: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# ===========================================================================
+# Envio direto via WAHA (Bloco 8) — com limite diário e intervalo aleatório
+# para mitigar risco de bloqueio do número.
+# ===========================================================================
+
+def _waha_daily_quota(c):
+    """Retorna (limite, usados_hoje). Limite configurável em app_settings."""
+    try:
+        limit = int(_resolve_setting('waha_daily_send_limit', 'WAHA_DAILY_SEND_LIMIT') or 45)
+    except Exception:
+        limit = 45
+    c.execute("SELECT COUNT(*) FROM whatsapp_sends WHERE status = 'sent' AND date(sent_at) = date('now', 'localtime')")
+    used = c.fetchone()[0]
+    return limit, used
+
+
+def _waha_send_text(chat_id, text):
+    """Envia texto via WAHA sendText. Retorna (ok, erro)."""
+    api_url, api_key, session = _waha_settings()
+    try:
+        resp = requests.post(
+            f'{api_url}/api/sendText',
+            headers=_waha_headers(api_key),
+            json={'chatId': chat_id, 'text': text, 'session': session},
+            timeout=30
+        )
+        if resp.status_code in (200, 201):
+            return True, None
+        return False, f'HTTP {resp.status_code}: {resp.text[:180]}'
+    except Exception as e:
+        return False, str(e)
+
+
+def _waha_send_and_register(c, client_id, phone, message, register_activity=True):
+    """Valida, respeita o limite diário, envia e registra atividade.
+    Retorna dict {ok, error, activity_id, limit_reached}."""
+    limit, used = _waha_daily_quota(c)
+    if used >= limit:
+        return {'ok': False, 'limit_reached': True,
+                'error': f'Limite diário de {limit} mensagens via WAHA atingido. '
+                         'Ajuste em Configurações ou use o WhatsApp Web como contingência.'}
+    chat_id = _phone_to_waha_chatid(phone)
+    if not chat_id:
+        return {'ok': False, 'error': 'Telefone inválido para WhatsApp.'}
+    ok, err = _waha_send_text(chat_id, message)
+    c.execute('INSERT INTO whatsapp_sends (client_id, phone, message, status, error) VALUES (?, ?, ?, ?, ?)',
+              (client_id, phone, message[:500], 'sent' if ok else 'error', err))
+    if not ok:
+        return {'ok': False, 'error': err}
+    activity_id = None
+    if register_activity and client_id:
+        info = f'Mensagem enviada via WhatsApp (WAHA):\n{message[:400]}'
+        c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, 'WhatsApp', ?)",
+                  (client_id, info))
+        activity_id = c.lastrowid
+        c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (client_id,))
+        _inbound_mark_responded(c, client_id, 'whatsapp')
+    return {'ok': True, 'activity_id': activity_id}
+
+
+@app.route('/api/whatsapp/send-quota', methods=['GET'])
+def whatsapp_send_quota():
+    conn = get_db()
+    limit, used = _waha_daily_quota(conn.cursor())
+    conn.close()
+    return jsonify({'limit': limit, 'used_today': used, 'remaining': max(limit - used, 0)})
+
+
+@app.route('/api/whatsapp/send', methods=['POST'])
+def whatsapp_send_single():
+    try:
+        data = request.get_json(force=True) or {}
+        message = (data.get('message') or '').strip()
+        phone = (data.get('phone') or '').strip()
+        client_id = data.get('client_id')
+        if not message or not phone:
+            return jsonify({'error': 'Telefone e mensagem são obrigatórios.'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        result = _waha_send_and_register(c, client_id, phone, message,
+                                         register_activity=data.get('register_activity', True))
+        conn.commit()
+        conn.close()
+        status = 200 if result.get('ok') else (429 if result.get('limit_reached') else 502)
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/whatsapp/send: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _whatsapp_batch_send_async(task_id, items, interval_min, interval_max):
+    import random as _random
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        total = len(items)
+        sent = failed = blocked = 0
+        details = []
+        for i, item in enumerate(items):
+            name = item.get('name') or item.get('phone') or f'contato {i + 1}'
+            _bg_task_set(task_id, {
+                'step': f'📤 Enviando para {name}... ({i + 1}/{total})',
+                'progress': 5 + int((i / max(total, 1)) * 90)
+            })
+            result = _waha_send_and_register(c, item.get('client_id'), item.get('phone') or '',
+                                             (item.get('message') or '').strip())
+            conn.commit()
+            if result.get('limit_reached'):
+                blocked = total - i
+                details.append({'name': name, 'status': 'blocked', 'error': result.get('error')})
+                # limite diário atingido: recusa o restante da fila
+                for rest in items[i + 1:]:
+                    details.append({'name': rest.get('name') or rest.get('phone'), 'status': 'blocked',
+                                    'error': 'Limite diário atingido'})
+                break
+            if result.get('ok'):
+                sent += 1
+                details.append({'name': name, 'status': 'sent', 'activity_id': result.get('activity_id')})
+            else:
+                # falha em 1 contato não interrompe a fila
+                failed += 1
+                details.append({'name': name, 'status': 'error', 'error': result.get('error')})
+            if i < total - 1:
+                time.sleep(_random.uniform(interval_min, interval_max))
+        conn.close()
+        _bg_task_set(task_id, {
+            'status': 'done', 'progress': 100, 'step': 'Concluído!',
+            'result': {'sent': sent, 'failed': failed, 'blocked': blocked, 'details': details}
+        })
+        _bg_task_cleanup(task_id, delay=600)
+    except Exception as e:
+        logger.exception(f'[WAHA batch] Falha no despacho: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/whatsapp/send-batch', methods=['POST'])
+def whatsapp_send_batch():
+    try:
+        data = request.get_json(force=True) or {}
+        items = data.get('items') or []
+        if not items:
+            return jsonify({'error': 'Nenhum contato na fila.'}), 400
+        try:
+            interval_min = float(_resolve_setting('waha_send_interval_min', 'WAHA_SEND_INTERVAL_MIN') or 8)
+            interval_max = float(_resolve_setting('waha_send_interval_max', 'WAHA_SEND_INTERVAL_MAX') or 15)
+        except Exception:
+            interval_min, interval_max = 8.0, 15.0
+        if interval_max < interval_min:
+            interval_max = interval_min
+        task_id = uuid.uuid4().hex
+        _bg_task_register_persistent(task_id, 'whatsapp_batch_send')
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando despacho...', 'progress': 3})
+        threading.Thread(target=_whatsapp_batch_send_async,
+                         args=(task_id, items, interval_min, interval_max), daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/whatsapp/send-batch: {e}')
+        return jsonify({'error': str(e)}), 500

@@ -4917,6 +4917,7 @@
                 const modalBody = `
                     <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
                         <button class="btn btn-primary btn-small" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company || '')}')"><i class="fas fa-plus-circle"></i> Registrar Atividade</button>
+                        <button class="btn btn-auto-mapping btn-small" onclick="openQuickContactModal(${client.id})" title="Enviar mensagem rápida usando um template"><i class="fab fa-whatsapp"></i> Contato rápido</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
                     <div class="profile-layout">

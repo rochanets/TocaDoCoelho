@@ -2284,19 +2284,25 @@
                        <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>`;
                 const btnIcon = isWpp ? '<i class="fab fa-whatsapp"></i>' : '<i class="fas fa-paper-plane"></i>';
                 const btnLabel = isWpp ? 'Abrir no WhatsApp' : 'Abrir no Outlook';
+                const wahaBtn = isWpp
+                    ? `<button id="mailingWahaBtn_${i}" class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaWahaOne(${i})" title="Enviar direto via WAHA, sem abrir janela do navegador"><i class="fas fa-bolt"></i> WAHA</button>`
+                    : '';
                 return `
-                <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
+                <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto${isWpp ? ' auto' : ''}; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
                     <div style="min-width:0; overflow:hidden;">
                         <div style="font-weight:600; color:#065f46;">${escapeHtml(d.contact.name || '-')}</div>
                         ${subInfo}
                     </div>
                     <span class="mailing-dispatch-status" id="mailingDispatchStatus_${i}" style="font-size:12px; color:#92400e; white-space:nowrap;">Pendente</span>
+                    ${wahaBtn}
                     <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})">${btnIcon} ${btnLabel}</button>
                 </div>`;
             }).join('');
 
             const batchBtnHtml = isWpp
-                ? `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-forward-step"></i> Abrir próximo no WhatsApp</button>`
+                ? `<button class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaWahaAll()" title="Envia toda a fila direto via WAHA, com intervalo aleatório entre mensagens"><span class="ai-star-icon">✦</span> Enviar todos via WAHA</button>
+                   <span id="mailingWahaQuota" style="font-size:12px; color:#6b7280;"></span>
+                   <button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-forward-step"></i> Abrir próximo no WhatsApp</button>`
                 : `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;
 
             const batchNote = isWpp
@@ -2319,6 +2325,14 @@
                             ${batchBtnHtml}
                             <span id="mailingDispatchCounter" style="font-size:12px; color:#6b7280;">0 de ${drafts.length} enviados</span>
                         </div>
+                        <div id="mailingWahaProgress" style="display:none; padding:8px 4px 12px;">
+                            <div style="font-size:13px; color:#6b7280; margin-bottom:8px; text-align:center;" id="mailingWahaProgressStep">Iniciando...</div>
+                            <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px;">
+                                <div id="mailingWahaProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                    <span class="iata-bunny">🐇</span>
+                                </div>
+                            </div>
+                        </div>
                         <div style="display:flex; flex-direction:column; gap:8px; max-height:55vh; overflow:auto; padding-right:4px;">
                             ${rowsHtml}
                         </div>
@@ -2329,6 +2343,7 @@
                 </div>
             `;
             document.body.insertAdjacentHTML('beforeend', html);
+            if (isWpp && typeof _wahaRefreshQuota === 'function') _wahaRefreshQuota();
             tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length, channel: drafts[0]?.channel });
         }
 
@@ -2379,7 +2394,8 @@
                     idx: draft.idx,
                     contact_id: draft.contact.id
                 });
-                return true;
+                const payload = await response.json().catch(() => ({}));
+                return payload.id || true;
             } catch (e) {
                 tocaDebug('mala-direta.activity', 'Erro ao registrar atividade', {
                     idx: draft.idx,
@@ -2427,23 +2443,16 @@
             draft.status = 'sent';
             _updateAutoTocaMailingDispatchRow(idx);
 
-            // Pergunta UMA vez, por contato, se deseja registrar a atividade.
-            // O modal de despacho garante que este fluxo é serial (um clique por vez),
-            // então não há o problema de concorrência do resolve global do openSystemDialog.
-            const contactName = draft.contact.name || (isWpp ? draft.phone : draft.contact.email);
-            const channelLabel = isWpp ? 'WhatsApp' : 'Email';
-            const shouldRegister = await uiConfirm(
-                `Deseja registrar essa interação de ${channelLabel} como atividade em "${contactName}"?`
-            );
-            tocaDebug('mala-direta.dispatch-one', 'Decisão sobre registro da atividade', {
-                idx,
-                contact_id: draft.contact.id,
-                register: !!shouldRegister
-            });
-            if (!shouldRegister) return;
-
-            const ok = await _registerAutoTocaMailingActivity(draft);
-            if (ok) {
+            // Registro automático da atividade (Bloco 8) — sem perguntar por
+            // contato; toast com opção de desfazer por ~10s.
+            const activityId = await _registerAutoTocaMailingActivity(draft);
+            if (activityId) {
+                if (typeof showUndoToast === 'function' && Number(activityId)) {
+                    showUndoToast('Atividade registrada — desfazer', async () => {
+                        try { await fetch(`${API_BASE}/atividades/${activityId}`, { method: 'DELETE' }); } catch (e) {}
+                        try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
+                    });
+                }
                 try { await Promise.all([loadActivities(), loadDashboard()]); } catch (e) {}
             }
         }
