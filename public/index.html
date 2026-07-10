@@ -463,17 +463,17 @@
         }
 
         .dashboard-scroll-wrapper::-webkit-scrollbar-track {
-            background: rgba(52, 211, 153, 0.05);
+            background: var(--t-accent-faint);
             border-radius: 3px;
         }
 
         .dashboard-scroll-wrapper::-webkit-scrollbar-thumb {
-            background: rgba(52, 211, 153, 0.35);
+            background: var(--t-accent);
             border-radius: 3px;
         }
 
         .dashboard-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-            background: rgba(52, 211, 153, 0.6);
+            background: var(--t-accent2);
         }
 
         /* Tabela do dashboard com largura mínima para garantir leitura em 90% de zoom */
@@ -558,15 +558,15 @@
         }
 
         .btn-edit-accent {
-            background: #fed7aa;
-            color: #9a3412;
-            border: 1px solid #fdba74;
+            background: var(--t-accent-faint);
+            color: var(--t-primary);
+            border: 1px solid var(--t-accent-light);
         }
 
         @media (hover: hover) and (pointer: fine) {
             .btn-edit-accent:hover {
-                background: #fdba74;
-                color: #7c2d12;
+                background: var(--t-accent-light);
+                color: var(--t-primary);
             }
         }
 
@@ -881,15 +881,15 @@
 
         .section-title h2 {
             font-size: 20px;
-            color: #047857;
+            color: var(--t-primary);
         }
 
         .table-container {
             background: rgba(255, 255, 255, 0.8);
             backdrop-filter: blur(4px);
             border-radius: 16px;
-            border: 1px solid rgba(52, 211, 153, 0.2);
-            box-shadow: 0 4px 12px rgba(52, 211, 153, 0.08);
+            border: 1px solid var(--t-card-border);
+            box-shadow: 0 4px 12px var(--t-btn-glow);
             overflow-x: auto;
             overflow-y: visible;
         }
@@ -900,22 +900,22 @@
         }
 
         th {
-            background: rgba(52, 211, 153, 0.05);
+            background: var(--t-accent-faint);
             padding: 15px;
             text-align: left;
             font-weight: 600;
-            border-bottom: 2px solid rgba(52, 211, 153, 0.2);
-            color: #047857;
+            border-bottom: 2px solid var(--t-card-border);
+            color: var(--t-primary);
         }
 
         td {
             padding: 15px;
-            border-bottom: 1px solid rgba(52, 211, 153, 0.1);
+            border-bottom: 1px solid var(--t-card-border);
         }
 
         @media (hover: hover) and (pointer: fine) {
             tr:hover {
-                background: rgba(52, 211, 153, 0.05);
+                background: var(--t-accent-faint);
             }
         }
 
@@ -1083,14 +1083,14 @@
             gap: 20px;
             margin-bottom: 20px;
             padding-bottom: 20px;
-            border-bottom: 1px solid rgba(52, 211, 153, 0.2);
+            border-bottom: 1px solid var(--t-card-border);
         }
 
         .profile-avatar-large {
             width: 160px;
             height: 160px;
             border-radius: 18px;
-            background: linear-gradient(135deg, #34D399, #10B981);
+            background: linear-gradient(135deg, var(--t-accent), var(--t-accent2));
             color: white;
             display: flex;
             align-items: center;
@@ -1098,7 +1098,7 @@
             font-size: 56px;
             font-weight: 700;
             object-fit: cover;
-            box-shadow: 0 10px 24px rgba(16, 185, 129, 0.25);
+            box-shadow: 0 10px 24px var(--t-btn-glow);
         }
 
         .profile-info-grid {
@@ -1108,15 +1108,15 @@
         }
 
         .profile-field {
-            background: rgba(52, 211, 153, 0.08);
-            border: 1px solid rgba(52, 211, 153, 0.2);
+            background: var(--t-accent-faint);
+            border: 1px solid var(--t-card-border);
             border-radius: 10px;
             padding: 12px;
         }
 
         .profile-field-label {
             font-size: 12px;
-            color: #059669;
+            color: var(--t-primary);
             margin-bottom: 4px;
             text-transform: uppercase;
             letter-spacing: 0.4px;
@@ -1130,7 +1130,7 @@
         }
 
         .history-title {
-            color: #047857;
+            color: var(--t-primary);
             margin-bottom: 10px;
             font-size: 18px;
         }
@@ -1142,7 +1142,7 @@
         }
 
         .history-item {
-            border: 1px solid rgba(52, 211, 153, 0.2);
+            border: 1px solid var(--t-card-border);
             background: rgba(255, 255, 255, 0.85);
             border-radius: 10px;
             padding: 12px;
@@ -1150,7 +1150,7 @@
 
         .history-meta {
             font-size: 12px;
-            color: #059669;
+            color: var(--t-primary);
             margin-bottom: 6px;
             font-weight: 600;
             white-space: nowrap;
@@ -1393,43 +1393,48 @@
         .filter-select {
             width: 100%;
             padding: 8px 10px;
-            border: 2px solid rgba(52, 211, 153, 0.25);
+            border: 2px solid var(--t-card-border);
             border-radius: 10px;
             background: white;
-            color: #065f46;
+            color: #1f2937;
             font-weight: 500;
             transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
         }
 
         .filter-select:focus {
             outline: none;
-            border-color: #10B981;
-            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+            border-color: var(--t-accent2);
+            box-shadow: 0 0 0 3px var(--t-btn-glow);
         }
 
         .filter-input {
             width: 100%;
             padding: 8px 10px;
-            border: 2px solid rgba(52, 211, 153, 0.25);
+            border: 2px solid var(--t-card-border);
             border-radius: 10px;
             background: white;
-            color: #065f46;
+            color: #1f2937;
             font-weight: 500;
             transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
         }
 
+        .filter-input::placeholder {
+            color: #6b7280;
+            opacity: 1;
+        }
+
         .filter-input:focus {
             outline: none;
-            border-color: #10B981;
-            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+            border-color: var(--t-accent2);
+            box-shadow: 0 0 0 3px var(--t-btn-glow);
         }
 
         .filter-clear-btn {
             height: 42px;
             border: none;
             border-radius: 10px;
-            background: linear-gradient(135deg, #d1fae5, #a7f3d0);
-            color: #065f46;
+            background: linear-gradient(135deg, var(--t-accent-faint), var(--t-accent-light));
+            color: var(--t-primary);
             font-weight: 700;
             padding: 0 14px;
             cursor: pointer;
@@ -3114,8 +3119,6 @@
         html[data-theme="baby-pink"] .tab-content:not(#home) td { border-bottom-color: rgba(220,160,180,0.15) !important; }
         html[data-theme="baby-pink"] .tab-content:not(#home) tr:hover { background: rgba(220,160,180,0.07) !important; }
         /* Dashboard — limpar filtros */
-        html[data-theme="baby-pink"] .filter-clear-btn { background: linear-gradient(135deg, #ffc9d6, #ffb6ca) !important; color: #7a3a52 !important; border-color: #ffb6ca !important; }
-        html[data-theme="baby-pink"] .filter-clear-btn:hover { filter: brightness(0.97); }
         /* Dashboard — summary banner */
         html[data-theme="baby-pink"] .summary-banner { background: rgba(220,160,180,0.12) !important; border-color: rgba(220,160,180,0.3) !important; color: #7a3a52 !important; }
         /* iToca — avatares */
@@ -3195,7 +3198,7 @@
         html[data-theme="white-pearl"] {
             --t-behind:            #d8d1cb;
             --t-body-bg:           linear-gradient(135deg, #fdfcfb 0%, #ffffff 50%, #f7f4f1 100%);
-            --t-primary:           #7c6d5f;
+            --t-primary:           #333333;
             --t-accent:            #b4af9c;
             --t-accent2:           #a09880;
             --t-accent-light:      #d4cfc0;
@@ -3799,7 +3802,13 @@
                     <div id="wikiEntriesList"></div>
                 </section>
                 <section class="wiki-card">
-                    <h3 style="color:#047857; margin-bottom:12px;">Documentos (PDF, Excel, Word)</h3>
+                    <div class="wiki-section-header">
+                        <h3 class="wiki-section-title" style="margin-bottom:0;">Documentos (PDF, Excel, Word)</h3>
+                        <div class="wiki-import-export">
+                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiDocuments()" title="Exportar documentos"><i class="fas fa-file-export"></i> Exportar</button>
+                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiDocImportModal()" title="Importar documentos"><i class="fas fa-file-import"></i> Importar</button>
+                        </div>
+                    </div>
                     <div class="wiki-doc-upload-row">
                         <div class="wiki-doc-upload-main">
                                                         <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
@@ -3843,6 +3852,30 @@
                 <div class="modal-footer" style="justify-content:flex-end;">
                     <button class="btn btn-secondary" onclick="closeWikiImportModal()">Cancelar</button>
                     <button class="btn btn-primary" id="wikiImportConfirmBtn" onclick="confirmWikiXlsxImport()" disabled style="opacity:0.5;"><i class="fas fa-file-import"></i> Importar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal de Importação de Documentos WikiToca -->
+        <div id="wikiDocImportModal" class="modal" onclick="if(event.target===this) closeWikiDocImportModal()">
+            <div class="modal-content" style="max-width:520px;">
+                <div class="modal-header">
+                    <h2 class="modal-title">Importar Documentos</h2>
+                    <button class="modal-close" onclick="closeWikiDocImportModal()">&#215;</button>
+                </div>
+                <div style="padding:4px 0 16px 0;">
+                    <p style="color:#374151; margin-bottom:16px; line-height:1.6;">Importe documentos a partir de um pacote <strong>.zip</strong> gerado pelo botão "Exportar" desta mesma seção (em qualquer instalação do Toca do Coelho).</p>
+                    <div style="border:2px dashed #bbf7d0; border-radius:10px; padding:20px; text-align:center; cursor:pointer;" onclick="document.getElementById('wikiDocZipInput').click()" id="wikiDocImportDropzone">
+                        <i class="fas fa-file-zipper" style="font-size:28px; color:#34D399; margin-bottom:8px;"></i>
+                        <div style="color:#065f46; font-weight:600; margin-bottom:4px;">Clique para selecionar o arquivo .zip</div>
+                        <div style="font-size:12px; color:#9ca3af;" id="wikiDocZipFileName">Nenhum arquivo selecionado</div>
+                        <input type="file" id="wikiDocZipInput" accept=".zip" style="display:none;" onchange="onWikiDocZipSelected(event)">
+                    </div>
+                    <div id="wikiDocImportProgress" style="display:none; margin-top:12px; padding:10px; background:#f0fdf4; border-radius:8px; color:#065f46; font-size:13px;"></div>
+                </div>
+                <div class="modal-footer" style="justify-content:flex-end;">
+                    <button class="btn btn-secondary" onclick="closeWikiDocImportModal()">Cancelar</button>
+                    <button class="btn btn-primary" id="wikiDocImportConfirmBtn" onclick="confirmWikiDocZipImport()" disabled style="opacity:0.5;"><i class="fas fa-file-import"></i> Importar</button>
                 </div>
             </div>
         </div>
@@ -3983,8 +4016,11 @@
             </div>
 
             <div id="portfolioSubPanel_stf">
-                <div style="margin-bottom:12px;">
+                <div style="margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap;">
                     <button class="btn btn-auto-mapping btn-small" onclick="openNewOfferModal()"><span class="ai-star-icon">✦</span> + Nova Oferta</button>
+                    <button class="btn btn-secondary btn-small" onclick="exportSTFSolutions()" title="Exportar soluções STF"><i class="fas fa-file-export"></i> Exportar</button>
+                    <button class="btn btn-secondary btn-small" onclick="document.getElementById('stfImportInput').click()" title="Importar soluções STF"><i class="fas fa-file-import"></i> Importar</button>
+                    <input type="file" id="stfImportInput" accept=".json" style="display:none;" onchange="importSTFSolutions(event)">
                 </div>
                 <div id="portfolioContent"></div>
             </div>
@@ -4279,7 +4315,89 @@
             </div>
             <div class="settings-grid">
 
-                <!-- 1. Agrupamento de Cargos -->
+                <!-- 1. Cadastro do Usuário -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-id-card" style="margin-right:8px; color:#059669;"></i>Cadastro do Usuário</h3>
+                    <form id="userProfileForm" onsubmit="saveUserProfile(event)">
+                        <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
+                        <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
+                        <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
+                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
+                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
+                        <div class="form-group"><label>Boss (opcional)</label><input type="text" name="boss_name"></div>
+                        <div class="form-group"><label>Email do Boss (opcional)</label><input type="email" name="boss_email"></div>
+                        <div class="form-group">
+                            <label>Foto *</label>
+                            <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
+                            <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
+                            <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- 2. MSG Padrão -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-comment-dots" style="margin-right:8px; color:#059669;"></i>MSG Padrão</h3>
+                    <form onsubmit="saveMessageTemplate(event)">
+                        <input type="hidden" id="templateId">
+                        <div class="form-group"><label>Título</label><input type="text" id="templateTitle" required></div>
+                        <div class="form-group">
+                            <label>Descritivo</label>
+                            <textarea id="templateDescription" rows="3" required></textarea>
+                            <div style="margin-top:6px;">
+                                <div style="font-size:11px; color:#6b7280; margin-bottom:5px;">Variáveis disponíveis (clique para inserir):</div>
+                                <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;conta&gt;')">&lt;conta&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;nome do contato&gt;')">&lt;nome do contato&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;sobrenome&gt;')">&lt;sobrenome&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;cargo&gt;')">&lt;cargo&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;setor&gt;')">&lt;setor&gt;</button>
+                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;data&gt;')">&lt;data&gt;</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group" style="display:flex; gap:16px; align-items:center;">
+                            <label><input type="checkbox" id="templateWhatsapp" checked> <i class="fab fa-whatsapp"></i> WhatsApp</label>
+                            <label><input type="checkbox" id="templateEmail" checked> <i class="fas fa-envelope"></i> Email</label>
+                        </div>
+                        <button class="btn btn-primary" type="submit" style="margin-top:4px;"><i class="fas fa-save"></i> Salvar MSG Padrão</button>
+                    </form>
+                    <div id="templateList" style="margin-top:12px;"></div>
+                </section>
+
+                <!-- 3. Tema de Cores -->
+                <section class="settings-card">
+                    <h3><i class="fas fa-palette" style="margin-right:8px; color:#059669;"></i>Tema de Cores</h3>
+                    <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Escolha o padrão visual do sistema. As cores de status e o Dashboard Executivo não são afetadas.</p>
+                    <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px;" id="themeOptionsGrid">
+                        <button class="theme-option-btn" data-theme="verde-classico" onclick="selectTheme('verde-classico')">
+                            <div class="theme-swatch" style="background:linear-gradient(135deg,#194b3c 0%,#047857 50%,#34d399 100%);"></div>
+                            <span>Verde Clássico</span>
+                        </button>
+                        <button class="theme-option-btn" data-theme="baby-pink" onclick="selectTheme('baby-pink')">
+                            <div class="theme-swatch" style="background:linear-gradient(135deg,#6d1a3e 0%,#c2185b 50%,#f06292 100%);"></div>
+                            <span>Baby Pink</span>
+                        </button>
+                        <button class="theme-option-btn" data-theme="black-cat" onclick="selectTheme('black-cat')">
+                            <div class="theme-swatch" style="background:linear-gradient(135deg,#080808 0%,#3a3a3a 50%,#9e9e9e 100%);"></div>
+                            <span>Black Cat</span>
+                        </button>
+                        <button class="theme-option-btn" data-theme="white-pearl" onclick="selectTheme('white-pearl')">
+                            <div class="theme-swatch" style="background:linear-gradient(135deg,#8b7d6b 0%,#c8c3b4 50%,#faf7f4 100%);"></div>
+                            <span>White Pearl</span>
+                        </button>
+                        <button class="theme-option-btn" data-theme="blue-space" onclick="selectTheme('blue-space')" style="grid-column:1/-1;">
+                            <div class="theme-swatch" style="background:linear-gradient(135deg,#030814 0%,#5754a8 55%,#9eadcf 100%);"></div>
+                            <span>✦ Blue Space</span>
+                        </button>
+                    </div>
+                    <div id="themeStatus" style="margin-top:10px; font-size:13px; color:#6b7280; min-height:18px;"></div>
+                </section>
+
+                <!-- 4. Agrupamento de Cargos -->
                 <section class="settings-card">
                     <h3><i class="fas fa-layer-group" style="margin-right:8px; color:#059669;"></i>Agrupamento de Cargos</h3>
                     <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
@@ -4288,7 +4406,7 @@
                     <div id="positionGroupingList" style="margin-top:12px;"></div>
                 </section>
 
-                <!-- 2. Ajuda e Atualizações -->
+                <!-- 5. Ajuda e Atualizações -->
                 <section class="settings-card">
                     <h3><i class="fas fa-rotate" style="margin-right:8px; color:#059669;"></i>Ajuda e Atualizações</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
@@ -4315,7 +4433,7 @@
                     <div id="updateCheckResult" style="margin-top:12px; color:#4b5563; font-size:13px;"></div>
                 </section>
 
-                <!-- 3. Backup do Banco de Dados -->
+                <!-- 6. Backup do Banco de Dados -->
                 <section class="settings-card">
                     <h3><i class="fas fa-database" style="margin-right:8px; color:#059669;"></i>Backup do Banco de Dados</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Faça backup completo ou restaure o banco de dados.</p>
@@ -4334,30 +4452,7 @@
                     </div>
                 </section>
 
-                <!-- 4. Cadastro do Usuário -->
-                <section class="settings-card">
-                    <h3><i class="fas fa-id-card" style="margin-right:8px; color:#059669;"></i>Cadastro do Usuário</h3>
-                    <form id="userProfileForm" onsubmit="saveUserProfile(event)">
-                        <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
-                        <div class="form-group"><label>Apelido *</label><input type="text" name="nickname" required></div>
-                        <div class="form-group"><label>Cargo *</label><input type="text" name="position" required></div>
-                        <div class="form-group"><label>Email *</label><input type="email" name="email" required></div>
-                        <div class="form-group"><label>Telefone *</label><input type="tel" name="phone" required></div>
-                        <div class="form-group"><label>Boss (opcional)</label><input type="text" name="boss_name"></div>
-                        <div class="form-group"><label>Email do Boss (opcional)</label><input type="email" name="boss_email"></div>
-                        <div class="form-group">
-                            <label>Foto *</label>
-                            <input type="file" id="profilePhotoInput" name="photo" accept="image/*" onchange="previewProfilePhoto(event)">
-                            <img id="profilePhotoPreview" class="photo-preview" style="display:none;">
-                        </div>
-                        <div style="display: flex; gap: 10px; align-items: center;">
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar usuário</button>
-                            <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
-                        </div>
-                    </form>
-                </section>
-
-                <!-- 5. Exportar Atividades -->
+                <!-- 7. Exportar Atividades -->
                 <section class="settings-card">
                     <h3><i class="fas fa-file-export" style="margin-right:8px; color:#059669;"></i>Exportar Atividades</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Exporte atividades com filtro de período.</p>
@@ -4366,14 +4461,14 @@
                     <button class="btn btn-primary" onclick="exportActivities()"><i class="fas fa-download"></i> Exportar Atividades (CSV)</button>
                 </section>
 
-                <!-- 6. Exportar Base de Clientes -->
+                <!-- 8. Exportar Base de Clientes -->
                 <section class="settings-card">
                     <h3><i class="fas fa-users" style="margin-right:8px; color:#059669;"></i>Exportar Base de Clientes</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Exporte todos os dados cadastrais dos clientes em CSV.</p>
                     <button class="btn btn-primary" onclick="openClientExportModal()"><i class="fas fa-download"></i> Exportar Clientes (CSV)</button>
                 </section>
 
-                <!-- 7. Faixa de Status -->
+                <!-- 9. Faixa de Status -->
                 <section class="settings-card">
                     <h3><i class="fas fa-gauge-high" style="margin-right:8px; color:#059669;"></i>Faixa de Status</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Regra A (universal) será aplicada quando não houver regra específica por cargo (Regra B).</p>
@@ -4415,7 +4510,7 @@
                     </div>
                 </section>
 
-                <!-- 8. Integrações de API -->
+                <!-- 10. Integrações de API -->
                 <section class="settings-card">
                     <h3><i class="fas fa-plug" style="margin-right:8px; color:#059669;"></i>Integrações de API</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Configure as chaves do usuário final para busca (Tavily), LLM (OpenRouter) e o assistente iToca (SAI).</p>
@@ -4461,7 +4556,7 @@
                     </form>
                 </section>
 
-                <!-- 9. Logs de Depuração -->
+                <!-- 11. Logs de Depuração -->
                 <section class="settings-card" id="debugLogsSettingsCard">
                     <h3><i class="fas fa-bug" style="margin-right:8px; color:#059669;"></i>Logs de Depuração</h3>
                     <p style="margin-bottom:10px; color:#4b5563;">Habilite para capturar eventos detalhados do cliente (janelas abertas, chamadas à API, erros) e sincronizá-los com o log do servidor. Útil para diagnosticar falhas intermitentes — como pop-ups bloqueados na Mala Direta.</p>
@@ -4482,65 +4577,6 @@
                         <span id="debugLogsMeta" style="align-self:center; font-size:12px; color:#6b7280;"></span>
                     </div>
                     <pre id="debugLogsViewer" style="max-height:340px; min-height:140px; overflow:auto; background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px; font-size:11px; font-family:'Courier New',monospace; white-space:pre-wrap; margin:0;">Clique em "Atualizar" para carregar os logs do servidor.</pre>
-                </section>
-
-                <!-- 10. MSG Padrão -->
-                <section class="settings-card">
-                    <h3><i class="fas fa-comment-dots" style="margin-right:8px; color:#059669;"></i>MSG Padrão</h3>
-                    <form onsubmit="saveMessageTemplate(event)">
-                        <input type="hidden" id="templateId">
-                        <div class="form-group"><label>Título</label><input type="text" id="templateTitle" required></div>
-                        <div class="form-group">
-                            <label>Descritivo</label>
-                            <textarea id="templateDescription" rows="3" required></textarea>
-                            <div style="margin-top:6px;">
-                                <div style="font-size:11px; color:#6b7280; margin-bottom:5px;">Variáveis disponíveis (clique para inserir):</div>
-                                <div style="display:flex; flex-wrap:wrap; gap:6px;">
-                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;conta&gt;')">&lt;conta&gt;</button>
-                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;nome do contato&gt;')">&lt;nome do contato&gt;</button>
-                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;sobrenome&gt;')">&lt;sobrenome&gt;</button>
-                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;cargo&gt;')">&lt;cargo&gt;</button>
-                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;setor&gt;')">&lt;setor&gt;</button>
-                                    <button type="button" class="btn btn-secondary btn-small" style="border-radius:999px; font-size:11px; padding:2px 10px;" onclick="insertTemplateVar('&lt;data&gt;')">&lt;data&gt;</button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="form-group" style="display:flex; gap:16px; align-items:center;">
-                            <label><input type="checkbox" id="templateWhatsapp" checked> <i class="fab fa-whatsapp"></i> WhatsApp</label>
-                            <label><input type="checkbox" id="templateEmail" checked> <i class="fas fa-envelope"></i> Email</label>
-                        </div>
-                        <button class="btn btn-primary" type="submit" style="margin-top:4px;"><i class="fas fa-save"></i> Salvar MSG Padrão</button>
-                    </form>
-                    <div id="templateList" style="margin-top:12px;"></div>
-                </section>
-
-                <!-- 11. Tema de Cores -->
-                <section class="settings-card">
-                    <h3><i class="fas fa-palette" style="margin-right:8px; color:#059669;"></i>Tema de Cores</h3>
-                    <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Escolha o padrão visual do sistema. As cores de status e o Dashboard Executivo não são afetadas.</p>
-                    <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px;" id="themeOptionsGrid">
-                        <button class="theme-option-btn" data-theme="verde-classico" onclick="selectTheme('verde-classico')">
-                            <div class="theme-swatch" style="background:linear-gradient(135deg,#194b3c 0%,#047857 50%,#34d399 100%);"></div>
-                            <span>Verde Clássico</span>
-                        </button>
-                        <button class="theme-option-btn" data-theme="baby-pink" onclick="selectTheme('baby-pink')">
-                            <div class="theme-swatch" style="background:linear-gradient(135deg,#6d1a3e 0%,#c2185b 50%,#f06292 100%);"></div>
-                            <span>Baby Pink</span>
-                        </button>
-                        <button class="theme-option-btn" data-theme="black-cat" onclick="selectTheme('black-cat')">
-                            <div class="theme-swatch" style="background:linear-gradient(135deg,#080808 0%,#3a3a3a 50%,#9e9e9e 100%);"></div>
-                            <span>Black Cat</span>
-                        </button>
-                        <button class="theme-option-btn" data-theme="white-pearl" onclick="selectTheme('white-pearl')">
-                            <div class="theme-swatch" style="background:linear-gradient(135deg,#8b7d6b 0%,#c8c3b4 50%,#faf7f4 100%);"></div>
-                            <span>White Pearl</span>
-                        </button>
-                        <button class="theme-option-btn" data-theme="blue-space" onclick="selectTheme('blue-space')" style="grid-column:1/-1;">
-                            <div class="theme-swatch" style="background:linear-gradient(135deg,#030814 0%,#5754a8 55%,#9eadcf 100%);"></div>
-                            <span>✦ Blue Space</span>
-                        </button>
-                    </div>
-                    <div id="themeStatus" style="margin-top:10px; font-size:13px; color:#6b7280; min-height:18px;"></div>
                 </section>
 
                 <!-- 12. Sistema -->
@@ -13508,8 +13544,6 @@
                 const modalBody = `
                     <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
                         <button class="btn btn-primary btn-small" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company || '')}')"><i class="fas fa-plus-circle"></i> Registrar Atividade</button>
-                        ${archivedContact ? `<button class="btn btn-small btn-archive-glass" onclick="unarchiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-box-open"></i> Desarquivar Contato</button>` : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
-                        <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
                     </div>
                     <div class="profile-layout">
@@ -13532,6 +13566,10 @@
                     </div>
                     <h3 class="history-title">Histórico de atividades</h3>
                     ${historyHtml}
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px; flex-wrap:wrap;">
+                        ${archivedContact ? `<button class="btn btn-small btn-archive-glass" onclick="unarchiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-box-open"></i> Desarquivar Contato</button>` : `<button class="btn btn-small btn-archive-glass" onclick="archiveClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-archive"></i> Arquivar Contato</button>`}
+                        <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id}, { closeProfileOnSuccess: true })"><i class="fas fa-trash"></i> Excluir contato</button>
+                    </div>
                 `;
 
                 document.getElementById('profileModalBody').innerHTML = modalBody;
@@ -17580,6 +17618,28 @@
             }
         }
 
+        function exportSTFSolutions() {
+            if (!portfolioOffers || !portfolioOffers.length) return showError('Nenhuma solução para exportar.');
+            window.location.href = `${API_BASE}/portfolio/offers/export-json`;
+        }
+
+        async function importSTFSolutions(event) {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const res = await fetch(`${API_BASE}/portfolio/offers/import-json`, { method: 'POST', body: formData });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || 'Falha na importação.');
+                showSuccess(`${data.imported} solução(ões) importada(s) com sucesso.`);
+                await _loadSTFSolutions();
+            } catch (err) {
+                showError(err.message || 'Erro ao importar soluções STF.');
+            }
+        }
+
         function renderPortfolioOffers(offers = []) {
             const container = document.getElementById('portfolioContent');
             if (!container) return;
@@ -18796,6 +18856,72 @@
                 showSuccess(msg);
                 await loadWikiTocaData();
                 setTimeout(() => closeWikiImportModal(), 1800);
+            } catch (err) {
+                if (progress) progress.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-times-circle"></i> Erro de conexão: ${err.message}</span>`;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            }
+        }
+
+        function exportWikiDocuments() {
+            if (!wikiDocuments || !wikiDocuments.length) return showError('Nenhum documento para exportar.');
+            window.location.href = `${API_BASE}/wikitoca/documents/export-zip`;
+        }
+
+        function openWikiDocImportModal() {
+            const modal = document.getElementById('wikiDocImportModal');
+            if (!modal) return;
+            const fileInput = document.getElementById('wikiDocZipInput');
+            const fileLabel = document.getElementById('wikiDocZipFileName');
+            const progress = document.getElementById('wikiDocImportProgress');
+            const btn = document.getElementById('wikiDocImportConfirmBtn');
+            if (fileInput) fileInput.value = '';
+            if (fileLabel) fileLabel.textContent = 'Nenhum arquivo selecionado';
+            if (progress) { progress.style.display = 'none'; progress.textContent = ''; }
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+            modal.classList.add('active');
+        }
+
+        function closeWikiDocImportModal() {
+            const modal = document.getElementById('wikiDocImportModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        function onWikiDocZipSelected(event) {
+            const file = event.target.files?.[0];
+            const label = document.getElementById('wikiDocZipFileName');
+            const btn = document.getElementById('wikiDocImportConfirmBtn');
+            if (file) {
+                if (label) label.textContent = file.name;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            } else {
+                if (label) label.textContent = 'Nenhum arquivo selecionado';
+                if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+            }
+        }
+
+        async function confirmWikiDocZipImport() {
+            const fileInput = document.getElementById('wikiDocZipInput');
+            const file = fileInput?.files?.[0];
+            if (!file) return showError('Selecione um arquivo .zip para importar.');
+            const progress = document.getElementById('wikiDocImportProgress');
+            const btn = document.getElementById('wikiDocImportConfirmBtn');
+            if (progress) { progress.style.display = 'block'; progress.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importando...'; }
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const res = await fetch(`${API_BASE}/wikitoca/documents/import-zip`, { method: 'POST', body: formData });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    if (progress) progress.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-times-circle"></i> Erro: ${data.error || 'Falha na importação'}</span>`;
+                    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+                    return;
+                }
+                const msg = `${data.imported} documento(s) importado(s) com sucesso.`;
+                if (progress) progress.innerHTML = `<span style="color:#065f46;"><i class="fas fa-check-circle"></i> ${msg}</span>`;
+                showSuccess(msg);
+                await loadWikiDocuments();
+                setTimeout(() => closeWikiDocImportModal(), 1800);
             } catch (err) {
                 if (progress) progress.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-times-circle"></i> Erro de conexão: ${err.message}</span>`;
                 if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
