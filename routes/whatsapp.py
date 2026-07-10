@@ -1,0 +1,245 @@
+# -*- coding: utf-8 -*-
+# Rotas do domínio "whatsapp" (Bloco 3 — modularização).
+# Este arquivo é executado no namespace de app.py por _load_route_modules():
+# tem acesso a todos os helpers/globals de app.py e registra as rotas no
+# mesmo objeto Flask `app`, com URLs idênticas às originais.
+
+@app.route('/api/whatsapp/config', methods=['GET'])
+def whatsapp_get_config():
+    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
+    has_key = bool((s.get('waha_api_key') or '').strip())
+    return jsonify({
+        'waha_api_url': s.get('waha_api_url') or 'http://localhost:3001',
+        'waha_api_key': '••••••••' if has_key else '',
+        'waha_session_name': s.get('waha_session_name') or 'default',
+        'configured': bool((s.get('waha_api_url') or '').strip()),
+    })
+
+
+@app.route('/api/whatsapp/config', methods=['PUT'])
+def whatsapp_save_config():
+    data = request.get_json(force=True) or {}
+    waha_url = (data.get('waha_api_url') or '').strip()
+    if waha_url:
+        app_port = str(os.environ.get('PORT', '3000'))
+        for forbidden in (f'localhost:{app_port}', f'127.0.0.1:{app_port}'):
+            if forbidden in waha_url:
+                return jsonify({'ok': False,
+                                'error': f'A URL do WAHA não pode apontar para a porta do próprio app (:{app_port}). Use a porta 3001.'}), 400
+    db = get_db()
+    c = db.cursor()
+    for key in ['waha_api_url', 'waha_api_key', 'waha_session_name']:
+        val = (data.get(key) or '').strip()
+        if val and val != '••••••••':
+            c.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+                (key, val)
+            )
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/whatsapp/status', methods=['GET'])
+def whatsapp_status():
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'configured': False, 'connected': False, 'state': 'not_configured'})
+    try:
+        resp = requests.get(f'{api_url}/api/sessions/{session}', headers=_waha_headers(api_key), timeout=5)
+        if resp.status_code == 404:
+            return jsonify({'configured': True, 'connected': False, 'state': 'no_session'})
+        if resp.status_code == 401:
+            return jsonify({'configured': True, 'connected': False, 'state': 'unauthorized',
+                            'error': 'API Key inválida.'})
+        body = resp.json() or {}
+        raw = (body.get('status') or 'STOPPED').upper()
+        waha_err = body.get('error')
+        # Normaliza os estados crus do WAHA-lite (MAIÚSCULOS) para os estados que o front
+        # entende (minúsculos). Sem isso, 'STARTING' não casava com nenhum branch do front,
+        # que pulava direto para o QR e estourava o timeout de 40s durante o cold start do
+        # Chrome — mesmo quando a sessão já estava prestes a ficar WORKING (sessão salva).
+        if raw == 'WORKING':
+            return jsonify({'configured': True, 'connected': True, 'state': 'connected'})
+        if raw == 'SCAN_QR_CODE':
+            return jsonify({'configured': True, 'connected': False, 'state': 'scan_qr'})
+        if raw == 'STARTING':
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WhatsApp conectando (abrindo o Chrome e restaurando a sessão)... aguarde.'})
+        # STOPPED / FAILED: se o WAHA-lite reportou um erro (ex.: navegador não encontrado),
+        # mostra a causa real; senão, deixa o front seguir para (re)conectar.
+        return jsonify({'configured': True, 'connected': False,
+                        'state': 'offline' if waha_err else 'stopped',
+                        'error': waha_err or 'Sessão do WhatsApp parada. Clique para reconectar.'})
+    except requests.exceptions.ConnectionError:
+        # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
+        if _waha_deps_missing():
+            return jsonify({'configured': True, 'connected': False, 'state': 'offline',
+                            'error': 'WAHA-lite não pôde iniciar: dependências (node_modules) ausentes. '
+                                     'Reinstale o Toca do Coelho (ou rode "npm install" na pasta waha-lite).'})
+        started_at = float(os.environ.get('WAHA_STARTED_AT', '0'))
+        seconds_up = time.time() - started_at
+        if seconds_up < 90:
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite está inicializando. Aguarde alguns instantes...'})
+        restarted = _restart_waha_lite()
+        if restarted:
+            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite foi reiniciado. Aguarde alguns instantes...'})
+        return jsonify({'configured': True, 'connected': False, 'state': 'offline',
+                        'error': 'Serviço do WhatsApp (WAHA-lite) offline. Reinicie o Toca do Coelho para iniciá-lo automaticamente.'})
+    except Exception as e:
+        return jsonify({'configured': True, 'connected': False, 'state': 'error', 'error': str(e)})
+
+
+@app.route('/api/whatsapp/connect', methods=['POST'])
+def whatsapp_connect():
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'ok': False, 'error': 'WAHA não configurado.'}), 400
+    headers = _waha_headers(api_key)
+
+    # 1. Garante que a sessão existe e está iniciada
+    try:
+        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        if st.status_code == 200:
+            status = (st.json() or {}).get('status')
+            if status == 'WORKING':
+                return jsonify({'ok': True, 'connected': True})
+            if status in ('STOPPED', 'FAILED'):
+                requests.post(f'{api_url}/api/sessions/{session}/start', headers=headers, timeout=15)
+        elif st.status_code == 404:
+            # Cria e inicia a sessão
+            requests.post(f'{api_url}/api/sessions/', headers=headers,
+                          json={'name': session, 'start': True}, timeout=20)
+        elif st.status_code == 401:
+            return jsonify({'ok': False, 'error': 'API Key inválida.'}), 401
+    except requests.exceptions.ConnectionError:
+        return jsonify({'ok': False, 'error': 'WAHA não está acessível.'}), 503
+    except Exception as exc:
+        logger.warning(f'[WhatsApp] WAHA session check error: {exc}')
+
+    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64).
+    # 90s: o primeiro start (cold) abre o Chrome e carrega o WhatsApp Web — pode passar de 1 min.
+    qr = None
+    for _ in range(45):
+        time.sleep(2)
+        try:
+            st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+            status = (st.json() or {}).get('status') if st.ok else None
+            if status == 'WORKING':
+                return jsonify({'ok': True, 'connected': True})
+            if status == 'SCAN_QR_CODE':
+                qr_resp = requests.get(f'{api_url}/api/{session}/auth/qr',
+                                       headers=headers, params={'format': 'image'}, timeout=10)
+                if qr_resp.status_code == 200 and qr_resp.content:
+                    ctype = qr_resp.headers.get('Content-Type', 'image/png')
+                    b64 = base64.b64encode(qr_resp.content).decode('ascii')
+                    qr = f'data:{ctype};base64,{b64}'
+                    break
+        except Exception as e:
+            logger.debug(f'[whatsapp_connect] exceção ignorada: {e}')
+
+    if qr:
+        return jsonify({'ok': True, 'connected': False, 'qr': qr})
+
+    # Reconfere uma última vez: a sessão pode ter ficado WORKING (sessão salva reconectou)
+    # justamente no fim da espera — nesse caso não há QR a exibir e está tudo certo.
+    try:
+        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        body = st.json() if st.ok else {}
+        if (body or {}).get('status') == 'WORKING':
+            return jsonify({'ok': True, 'connected': True})
+        # Ainda inicializando (Chrome abrindo): pede para o front aguardar e repetir, em vez
+        # de mostrar erro definitivo.
+        if (body or {}).get('status') == 'STARTING':
+            return jsonify({'ok': False, 'state': 'starting',
+                            'error': 'WhatsApp ainda conectando (abrindo o Chrome)... aguarde alguns instantes e tente de novo.'}), 503
+    except Exception as e:
+        logger.debug(f'[whatsapp_connect] exceção ignorada: {e}')
+
+    return jsonify({'ok': False, 'error': 'O QR code não apareceu a tempo. O Chrome pode estar demorando para abrir na primeira conexão — aguarde alguns instantes e clique em Tentar novamente.'}), 500
+
+
+@app.route('/api/whatsapp/sync', methods=['POST'])
+def whatsapp_sync_start():
+    data = request.get_json(force=True) or {}
+    period_days = int(data.get('period_days', 7))
+    if period_days not in [1, 3, 7, 15, 30]:
+        period_days = 7
+    task_id = uuid.uuid4().hex
+    _bg_task_register_persistent(task_id, 'whatsapp_sync')
+    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando sincronização...', 'progress': 5})
+    threading.Thread(target=_whatsapp_sync_async, args=(task_id, period_days), daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
+
+
+@app.route('/api/whatsapp/tasks/<task_id>', methods=['GET'])
+def whatsapp_task_poll(task_id):
+    task = _bg_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    return jsonify(task)
+
+
+@app.route('/api/whatsapp/approve', methods=['POST'])
+def whatsapp_approve():
+    data = request.get_json(force=True) or {}
+    items = data.get('items', [])
+    if not isinstance(items, list):
+        return jsonify({'ok': False, 'error': 'items deve ser uma lista'}), 400
+
+    db = get_db()
+    c = db.cursor()
+    inserted = 0
+    commitments_created = 0
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    for item in items:
+        client_id = item.get('client_id')
+        summary = (item.get('summary') or '').strip()
+        activity_date = (item.get('activity_date') or now_str).strip()
+        content_hash = (item.get('content_hash') or '').strip()
+        phone = (item.get('phone') or '').strip()
+        period_days = int(item.get('period_days') or 7)
+        message_count = int(item.get('message_count') or 0)
+        last_message_ts = int(item.get('last_message_ts') or 0)
+        followup_date = (item.get('followup_date') or '').strip()
+        followup_title = (item.get('followup_title') or '').strip()
+        # Permite que o usuário desmarque o FUP no modal de revisão
+        followup_enabled = item.get('followup_enabled', True)
+
+        if not client_id or not summary or not content_hash:
+            continue
+
+        c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
+                  (client_id, content_hash))
+        if c.fetchone():
+            continue
+
+        c.execute(
+            "INSERT INTO activities (client_id, contact_type, information, activity_date) VALUES (?, 'WhatsApp', ?, ?)",
+            (client_id, summary, activity_date)
+        )
+        activity_id = c.lastrowid
+        c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
+        c.execute(
+            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id)
+        )
+        inserted += 1
+
+        # Compromisso de follow-up (FUP) → calendário do sistema
+        if followup_enabled and re.match(r'^\d{4}-\d{2}-\d{2}$', followup_date):
+            title = followup_title or 'Retorno combinado (WhatsApp)'
+            if len(title) > 120:
+                title = title[:117] + '...'
+            c.execute(
+                '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (client_id, activity_id, title, summary, followup_date, None, 'whatsapp')
+            )
+            commitments_created += 1
+
+    db.commit()
+    db.close()
+    return jsonify({'ok': True, 'inserted': inserted, 'commitments': commitments_created})
