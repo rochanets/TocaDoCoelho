@@ -12636,6 +12636,89 @@ def delete_portfolio_offer(offer_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/portfolio/offers/export-json', methods=['GET'])
+def export_portfolio_offers():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM portfolio_offers ORDER BY id')
+        offers = [dict_from_row(r) for r in c.fetchall()]
+        for offer in offers:
+            c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer['id'],))
+            offer['items'] = [dict_from_row(r) for r in c.fetchall()]
+            offer.pop('id', None)
+            for item in offer['items']:
+                item.pop('id', None)
+                item.pop('offer_id', None)
+        conn.close()
+
+        from flask import Response
+        payload = json.dumps({'solucoes_stf': offers}, ensure_ascii=False, indent=2)
+        return Response(
+            payload,
+            mimetype='application/json',
+            headers={'Content-Disposition': f'attachment; filename=solucoes-stf-{datetime.now().strftime("%Y%m%d-%H%M%S")}.json'}
+        )
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao exportar ofertas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/offers/import-json', methods=['POST'])
+def import_portfolio_offers():
+    try:
+        data = None
+        if 'file' in request.files:
+            file = request.files['file']
+            if not file.filename:
+                return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
+            try:
+                data = json.loads(file.read().decode('utf-8'))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return jsonify({'error': 'Arquivo .json inválido ou corrompido.'}), 400
+        else:
+            data = request.get_json(silent=True)
+
+        if not data:
+            return jsonify({'error': 'Nenhum dado enviado para importação.'}), 400
+
+        offers = data.get('solucoes_stf') if isinstance(data, dict) else data
+        if not isinstance(offers, list):
+            return jsonify({'error': 'Formato inválido. Esperado um pacote exportado do módulo Soluções STF.'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+        imported = 0
+        for offer in offers:
+            if not isinstance(offer, dict):
+                continue
+            title = (offer.get('title') or '').strip()
+            if not title:
+                continue
+            summary = offer.get('summary') or ''
+            raw_input = offer.get('raw_input') or ''
+            c.execute(
+                'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                (title, summary, raw_input)
+            )
+            offer_id = c.lastrowid
+            for idx, item in enumerate(offer.get('items') or []):
+                if not isinstance(item, dict):
+                    continue
+                c.execute(
+                    '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
+                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                    (offer_id, item.get('pain') or '', item.get('solution') or '', item.get('sort_order', idx))
+                )
+            imported += 1
+        conn.commit()
+        conn.close()
+        return jsonify({'imported': imported}), 201
+    except Exception as e:
+        logger.exception(f'[Portfolio] Erro ao importar ofertas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/portfolio/offers/<int:offer_id>/items/<int:item_id>', methods=['PUT'])
 def update_portfolio_offer_item(offer_id, item_id):
     try:
@@ -14782,6 +14865,104 @@ def delete_wiki_document(document_id):
         print(f'[ERROR] DELETE /api/wikitoca/documents/{document_id}: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOC_DELETE_ERROR', 'Erro ao remover documento.', details=str(e))
+
+
+@app.route('/api/wikitoca/documents/export-zip', methods=['GET'])
+def export_wiki_documents():
+    try:
+        from flask import send_file
+        import tempfile
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM wiki_documents ORDER BY id')
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+
+        temp_dir = tempfile.mkdtemp()
+        temp_zip = Path(temp_dir) / 'wikitoca-documentos.zip'
+        manifest = []
+        with zipfile.ZipFile(str(temp_zip), mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+            for row in rows:
+                file_path = WIKI_UPLOAD_DIR / row['file_name']
+                if file_path.exists():
+                    zf.write(str(file_path), arcname=f"files/{row['file_name']}")
+                manifest.append({
+                    'title': row.get('title'),
+                    'file_name': row.get('file_name'),
+                    'original_name': row.get('original_name'),
+                    'file_ext': row.get('file_ext'),
+                })
+            zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+
+        return send_file(
+            str(temp_zip),
+            as_attachment=True,
+            download_name=f'wikitoca-documentos-{datetime.now().strftime("%Y%m%d-%H%M%S")}.zip',
+            mimetype='application/zip'
+        )
+    except Exception as e:
+        print(f'[ERROR] GET /api/wikitoca/documents/export-zip: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_DOC_EXPORT_ERROR', 'Erro ao exportar documentos.', details=str(e))
+
+
+@app.route('/api/wikitoca/documents/import-zip', methods=['POST'])
+def import_wiki_documents():
+    try:
+        if 'file' not in request.files:
+            return api_error(400, 'WIKI_DOC_IMPORT_NO_FILE', 'Nenhum arquivo enviado.')
+        file = request.files['file']
+        if not file.filename or not file.filename.lower().endswith('.zip'):
+            return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Envie um arquivo .zip exportado pelo Toca do Coelho.')
+
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        temp_zip_path = Path(temp_dir) / 'import.zip'
+        file.save(str(temp_zip_path))
+
+        imported = []
+        with zipfile.ZipFile(str(temp_zip_path), mode='r') as zf:
+            names = zf.namelist()
+            if 'manifest.json' not in names:
+                return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Arquivo .zip inválido: manifest.json não encontrado.')
+            manifest = json.loads(zf.read('manifest.json').decode('utf-8'))
+
+            conn = get_db()
+            c = conn.cursor()
+            for entry in manifest:
+                original_name = entry.get('original_name') or entry.get('file_name') or 'documento'
+                ext = (entry.get('file_ext') or Path(original_name).suffix.lower())
+                if ext not in ALLOWED_WIKI_EXTENSIONS:
+                    continue
+                src_name = f"files/{entry.get('file_name')}"
+                if src_name not in names:
+                    continue
+                safe_name = secure_filename(f'wiki_{int(datetime.now().timestamp()*1000)}_{original_name}')
+                save_path = WIKI_UPLOAD_DIR / safe_name
+                with zf.open(src_name) as src, open(save_path, 'wb') as dst:
+                    dst.write(src.read())
+                file_size = save_path.stat().st_size
+                file_url = f'/uploads/wikitoca/{safe_name}'
+                doc_title = entry.get('title') or original_name
+                c.execute(
+                    '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
+                                                  created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                    (doc_title, safe_name, original_name, file_url, ext, file_size)
+                )
+                conn.commit()
+                doc_id = c.lastrowid
+                c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
+                imported.append(dict_from_row(c.fetchone()))
+            conn.close()
+
+        return jsonify({'imported': len(imported), 'documents': imported}), 201
+    except zipfile.BadZipFile:
+        return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Arquivo .zip inválido ou corrompido.')
+    except Exception as e:
+        print(f'[ERROR] POST /api/wikitoca/documents/import-zip: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_DOC_IMPORT_ERROR', 'Erro ao importar documentos.', details=str(e))
 
 
 # WikiToca - Export/Import XLSX
