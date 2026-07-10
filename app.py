@@ -1093,8 +1093,8 @@ def init_db():
         if 'angle_area' not in camp_act_cols:
             c.execute('ALTER TABLE campaign_actions ADD COLUMN angle_area TEXT')
         conn.commit()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f'[init_db] exceção ignorada: {e}')
     
     conn.close()
     logger.info('[Database] Banco de dados inicializado')
@@ -1233,8 +1233,8 @@ def get_db():
     try:
         import stat as _stat
         os.chmod(str(DB_PATH), _stat.S_IRUSR | _stat.S_IWUSR)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[get_db] exceção ignorada: {e}')
     return conn
 
 def dict_from_row(row):
@@ -3431,8 +3431,8 @@ def _itoca_build_snippet(row_dict):
             try:
                 dt = datetime.strptime(text[:10], '%Y-%m-%d')
                 text = dt.strftime('%d/%m/%Y')
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_itoca_build_snippet] exceção ignorada: {e}')
         # Trunca campos muito longos
         if len(text) > 500:
             text = text[:500] + '...'
@@ -3778,8 +3778,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                         enriched['empresa'] = rd_cl['company']
                     if rd_cl.get('position'):
                         enriched['cargo'] = rd_cl['position']
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
         # Remove o campo de FK bruto para não aparecer no snippet
         enriched.pop(fk_field, None)
 
@@ -3795,8 +3795,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                     enriched['nome_conta'] = rd_ac['name']
                 if rd_ac.get('sector'):
                     enriched['setor'] = rd_ac['sector']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('account_id', None)
 
     # Resolve column_id -> título da coluna do Kanban
@@ -3809,8 +3809,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                 rd_col = dict_from_row(r)
                 if rd_col.get('title'):
                     enriched['coluna_kanban'] = rd_col['title']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('column_id', None)
 
     # Resolve card_id -> título do card
@@ -3823,8 +3823,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                 rd_card = dict_from_row(r)
                 if rd_card.get('title'):
                     enriched['mapeamento'] = rd_card['title']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('card_id', None)
 
     # Resolve grouping_id -> nome do agrupamento
@@ -3837,8 +3837,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                 rd_grp = dict_from_row(r)
                 if rd_grp.get('name'):
                     enriched['agrupamento'] = rd_grp['name']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('grouping_id', None)
 
     # Remove outros campos de FK que não foram resolvidos
@@ -3882,8 +3882,8 @@ def _itoca_find_tesseract_cmd():
         result = subprocess.run(['tesseract', '--version'], capture_output=True, timeout=5)
         if result.returncode == 0:
             return 'tesseract'
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[_itoca_find_tesseract_cmd] exceção ignorada: {e}')
 
     # 3. Caminhos padrão do Windows
     if sys.platform == 'win32':
@@ -4024,8 +4024,8 @@ def _itoca_extract_text_from_file(file_path_str):
         elif ext == '.txt':
             try:
                 text_parts.append(path.read_text(encoding='utf-8', errors='replace'))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_itoca_extract_text_from_file] exceção ignorada: {e}')
 
     except Exception as e:
         logger.warning(f'[iToca] Erro geral ao extrair texto de {file_path_str}: {e}')
@@ -4262,8 +4262,8 @@ def _itoca_build_activities_items(conn):
                         cm_title = (cm_row[0] if not isinstance(cm_row, sqlite3.Row) else cm_row['title'] if 'title' in cm_row.keys() else cm_row[0]) or ''
                         if cm_title:
                             parts.append(f'compromisso_vinculado: {cm_title[:120]}')
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_itoca_build_activities_items] exceção ignorada: {e}')
 
             snippet = ' | '.join(parts)
             if snippet:
@@ -4305,8 +4305,8 @@ def _itoca_build_presences_items(conn):
                 try:
                     receita = int(rd['current_revenue_cents']) / 100
                     parts.append(f'receita_atual: R$ {receita:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_itoca_build_presences_items] exceção ignorada: {e}')
             if rd.get('validity_month'):
                 parts.append(f'validade: {rd["validity_month"]}')
             snippet = ' | '.join(parts)
@@ -4666,8 +4666,8 @@ def _itoca_update_cached_base(progress_cb=None, incremental=False):
                 if row and (dict_from_row(row).get('cnt') or 0) > 0:
                     generic_changed = True
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_progress] exceção ignorada: {e}')
 
         # Verifica se houve alterações nas tabelas especializadas
         specialized_changed_tables = set()
@@ -4733,8 +4733,8 @@ def _itoca_update_cached_base(progress_cb=None, incremental=False):
                         snippet = _itoca_build_snippet(rd)
                         if snippet:
                             kept_items.append({'table': table, 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_progress] exceção ignorada: {e}')
 
         # Re-indexa tabelas especializadas alteradas
         if 'user_profile' in tables_to_refresh:
@@ -5045,8 +5045,8 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
             obj = json.loads(text.strip())
             if isinstance(obj, dict):
                 return obj
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_llm_json] exceção ignorada: {e}')
         # Tentativa 2: extrai o primeiro objeto JSON da string
         obj = _extract_json_object_from_text(text)
         if obj and isinstance(obj, dict):
@@ -5125,8 +5125,8 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
     if answer_text.startswith('"') and answer_text.endswith('"') and len(answer_text) > 2:
         try:
             answer_text = json.loads(answer_text)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_llm_json] exceção ignorada: {e}')
 
     if not answer_text:
         answer_text = 'Sem resposta disponível.'
@@ -5257,7 +5257,7 @@ def sync_accounts_from_clients():
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f'[WARN] sync_accounts_from_clients: {e}')
+        logger.warning(f'[WARN] sync_accounts_from_clients: {e}')
 
 
 
@@ -5599,8 +5599,8 @@ def _extract_json_object_from_text(text):
     if stripped.startswith('{'):
         try:
             return json.loads(stripped)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_extract_json_object_from_text] exceção ignorada: {e}')
 
     # Busca o primeiro '{' e tenta balancear as chaves
     start = text.find('{')
@@ -5741,7 +5741,7 @@ def _run_openrouter_synthesis(result_payload):
             'api_key_prefix': api_key[:7] if api_key else '',
             'sent_headers': ['Content-Type', 'Authorization', 'HTTP-Referer', 'X-Title']
         }
-        print(f'[ERROR][OpenRouter] HTTPError diagnostics={diagnostics} body={detail[:500]}')
+        logger.exception(f'[ERROR][OpenRouter] HTTPError diagnostics={diagnostics} body={detail[:500]}')
         hint = ' Verifique se OPENROUTER_API_KEY é a chave da OpenRouter (prefixo sk-or-) e se foi exportada no mesmo terminal do app.' if diagnostics.get('status') == 401 else ''
         raise RuntimeError(f'OpenRouter HTTP {diagnostics["status"]} - body: {detail[:400]} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}{hint}')
     except Exception as e:
@@ -5750,7 +5750,7 @@ def _run_openrouter_synthesis(result_payload):
             'has_api_key': bool(api_key),
             'api_key_prefix': api_key[:7] if api_key else ''
         }
-        print(f'[ERROR][OpenRouter] Exception diagnostics={diagnostics} error={e}')
+        logger.exception(f'[ERROR][OpenRouter] Exception diagnostics={diagnostics} error={e}')
         raise RuntimeError(f'Falha inesperada OpenRouter: {str(e)} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}')
 
     choices = data.get('choices') or []
@@ -5857,8 +5857,8 @@ def extract_future_commitment_dates(text):
                 dt = datetime(y + 1, month, day)
             if dt.date() >= now.date():
                 matches.append(dt.date().isoformat())
-        except ValueError:
-            pass
+        except Exception as e:
+            logger.debug(f'[add_date] exceção ignorada: {e}')
 
     for m in re.finditer(r'\b(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-](\d{2,4}))?\b', text):
         add_date(int(m.group(1)), int(m.group(2)), int(m.group(3)) if m.group(3) else None)
@@ -6007,13 +6007,13 @@ def transcribe_audio():
         return ('', 204)
 
     if TRANSCRIPTION_DEBUG:
-        print('[Transcription][DEBUG] Requisição recebida em /api/transcribe-audio')
-        print(f"[Transcription][DEBUG] Content-Type: {request.content_type}")
-        print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
+        logger.debug('[Transcription][DEBUG] Requisição recebida em /api/transcribe-audio')
+        logger.debug(f"[Transcription][DEBUG] Content-Type: {request.content_type}")
+        logger.debug(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
         details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
-        print(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
+        logger.error(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
         return jsonify({'error': 'Biblioteca faster-whisper não está disponível neste ambiente.'}), 503
 
     audio_file = request.files.get('audio')
@@ -6022,7 +6022,7 @@ def transcribe_audio():
 
     ffmpeg_path = configure_ffmpeg_for_whisper()
     if TRANSCRIPTION_DEBUG and not ffmpeg_path:
-        print('[Transcription][DEBUG] FFmpeg externo não encontrado; continuando com decoder da stack local.')
+        logger.debug('[Transcription][DEBUG] FFmpeg externo não encontrado; continuando com decoder da stack local.')
 
     suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
     temp_path = None
@@ -6032,9 +6032,9 @@ def transcribe_audio():
             temp_path = tmp.name
 
         if TRANSCRIPTION_DEBUG:
-            print(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
-            print(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
-            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
+            logger.debug(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
+            logger.debug(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
+            logger.debug(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
         if model is None:
@@ -6044,11 +6044,11 @@ def transcribe_audio():
         text = ''.join(segment.text for segment in segments).strip()
 
         if TRANSCRIPTION_DEBUG:
-            print(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
+            logger.debug(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
 
         return jsonify({'text': text})
     except Exception as e:
-        print(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
+        logger.error(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
         if TRANSCRIPTION_DEBUG:
             traceback.print_exc()
         return jsonify({'error': f'Falha ao transcrever áudio com faster-whisper: {e}'}), 500
@@ -6056,7 +6056,7 @@ def transcribe_audio():
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
             if TRANSCRIPTION_DEBUG:
-                print(f"[Transcription][DEBUG] Arquivo temporário removido: {temp_path}")
+                logger.debug(f"[Transcription][DEBUG] Arquivo temporário removido: {temp_path}")
 
 # API - Clientes (rotas alternativas para compatibilidade)
 @app.route('/api/clientes', methods=['GET'])
@@ -6073,7 +6073,7 @@ def get_clients():
         conn.close()
         return jsonify(clients)
     except Exception as e:
-        print(f'[ERROR] GET /api/clients: {e}')
+        logger.exception(f'[ERROR] GET /api/clients: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6087,7 +6087,7 @@ def get_positions():
         conn.close()
         return jsonify(positions)
     except Exception as e:
-        print(f'[ERROR] GET /api/cargos: {e}')
+        logger.exception(f'[ERROR] GET /api/cargos: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6101,7 +6101,7 @@ def get_autotoca_mailing_positions():
         conn.close()
         return jsonify(positions)
     except Exception as e:
-        print(f'[ERROR] GET /api/autotoca/mala-direta/positions: {e}')
+        logger.exception(f'[ERROR] GET /api/autotoca/mala-direta/positions: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6115,7 +6115,7 @@ def get_autotoca_mailing_areas():
         conn.close()
         return jsonify(areas)
     except Exception as e:
-        print(f'[ERROR] GET /api/autotoca/mala-direta/areas: {e}')
+        logger.exception(f'[ERROR] GET /api/autotoca/mala-direta/areas: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6132,7 +6132,7 @@ def get_companies():
         conn.close()
         return jsonify(companies)
     except Exception as e:
-        print(f'[ERROR] GET /api/empresas: {e}')
+        logger.exception(f'[ERROR] GET /api/empresas: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6163,7 +6163,7 @@ def get_status_config():
             }
         })
     except Exception as e:
-        print(f'[ERROR] GET /api/config/status: {e}')
+        logger.exception(f'[ERROR] GET /api/config/status: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6185,7 +6185,7 @@ def update_universal_status_config():
         conn.close()
         return jsonify({'message': 'Configuração universal atualizada'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/config/status/universal: {e}')
+        logger.exception(f'[ERROR] PUT /api/config/status/universal: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6209,7 +6209,7 @@ def update_target_status_config():
         conn.close()
         return jsonify({'message': 'Configuração Target atualizada'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/config/status/target: {e}')
+        logger.exception(f'[ERROR] PUT /api/config/status/target: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6232,7 +6232,7 @@ def update_cold_status_config():
         conn.close()
         return jsonify({'message': 'Configuração de contato frio atualizada'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/config/status/cold: {e}')
+        logger.exception(f'[ERROR] PUT /api/config/status/cold: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6249,7 +6249,7 @@ def list_position_groupings():
         conn.close()
         return jsonify(groups)
     except Exception as e:
-        print(f'[ERROR] GET /api/config/position-groupings: {e}')
+        logger.exception(f'[ERROR] GET /api/config/position-groupings: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6273,7 +6273,7 @@ def create_position_grouping():
         conn.close()
         return jsonify({'message': 'Agrupamento criado'})
     except Exception as e:
-        print(f'[ERROR] POST /api/config/position-groupings: {e}')
+        logger.exception(f'[ERROR] POST /api/config/position-groupings: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6287,7 +6287,7 @@ def delete_position_grouping(grouping_id):
         conn.close()
         return jsonify({'message': 'Agrupamento removido'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/config/position-groupings/{grouping_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/config/position-groupings/{grouping_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/status/rules', methods=['POST'])
@@ -6316,7 +6316,7 @@ def create_or_update_status_rule():
         conn.close()
         return jsonify({'message': 'Regra por cargo salva'})
     except Exception as e:
-        print(f'[ERROR] POST /api/config/status/rules: {e}')
+        logger.exception(f'[ERROR] POST /api/config/status/rules: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6330,7 +6330,7 @@ def delete_status_rule(rule_id):
         conn.close()
         return jsonify({'message': 'Regra removida'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/config/status/rules/{rule_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/config/status/rules/{rule_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6344,7 +6344,7 @@ def get_profile_config():
         conn.close()
         return jsonify(profile or {})
     except Exception as e:
-        print(f'[ERROR] GET /api/config/profile: {e}')
+        logger.exception(f'[ERROR] GET /api/config/profile: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6359,7 +6359,7 @@ def get_ui_config():
         conn.close()
         return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
     except Exception as e:
-        print(f'[ERROR] GET /api/config/ui: {e}')
+        logger.exception(f'[ERROR] GET /api/config/ui: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6376,7 +6376,7 @@ def get_theme_config():
         theme = row['value'] if row and row['value'] in _VALID_THEMES else 'verde-classico'
         return jsonify({'theme': theme})
     except Exception as e:
-        print(f'[ERROR] GET /api/config/theme: {e}')
+        logger.exception(f'[ERROR] GET /api/config/theme: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6397,7 +6397,7 @@ def put_theme_config():
         conn.close()
         return jsonify({'theme': theme})
     except Exception as e:
-        print(f'[ERROR] PUT /api/config/theme: {e}')
+        logger.exception(f'[ERROR] PUT /api/config/theme: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -6754,8 +6754,8 @@ def startup_update_check():
                 snooze_dt = datetime.fromisoformat(snooze_until)
                 if datetime.now() < snooze_dt:
                     return jsonify({'snoozed': True, 'snooze_until': snooze_until})
-            except ValueError:
-                pass
+            except Exception as e:
+                logger.debug(f'[startup_update_check] exceção ignorada: {e}')
 
         owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
         repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
@@ -6991,8 +6991,8 @@ def set_startup_config():
         else:
             try:
                 winreg.DeleteValue(key, 'TocaDoCoelho')
-            except FileNotFoundError:
-                pass
+            except Exception as e:
+                logger.debug(f'[set_startup_config] exceção ignorada: {e}')
         winreg.CloseKey(key)
         return jsonify({'enabled': enable, 'message': 'Configuração salva com sucesso.'})
     except Exception as e:
@@ -7138,8 +7138,8 @@ $results | ConvertTo-Json -Depth 5 -Compress
         if tmp_path:
             try:
                 os.unlink(tmp_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_DISABLED_outlook_fetch_via_powershell_legacy] exceção ignorada: {e}')
 
 
 def _outlook_extract_smtp_from_recipient(recipient):
@@ -7173,8 +7173,8 @@ def _outlook_get_all_subfolders(folder):
     try:
         for sub in folder.Folders:
             result.extend(_outlook_get_all_subfolders(sub))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[_outlook_get_all_subfolders] exceção ignorada: {e}')
     return result
 
 
@@ -7194,15 +7194,15 @@ def _outlook_extract_email(item, direction, cutoff_dt):
                 try:
                     email = _outlook_extract_smtp_from_recipient(r)
                     recipients.append({'name': (r.Name or '').strip(), 'email': email})
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as e:
+                    logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
+        except Exception as e:
+            logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
         body_preview = ''
         try:
             body_preview = (item.Body or '')[:1500].strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
         return {
             'subject': (item.Subject or '').strip(),
             'date': dt.strftime('%Y-%m-%dT%H:%M:%S'),
@@ -7226,18 +7226,18 @@ def _outlook_process_folder(folder, direction, cutoff_dt, emails):
         field = 'ReceivedTime' if direction == 'received' else 'SentOn'
         try:
             items = items.Restrict(f"[{field}] >= '{date_str}'")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
         for item in items:
             try:
                 data = _outlook_extract_email(item, direction, cutoff_dt)
                 if data:
                     emails.append(data)
                     count += 1
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
+    except Exception as e:
+        logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
     return count
 
 
@@ -7375,8 +7375,8 @@ def outlook_diagnose():
         c.execute("SELECT 1 FROM user_integrations WHERE provider = 'outlook_graph' LIMIT 1")
         has_graph_token = c.fetchone() is not None
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[outlook_diagnose] exceção ignorada: {e}')
     checks.append({
         'label': 'OAuth Graph autenticado',
         'ok': has_graph_token,
@@ -7393,8 +7393,8 @@ def outlook_diagnose():
         c.execute('SELECT COUNT(*) FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
         clients_with_email = (c.fetchone() or [0])[0]
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[outlook_diagnose] exceção ignorada: {e}')
     email_pct = int(clients_with_email / total_clients * 100) if total_clients else 0
     checks.append({
         'label': 'Clientes com email',
@@ -7611,8 +7611,8 @@ def outlook_graph_status_endpoint():
             with urllib.request.urlopen(req, timeout=10) as resp:
                 me = json.loads(resp.read())
                 email = me.get('mail') or me.get('userPrincipalName')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[outlook_graph_status_endpoint] exceção ignorada: {e}')
         return jsonify({'connected': True, 'email': email, 'expires_at': row['expires_at']})
     except Exception as e:
         return jsonify({'connected': False, 'error': str(e)})
@@ -7951,8 +7951,8 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
         finally:
             try:
                 pythoncom.CoUninitialize()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_finalize] exceção ignorada: {e}')
 
     return Response(
         stream_with_context(generate()),
@@ -8050,8 +8050,8 @@ def _outlook_confirm_async(task_id, activities_to_import):
                         c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
                                   '(user_id, message_id, conversation_id, client_id) VALUES (1, ?, ?, ?)',
                                   (mid, conv_id, client_id))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
                 continue
 
             # Monta o texto consolidado da thread para o resumo do LLM
@@ -8117,8 +8117,8 @@ def _outlook_confirm_async(task_id, activities_to_import):
                     c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
                               '(user_id, message_id, conversation_id, client_id, activity_id) VALUES (1, ?, ?, ?, ?)',
                               (mid, conv_id, client_id, activity_id))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
 
             new_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
             commitments_created += len(new_commitments)
@@ -8203,8 +8203,8 @@ def _outlook_confirm_async(task_id, activities_to_import):
                                         'reason': (kanban_data.get('reason') or '')[:120],
                                         'client_id': client_id
                                     })
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
 
         conn.commit()
         conn.close()
@@ -9343,7 +9343,7 @@ def save_profile_config():
 
         return jsonify({'message': 'Perfil salvo'})
     except Exception as e:
-        print(f'[ERROR] POST /api/config/profile: {e}')
+        logger.exception(f'[ERROR] POST /api/config/profile: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/profile', methods=['DELETE'])
@@ -9356,7 +9356,7 @@ def delete_profile_config():
         conn.close()
         return jsonify({'message': 'Usuário excluído com sucesso'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/config/profile: {e}')
+        logger.exception(f'[ERROR] DELETE /api/config/profile: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/clients/<int:client_id>', methods=['GET'])
@@ -9372,7 +9372,7 @@ def get_client(client_id):
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         return jsonify(client)
     except Exception as e:
-        print(f'[ERROR] GET /api/clients/{client_id}: {e}')
+        logger.exception(f'[ERROR] GET /api/clients/{client_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -9414,7 +9414,7 @@ def check_duplicate_client():
         conn.close()
         return jsonify({'matches': matches})
     except Exception as e:
-        print(f'[ERROR] POST /api/clients/check-duplicate: {e}')
+        logger.exception(f'[ERROR] POST /api/clients/check-duplicate: {e}')
         return jsonify({'error': str(e)}), 500
 
 def _autopic_get_role_via_llm(name, company):
@@ -9644,10 +9644,10 @@ def create_cliente():
 @app.route('/api/clients', methods=['POST'])
 def create_client():
     try:
-        print('[DEBUG] POST /api/clients')
-        print(f'[DEBUG] Content-Type: {request.content_type}')
-        print(f'[DEBUG] Form data: {request.form}')
-        print(f'[DEBUG] Files: {request.files}')
+        logger.debug('[DEBUG] POST /api/clients')
+        logger.debug(f'[DEBUG] Content-Type: {request.content_type}')
+        logger.debug(f'[DEBUG] Form data: {request.form}')
+        logger.debug(f'[DEBUG] Files: {request.files}')
         
         name = request.form.get('name', '').strip()
         company = request.form.get('company', '').strip()
@@ -9709,10 +9709,10 @@ def create_client():
         conn.commit()
         conn.close()
         
-        print(f'[DEBUG] Cliente criado com ID: {client_id}')
+        logger.debug(f'[DEBUG] Cliente criado com ID: {client_id}')
         return jsonify({'id': client_id, 'message': 'Cliente criado'}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/clients: {e}')
+        logger.exception(f'[ERROR] POST /api/clients: {e}')
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -9724,7 +9724,7 @@ def update_cliente(client_id):
 @app.route('/api/clients/<int:client_id>', methods=['PUT'])
 def update_client(client_id):
     try:
-        print(f'[DEBUG] PUT /api/clients/{client_id}')
+        logger.debug(f'[DEBUG] PUT /api/clients/{client_id}')
         
         name = request.form.get('name', '').strip()
         company = request.form.get('company', '').strip()
@@ -9772,10 +9772,10 @@ def update_client(client_id):
         conn.commit()
         conn.close()
         
-        print(f'[DEBUG] Cliente {client_id} atualizado')
+        logger.debug(f'[DEBUG] Cliente {client_id} atualizado')
         return jsonify({'message': 'Cliente atualizado'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/clients/{client_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/clients/{client_id}: {e}')
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -9794,7 +9794,7 @@ def delete_client(client_id):
         conn.close()
         return jsonify({'message': 'Cliente deletado'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/clients/{client_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/clients/{client_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/clientes/<int:client_id>/arquivar', methods=['POST'])
@@ -9838,7 +9838,7 @@ def archive_client(client_id):
         conn.close()
         return jsonify({'message': 'Contato arquivado'})
     except Exception as e:
-        print(f'[ERROR] POST /api/clients/{client_id}/archive: {e}')
+        logger.exception(f'[ERROR] POST /api/clients/{client_id}/archive: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/clientes/<int:client_id>/desarquivar', methods=['POST'])
@@ -9881,7 +9881,7 @@ def unarchive_client(client_id):
         conn.close()
         return jsonify({'message': 'Contato desarquivado'})
     except Exception as e:
-        print(f'[ERROR] POST /api/clientes/{client_id}/desarquivar: {e}')
+        logger.exception(f'[ERROR] POST /api/clientes/{client_id}/desarquivar: {e}')
         return jsonify({'error': str(e)}), 500
 
 # API - Atividades (rotas alternativas para compatibilidade)
@@ -9901,13 +9901,13 @@ def get_activities():
         conn.close()
         return jsonify(activities)
     except Exception as e:
-        print(f'[ERROR] GET /api/activities: {e}')
+        logger.exception(f'[ERROR] GET /api/activities: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/atividades', methods=['POST'])
 def create_atividade():
     try:
-        print('[DEBUG] POST /api/atividades')
+        logger.debug('[DEBUG] POST /api/atividades')
         # Aceitar tanto JSON quanto FormData
         if request.is_json:
             data = request.get_json()
@@ -9919,7 +9919,7 @@ def create_atividade():
             contact_type = request.form.get('contact_type', 'Outro')
             information = request.form.get('information', '').strip()
         
-        print(f'[DEBUG] client_id: {client_id}, contact_type: {contact_type}, information: {information}')
+        logger.debug(f'[DEBUG] client_id: {client_id}, contact_type: {contact_type}, information: {information}')
         
         if not client_id or not information:
             return jsonify({'error': 'Cliente e informacoes sao obrigatorios'}), 400
@@ -9951,10 +9951,10 @@ def create_atividade():
         conn.commit()
         conn.close()
         
-        print(f'[DEBUG] Atividade criada com ID: {activity_id}')
+        logger.debug(f'[DEBUG] Atividade criada com ID: {activity_id}')
         return jsonify({'id': activity_id, 'message': 'Atividade registrada', 'commitments_created': created_commitments}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/atividades: {e}')
+        logger.exception(f'[ERROR] POST /api/atividades: {e}')
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -9962,9 +9962,9 @@ def create_atividade():
 @app.route('/api/activities', methods=['POST'])
 def create_activity():
     try:
-        print('[DEBUG] POST /api/activities')
+        logger.debug('[DEBUG] POST /api/activities')
         data = request.get_json()
-        print(f'[DEBUG] Data: {data}')
+        logger.debug(f'[DEBUG] Data: {data}')
         
         client_id = data.get('client_id')
         description = data.get('description', '').strip()
@@ -9998,10 +9998,10 @@ def create_activity():
         conn.commit()
         conn.close()
         
-        print(f'[DEBUG] Atividade criada com ID: {activity_id}')
+        logger.debug(f'[DEBUG] Atividade criada com ID: {activity_id}')
         return jsonify({'id': activity_id, 'message': 'Atividade registrada', 'commitments_created': created_commitments}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/activities: {e}')
+        logger.exception(f'[ERROR] POST /api/activities: {e}')
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -10009,7 +10009,7 @@ def create_activity():
 @app.route('/api/atividades/<int:activity_id>', methods=['PUT'])
 def update_atividade(activity_id):
     try:
-        print(f'[DEBUG] PUT /api/atividades/{activity_id}')
+        logger.debug(f'[DEBUG] PUT /api/atividades/{activity_id}')
         # Aceitar tanto JSON quanto FormData
         if request.is_json:
             data = request.get_json()
@@ -10030,10 +10030,10 @@ def update_atividade(activity_id):
         conn.commit()
         conn.close()
         
-        print(f'[DEBUG] Atividade {activity_id} atualizada')
+        logger.debug(f'[DEBUG] Atividade {activity_id} atualizada')
         return jsonify({'message': 'Atividade atualizada'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/atividades/{activity_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/atividades/{activity_id}: {e}')
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -10052,7 +10052,7 @@ def delete_activity(activity_id):
         conn.close()
         return jsonify({'message': 'Atividade deletada'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/activities/{activity_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/activities/{activity_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10090,7 +10090,7 @@ def get_agenda():
         conn.close()
         return jsonify(items)
     except Exception as e:
-        print(f'[ERROR] GET /api/agenda: {e}')
+        logger.exception(f'[ERROR] GET /api/agenda: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10126,7 +10126,7 @@ def create_agenda_item():
         conn.close()
         return jsonify({'message': 'Compromisso criado', 'item': item}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/agenda: {e}')
+        logger.exception(f'[ERROR] POST /api/agenda: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10145,7 +10145,7 @@ def update_agenda_time(commitment_id):
         conn.close()
         return jsonify({'message': 'Horário atualizado'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/agenda/{commitment_id}/time: {e}')
+        logger.exception(f'[ERROR] PUT /api/agenda/{commitment_id}/time: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10161,7 +10161,7 @@ def delete_agenda_item(commitment_id):
         conn.close()
         return jsonify({'message': 'Compromisso removido'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/agenda/{commitment_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/agenda/{commitment_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10216,7 +10216,7 @@ def download_agenda_ics(commitment_id):
         response.headers['Content-Disposition'] = f'attachment; filename=agenda-{commitment_id}.ics'
         return response
     except Exception as e:
-        print(f'[ERROR] GET /api/agenda/{commitment_id}/ics: {e}')
+        logger.exception(f'[ERROR] GET /api/agenda/{commitment_id}/ics: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10241,7 +10241,7 @@ def get_week_commitments_count():
             'end_week': end_week.isoformat()
         })
     except Exception as e:
-        print(f'[ERROR] GET /api/agenda/semana-atual-count: {e}')
+        logger.exception(f'[ERROR] GET /api/agenda/semana-atual-count: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10258,7 +10258,7 @@ def update_client_target(client_id):
         conn.close()
         return jsonify({'message': 'Target atualizado'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/clients/{client_id}/target: {e}')
+        logger.exception(f'[ERROR] PUT /api/clients/{client_id}/target: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10289,7 +10289,7 @@ def update_target_bulk():
         conn.close()
         return jsonify({'message': 'Target em massa aplicado', 'affected': affected})
     except Exception as e:
-        print(f'[ERROR] POST /api/clients/target-bulk: {e}')
+        logger.exception(f'[ERROR] POST /api/clients/target-bulk: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10364,7 +10364,7 @@ def export_group_xlsx():
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/export/group-xlsx: {e}')
+        logger.exception(f'[ERROR] GET /api/export/group-xlsx: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10431,7 +10431,7 @@ def export_clientes():
         response.headers['Content-Disposition'] = 'attachment; filename=clientes.csv'
         return response
     except Exception as e:
-        print(f'[ERROR] GET /api/export/clientes: {e}')
+        logger.exception(f'[ERROR] GET /api/export/clientes: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/export/atividades', methods=['GET'])
@@ -10483,7 +10483,7 @@ def export_atividades():
         response.headers['Content-Disposition'] = 'attachment; filename=atividades.csv'
         return response
     except Exception as e:
-        print(f'[ERROR] GET /api/export/atividades: {e}')
+        logger.exception(f'[ERROR] GET /api/export/atividades: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Template Excel para importacao de clientes/contatos
@@ -10525,7 +10525,7 @@ def download_import_clients_template():
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/importar-clientes/template-xlsx: {e}')
+        logger.exception(f'[ERROR] GET /api/importar-clientes/template-xlsx: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Importar clientes via CSV/Excel (suporta CSV e XLSX) COM VALIDACOES
@@ -10596,7 +10596,7 @@ def import_clients():
                             continue
                         rows.append(row)
             except Exception as e:
-                print(f'[ERROR] Excel parsing: {e}')
+                logger.exception(f'[ERROR] Excel parsing: {e}')
                 return jsonify({'error': f'Erro ao ler Excel: {str(e)}'}), 400
         else:
             try:
@@ -10627,7 +10627,7 @@ def import_clients():
                         continue
                     rows.append(row)
             except Exception as e:
-                print(f'[ERROR] CSV parsing: {e}')
+                logger.exception(f'[ERROR] CSV parsing: {e}')
                 return jsonify({'error': f'Erro ao ler CSV: {str(e)}'}), 400
         
         # VALIDACAO 2: Verificar quantidade de linhas (maximo 1000)
@@ -10719,13 +10719,13 @@ def import_clients():
         
         except Exception as e:
             conn.rollback()
-            print(f'[ERROR] Import transaction failed: {e}')
+            logger.exception(f'[ERROR] Import transaction failed: {e}')
             return jsonify({'error': f'Erro ao importar dados: {str(e)}'}), 500
         finally:
             conn.close()
     
     except Exception as e:
-        print(f'[ERROR] POST /api/importar-clientes: {e}')
+        logger.exception(f'[ERROR] POST /api/importar-clientes: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Rotas de Kanban
@@ -10743,7 +10743,7 @@ def list_kanban_columns():
         conn.close()
         return jsonify(rows)
     except Exception as e:
-        print(f'[ERROR] GET /api/kanban/columns: {e}')
+        logger.exception(f'[ERROR] GET /api/kanban/columns: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10764,7 +10764,7 @@ def create_kanban_column():
         conn.close()
         return jsonify({'id': new_id, 'message': 'Sessão criada com sucesso'}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/kanban/columns: {e}')
+        logger.exception(f'[ERROR] POST /api/kanban/columns: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10792,7 +10792,7 @@ def update_kanban_column(column_id):
         conn.close()
         return jsonify({'message': 'Sessão atualizada com sucesso'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/kanban/columns/{column_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/kanban/columns/{column_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10823,7 +10823,7 @@ def delete_kanban_column(column_id):
         conn.close()
         return jsonify({'message': 'Sessão removida com sucesso'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/kanban/columns/{column_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/kanban/columns/{column_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10846,7 +10846,7 @@ def list_kanban_cards():
         conn.close()
         return jsonify(rows)
     except Exception as e:
-        print(f'[ERROR] GET /api/kanban/cards: {e}')
+        logger.exception(f'[ERROR] GET /api/kanban/cards: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10885,7 +10885,7 @@ def create_kanban_card():
         conn.close()
         return jsonify({'id': new_id, 'message': 'Card criado com sucesso'}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/kanban/cards: {e}')
+        logger.exception(f'[ERROR] POST /api/kanban/cards: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10914,7 +10914,7 @@ def update_kanban_card(card_id):
         conn.close()
         return jsonify({'message': 'Card atualizado com sucesso'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/kanban/cards/{card_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/kanban/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10942,7 +10942,7 @@ def get_kanban_card(card_id):
         conn.close()
         return jsonify(card)
     except Exception as e:
-        print(f'[ERROR] GET /api/kanban/cards/{card_id}: {e}')
+        logger.exception(f'[ERROR] GET /api/kanban/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10966,7 +10966,7 @@ def add_kanban_card_activity(card_id):
         conn.close()
         return jsonify({'message': 'Atividade adicionada', 'activity': created}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/kanban/cards/{card_id}/activities: {e}')
+        logger.exception(f'[ERROR] POST /api/kanban/cards/{card_id}/activities: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -10980,7 +10980,7 @@ def delete_kanban_card(card_id):
         conn.close()
         return jsonify({'message': 'Card removido com sucesso'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/kanban/cards/{card_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/kanban/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -11005,7 +11005,7 @@ def update_kanban_card_urgency(card_id):
         conn.close()
         return jsonify({'message': 'Urgência atualizada com sucesso'})
     except Exception as e:
-        print(f'[ERROR] PATCH /api/kanban/cards/{card_id}/urgency: {e}')
+        logger.exception(f'[ERROR] PATCH /api/kanban/cards/{card_id}/urgency: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/kanban/cards/<int:card_id>/move', methods=['PATCH'])
@@ -11047,7 +11047,7 @@ def move_kanban_card(card_id):
         conn.close()
         return jsonify({'message': 'Card movido com sucesso'})
     except Exception as e:
-        print(f'[ERROR] PATCH /api/kanban/cards/{card_id}/move: {e}')
+        logger.exception(f'[ERROR] PATCH /api/kanban/cards/{card_id}/move: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -11062,7 +11062,7 @@ def get_environment_cards():
         conn.close()
         return jsonify(cards)
     except Exception as e:
-        print(f'[ERROR] GET /api/environment/cards: {e}')
+        logger.exception(f'[ERROR] GET /api/environment/cards: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards', methods=['POST'])
@@ -11089,7 +11089,7 @@ def create_environment_card():
         
         return jsonify({'message': 'Card criado com sucesso', 'id': card_id}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/environment/cards: {e}')
+        logger.exception(f'[ERROR] POST /api/environment/cards: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards/<int:card_id>', methods=['PUT'])
@@ -11110,7 +11110,7 @@ def update_environment_card(card_id):
         
         return jsonify({'message': 'Card atualizado com sucesso'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/environment/cards/{card_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/environment/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards/<int:card_id>', methods=['DELETE'])
@@ -11130,7 +11130,7 @@ def delete_environment_card(card_id):
         
         return jsonify({'message': 'Card deletado com sucesso'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/environment/cards/{card_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/environment/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/responses', methods=['GET'])
@@ -11160,7 +11160,7 @@ def get_environment_responses():
         conn.close()
         return jsonify(responses)
     except Exception as e:
-        print(f'[ERROR] GET /api/environment/responses: {e}')
+        logger.exception(f'[ERROR] GET /api/environment/responses: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/responses', methods=['POST'])
@@ -11193,7 +11193,7 @@ def save_environment_response():
         
         return jsonify({'message': 'Resposta salva com sucesso'})
     except Exception as e:
-        print(f'[ERROR] POST /api/environment/responses: {e}')
+        logger.exception(f'[ERROR] POST /api/environment/responses: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/card/<int:card_id>/all-responses', methods=['GET'])
@@ -11233,7 +11233,7 @@ def get_card_all_responses(card_id):
             'responses': clients_responses
         })
     except Exception as e:
-        print(f'[ERROR] GET /api/environment/card/{card_id}/all-responses: {e}')
+        logger.exception(f'[ERROR] GET /api/environment/card/{card_id}/all-responses: {e}')
         return jsonify({'error': str(e)}), 500
 
 def _environment_extract_suggestions(company, industry, cards, card_results):
@@ -11443,7 +11443,7 @@ def environment_auto_fill():
         ).start()
         return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        print(f'[ERROR] POST /api/environment/auto-fill: {e}')
+        logger.exception(f'[ERROR] POST /api/environment/auto-fill: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -11653,7 +11653,7 @@ def backup_database():
             mimetype='application/x-sqlite3'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/backup/database: {e}')
+        logger.exception(f'[ERROR] GET /api/backup/database: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/restore/database', methods=['POST'])
@@ -11684,7 +11684,7 @@ def restore_database():
         
         import shutil
         shutil.copy2(str(DB_PATH), str(backup_path))
-        print(f'[Database] Backup de segurança criado em {backup_path}')
+        logger.info(f'[Database] Backup de segurança criado em {backup_path}')
 
         # Backup de segurança dos uploads atuais (garante rollback dos arquivos visuais)
         with zipfile.ZipFile(str(backup_uploads_path), mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
@@ -11693,7 +11693,7 @@ def restore_database():
                     if file_path.is_file():
                         rel = file_path.relative_to(UPLOAD_DIR)
                         zf.write(str(file_path), arcname=str(Path('uploads') / rel))
-        print(f'[Database] Backup de segurança dos uploads criado em {backup_uploads_path}')
+        logger.info(f'[Database] Backup de segurança dos uploads criado em {backup_uploads_path}')
         
         # Salvar arquivo temporário
         temp_path = DATA_DIR / 'temp_restore.db'
@@ -11745,7 +11745,7 @@ def restore_database():
 
         # Substituir banco atual
         shutil.move(str(temp_path), str(DB_PATH))
-        print(f'[Database] Banco de dados restaurado com sucesso')
+        logger.info(f'[Database] Banco de dados restaurado com sucesso')
 
         restored_uploads = 0
         if is_zip_backup and temp_zip_path.exists():
@@ -11787,7 +11787,7 @@ def restore_database():
         }), 200
         
     except Exception as e:
-        print(f'[ERROR] POST /api/restore/database: {e}')
+        logger.exception(f'[ERROR] POST /api/restore/database: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Rotas de sugestões diárias
@@ -11966,7 +11966,7 @@ def get_today_suggestions():
         return jsonify(result)
         
     except Exception as e:
-        print(f'[ERROR] GET /api/suggestions/today: {e}')
+        logger.exception(f'[ERROR] GET /api/suggestions/today: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/suggestions/<int:suggestion_id>/complete', methods=['POST'])
@@ -12038,7 +12038,7 @@ def complete_suggestion(suggestion_id):
         return jsonify({'message': 'Sugestão marcada como concluída'})
         
     except Exception as e:
-        print(f'[ERROR] POST /api/suggestions/{suggestion_id}/complete: {e}')
+        logger.exception(f'[ERROR] POST /api/suggestions/{suggestion_id}/complete: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/templates', methods=['GET'])
@@ -12051,7 +12051,7 @@ def list_message_templates():
         conn.close()
         return jsonify(items)
     except Exception as e:
-        print(f'[ERROR] GET /api/config/templates: {e}')
+        logger.exception(f'[ERROR] GET /api/config/templates: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12075,7 +12075,7 @@ def create_message_template():
         conn.close()
         return jsonify(item), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/config/templates: {e}')
+        logger.exception(f'[ERROR] POST /api/config/templates: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12099,7 +12099,7 @@ def update_message_template(template_id):
         conn.close()
         return jsonify(item or {'message': 'Atualizado'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/config/templates/{template_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/config/templates/{template_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12111,7 +12111,7 @@ def delete_message_template(template_id):
         conn.commit(); conn.close()
         return jsonify({'message': 'Modelo removido'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/config/templates/{template_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/config/templates/{template_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12129,7 +12129,7 @@ def get_accounts_support_data():
         conn.close()
         return jsonify({'companies': companies, 'sectors': sectors})
     except Exception as e:
-        print(f'[ERROR] GET /api/accounts/support-data: {e}')
+        logger.exception(f'[ERROR] GET /api/accounts/support-data: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12161,7 +12161,7 @@ def list_accounts():
         conn.close()
         return jsonify(accounts)
     except Exception as e:
-        print(f'[ERROR] GET /api/accounts: {e}')
+        logger.exception(f'[ERROR] GET /api/accounts: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12184,7 +12184,7 @@ def get_account(account_id):
         account['presences'] = [dict_from_row(r) for r in c.fetchall()]
         conn.close(); return jsonify(account)
     except Exception as e:
-        print(f'[ERROR] GET /api/accounts/{account_id}: {e}')
+        logger.exception(f'[ERROR] GET /api/accounts/{account_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -12201,16 +12201,16 @@ def _account_autofill_parse_llm_raw(raw):
             parsed = json.loads(value.strip())
             if isinstance(parsed, dict):
                 return parsed
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_json] exceção ignorada: {e}')
         m = re.search(r'\{[^{}]*\}', value, re.DOTALL)
         if m:
             try:
                 parsed = json.loads(m.group(0))
                 if isinstance(parsed, dict):
                     return parsed
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_try_parse_json] exceção ignorada: {e}')
         return None
 
     parsed = _try_parse_json(raw) or {}
@@ -12368,8 +12368,8 @@ def _portfolio_parse_llm_raw(raw):
                 return parsed
             if isinstance(parsed, list):
                 return {'items': parsed}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_json] exceção ignorada: {e}')
         parsed = _extract_json_object_from_text(stripped)
         if isinstance(parsed, dict):
             return parsed
@@ -13038,8 +13038,8 @@ def _iata_parse_llm_ata(raw):
                     if isinstance(nested, dict) and 'title' in nested:
                         parsed = nested
                         break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_iata_parse_llm_ata] exceção ignorada: {e}')
     title = (parsed.get('title') or '').strip()
     if not title:
         return None
@@ -13465,8 +13465,8 @@ def _autofill_process_async(task_id, account_name):
             try:
                 cents = int(round(float(raw_revenue) * 100))
                 average_revenue_formatted = format_currency_br(cents)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_autofill_process_async] exceção ignorada: {e}')
 
         _bg_task_set(task_id, {'step': 'Buscando logo da empresa...', 'progress': 70})
         logo_url = None
@@ -13589,8 +13589,8 @@ def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extensi
                 if m:
                     try:
                         parsed = json.loads(m.group(0))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_client_linkedin_autofill_async] exceção ignorada: {e}')
 
         _bg_task_set(task_id, {'step': 'Buscando foto de perfil...', 'progress': 75})
 
@@ -13604,8 +13604,8 @@ def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extensi
                 candidates = _find_image_candidates_on_web(query, limit=3)
                 if candidates:
                     photo_url = candidates[0]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_client_linkedin_autofill_async] exceção ignorada: {e}')
 
         result = {
             'nome': parsed.get('nome') or '',
@@ -13774,15 +13774,15 @@ def _linkedin_parse_summary(raw):
     # Tenta JSON direto
     try:
         return json.loads(raw)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[_linkedin_parse_summary] exceção ignorada: {e}')
     # Tenta extrair JSON do texto
     m = re.search(r'\{[\s\S]*\}', raw)
     if m:
         try:
             return json.loads(m.group(0))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_linkedin_parse_summary] exceção ignorada: {e}')
     return None
 
 
@@ -14088,7 +14088,7 @@ def create_account():
         conn.commit(); conn.close()
         return jsonify({'id': account_id, 'message': 'Conta criada'}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/accounts: {e}')
+        logger.exception(f'[ERROR] POST /api/accounts: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14146,7 +14146,7 @@ def update_account(account_id):
         conn.commit(); conn.close()
         return jsonify({'message': 'Conta atualizada'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/accounts/{account_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/accounts/{account_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14224,7 +14224,7 @@ def delete_account(account_id):
         conn.commit(); conn.close()
         return jsonify({'message': 'Conta arquivada e excluída', 'archived_contacts': len(clients)})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/{account_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/accounts/{account_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14237,7 +14237,7 @@ def list_account_archives():
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close(); return jsonify(rows)
     except Exception as e:
-        print(f'[ERROR] GET /api/accounts/archives: {e}')
+        logger.exception(f'[ERROR] GET /api/accounts/archives: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14343,7 +14343,7 @@ def restore_account_archive(archive_id):
         conn.commit(); conn.close()
         return jsonify({'message': 'Conta restaurada', 'account_id': new_account_id})
     except Exception as e:
-        print(f'[ERROR] POST /api/accounts/archives/{archive_id}/restore: {e}')
+        logger.exception(f'[ERROR] POST /api/accounts/archives/{archive_id}/restore: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14355,7 +14355,7 @@ def delete_account_archive(archive_id):
         conn.commit(); conn.close()
         return jsonify({'message': 'Arquivo excluído'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/archives/{archive_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/accounts/archives/{archive_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14411,7 +14411,7 @@ def create_account_presence(account_id):
         conn.commit(); conn.close()
         return jsonify(presence), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/accounts/{account_id}/presences: {e}')
+        logger.exception(f'[ERROR] POST /api/accounts/{account_id}/presences: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14466,7 +14466,7 @@ def update_account_presence(account_id, presence_id):
         conn.commit(); conn.close()
         return jsonify(presence or {'message': 'Atualizada'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/accounts/{account_id}/presences/{presence_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/accounts/{account_id}/presences/{presence_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14479,7 +14479,7 @@ def delete_account_presence(account_id, presence_id):
         conn.commit(); conn.close()
         return jsonify({'message': 'Presença removida'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14498,7 +14498,7 @@ def get_account_activities(account_id):
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close(); return jsonify(rows)
     except Exception as e:
-        print(f'[ERROR] GET /api/accounts/{account_id}/activities: {e}')
+        logger.exception(f'[ERROR] GET /api/accounts/{account_id}/activities: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14525,7 +14525,7 @@ def create_account_activity(account_id):
         conn.close()
         return jsonify({'id': activity_id, 'message': 'Atividade registrada'}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/accounts/{account_id}/activities: {e}')
+        logger.exception(f'[ERROR] POST /api/accounts/{account_id}/activities: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14537,7 +14537,7 @@ def delete_account_activity(account_id, activity_id):
         conn.commit(); conn.close()
         return jsonify({'message': 'Atividade removida'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/{account_id}/activities/{activity_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/accounts/{account_id}/activities/{activity_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14551,7 +14551,7 @@ def cancel_automapping():
         _mark_automapping_cancelled(request_id)
         return jsonify({'message': 'Cancelamento registrado'})
     except Exception as e:
-        print(f'[ERROR] POST /api/automapping/cancel: {e}')
+        logger.exception(f'[ERROR] POST /api/automapping/cancel: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14675,7 +14675,7 @@ def run_automapping():
         return jsonify({'task_id': task_id}), 202
 
     except Exception as e:
-        print(f'[ERROR] POST /api/automapping: {e}')
+        logger.exception(f'[ERROR] POST /api/automapping: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14693,7 +14693,7 @@ def get_automapping_run(run_id):
         payload['result'] = json.loads(payload['result_json'])
         return jsonify(payload)
     except Exception as e:
-        print(f'[ERROR] GET /api/automapping/runs/{run_id}: {e}')
+        logger.exception(f'[ERROR] GET /api/automapping/runs/{run_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14710,7 +14710,7 @@ def delete_automapping_run(run_id):
             return jsonify({'error': 'Execução não encontrada'}), 404
         return jsonify({'message': 'Log de AutoMapping removido com sucesso'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/automapping/runs/{run_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/automapping/runs/{run_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14754,7 +14754,7 @@ def list_automapping_runs():
 
         return jsonify({'days': days, 'runs': runs})
     except Exception as e:
-        print(f'[ERROR] GET /api/automapping/runs: {e}')
+        logger.exception(f'[ERROR] GET /api/automapping/runs: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -14764,7 +14764,7 @@ def list_automapping_runs():
 
 @app.route('/api/wikitoca/entries', methods=['GET'])
 def list_wiki_entries():
-    print('[DEBUG] GET /api/wikitoca/entries chamado')
+    logger.debug('[DEBUG] GET /api/wikitoca/entries chamado')
     try:
         q = (request.args.get('q') or '').strip()
         conn = get_db()
@@ -14781,10 +14781,10 @@ def list_wiki_entries():
             c.execute('SELECT * FROM wiki_entries ORDER BY updated_at DESC')
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
-        print(f'[DEBUG] GET /api/wikitoca/entries retornando {len(rows)} registros')
+        logger.debug(f'[DEBUG] GET /api/wikitoca/entries retornando {len(rows)} registros')
         return jsonify(rows)
     except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/entries: {e}')
+        logger.exception(f'[ERROR] GET /api/wikitoca/entries: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_ENTRIES_LIST_ERROR', 'Erro ao listar conhecimentos.', details=str(e),
                          hint='Verifique se o banco de dados está acessível.')
@@ -14792,16 +14792,16 @@ def list_wiki_entries():
 
 @app.route('/api/wikitoca/entries', methods=['POST'])
 def create_wiki_entry():
-    print('[DEBUG] POST /api/wikitoca/entries chamado')
+    logger.debug('[DEBUG] POST /api/wikitoca/entries chamado')
     try:
         data = request.get_json(force=True) or {}
-        print(f'[DEBUG] POST /api/wikitoca/entries payload: {data}')
+        logger.debug(f'[DEBUG] POST /api/wikitoca/entries payload: {data}')
         title = (data.get('title') or '').strip()
         content = (data.get('content') or '').strip()
         category = (data.get('category') or '').strip() or None
         tags = (data.get('tags') or '').strip() or None
         if not title or not content:
-            print('[WARN] POST /api/wikitoca/entries: titulo ou conteudo ausente')
+            logger.warning('[WARN] POST /api/wikitoca/entries: titulo ou conteudo ausente')
             return api_error(400, 'WIKI_ENTRY_MISSING_FIELDS', 'Título e conteúdo são obrigatórios.')
         conn = get_db()
         c = conn.cursor()
@@ -14815,17 +14815,17 @@ def create_wiki_entry():
         c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
         entry = dict_from_row(c.fetchone())
         conn.close()
-        print(f'[DEBUG] POST /api/wikitoca/entries criado id={entry_id}')
+        logger.debug(f'[DEBUG] POST /api/wikitoca/entries criado id={entry_id}')
         return jsonify(entry), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/entries: {e}')
+        logger.exception(f'[ERROR] POST /api/wikitoca/entries: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_ENTRY_CREATE_ERROR', 'Erro ao criar conhecimento.', details=str(e))
 
 
 @app.route('/api/wikitoca/entries/<int:entry_id>', methods=['PUT'])
 def update_wiki_entry(entry_id):
-    print(f'[DEBUG] PUT /api/wikitoca/entries/{entry_id} chamado')
+    logger.debug(f'[DEBUG] PUT /api/wikitoca/entries/{entry_id} chamado')
     try:
         data = request.get_json(force=True) or {}
         title = (data.get('title') or '').strip()
@@ -14839,7 +14839,7 @@ def update_wiki_entry(entry_id):
         c.execute('SELECT id FROM wiki_entries WHERE id = ?', (entry_id,))
         if not c.fetchone():
             conn.close()
-            print(f'[WARN] PUT /api/wikitoca/entries/{entry_id}: nao encontrado')
+            logger.warning(f'[WARN] PUT /api/wikitoca/entries/{entry_id}: nao encontrado')
             return api_error(404, 'WIKI_ENTRY_NOT_FOUND', 'Conhecimento não encontrado.')
         c.execute(
             '''UPDATE wiki_entries
@@ -14851,17 +14851,17 @@ def update_wiki_entry(entry_id):
         c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
         entry = dict_from_row(c.fetchone())
         conn.close()
-        print(f'[DEBUG] PUT /api/wikitoca/entries/{entry_id} atualizado')
+        logger.debug(f'[DEBUG] PUT /api/wikitoca/entries/{entry_id} atualizado')
         return jsonify(entry)
     except Exception as e:
-        print(f'[ERROR] PUT /api/wikitoca/entries/{entry_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/wikitoca/entries/{entry_id}: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_ENTRY_UPDATE_ERROR', 'Erro ao atualizar conhecimento.', details=str(e))
 
 
 @app.route('/api/wikitoca/entries/<int:entry_id>', methods=['DELETE'])
 def delete_wiki_entry(entry_id):
-    print(f'[DEBUG] DELETE /api/wikitoca/entries/{entry_id} chamado')
+    logger.debug(f'[DEBUG] DELETE /api/wikitoca/entries/{entry_id} chamado')
     try:
         conn = get_db()
         c = conn.cursor()
@@ -14872,10 +14872,10 @@ def delete_wiki_entry(entry_id):
         c.execute('DELETE FROM wiki_entries WHERE id = ?', (entry_id,))
         conn.commit()
         conn.close()
-        print(f'[DEBUG] DELETE /api/wikitoca/entries/{entry_id} removido')
+        logger.debug(f'[DEBUG] DELETE /api/wikitoca/entries/{entry_id} removido')
         return jsonify({'message': 'Conhecimento excluído com sucesso.'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/wikitoca/entries/{entry_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/wikitoca/entries/{entry_id}: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_ENTRY_DELETE_ERROR', 'Erro ao excluir conhecimento.', details=str(e))
 
@@ -14889,7 +14889,7 @@ ALLOWED_WIKI_EXTENSIONS = {'.pdf', '.xls', '.xlsx', '.doc', '.docx'}
 
 @app.route('/api/wikitoca/documents', methods=['GET'])
 def list_wiki_documents():
-    print('[DEBUG] GET /api/wikitoca/documents chamado')
+    logger.debug('[DEBUG] GET /api/wikitoca/documents chamado')
     try:
         q = (request.args.get('q') or '').strip()
         conn = get_db()
@@ -14906,20 +14906,20 @@ def list_wiki_documents():
             c.execute('SELECT * FROM wiki_documents ORDER BY updated_at DESC')
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
-        print(f'[DEBUG] GET /api/wikitoca/documents retornando {len(rows)} documentos')
+        logger.debug(f'[DEBUG] GET /api/wikitoca/documents retornando {len(rows)} documentos')
         return jsonify(rows)
     except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/documents: {e}')
+        logger.exception(f'[ERROR] GET /api/wikitoca/documents: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOCS_LIST_ERROR', 'Erro ao listar documentos.', details=str(e))
 
 
 @app.route('/api/wikitoca/documents', methods=['POST'])
 def upload_wiki_documents():
-    print('[DEBUG] POST /api/wikitoca/documents chamado')
+    logger.debug('[DEBUG] POST /api/wikitoca/documents chamado')
     try:
         files = request.files.getlist('files')
-        print(f'[DEBUG] POST /api/wikitoca/documents arquivos recebidos: {[f.filename for f in files]}')
+        logger.debug(f'[DEBUG] POST /api/wikitoca/documents arquivos recebidos: {[f.filename for f in files]}')
         if not files or all(not f.filename for f in files):
             return api_error(400, 'WIKI_DOC_NO_FILE', 'Nenhum arquivo enviado.')
         title = (request.form.get('title') or '').strip()
@@ -14931,7 +14931,7 @@ def upload_wiki_documents():
                 continue
             ext = Path(f.filename).suffix.lower()
             if ext not in ALLOWED_WIKI_EXTENSIONS:
-                print(f'[WARN] POST /api/wikitoca/documents: extensao rejeitada: {ext}')
+                logger.warning(f'[WARN] POST /api/wikitoca/documents: extensao rejeitada: {ext}')
                 continue
             original_name = f.filename
             safe_name = secure_filename(f'wiki_{int(datetime.now().timestamp())}_{original_name}')
@@ -14950,21 +14950,21 @@ def upload_wiki_documents():
             doc_id = c.lastrowid
             c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
             created.append(dict_from_row(c.fetchone()))
-            print(f'[DEBUG] POST /api/wikitoca/documents salvo id={doc_id} nome={original_name}')
+            logger.debug(f'[DEBUG] POST /api/wikitoca/documents salvo id={doc_id} nome={original_name}')
         conn.close()
         if not created:
             return api_error(400, 'WIKI_DOC_INVALID_TYPE',
                              'Nenhum arquivo válido enviado. Tipos aceitos: PDF, XLS, XLSX, DOC, DOCX.')
         return jsonify(created), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/documents: {e}')
+        logger.exception(f'[ERROR] POST /api/wikitoca/documents: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOC_UPLOAD_ERROR', 'Erro ao enviar documento.', details=str(e))
 
 
 @app.route('/api/wikitoca/documents/<int:document_id>', methods=['DELETE'])
 def delete_wiki_document(document_id):
-    print(f'[DEBUG] DELETE /api/wikitoca/documents/{document_id} chamado')
+    logger.debug(f'[DEBUG] DELETE /api/wikitoca/documents/{document_id} chamado')
     try:
         conn = get_db()
         c = conn.cursor()
@@ -14979,10 +14979,10 @@ def delete_wiki_document(document_id):
         c.execute('DELETE FROM wiki_documents WHERE id = ?', (document_id,))
         conn.commit()
         conn.close()
-        print(f'[DEBUG] DELETE /api/wikitoca/documents/{document_id} removido')
+        logger.debug(f'[DEBUG] DELETE /api/wikitoca/documents/{document_id} removido')
         return jsonify({'message': 'Documento removido com sucesso.'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/wikitoca/documents/{document_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/wikitoca/documents/{document_id}: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOC_DELETE_ERROR', 'Erro ao remover documento.', details=str(e))
 
@@ -15021,7 +15021,7 @@ def export_wiki_documents():
             mimetype='application/zip'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/documents/export-zip: {e}')
+        logger.exception(f'[ERROR] GET /api/wikitoca/documents/export-zip: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOC_EXPORT_ERROR', 'Erro ao exportar documentos.', details=str(e))
 
@@ -15080,7 +15080,7 @@ def import_wiki_documents():
     except zipfile.BadZipFile:
         return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Arquivo .zip inválido ou corrompido.')
     except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/documents/import-zip: {e}')
+        logger.exception(f'[ERROR] POST /api/wikitoca/documents/import-zip: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOC_IMPORT_ERROR', 'Erro ao importar documentos.', details=str(e))
 
@@ -15090,7 +15090,7 @@ def import_wiki_documents():
 @app.route('/api/wikitoca/entries/export-xlsx', methods=['GET'])
 def export_wikitoca_xlsx():
     try:
-        print('[DEBUG] GET /api/wikitoca/entries/export-xlsx chamado')
+        logger.debug('[DEBUG] GET /api/wikitoca/entries/export-xlsx chamado')
         if not OPENPYXL_AVAILABLE:
             return jsonify({'error': 'Exportação XLSX requer openpyxl instalado'}), 500
         conn = get_db()
@@ -15134,14 +15134,14 @@ def export_wikitoca_xlsx():
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/entries/export-xlsx: {e}')
+        logger.exception(f'[ERROR] GET /api/wikitoca/entries/export-xlsx: {e}')
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/wikitoca/entries/template-xlsx', methods=['GET'])
 def wikitoca_template_xlsx():
     try:
-        print('[DEBUG] GET /api/wikitoca/entries/template-xlsx chamado')
+        logger.debug('[DEBUG] GET /api/wikitoca/entries/template-xlsx chamado')
         if not OPENPYXL_AVAILABLE:
             return jsonify({'error': 'Template XLSX requer openpyxl instalado'}), 500
         import openpyxl
@@ -15173,14 +15173,14 @@ def wikitoca_template_xlsx():
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/entries/template-xlsx: {e}')
+        logger.exception(f'[ERROR] GET /api/wikitoca/entries/template-xlsx: {e}')
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/wikitoca/entries/import-xlsx', methods=['POST'])
 def import_wikitoca_xlsx():
     try:
-        print('[DEBUG] POST /api/wikitoca/entries/import-xlsx chamado')
+        logger.debug('[DEBUG] POST /api/wikitoca/entries/import-xlsx chamado')
         if 'file' not in request.files:
             return jsonify({'error': 'Nenhum arquivo enviado'}), 400
         file = request.files['file']
@@ -15252,10 +15252,10 @@ def import_wikitoca_xlsx():
                 errors.append(f'Linha {idx}: {str(row_err)}')
         conn.commit()
         conn.close()
-        print(f'[DEBUG] POST /api/wikitoca/entries/import-xlsx: {ok} importados, {fail} erros')
+        logger.debug(f'[DEBUG] POST /api/wikitoca/entries/import-xlsx: {ok} importados, {fail} erros')
         return jsonify({'imported': ok, 'failed': fail, 'errors': errors[:10]}), 200
     except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/entries/import-xlsx: {e}')
+        logger.exception(f'[ERROR] POST /api/wikitoca/entries/import-xlsx: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -15349,8 +15349,8 @@ def autotoca_upload():
                 # Remover arquivo temporário
                 try:
                     temp_path.unlink()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[autotoca_upload] exceção ignorada: {e}')
                 
                 return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': pdf_filename})
             except Exception as e:
@@ -15424,8 +15424,8 @@ def _autotoca_parse_account_info_raw(raw):
             obj = json.loads(text)
             if isinstance(obj, dict):
                 return obj
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_coerce] exceção ignorada: {e}')
         obj = _extract_json_object_from_text(text)
         return obj if isinstance(obj, dict) else None
 
@@ -15701,8 +15701,8 @@ def _kill_process_on_port(port):
                     try:
                         os.kill(int(pid), _sig.SIGTERM)
                         killed.append(pid)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_kill_process_on_port] exceção ignorada: {e}')
     except Exception as exc:
         logger.debug(f'[WhatsApp] _kill_process_on_port({port}): {exc}')
     if killed:
@@ -15927,8 +15927,8 @@ def _whatsapp_sync_async(task_id, period_days):
                             timeout=30
                         )
                         raw_llm = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_msg_ts] exceção ignorada: {e}')
 
             # Parse da resposta: JSON {resumo, followup} ou texto puro (fallback retrocompatível)
             summary = ''
@@ -16122,8 +16122,8 @@ def whatsapp_connect():
                     b64 = base64.b64encode(qr_resp.content).decode('ascii')
                     qr = f'data:{ctype};base64,{b64}'
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[whatsapp_connect] exceção ignorada: {e}')
 
     if qr:
         return jsonify({'ok': True, 'connected': False, 'qr': qr})
@@ -16140,8 +16140,8 @@ def whatsapp_connect():
         if (body or {}).get('status') == 'STARTING':
             return jsonify({'ok': False, 'state': 'starting',
                             'error': 'WhatsApp ainda conectando (abrindo o Chrome)... aguarde alguns instantes e tente de novo.'}), 503
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[whatsapp_connect] exceção ignorada: {e}')
 
     return jsonify({'ok': False, 'error': 'O QR code não apareceu a tempo. O Chrome pode estar demorando para abrir na primeira conexão — aguarde alguns instantes e clique em Tentar novamente.'}), 500
 
@@ -16709,8 +16709,8 @@ def _campaign_generate_core(payload, progress_cb=None):
         if progress_cb:
             try:
                 progress_cb(pct, step)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_emit] exceção ignorada: {e}')
 
     conn = get_db()
     c = conn.cursor()
@@ -16815,8 +16815,8 @@ def _campaign_regenerate_core(cid, progress_cb=None):
         if progress_cb:
             try:
                 progress_cb(pct, step)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_emit] exceção ignorada: {e}')
 
     conn = get_db()
     c = conn.cursor()
@@ -17936,8 +17936,8 @@ def home_overview():
                 d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
                 if green_days <= (now_dt - d).days < yellow_days:
                     target_risco_atencao += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_rank_key] exceção ignorada: {e}')
 
         # --- Meses disponíveis (para o filtro) ---
         c.execute("""
@@ -17989,7 +17989,7 @@ def home_overview():
             },
         })
     except Exception as e:
-        print(f'[ERROR] GET /api/home/overview: {e}')
+        logger.exception(f'[ERROR] GET /api/home/overview: {e}')
         import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
@@ -18372,7 +18372,7 @@ def home_drilldown():
 
         return jsonify({'error': f'type desconhecido: {dtype}'}), 400
     except Exception as e:
-        print(f'[ERROR] GET /api/home/drilldown: {e}')
+        logger.exception(f'[ERROR] GET /api/home/drilldown: {e}')
         import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
@@ -18392,7 +18392,7 @@ if __name__ == '__main__':
     print('=' * 50)
     print('  TOCA DO COELHO - Gestao de Clientes')
     print('=' * 50)
-    print(f'[Database] Banco de dados inicializado')
+    logger.info(f'[Database] Banco de dados inicializado')
     print(f'[Server] Iniciando em http://localhost:{port}')
     print(f'[Debug] Modo debug fixo no terminal: {"ATIVO" if fixed_debug_mode else "INATIVO"}')
     print(f'[Server] Pressione CTRL+C para parar')
