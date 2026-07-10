@@ -502,14 +502,15 @@
         }
 
         function switchGestaoContaSubmodule(subTab = 'accounts') {
-            const allowed = new Set(['accounts', 'environment', 'org']);
+            const allowed = new Set(['accounts', 'environment', 'org', 'planning']);
             const next = allowed.has(subTab) ? subTab : 'accounts';
             _gestaoContaCurrentSubTab = next;
 
             const tabs = [
                 { key: 'accounts', panelId: 'gestaoContaSubPanel_accounts', btnId: 'gestaoContaSubBtn_accounts', loader: loadAccounts, activeClass: 'btn-auto-mapping', inactiveClass: 'btn-secondary' },
                 { key: 'environment', panelId: 'gestaoContaSubPanel_environment', btnId: 'gestaoContaSubBtn_environment', loader: loadMapeamento, activeClass: 'btn-auto-mapping', inactiveClass: 'btn-secondary' },
-                { key: 'org', panelId: 'gestaoContaSubPanel_org', btnId: 'gestaoContaSubBtn_org', loader: loadOrganizationalMapping, activeClass: 'btn-auto-mapping', inactiveClass: 'btn-secondary' }
+                { key: 'org', panelId: 'gestaoContaSubPanel_org', btnId: 'gestaoContaSubBtn_org', loader: loadOrganizationalMapping, activeClass: 'btn-auto-mapping', inactiveClass: 'btn-secondary' },
+                { key: 'planning', panelId: 'gestaoContaSubPanel_planning', btnId: 'gestaoContaSubBtn_planning', loader: initAccountPlanning, activeClass: 'btn-auto-mapping', inactiveClass: 'btn-secondary' }
             ];
 
             tabs.forEach(item => {

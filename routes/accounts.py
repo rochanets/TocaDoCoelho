@@ -569,3 +569,221 @@ def delete_account_activity(account_id, activity_id):
 @app.route('/uploads/accounts/<filename>')
 def serve_account_upload(filename):
     return send_from_directory(str(ACCOUNT_UPLOAD_DIR), filename)
+
+
+# ===========================================================================
+# Account Planning — mapeamento de decisores com IA (Bloco 4)
+# Busca via Tavily (site:linkedin.com/in), sem scraping do LinkedIn.
+# ===========================================================================
+
+_ACCOUNT_PLANNING_TARGETS = [
+    # (rótulo do cargo, termo de busca, máx. de candidatos)
+    ('CEO', 'CEO', 3),
+    ('CIO', 'CIO', 3),
+    ('CMO', 'CMO', 3),
+    ('COO', 'COO', 3),
+    ('CISO', 'CISO', 3),
+    ('CHRO (Diretor de RH)', 'Diretor de RH', 3),
+    ('Diretor de TI', 'Diretor de TI', 5),
+    ('Gerente de TI', 'Gerente de TI', 5),
+    ('Profissional de Compras', 'Compras', 5),
+]
+
+
+def _ap_normalize_linkedin_url(url):
+    u = (url or '').strip().lower()
+    u = re.sub(r'^https?://', '', u)
+    u = re.sub(r'^www\.', '', u)
+    u = u.split('?')[0].split('#')[0].rstrip('/')
+    return u
+
+
+def _ap_parse_linkedin_title(title):
+    """Extrai (nome, cargo) do título indexado do LinkedIn:
+    padrão comum "Nome - Cargo - Empresa | LinkedIn"."""
+    t = (title or '').strip()
+    t = re.sub(r'\s*[|–]\s*LinkedIn\s*$', '', t, flags=re.I)
+    t = re.sub(r'\s*\|\s*Professional Profile\s*$', '', t, flags=re.I)
+    parts = [p.strip() for p in re.split(r'\s[-–—]\s', t) if p.strip()]
+    if not parts:
+        return None, None
+    name = parts[0]
+    position = parts[1] if len(parts) > 1 else None
+    # Nome plausível: 2+ palavras, sem dígitos
+    if not name or len(name.split()) < 2 or re.search(r'\d', name):
+        return None, position
+    return name, position
+
+
+def _ap_normalize_with_llm(title, snippet, company):
+    """Usa LLM só para normalizar nome/cargo a partir do texto do resultado —
+    nunca como fonte da URL."""
+    raw = _llm_openrouter_first(
+        'A partir do título e trecho abaixo, vindos de um resultado de busca de um '
+        'perfil público do LinkedIn, extraia o nome da pessoa e o cargo dela na '
+        f'empresa "{company}". Retorne SOMENTE JSON válido no formato '
+        '{"nome": "...", "cargo": "..."}. Use null se não conseguir identificar.\n\n'
+        f'Título: {title}\nTrecho: {snippet}',
+        log_tag='AccountPlanning'
+    )
+    if not raw:
+        return None, None
+    try:
+        obj = _extract_json_object_from_text(raw) or json.loads(raw)
+        return (obj.get('nome') or None), (obj.get('cargo') or None)
+    except Exception as e:
+        logger.debug(f'[AccountPlanning] LLM normalizador sem JSON válido: {e}')
+        return None, None
+
+
+def _account_planning_search_async(task_id, company, segment):
+    try:
+        api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+        _bg_task_set(task_id, {'step': 'Preparando busca de decisores...', 'progress': 5})
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT id, name, linkedin FROM clients WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''")
+        existing = {_ap_normalize_linkedin_url(r['linkedin']): r['id'] for r in c.fetchall()}
+
+        results = []
+        seen_urls = set()
+        total = len(_ACCOUNT_PLANNING_TARGETS)
+        for i, (label, term, max_cands) in enumerate(_ACCOUNT_PLANNING_TARGETS):
+            _bg_task_set(task_id, {
+                'step': f'🔎 Buscando {label}... ({i + 1}/{total})',
+                'progress': 5 + int((i / total) * 70)
+            })
+            query = f'site:linkedin.com/in "{term}" "{company}"'
+            try:
+                raw_results = _run_tavily_request(api_key, query, max_results=max_cands + 3)
+            except Exception as e:
+                logger.warning(f'[AccountPlanning] Tavily falhou para "{label}": {e}')
+                continue
+            added = 0
+            for item in raw_results:
+                if added >= max_cands:
+                    break
+                url = (item.get('url') or '').strip()
+                if 'linkedin.com/in/' not in url.lower():
+                    continue
+                norm = _ap_normalize_linkedin_url(url)
+                if norm in seen_urls:
+                    continue  # mesma pessoa já apareceu em outro cargo
+                title = item.get('title') or ''
+                snippet = item.get('content') or ''
+                name, position = _ap_parse_linkedin_title(title)
+                if not name:
+                    name, llm_position = _ap_normalize_with_llm(title, snippet, company)
+                    position = position or llm_position
+                if not name:
+                    continue
+                seen_urls.add(norm)
+                client_id = existing.get(norm)
+                results.append({
+                    'target': label,
+                    'name': name,
+                    'position': position or label,
+                    'linkedin': url,
+                    'snippet': snippet[:280],
+                    'already_registered': bool(client_id),
+                    'client_id': client_id,
+                    'photo_url': None,
+                })
+                added += 1
+
+        # Foto (melhor esforço, com aviso de aproximação na UI)
+        for j, cand in enumerate(results):
+            if cand['already_registered']:
+                continue
+            _bg_task_set(task_id, {
+                'step': f'🖼️ Buscando foto de {cand["name"]}... ({j + 1}/{len(results)})',
+                'progress': 75 + int((j / max(len(results), 1)) * 20)
+            })
+            try:
+                photos = _find_image_candidates_on_web(f'{cand["name"]} {company}', limit=1)
+                cand['photo_url'] = photos[0] if photos else None
+            except Exception as e:
+                logger.debug(f'[AccountPlanning] foto indisponível para {cand["name"]}: {e}')
+
+        payload = {
+            'company': company,
+            'segment': segment,
+            'candidates': results,
+        }
+        c.execute('INSERT INTO account_planning_runs (company, segment, result_json) VALUES (?, ?, ?)',
+                  (company, segment, json.dumps(payload, ensure_ascii=False)))
+        conn.commit()
+        run_id = c.lastrowid
+        conn.close()
+        payload['run_id'] = run_id
+
+        _bg_task_set(task_id, {'status': 'done', 'step': 'Concluído!', 'progress': 100, 'result': payload})
+        _bg_task_cleanup(task_id)
+    except Exception as e:
+        logger.exception(f'[AccountPlanning] Falha na busca: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e), 'progress': 0})
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/account-planning/search', methods=['POST'])
+def account_planning_search():
+    data = request.get_json(force=True) or {}
+    company = (data.get('company') or '').strip()
+    segment = (data.get('segment') or '').strip()
+    if not company:
+        return jsonify({'error': 'Informe o nome da empresa.'}), 400
+    api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+    if not api_key:
+        return jsonify({'error': 'A chave da Tavily não está configurada. Configure em Configurações > Integrações ou defina TAVILY_API_KEY no ambiente.'}), 400
+    task_id = uuid.uuid4().hex
+    _bg_task_register_persistent(task_id, 'account_planning')
+    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 3})
+    threading.Thread(target=_account_planning_search_async, args=(task_id, company, segment), daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
+
+
+@app.route('/api/account-planning/tasks/<task_id>', methods=['GET'])
+def account_planning_task_poll(task_id):
+    task = _bg_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    return jsonify(task)
+
+
+@app.route('/api/account-planning/runs', methods=['GET'])
+def account_planning_runs():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT id, company, segment, created_at FROM account_planning_runs ORDER BY id DESC LIMIT 20')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route('/api/account-planning/runs/<int:run_id>', methods=['GET'])
+def account_planning_run_detail(run_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT id, company, segment, result_json, created_at FROM account_planning_runs WHERE id = ?', (run_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Busca não encontrada'}), 404
+    payload = json.loads(row['result_json'])
+    payload['run_id'] = row['id']
+    payload['created_at'] = row['created_at']
+    return jsonify(payload)
+
+
+@app.route('/api/account-planning/segments', methods=['GET'])
+def account_planning_segments():
+    """Sugestões de segmento a partir das áreas de atuação já cadastradas."""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""SELECT DISTINCT TRIM(area_of_activity) AS seg FROM clients
+                 WHERE area_of_activity IS NOT NULL AND TRIM(area_of_activity) != ''
+                 ORDER BY seg""")
+    rows = [r['seg'] for r in c.fetchall()]
+    conn.close()
+    return jsonify(rows)

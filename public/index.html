@@ -589,6 +589,7 @@
                 <button id="gestaoContaSubBtn_accounts" class="btn btn-auto-mapping" onclick="switchGestaoContaSubmodule('accounts')">Contas</button>
                 <button id="gestaoContaSubBtn_environment" class="btn btn-secondary" onclick="switchGestaoContaSubmodule('environment')">Mapeamento de Ambiente</button>
                 <button id="gestaoContaSubBtn_org" class="btn btn-secondary" onclick="switchGestaoContaSubmodule('org')">Mapeamento Organizacional</button>
+                <button id="gestaoContaSubBtn_planning" class="btn btn-secondary" onclick="switchGestaoContaSubmodule('planning')"><span class="ai-star-icon">✦</span> Account Planning</button>
             </div>
             <div id="gestaoContaSubPanel_accounts" data-subtab="accounts">
                 <div style="margin-bottom:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
@@ -644,6 +645,38 @@
                     </button>
                 </div>
                 <div id="organizationalContent"></div>
+            </div>
+            <div id="gestaoContaSubPanel_planning" data-subtab="planning" style="display:none;">
+                <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px; margin-top:6px;">
+                    <div style="min-width:260px; width:340px;">
+                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Empresa (cliente potencial)</label>
+                        <input id="apCompanyInput" type="text" class="input-minimal" placeholder="Nome da empresa" style="width:100%;">
+                    </div>
+                    <div style="min-width:220px; width:280px;">
+                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Segmento</label>
+                        <input id="apSegmentInput" type="text" class="input-minimal" list="apSegmentOptions" placeholder="Ex.: Varejo, Indústria..." style="width:100%;">
+                        <datalist id="apSegmentOptions"></datalist>
+                    </div>
+                    <button class="btn btn-auto-mapping" onclick="startAccountPlanningSearch()"><span class="ai-star-icon">✦</span> Mapear Decisores</button>
+                    <select id="apRecentRuns" class="input-minimal" style="min-width:220px;" onchange="if(this.value) loadAccountPlanningRun(this.value)">
+                        <option value="">Buscas recentes...</option>
+                    </select>
+                </div>
+                <div id="apProgressArea" style="display:none; padding:16px 4px 10px; max-width:640px;">
+                    <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="apProgressStep">Iniciando...</div>
+                    <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                        <div id="apProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                            <span class="iata-bunny">🐇</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
+                        <div style="font-size:12px; color:#10b981;">
+                            <span class="iata-paw">🐾</span><span class="iata-paw">🐾</span><span class="iata-paw">🐾</span>
+                        </div>
+                        <div style="font-size:11px; color:#6b7280;" id="apProgressPct">5%</div>
+                    </div>
+                </div>
+                <div id="apResultsContent"></div>
             </div>
         </div>
 
@@ -1639,6 +1672,7 @@
     <script src="/js/home-clientes.js"></script>
     <script src="/js/itoca-autotoca.js"></script>
     <script src="/js/linkedin-meeting.js"></script>
+    <script src="/js/account-planning.js"></script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <!-- html2canvas + jsPDF para exportação do resumo LinkedIn -->

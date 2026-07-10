@@ -1164,6 +1164,16 @@ SCHEMA_MIGRATIONS = [
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''',
     ]),
+    (4, 'account_planning_runs', [
+        '''CREATE TABLE IF NOT EXISTS account_planning_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            segment TEXT,
+            result_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_account_planning_created ON account_planning_runs(created_at)',
+    ]),
 ]
 
 
@@ -1388,6 +1398,43 @@ def _extract_bing_image_urls(raw_html, log_prefix='[AutoPic]'):
         if url.startswith('http://') or url.startswith('https://'):
             urls.append(url)
     return urls
+
+
+def _llm_openrouter_first(question, log_tag='llm', temperature=0.1):
+    """Chamada de LLM no padrão do projeto para features novas:
+    OpenRouter primeiro, _sai_simple_prompt como fallback.
+    Retorna str com a resposta, ou None se nenhum provider respondeu."""
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
+        try:
+            resp = requests.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                json={
+                    'model': model,
+                    'messages': [{'role': 'user', 'content': question}],
+                    'temperature': temperature
+                },
+                headers={
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                timeout=90
+            )
+            data = resp.json()
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            if raw and str(raw).strip():
+                logger.info(f'[{log_tag}][OpenRouter] Resposta gerada com sucesso')
+                return raw
+            logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
+        except Exception as e:
+            logger.warning(f'[{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
+    return _sai_simple_prompt(question)
 
 
 def _find_image_candidates_on_web(query, limit=3):
