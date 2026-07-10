@@ -1174,6 +1174,10 @@ SCHEMA_MIGRATIONS = [
         )''',
         'CREATE INDEX IF NOT EXISTS idx_account_planning_created ON account_planning_runs(created_at)',
     ]),
+    (5, 'radar_do_dia_score_snooze', [
+        'ALTER TABLE daily_suggestions ADD COLUMN score REAL DEFAULT 0',
+        'ALTER TABLE daily_suggestions ADD COLUMN snoozed_until TEXT',
+    ]),
 ]
 
 

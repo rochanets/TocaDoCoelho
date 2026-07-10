@@ -314,6 +314,9 @@
             const tab = document.getElementById('home');
             if (!tab) return;
 
+            // Radar do Dia carrega em paralelo ao dashboard
+            if (typeof loadRadarDoDia === 'function') loadRadarDoDia();
+
             const params = new URLSearchParams();
             params.set('period', HOME_STATE.period);
             if (HOME_STATE.period === 'months' && HOME_STATE.months.length) {
