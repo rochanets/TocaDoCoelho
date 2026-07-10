@@ -6827,12 +6827,15 @@ def install_update():
             return jsonify({'error': 'Instalador inválido ou não encontrado.'}), 400
 
         if sys.platform == 'win32':
-            # ShellExecuteW com verbo 'runas' dispara o prompt UAC e eleva o processo.
-            # subprocess.Popen não consegue elevar privilégios, por isso falha com WinError 740.
+            # NUNCA usar o verbo 'runas' aqui: o instalador é per-user
+            # (RequestExecutionLevel user) e não precisa de elevação. Em contas sem
+            # admin, o prompt UAC do 'runas' pedia credenciais de OUTRA conta e o
+            # instalador rodava como ela — registro, atalhos e banco iam para o
+            # perfil errado (o app "sumia" de instalados e abria com banco vazio).
             import ctypes
             ret = ctypes.windll.shell32.ShellExecuteW(
                 None,           # hwnd
-                'runas',        # verbo — solicita elevação UAC
+                'open',         # verbo — executa como o usuário atual, sem elevação
                 str(installer), # executável
                 None,           # parâmetros
                 None,           # diretório de trabalho (None = diretório do executável)

@@ -1,5 +1,6 @@
 !include "MUI2.nsh"
 !include "x64.nsh"
+!include "LogicLib.nsh"
 
 !ifndef APP_VERSION
 !define APP_VERSION "1.0.0"
@@ -7,10 +8,25 @@
 
 Name "Toca do Coelho - Registro de Atividades"
 OutFile "TocaDoCoelho-${APP_VERSION}-Setup.exe"
-InstallDir "$PROGRAMFILES\TocaDoCoelho"
-InstallDirRegKey HKCU "Software\TocaDoCoelho" "InstallPath"
+
+; Instalação per-user, SEM elevação UAC. Instalar em $PROGRAMFILES exigia admin e,
+; em contas sem esse privilégio, o UAC pedia credenciais de OUTRA conta — o instalador
+; inteiro passava a rodar como ela, e tudo que é por usuário (registro HKCU, atalhos,
+; autostart e o banco criado pelo "Iniciar agora" da página final) ia para o perfil
+; errado. Após reiniciar, o app abria com banco vazio e sumia de "Aplicativos instalados".
+RequestExecutionLevel user
+InstallDir "$LOCALAPPDATA\TocaDoCoelho"
 
 Var StartMenuFolder
+Var OldInstallDir
+
+; Lê o destino da instalação anterior para migrá-la: o layout antigo (Program Files)
+; é removido best-effort na seção de instalação. Não usamos InstallDirRegKey porque
+; ele reaproveitaria o caminho antigo como destino padrão — e sem elevação a gravação
+; em Program Files falharia.
+Function .onInit
+    ReadRegStr $OldInstallDir HKCU "Software\TocaDoCoelho" "InstallPath"
+FunctionEnd
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -40,6 +56,18 @@ Section "Instalar Toca do Coelho" SecApp
     DetailPrint "Encerrando WAHA-lite (node.exe)..."
     nsExec::Exec 'powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''*TocaDoCoelho*'' } | Stop-Process -Force"'
     Sleep 2500
+
+    ; Migração do layout antigo: remove a cópia anterior (ex.: C:\Program Files\
+    ; TocaDoCoelho), best effort. Sem permissão de escrita (usuário sem admin) o RMDir
+    ; falha em silêncio e a pasta antiga vira apenas peso morto — atalhos e registro
+    ; passam a apontar para a instalação nova de qualquer forma. Só remove se a pasta
+    ; realmente contém o app, para nunca apagar um diretório arbitrário vindo do registro.
+    ${If} $OldInstallDir != ""
+    ${AndIf} $OldInstallDir != $INSTDIR
+    ${AndIf} ${FileExists} "$OldInstallDir\TocaDoCoelho.exe"
+        DetailPrint "Removendo instalação anterior em $OldInstallDir..."
+        RMDir /r "$OldInstallDir"
+    ${EndIf}
 
     SetOutPath "$INSTDIR"
     File /r "dist\TocaDoCoelho\*"
@@ -84,6 +112,13 @@ Section "Instalar Toca do Coelho" SecApp
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "DisplayVersion" "${APP_VERSION}"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "UninstallString" "$INSTDIR\uninstall.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho" "InstallLocation" "$INSTDIR"
+
+    ; Se "Iniciar com o Windows" já estava ativo, reaponta para o novo caminho do exe
+    ; (o antigo pode ter sido removido na migração acima).
+    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TocaDoCoelho"
+    ${If} $0 != ""
+        WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TocaDoCoelho" '"$INSTDIR\TocaDoCoelho.exe"'
+    ${EndIf}
 
     WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd

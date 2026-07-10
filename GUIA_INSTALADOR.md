@@ -31,7 +31,8 @@ Saída:
 
 ## 📦 O que o instalador faz
 
-✅ Instala em `C:\Program Files\TocaDoCoelho`  
+✅ Instala em `%LocalAppData%\TocaDoCoelho` (per-user, **sem pedir admin/UAC**)  
+✅ Migra instalações antigas: remove a cópia em `C:\Program Files\TocaDoCoelho` (best effort) e reaponta atalhos, registro e autostart  
 ✅ Cria atalhos (Desktop/Menu Iniciar)  
 ✅ Não depende de Python instalado no PC do usuário  
 ✅ Inclui suporte ao FFmpeg no bundle de build  
