@@ -418,3 +418,34 @@ def export_atividades():
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/export/atividades: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/commitments/alerts', methods=['GET'])
+def commitments_alerts():
+    """Follow-ups do dia e vencidos (Bloco 7) — usados no banner da Home
+    e na notificação nativa do Windows via launcher/tray."""
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT co.id, co.title, co.due_date, co.due_time, cl.name, cl.company,
+                   CASE WHEN co.due_date < ? THEN 'overdue' ELSE 'today' END AS kind
+            FROM commitments co
+            JOIN clients cl ON cl.id = co.client_id
+            WHERE COALESCE(cl.is_archived, 0) = 0
+              AND co.due_date <= ?
+              AND NOT EXISTS (SELECT 1 FROM activities a
+                              WHERE a.client_id = co.client_id
+                                AND date(a.activity_date) >= co.due_date)
+            ORDER BY co.due_date ASC, co.due_time ASC
+        """, (today, today))
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify({
+            'today': [r for r in rows if r['kind'] == 'today'],
+            'overdue': [r for r in rows if r['kind'] == 'overdue'],
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/commitments/alerts: {e}')
+        return jsonify({'error': str(e)}), 500

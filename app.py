@@ -6508,11 +6508,18 @@ def _outlook_import_emails(emails_data, conn):
                    VALUES (?, 'Email', ?, ?)''',
                 (client_id, information, email_date)
             )
+            _addin_activity_id = c.lastrowid
             c.execute(
                 '''UPDATE clients SET last_activity_date = ?
                    WHERE id = ? AND (last_activity_date IS NULL OR last_activity_date < ?)''',
                 (email_date, client_id, email_date)
             )
+            # Follow-up combinado detectado via LLM (Bloco 7 — ingest do add-in)
+            try:
+                _detect_followup_from_text(c, client_id, _addin_activity_id, candidate_name,
+                                           f'{subject}\n{body_preview}')
+            except Exception as e:
+                logger.debug(f'[FollowupDetect] falha no ingest do add-in: {e}')
             imported += 1
 
         if not matched_any:
@@ -6912,6 +6919,48 @@ def _outlook_confirm_task_cleanup(task_id, delay=300):
     threading.Thread(target=_do, daemon=True).start()
 
 
+def _detect_followup_from_text(c, client_id, activity_id, client_name, text):
+    """Detecta follow-up combinado via LLM no mesmo formato JSON do sync WhatsApp
+    ({"followup": {"data", "titulo"}}) e cria o compromisso na agenda (Bloco 7).
+    Retorna 1 se criou compromisso, 0 caso contrário."""
+    if not text:
+        return 0
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    raw = _llm_openrouter_first(
+        f"A data de hoje é {today_str}. Analise a comunicação abaixo entre o usuário e '{client_name}'. "
+        'Retorne SOMENTE um JSON válido no formato '
+        '{"followup": {"data": "YYYY-MM-DD", "titulo": "descrição curta do retorno/compromisso combinado"}}. '
+        "Preencha 'followup' apenas se houver data combinada de retorno, reunião ou ligação "
+        '(resolva datas relativas, ex. "amanhã", a partir de hoje). '
+        'Se NÃO houver compromisso combinado, retorne {"followup": null}.\n\n'
+        f'{text[:3000]}',
+        log_tag='FollowupDetect'
+    )
+    if not raw:
+        return 0
+    try:
+        parsed = _extract_json_object_from_text(raw) or json.loads(raw)
+    except Exception:
+        return 0
+    fu = (parsed or {}).get('followup')
+    if not isinstance(fu, dict):
+        return 0
+    due_date = (fu.get('data') or fu.get('date') or '').strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', due_date):
+        return 0
+    title = ((fu.get('titulo') or fu.get('title') or '').strip() or f'Retorno combinado com {client_name}')[:120]
+    # Não duplica compromisso já criado para a mesma atividade/data (ex.: via regex)
+    c.execute('SELECT id FROM commitments WHERE activity_id = ? AND due_date = ?', (activity_id, due_date))
+    if c.fetchone():
+        return 0
+    c.execute(
+        '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, source_type)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (client_id, activity_id, title, (text or '')[:500], due_date, 'outlook')
+    )
+    return 1
+
+
 def _outlook_confirm_async(task_id, activities_to_import):
     try:
         total = len(activities_to_import)
@@ -7047,6 +7096,11 @@ def _outlook_confirm_async(task_id, activities_to_import):
 
             new_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
             commitments_created += len(new_commitments)
+            # Follow-up combinado detectado via LLM (mesmo formato do sync WhatsApp)
+            try:
+                commitments_created += _detect_followup_from_text(c, client_id, activity_id, cname, thread_text)
+            except Exception as e:
+                logger.debug(f'[FollowupDetect] falha na thread de {cname}: {e}')
 
             if analysis_text:
                 stage_raw = _outlook_call_llm(

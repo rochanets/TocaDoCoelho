@@ -148,6 +148,22 @@ class WindowsTrayIcon:
         except Exception:
             pass
 
+    def notify(self, title, message):
+        """Notificação nativa do Windows (balão/toast) via Shell_NotifyIcon."""
+        import win32con
+        import win32gui
+        if not self._ready.wait(timeout=10) or not self.hwnd:
+            return
+        try:
+            nid = (
+                self.hwnd, 0, win32gui.NIF_INFO, win32con.WM_USER + 20, 0,
+                "Toca do Coelho", str(message)[:250], 10, str(title)[:60],
+                win32gui.NIIF_INFO,
+            )
+            win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, nid)
+        except Exception as e:
+            print(f"[WARN] Falha ao exibir notificação: {e}")
+
     def _on_destroy(self, hwnd, msg, wparam, lparam):
         import win32gui
         nid = (self.hwnd, 0)
@@ -478,6 +494,38 @@ if sys.platform == 'win32':
         )
         tray_icon.start()
         print("[OK] Ícone de bandeja iniciado.")
+
+        # Notificação nativa de follow-ups do dia (Bloco 7), mesmo com o app
+        # minimizado na bandeja. Uma vez por dia + rechecagem periódica.
+        def _commitment_notifier(tray):
+            import datetime as _dt
+            notified_dates = set()
+            while True:
+                time.sleep(25)
+                today = _dt.date.today().isoformat()
+                if today not in notified_dates:
+                    try:
+                        resp = requests.get(
+                            f'http://localhost:{get_server_port()}/api/commitments/alerts',
+                            timeout=10
+                        )
+                        data = resp.json() if resp.status_code == 200 else {}
+                        todays = data.get('today') or []
+                        overdue = data.get('overdue') or []
+                        if todays or overdue:
+                            parts = []
+                            if todays:
+                                names = ', '.join(t.get('name', '') for t in todays[:3])
+                                parts.append(f"{len(todays)} follow-up(s) hoje: {names}")
+                            if overdue:
+                                parts.append(f"{len(overdue)} vencido(s)")
+                            tray.notify('Follow-ups — Toca do Coelho', ' | '.join(parts))
+                        notified_dates.add(today)
+                    except Exception:
+                        pass  # servidor ainda subindo — tenta no próximo ciclo
+                time.sleep(4 * 3600)
+
+        threading.Thread(target=_commitment_notifier, args=(tray_icon,), daemon=True).start()
     except Exception as e:
         print(f"[WARN] Falha ao iniciar ícone de bandeja: {e}")
 

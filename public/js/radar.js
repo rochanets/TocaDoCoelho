@@ -159,3 +159,31 @@
                 loadInboundPending();
             } catch (e) { showError(e.message); }
         }
+
+        // =====================================================
+        // Banner de follow-ups (Bloco 7) — do dia e vencidos
+        // =====================================================
+
+        async function loadRadarBanner() {
+            const el = document.getElementById('radarBanner');
+            if (!el) return;
+            try {
+                const resp = await fetch(`${API_BASE}/commitments/alerts`);
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'erro');
+                const parts = [];
+                if ((data.today || []).length) {
+                    parts.push(`<b>${data.today.length}</b> follow-up(s) para hoje: ` +
+                        data.today.map(t => `${escapeHtml(t.name)}${t.due_time ? ' às ' + escapeHtml(t.due_time) : ''}`).join(' · '));
+                }
+                if ((data.overdue || []).length) {
+                    parts.push(`<b style="color:#ef4444;">${data.overdue.length}</b> follow-up(s) vencido(s) sem atividade registrada`);
+                }
+                if (!parts.length) { el.innerHTML = ''; return; }
+                el.innerHTML = `
+                    <div style="background:rgba(16,185,129,.08); border:1px solid rgba(16,185,129,.3); border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:13px; cursor:pointer;"
+                         onclick="switchTab(null, 'agenda')" title="Abrir a Agenda">
+                        ⏰ ${parts.join(' &nbsp;|&nbsp; ')}
+                    </div>`;
+            } catch (e) { el.innerHTML = ''; }
+        }
