@@ -3364,6 +3364,25 @@
             color: #111827 !important;
         }
 
+        /* ── Ficha do contato: caixas de campo — --t-accent-faint fica escuro demais
+           em alguns temas (é reaproveitado por vários outros componentes), então a
+           caixa/rótulo da ficha recebe um ajuste dedicado por tema ── */
+        html[data-theme="verde-classico"] .profile-field { background: #e4f5ef; }
+        html[data-theme="black-cat"] .profile-field { background: #F8F8FF; }
+        html[data-theme="black-cat"] .profile-field-label { color: #363636; }
+        html[data-theme="blue-space"] .profile-field { background: #87CEEB; }
+        html[data-theme="blue-space"] .profile-field-label { color: #483D8B; }
+
+        /* ── Dashboard: placeholder de "Pesquisar contato" em branco nos temas escuros ── */
+        html[data-theme="black-cat"] .filter-input::placeholder { color: #ffffff !important; opacity: 1; }
+        html[data-theme="blue-space"] .filter-input::placeholder { color: #ffffff !important; opacity: 1; }
+
+        /* ── Dashboard: cor da fonte do grid por tema ── */
+        html[data-theme="white-pearl"] .dashboard-table td { color: #C0C0C0; }
+        html[data-theme="baby-pink"] .dashboard-table td { color: #DA70D6; }
+        html[data-theme="blue-space"] .dashboard-table td { color: #4169E1; }
+        html[data-theme="black-cat"] .dashboard-table td { color: #363636; }
+
     </style>
 </head>
 <body>
