@@ -20,9 +20,10 @@
             <img class="sidebar-logo-expanded" src="/logo-coelho.png" alt="Coelho Toca do Coelho">
         </div>
 
-            <button class="nav-item nav-home active" onclick="switchTab(event, 'home')">
+            <button class="nav-item nav-home active" onclick="switchTab(event, 'home')" style="position:relative;">
                 <i class="fas fa-house"></i>
                 <span>Home</span>
+                <span id="inboundBadge" style="display:none; position:absolute; top:6px; right:8px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; border-radius:99px; min-width:16px; height:16px; line-height:16px; text-align:center; padding:0 4px;"></span>
             </button>
             <button class="nav-item nav-iata" onclick="switchTab(event, 'iata')">
                 <i class="fas fa-robot"></i>
@@ -164,6 +165,15 @@
                     <div id="radarContent" style="display:flex; flex-direction:column; gap:6px;">
                         <div style="color:#9ca3af; font-size:13px;">Carregando sugestões...</div>
                     </div>
+                </div>
+
+                <!-- Pendentes de Resposta (Bloco 6) — inbound WhatsApp/Outlook -->
+                <div id="inboundPanel" class="card" style="display:none; margin-bottom:18px; padding:16px 18px; border-left:3px solid #ef4444;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                        <h2 style="margin:0; font-size:17px;">💬 Pendentes de Resposta</h2>
+                        <small id="inboundMetric" style="color:#9ca3af;"></small>
+                    </div>
+                    <div id="inboundContent" style="display:flex; flex-direction:column; gap:6px;"></div>
                 </div>
 
                 <div class="home-kpi-row">

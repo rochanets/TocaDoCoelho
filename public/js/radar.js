@@ -99,3 +99,63 @@
                 if (typeof radarActExtended === 'function') radarActExtended(id, type, data);
             }
         }
+
+        // =====================================================
+        // Pendentes de Resposta (Bloco 6) — inbound WhatsApp/Outlook
+        // =====================================================
+
+        function _inboundWaitLabel(hours) {
+            if (hours == null) return '';
+            if (hours < 1) return 'menos de 1h';
+            if (hours < 48) return `${hours}h`;
+            return `${Math.floor(hours / 24)} dias`;
+        }
+
+        async function loadInboundPending() {
+            const panel = document.getElementById('inboundPanel');
+            const content = document.getElementById('inboundContent');
+            const badge = document.getElementById('inboundBadge');
+            if (!panel || !content) return;
+            try {
+                const resp = await fetch(`${API_BASE}/inbound/pending`);
+                const items = await resp.json();
+                if (!resp.ok) throw new Error(items.error || 'erro');
+                if (badge) {
+                    badge.style.display = items.length ? '' : 'none';
+                    badge.textContent = items.length;
+                }
+                if (!items.length) { panel.style.display = 'none'; return; }
+                panel.style.display = '';
+                content.innerHTML = items.map(it => `
+                    <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid rgba(239,68,68,.25); border-radius:10px;">
+                        <span style="font-size:16px;">${it.channel === 'email' ? '📧' : '📱'}</span>
+                        <div style="flex:1; min-width:160px;">
+                            <div style="font-weight:600; font-size:13.5px;">${escapeHtml(it.name)}${it.company ? ' · ' + escapeHtml(it.company) : ''}
+                                <span style="color:#ef4444; font-weight:700; font-size:12px;"> aguardando há ${_inboundWaitLabel(it.waiting_hours)}</span>
+                            </div>
+                            <div style="font-size:12px; color:#9ca3af;">${escapeHtml(it.preview || '')}</div>
+                        </div>
+                        <button class="btn btn-primary btn-small" onclick="inboundRespond(${it.id})" title="Marcar como respondido"><i class="fas fa-check"></i> Respondi</button>
+                    </div>`).join('');
+                // Métrica de tempo de resposta (mediana 30 dias)
+                fetch(`${API_BASE}/inbound/metrics`).then(r => r.json()).then(m => {
+                    const el = document.getElementById('inboundMetric');
+                    if (el && m && m.median_response_hours != null) {
+                        el.textContent = `mediana de resposta (30d): ${m.median_response_hours}h`;
+                    }
+                }).catch(() => {});
+            } catch (e) {
+                panel.style.display = 'none';
+            }
+        }
+
+        async function inboundRespond(id) {
+            try {
+                const resp = await fetch(`${API_BASE}/inbound/${id}/respond`, { method: 'POST' });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.error || 'Erro ao marcar como respondido.');
+                }
+                loadInboundPending();
+            } catch (e) { showError(e.message); }
+        }

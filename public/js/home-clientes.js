@@ -316,6 +316,7 @@
 
             // Radar do Dia carrega em paralelo ao dashboard
             if (typeof loadRadarDoDia === 'function') loadRadarDoDia();
+            if (typeof loadInboundPending === 'function') loadInboundPending();
 
             const params = new URLSearchParams();
             params.set('period', HOME_STATE.period);

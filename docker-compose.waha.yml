@@ -7,5 +7,11 @@ services:
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
       - WAHA_PRINT_QR=True
       - WAHA_SESSION_STORE=FILE
+      # Webhook em tempo real para a Caixa de Respostas Pendentes do app
+      # (host.docker.internal = máquina onde o TocaDoCoelho roda, porta 3000 do Flask)
+      - WHATSAPP_HOOK_URL=http://host.docker.internal:3000/api/whatsapp/webhook
+      - WHATSAPP_HOOK_EVENTS=message
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     volumes:
       - ./.waha:/app/.sessions

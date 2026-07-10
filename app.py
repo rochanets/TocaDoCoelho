@@ -1178,6 +1178,21 @@ SCHEMA_MIGRATIONS = [
         'ALTER TABLE daily_suggestions ADD COLUMN score REAL DEFAULT 0',
         'ALTER TABLE daily_suggestions ADD COLUMN snoozed_until TEXT',
     ]),
+    (6, 'inbound_messages', [
+        '''CREATE TABLE IF NOT EXISTS inbound_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'whatsapp',
+            received_at TEXT NOT NULL,
+            preview TEXT,
+            responded_at TEXT,
+            source_msg_id TEXT UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_inbound_pending ON inbound_messages(responded_at, received_at)',
+        'CREATE INDEX IF NOT EXISTS idx_inbound_client ON inbound_messages(client_id, channel)',
+    ]),
 ]
 
 
@@ -7273,6 +7288,13 @@ def _outlook_match_emails(emails_data, conn):
                 'body_preview': body_preview[:180]
             })
 
+    # Caixa de respostas pendentes (Bloco 6): e-mails de clientes sem resposta sua
+    try:
+        _inbound_feed_from_outlook(c, emails_data, clients_map)
+        conn.commit()
+    except Exception as e:
+        logger.debug(f'[Inbound] Falha ao alimentar pendências via Outlook: {e}')
+
     return activities, unmatched, all_clients
 
 
@@ -10155,6 +10177,151 @@ def _waha_headers(api_key):
     return h
 
 
+# ---------------------------------------------------------------------------
+# Caixa de respostas pendentes (Bloco 6) — inbound WhatsApp e Outlook.
+# Registra a última mensagem recebida de cada cliente sem resposta sua.
+# ---------------------------------------------------------------------------
+
+def _inbound_upsert(c, client_id, channel, received_at, preview, source_msg_id):
+    """Registra mensagem recebida pendente (dedup por source_msg_id)."""
+    c.execute(
+        '''INSERT INTO inbound_messages (client_id, channel, received_at, preview, source_msg_id)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(source_msg_id) DO NOTHING''',
+        (client_id, channel, received_at, (preview or '')[:280], source_msg_id)
+    )
+
+
+def _inbound_mark_responded(c, client_id, channel, responded_at=None):
+    responded_at = responded_at or datetime.now().isoformat(timespec='seconds')
+    c.execute(
+        '''UPDATE inbound_messages SET responded_at = ?
+           WHERE client_id = ? AND channel = ? AND responded_at IS NULL''',
+        (responded_at, client_id, channel)
+    )
+
+
+def _inbound_scan_whatsapp():
+    """Fase A (polling): consulta o WAHA pelas conversas dos clientes cadastrados
+    e registra a última mensagem com fromMe=false posterior à última fromMe=true.
+    Comportamento passivo (equivalente a abrir o WhatsApp Web)."""
+    api_url, api_key, session = _waha_settings()
+    headers = _waha_headers(api_key)
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""SELECT id, name, phone FROM clients
+                 WHERE phone IS NOT NULL AND phone != '' AND COALESCE(is_archived, 0) = 0""")
+    clients = c.fetchall()
+    since_ts = int((datetime.now() - timedelta(days=14)).timestamp())
+    scanned = pending = 0
+    for row in clients:
+        chat_id = _phone_to_waha_chatid(row['phone'])
+        if not chat_id:
+            continue
+        try:
+            resp = requests.get(
+                f'{api_url}/api/{session}/chats/{chat_id}/messages',
+                headers=headers,
+                params={'limit': 50, 'downloadMedia': 'false', 'filter.timestamp.gte': since_ts},
+                timeout=20
+            )
+            if resp.status_code != 200:
+                continue
+            raw = resp.json()
+            messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
+        except Exception as e:
+            logger.debug(f'[Inbound] WAHA indisponível para {row["name"]}: {e}')
+            continue
+        scanned += 1
+        last_in, last_out, last_in_msg = 0, 0, None
+        for msg in messages:
+            try:
+                ts = int(msg.get('timestamp') or 0)
+            except (TypeError, ValueError):
+                continue
+            if msg.get('fromMe'):
+                last_out = max(last_out, ts)
+            elif ts > last_in:
+                last_in = ts
+                last_in_msg = msg
+        if last_in and last_in > last_out:
+            text, _sender = _waha_extract_text(last_in_msg, row['name'])
+            msg_id = last_in_msg.get('id')
+            if isinstance(msg_id, dict):
+                msg_id = msg_id.get('_serialized') or msg_id.get('id')
+            source_id = f'wa:{msg_id or (str(row["id"]) + ":" + str(last_in))}'
+            _inbound_upsert(c, row['id'], 'whatsapp',
+                            datetime.fromtimestamp(last_in).isoformat(timespec='seconds'),
+                            text or '(mensagem sem texto)', source_id)
+            pending += 1
+        elif last_out:
+            _inbound_mark_responded(c, row['id'], 'whatsapp',
+                                    datetime.fromtimestamp(last_out).isoformat(timespec='seconds'))
+    conn.commit()
+    conn.close()
+    logger.info(f'[Inbound] Scan WhatsApp: {scanned} conversas verificadas, {pending} pendências registradas')
+    return {'scanned': scanned, 'pending': pending}
+
+
+def _inbound_feed_from_outlook(c, emails_data, clients_map):
+    """Alimenta o painel de pendências a partir dos e-mails importados do Outlook:
+    cliente cujo último e-mail recebido é posterior ao último enviado = pendente."""
+    per_client = {}
+    for em in emails_data or []:
+        direction = em.get('direction', 'received')
+        when = (em.get('date') or '').strip()
+        if not when:
+            continue
+        if direction == 'received':
+            addr = ((em.get('sender') or {}).get('email') or '').lower()
+            entry = clients_map.get(addr)
+            if not entry:
+                continue
+            slot = per_client.setdefault(entry['id'], {'in': None, 'out': ''})
+            if slot['in'] is None or when > slot['in']['date']:
+                slot['in'] = {'date': when, 'preview': em.get('body_preview') or em.get('subject') or '',
+                              'msg_id': em.get('message_id') or ''}
+        else:
+            for rec in em.get('recipients') or []:
+                entry = clients_map.get((rec.get('email') or '').lower())
+                if entry:
+                    slot = per_client.setdefault(entry['id'], {'in': None, 'out': ''})
+                    slot['out'] = max(slot['out'], when)
+    for client_id, slot in per_client.items():
+        if slot['in'] and slot['in']['date'] > slot['out']:
+            source_id = f'em:{slot["in"]["msg_id"] or (str(client_id) + ":" + slot["in"]["date"])}'
+            _inbound_upsert(c, client_id, 'email', slot['in']['date'][:19].replace('T', ' '),
+                            slot['in']['preview'], source_id)
+        elif slot['out']:
+            _inbound_mark_responded(c, client_id, 'email', slot['out'][:19].replace('T', ' '))
+
+
+_inbound_poller_started = False
+
+
+def _start_inbound_poller():
+    """Job em background (Fase A) com intervalo configurável (default 15 min)."""
+    global _inbound_poller_started
+    if _inbound_poller_started or os.environ.get('TOCA_DISABLE_BG_JOBS') == '1':
+        return
+    _inbound_poller_started = True
+
+    def _loop():
+        while True:
+            try:
+                minutes = int(_resolve_setting('inbound_poll_minutes', 'INBOUND_POLL_MINUTES') or 15)
+            except Exception:
+                minutes = 15
+            time.sleep(max(minutes, 1) * 60)
+            try:
+                _inbound_scan_whatsapp()
+            except Exception as e:
+                logger.debug(f'[Inbound] Poller: scan falhou (WAHA offline?): {e}')
+
+    threading.Thread(target=_loop, daemon=True).start()
+    logger.info('[Inbound] Poller de respostas pendentes iniciado')
+
+
 _waha_last_restart = 0.0
 
 def _waha_runtime_paths():
@@ -11385,6 +11552,7 @@ def _load_route_modules():
 
 
 _load_route_modules()
+_start_inbound_poller()
 
 
 if __name__ == '__main__':

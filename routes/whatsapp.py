@@ -243,3 +243,134 @@ def whatsapp_approve():
     db.commit()
     db.close()
     return jsonify({'ok': True, 'inserted': inserted, 'commitments': commitments_created})
+
+
+# ===========================================================================
+# Caixa de respostas pendentes (Bloco 6) — rotas de inbound
+# ===========================================================================
+
+@app.route('/api/whatsapp/webhook', methods=['POST'])
+def whatsapp_webhook():
+    """Fase B: recebe eventos do WAHA (configurar WHATSAPP_HOOK_URL no
+    docker-compose.waha.yml apontando para este endpoint)."""
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        event = (body.get('event') or '').lower()
+        payload = body.get('payload') or {}
+        if event not in ('message', 'message.any'):
+            return jsonify({'ok': True, 'ignored': event})
+        chat_raw = payload.get('from') if not payload.get('fromMe') else payload.get('to')
+        chat_id = str(chat_raw or '')
+        digits = re.sub(r'\D', '', chat_id.split('@')[0])
+        if not digits:
+            return jsonify({'ok': True, 'ignored': 'sem_numero'})
+        conn = get_db()
+        c = conn.cursor()
+        # match por telefone normalizado (compara via chatid gerado)
+        c.execute("SELECT id, name, phone FROM clients WHERE phone IS NOT NULL AND phone != ''")
+        client_id = None
+        for row in c.fetchall():
+            cid = _phone_to_waha_chatid(row['phone']) or ''
+            if cid.split('@')[0] == digits:
+                client_id = row['id']
+                break
+        if not client_id:
+            conn.close()
+            return jsonify({'ok': True, 'ignored': 'nao_cliente'})
+        try:
+            ts = int(payload.get('timestamp') or 0)
+        except (TypeError, ValueError):
+            ts = 0
+        when = datetime.fromtimestamp(ts).isoformat(timespec='seconds') if ts else datetime.now().isoformat(timespec='seconds')
+        if payload.get('fromMe'):
+            _inbound_mark_responded(c, client_id, 'whatsapp', when)
+        else:
+            msg_id = payload.get('id')
+            if isinstance(msg_id, dict):
+                msg_id = msg_id.get('_serialized') or msg_id.get('id')
+            _inbound_upsert(c, client_id, 'whatsapp', when,
+                            payload.get('body') or '(mensagem sem texto)',
+                            f'wa:{msg_id or (str(client_id) + ":" + str(ts))}')
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/whatsapp/webhook: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/inbound/pending', methods=['GET'])
+def inbound_pending():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT im.id, im.client_id, im.channel, im.received_at, im.preview,
+                   cl.name, cl.company,
+                   CAST((julianday('now', 'localtime') - julianday(im.received_at)) * 24 AS INTEGER) AS waiting_hours
+            FROM inbound_messages im
+            JOIN clients cl ON cl.id = im.client_id
+            WHERE im.responded_at IS NULL AND COALESCE(cl.is_archived, 0) = 0
+            ORDER BY im.received_at ASC
+        """)
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/inbound/pending: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/inbound/<int:item_id>/respond', methods=['POST'])
+def inbound_mark_responded_manual(item_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE inbound_messages SET responded_at = ? WHERE id = ? AND responded_at IS NULL',
+                  (datetime.now().isoformat(timespec='seconds'), item_id))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Pendência não encontrada (ou já respondida)'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/inbound/{item_id}/respond: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/inbound/metrics', methods=['GET'])
+def inbound_metrics():
+    """Mediana do tempo de resposta (horas) dos últimos 30 dias."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT (julianday(responded_at) - julianday(received_at)) * 24 AS hours
+            FROM inbound_messages
+            WHERE responded_at IS NOT NULL
+              AND received_at >= datetime('now', 'localtime', '-30 days')
+            ORDER BY hours
+        """)
+        hours = [r['hours'] for r in c.fetchall() if r['hours'] is not None and r['hours'] >= 0]
+        conn.close()
+        median = None
+        if hours:
+            mid = len(hours) // 2
+            median = hours[mid] if len(hours) % 2 else (hours[mid - 1] + hours[mid]) / 2
+        return jsonify({'median_response_hours': round(median, 1) if median is not None else None,
+                        'responded_count_30d': len(hours)})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/inbound/metrics: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/inbound/scan', methods=['POST'])
+def inbound_scan_now():
+    """Dispara manualmente um ciclo de verificação (útil para testar a conexão)."""
+    try:
+        result = _inbound_scan_whatsapp()
+        return jsonify({'ok': True, **result})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/inbound/scan: {e}')
+        return jsonify({'error': str(e)}), 500
