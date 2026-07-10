@@ -10332,22 +10332,9 @@
 
         // Download Excel Template
         function downloadTemplate() {
-            const headers = ['Nome', 'Empresa', 'Cargo', 'Email', 'Telefone'];
-            const sampleData = [
-                ['João Silva', 'Tech Corp', 'Gerente', 'joao@techcorp.com', '11999999999'],
-                ['Maria Santos', 'Inovação Ltd', 'Diretora', 'maria@inovacao.com', '21988888888']
-            ];
-            
-            let csv = headers.join(',') + '\n';
-            sampleData.forEach(row => {
-                csv += row.join(',') + '\n';
-            });
-            
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            link.setAttribute('href', url);
-            link.setAttribute('download', 'template_clientes.csv');
+            link.setAttribute('href', `${API_BASE}/importar-clientes/template-xlsx`);
+            link.setAttribute('download', 'template_clientes.xlsx');
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
