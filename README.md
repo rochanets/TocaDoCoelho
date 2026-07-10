@@ -28,8 +28,9 @@ Sistema de gestão de clientes com interface web local.
 
 ### Regras de atualização/desinstalação
 
-- A atualização troca os binários em `C:\Program Files\TocaDoCoelho`.
-- O banco SQLite e uploads permanecem em `%AppData%\toca-do-coelho`.
+- A instalação é **per-user** (sem UAC): os binários ficam em `%LocalAppData%\TocaDoCoelho`.
+- Instalações antigas em `C:\Program Files\TocaDoCoelho` são migradas automaticamente na atualização (a pasta antiga é removida quando há permissão; atalhos, registro e autostart passam a apontar para o novo local).
+- O banco SQLite e uploads permanecem em `%AppData%\toca-do-coelho` — nunca são tocados pelo instalador.
 - A desinstalação **preserva os dados do usuário por padrão**.
 
 ## ⬆️ Verificar atualizações pelo GitHub Releases
