@@ -10394,6 +10394,48 @@ def export_atividades():
         print(f'[ERROR] GET /api/export/atividades: {e}')
         return jsonify({'error': str(e)}), 500
 
+# Template Excel para importacao de clientes/contatos
+@app.route('/api/importar-clientes/template-xlsx', methods=['GET'])
+def download_import_clients_template():
+    try:
+        if not OPENPYXL_AVAILABLE:
+            return jsonify({'error': 'Geração de template XLSX requer openpyxl instalado'}), 500
+
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from io import BytesIO
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Clientes'
+        headers = ['Nome', 'Empresa', 'Cargo', 'Email', 'Telefone', 'Linkedin']
+        ws.append(headers)
+        header_fill = PatternFill(start_color='34D399', end_color='34D399', fill_type='solid')
+        for col_idx, _ in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+        for col_letter, width in zip('ABCDEF', [25, 25, 20, 30, 18, 30]):
+            ws.column_dimensions[col_letter].width = width
+
+        ws.append(['João Silva', 'Tech Corp', 'Gerente', 'joao@techcorp.com', '11999999999', ''])
+        ws.append(['Maria Santos', 'Inovação Ltd', 'Diretora', 'maria@inovacao.com', '21988888888', ''])
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        from flask import send_file
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name='template_clientes.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        print(f'[ERROR] GET /api/importar-clientes/template-xlsx: {e}')
+        return jsonify({'error': str(e)}), 500
+
 # Importar clientes via CSV/Excel (suporta CSV e XLSX) COM VALIDACOES
 @app.route('/api/importar-clientes', methods=['POST'])
 def import_clients():
@@ -10432,7 +10474,10 @@ def import_clients():
 
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
                         file.save(tmp.name)
-                        wb = load_workbook(tmp.name, data_only=True)
+                        tmp_path = tmp.name
+
+                    try:
+                        wb = load_workbook(tmp_path, data_only=True)
                         ws = wb.active
 
                         for idx, row in enumerate(ws.iter_rows(values_only=True)):
@@ -10449,7 +10494,9 @@ def import_clients():
                                     row_data.append(val)
                             rows.append(row_data)
 
-                        os.unlink(tmp.name)
+                        wb.close()
+                    finally:
+                        os.unlink(tmp_path)
                 else:
                     parsed_rows = parse_xlsx_without_openpyxl(file)
                     for idx, row in enumerate(parsed_rows):
