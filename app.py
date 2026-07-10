@@ -1107,7 +1107,7 @@ def run_automatic_db_backup(interval_days=3):
         c.execute('SELECT value FROM app_settings WHERE key = ?', ('db_last_backup_at',))
         row = c.fetchone()
 
-        now = datetime.utcnow()
+        now = datetime.now()
         should_backup = True
 
         if row and row[0]:
@@ -1135,13 +1135,100 @@ def run_automatic_db_backup(interval_days=3):
     except Exception as e:
         logger.exception(f'[Backup] Falha ao executar backup automático: {e}')
 
-init_db()
+# ---------------------------------------------------------------------------
+# Sistema de migração versionada do schema.
+# A migração 1 é a "baseline" legada: o init_db() idempotente (CREATE TABLE IF
+# NOT EXISTS + ALTER TABLE condicionais via PRAGMA table_info), que cobre tanto
+# bancos novos quanto bancos antigos dos usuários (o instalador atualiza os
+# binários mas mantém o .db em %AppData%). Novas mudanças de schema devem ser
+# adicionadas como entradas numeradas em SCHEMA_MIGRATIONS — nunca mais como
+# ALTER TABLE ad-hoc no init_db.
+# ---------------------------------------------------------------------------
+SCHEMA_MIGRATIONS = [
+    (1, 'baseline_legacy_init', None),  # None => roda init_db()
+    (2, 'indices_consultas_frequentes', [
+        'CREATE INDEX IF NOT EXISTS idx_activities_client_date ON activities(client_id, activity_date)',
+        'CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company)',
+        'CREATE INDEX IF NOT EXISTS idx_clients_last_activity ON clients(last_activity_date)',
+        'CREATE INDEX IF NOT EXISTS idx_commitments_due_date ON commitments(due_date)',
+        'CREATE INDEX IF NOT EXISTS idx_account_activities_account ON account_activities(account_id)',
+    ]),
+    (3, 'background_tasks_persistentes', [
+        '''CREATE TABLE IF NOT EXISTS background_tasks (
+            task_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'processing',
+            step TEXT,
+            progress INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+    ]),
+]
+
+
+def _run_schema_migrations():
+    conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            name TEXT,
+            applied_at TEXT
+        )''')
+        conn.commit()
+        c.execute('SELECT MAX(version) FROM schema_version')
+        row = c.fetchone()
+        current = row[0] if row and row[0] else 0
+        for version, name, statements in SCHEMA_MIGRATIONS:
+            if version <= current:
+                continue
+            if statements is None:
+                # Baseline legada: init_db() usa a própria conexão.
+                init_db()
+            else:
+                for stmt in statements:
+                    c.execute(stmt)
+            c.execute(
+                'INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)',
+                (version, name, datetime.now().isoformat(timespec='seconds'))
+            )
+            conn.commit()
+            logger.info(f'[Database] Migração {version} ({name}) aplicada')
+    finally:
+        conn.close()
+
+
+def _mark_interrupted_background_tasks():
+    """Ao subir, marca tasks 'processing' de execuções anteriores como interrompidas."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
+        conn.execute(
+            "UPDATE background_tasks SET status = 'interrupted', updated_at = CURRENT_TIMESTAMP "
+            "WHERE status = 'processing'"
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.debug(f'[Tasks] Falha ao marcar tasks interrompidas: {e}')
+
+
+_run_schema_migrations()
+_mark_interrupted_background_tasks()
 run_automatic_db_backup(interval_days=3)
 
 # Funcoes auxiliares
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('PRAGMA foreign_keys=ON')
+    except Exception as e:
+        logger.debug(f'[Database] Falha ao aplicar PRAGMAs de conexão: {e}')
     # Garante que o arquivo de banco só seja acessível pelo usuário atual do SO
     try:
         import stat as _stat
@@ -7883,6 +7970,8 @@ def _outlook_confirm_task_set(task_id, update):
         if task_id not in _outlook_confirm_tasks:
             _outlook_confirm_tasks[task_id] = {}
         _outlook_confirm_tasks[task_id].update(update)
+        snapshot = dict(_outlook_confirm_tasks[task_id])
+    _bg_task_persist(task_id, 'outlook_confirm', snapshot)
 
 
 def _outlook_confirm_task_get(task_id):
@@ -12399,6 +12488,30 @@ def _portfolio_generate_offer_from_llm(raw_input, image_data=None, image_mime=No
 # ---------------------------------------------------------------------------
 _bg_tasks: dict = {}
 _bg_tasks_lock = threading.Lock()
+# Tasks registradas aqui têm estado mínimo espelhado na tabela background_tasks
+# (sobrevive a restart — ao subir, 'processing' antigas viram 'interrupted').
+_bg_persistent_kinds: dict = {}
+
+
+def _bg_task_register_persistent(task_id, kind):
+    _bg_persistent_kinds[task_id] = kind
+
+
+def _bg_task_persist(task_id, kind, task):
+    try:
+        conn = get_db()
+        conn.execute(
+            'INSERT INTO background_tasks (task_id, kind, status, step, progress, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) '
+            'ON CONFLICT(task_id) DO UPDATE SET status = excluded.status, step = excluded.step, '
+            'progress = excluded.progress, updated_at = CURRENT_TIMESTAMP',
+            (task_id, kind, task.get('status') or 'processing',
+             task.get('step'), int(task.get('progress') or 0))
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.debug(f'[Tasks] Falha ao persistir estado da task {task_id}: {e}')
 
 
 def _bg_task_set(task_id, updates):
@@ -12406,6 +12519,10 @@ def _bg_task_set(task_id, updates):
         task = _bg_tasks.get(task_id, {})
         task.update(updates)
         _bg_tasks[task_id] = task
+        snapshot = dict(task)
+    kind = _bg_persistent_kinds.get(task_id)
+    if kind:
+        _bg_task_persist(task_id, kind, snapshot)
 
 
 def _bg_task_get(task_id):
@@ -15680,7 +15797,10 @@ def _whatsapp_sync_async(task_id, period_days):
             _bg_task_cleanup(task_id)
             return
 
-        now_dt = datetime.utcnow()
+        # Horário local em todo o app; a conversão para epoch UTC (que a API do
+        # WAHA espera) acontece via .timestamp(), que interpreta o datetime
+        # naive como horário local — elimina o deslocamento de 3h no corte.
+        now_dt = datetime.now()
         since_dt = now_dt - timedelta(days=period_days)
         since_ts = int(since_dt.timestamp())
         now_ts = int(now_dt.timestamp())
@@ -16033,6 +16153,7 @@ def whatsapp_sync_start():
     if period_days not in [1, 3, 7, 15, 30]:
         period_days = 7
     task_id = uuid.uuid4().hex
+    _bg_task_register_persistent(task_id, 'whatsapp_sync')
     _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando sincronização...', 'progress': 5})
     threading.Thread(target=_whatsapp_sync_async, args=(task_id, period_days), daemon=True).start()
     return jsonify({'task_id': task_id}), 202
@@ -16057,7 +16178,7 @@ def whatsapp_approve():
     c = db.cursor()
     inserted = 0
     commitments_created = 0
-    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     for item in items:
         client_id = item.get('client_id')
