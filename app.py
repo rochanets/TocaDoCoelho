@@ -1208,6 +1208,20 @@ SCHEMA_MIGRATIONS = [
     (8, 'clients_birthday', [
         'ALTER TABLE clients ADD COLUMN birthday TEXT',
     ]),
+    (9, 'job_change_events', [
+        '''CREATE TABLE IF NOT EXISTS job_change_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            empresa_antiga TEXT,
+            empresa_nova TEXT,
+            cargo_novo TEXT,
+            potential_new_account INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pendente',
+            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_job_change_status ON job_change_events(status)',
+    ]),
 ]
 
 

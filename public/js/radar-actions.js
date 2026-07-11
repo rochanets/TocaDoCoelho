@@ -10,6 +10,13 @@
             const context = data.manchete
                 ? `<div style="font-size:13px; color:#4b5563; margin-bottom:10px;"><b>${escapeHtml(data.manchete)}</b><br>${escapeHtml(data.resumo || '')}</div>`
                 : '';
+            const jobChangeBar = (type === 'job_change' && data.event_id)
+                ? `<div style="margin-bottom:10px;">
+                       <button class="btn btn-primary btn-small" onclick="radarJobChangeOpenAccount(${data.event_id}, ${id})">
+                           <i class="fas fa-building-circle-check"></i> ${data.potential_new_account ? 'Criar conta' : 'Vincular conta'} + card no Kanban
+                       </button>
+                   </div>`
+                : '';
             const html = `
                 <div class="modal active" id="radarDraftModal" onclick="if(event.target===this) this.remove()">
                     <div class="modal-content" style="max-width:600px;">
@@ -18,6 +25,7 @@
                             <button class="modal-close" onclick="document.getElementById('radarDraftModal').remove()">&#215;</button>
                         </div>
                         ${context}
+                        ${jobChangeBar}
                         <div class="form-group">
                             <label>Rascunho da mensagem</label>
                             <textarea id="radarDraftBody" rows="7" placeholder="Clique em 'Gerar rascunho' para a IA escrever a partir do gatilho e do histórico do contato."></textarea>
@@ -35,6 +43,17 @@
             document.body.insertAdjacentHTML('beforeend', html);
             window._radarDraftClient = null;
             radarGenerateDraft(id);
+        }
+
+        async function radarJobChangeOpenAccount(eventId, suggestionId) {
+            try {
+                const resp = await fetch(`${API_BASE}/job-changes/${eventId}/open-account`, { method: 'POST' });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Erro ao criar conta/card.');
+                showSuccess('Conta e card de oportunidade prontos no Kanban!');
+                await fetch(`${API_BASE}/suggestions/${suggestionId}/complete`, { method: 'POST' }).catch(() => {});
+                loadRadarDoDia();
+            } catch (e) { showError(e.message); }
         }
 
         async function radarGenerateDraft(id) {

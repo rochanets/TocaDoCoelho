@@ -1,6 +1,6 @@
 (() => {
   // Confirmação visível no DevTools (F12 → Console) para diagnóstico
-  console.log('[AutoToca Helper] content.js v0.7.0 carregado em:', window.location.href);
+  console.log('[AutoToca Helper] content.js v0.8.0 carregado em:', window.location.href);
 
   const WEB_PING_EVENT    = 'autotoca-extension-ping';
   const WEB_PONG_EVENT    = 'autotoca-extension-pong';
@@ -75,7 +75,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.7.0',
+        version: '0.8.0',
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -719,4 +719,93 @@
     _log('info', 'Página de perfil no carregamento inicial, iniciando injeção');
     _scheduleButtonInjection(0);
   }
+
+  // ---- Captura automática "Siga o campeão" (Bloco 11) ------------------------
+  // Ao visitar o perfil de um contato JÁ CADASTRADO no Toca do Coelho, captura
+  // os dados visíveis (cargo/empresa) em background, sem exigir clique — modo
+  // passivo: só acontece quando o usuário navega até o perfil por conta própria.
+
+  const APP_BASE_URLS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  const WATCHLIST_KEY = 'autotoca-linkedin-watchlist';
+  const AUTOCAP_KEY   = 'autotoca-autocapture-log';
+  const WATCHLIST_TTL_MS = 30 * 60 * 1000;   // 30 min de cache da watchlist
+  const AUTOCAP_COOLDOWN_MS = 6 * 60 * 60 * 1000;  // 6h por perfil
+
+  async function _appFetch(path, options) {
+    for (const base of APP_BASE_URLS) {
+      try {
+        const resp = await fetch(base + path, options);
+        if (resp.ok) return resp;
+      } catch (_) { /* app offline nessa base — tenta a próxima */ }
+    }
+    return null;
+  }
+
+  async function _getWatchlist() {
+    try {
+      const stored = await chrome.storage.local.get(WATCHLIST_KEY);
+      const cached = stored[WATCHLIST_KEY];
+      if (cached && (Date.now() - cached.at) < WATCHLIST_TTL_MS) return cached.items;
+    } catch (_) {}
+    const resp = await _appFetch('/api/linkedin/watchlist');
+    if (!resp) return null;
+    const items = await resp.json().catch(() => null);
+    if (!Array.isArray(items)) return null;
+    try { await chrome.storage.local.set({ [WATCHLIST_KEY]: { at: Date.now(), items } }); } catch (_) {}
+    return items;
+  }
+
+  function _currentProfileSlug() {
+    const m = window.location.pathname.match(/\/in\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]).toLowerCase() : null;
+  }
+
+  async function _autoCaptureIfKnownProfile() {
+    if (!isLinkedInProfilePage()) return;
+    const slug = _currentProfileSlug();
+    if (!slug) return;
+    try {
+      const stored = await chrome.storage.local.get(AUTOCAP_KEY);
+      const log = stored[AUTOCAP_KEY] || {};
+      if (log[slug] && (Date.now() - log[slug]) < AUTOCAP_COOLDOWN_MS) return;
+    } catch (_) {}
+    const watchlist = await _getWatchlist();
+    if (!watchlist || !watchlist.some(w => (w.slug || '').toLowerCase() === slug)) return;
+
+    _log('info', 'Perfil de contato cadastrado detectado — captura automática', { slug });
+    try {
+      await _ensureFullProfileRendered();
+      const text = extractLinkedInText();
+      if (!text || text.length < 200) return;
+      const resp = await _appFetch('/api/linkedin/auto-capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: window.location.href, text }),
+      });
+      const payload = resp ? await resp.json().catch(() => ({})) : {};
+      _log('info', 'Captura automática enviada', { slug, changed: payload.changed || false });
+      try {
+        const stored = await chrome.storage.local.get(AUTOCAP_KEY);
+        const log = stored[AUTOCAP_KEY] || {};
+        log[slug] = Date.now();
+        await chrome.storage.local.set({ [AUTOCAP_KEY]: log });
+      } catch (_) {}
+    } catch (e) {
+      _log('warn', 'Falha na captura automática', { error: e?.message });
+    }
+  }
+
+  if (isLinkedInProfilePage()) {
+    setTimeout(() => _autoCaptureIfKnownProfile().catch(() => {}), 4000);
+  }
+  // Navegação SPA do LinkedIn: observa mudanças de URL
+  let _autocapLastHref = window.location.href;
+  setInterval(() => {
+    if (window.location.href !== _autocapLastHref) {
+      _autocapLastHref = window.location.href;
+      if (isLinkedInProfilePage()) {
+        setTimeout(() => _autoCaptureIfKnownProfile().catch(() => {}), 4000);
+      }
+    }
+  }, 2000);
 })();

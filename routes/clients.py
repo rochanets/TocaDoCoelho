@@ -885,3 +885,171 @@ def client_linkedin_autofill():
     except Exception as e:
         logger.exception(f'[ClientLinkedInAutoFill] Erro: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# ===========================================================================
+# "Siga o campeão" (Bloco 11) — mudança de emprego detectada pela extensão
+# (captura passiva ao visitar o perfil; sem scraping automatizado).
+# ===========================================================================
+
+@app.route('/api/linkedin/watchlist', methods=['GET'])
+def linkedin_watchlist():
+    """Slugs de LinkedIn dos contatos cadastrados — a extensão usa para saber
+    quando o usuário está visitando o perfil de um contato conhecido."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT id, linkedin FROM clients
+                     WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''
+                       AND COALESCE(is_archived, 0) = 0""")
+        out = []
+        for row in c.fetchall():
+            slug = _ap_normalize_linkedin_url(row['linkedin'])
+            m = re.search(r'linkedin\.com/in/([^/]+)', slug)
+            if m:
+                out.append({'client_id': row['id'], 'slug': m.group(1)})
+        conn.close()
+        return jsonify(out)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/linkedin/watchlist: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/linkedin/auto-capture', methods=['POST'])
+def linkedin_auto_capture():
+    """Recebe a captura automática da extensão (texto visível do perfil),
+    compara empresa/cargo com o cadastro e registra job_change_event se mudou."""
+    try:
+        data = request.get_json(force=True) or {}
+        url = (data.get('url') or '').strip()
+        text = (data.get('text') or '').strip()
+        if not url or not text:
+            return jsonify({'error': 'url e text são obrigatórios'}), 400
+        slug_match = re.search(r'linkedin\.com/in/([^/?#]+)', url.lower())
+        if not slug_match:
+            return jsonify({'ok': True, 'ignored': 'nao_perfil'})
+        slug = slug_match.group(1)
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT id, name, company, position, linkedin FROM clients
+                     WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''
+                       AND COALESCE(is_archived, 0) = 0""")
+        client = None
+        for row in c.fetchall():
+            if re.search(r'linkedin\.com/in/' + re.escape(slug),
+                         _ap_normalize_linkedin_url(row['linkedin'])):
+                client = row
+                break
+        if not client:
+            conn.close()
+            return jsonify({'ok': True, 'ignored': 'nao_cadastrado'})
+
+        raw = _llm_openrouter_first(
+            'A partir do texto visível de um perfil público do LinkedIn abaixo, extraia o emprego ATUAL '
+            'da pessoa. Retorne SOMENTE JSON válido: {"empresa_atual": "...", "cargo_atual": "..."}. '
+            'Use null se não conseguir identificar com segurança.\n\n'
+            f'{text[:2500]}',
+            log_tag='JobChange'
+        )
+        empresa_nova = cargo_novo = None
+        if raw:
+            try:
+                parsed = _extract_json_object_from_text(raw) or json.loads(raw)
+                empresa_nova = (parsed.get('empresa_atual') or '').strip() or None
+                cargo_novo = (parsed.get('cargo_atual') or '').strip() or None
+            except Exception as e:
+                logger.debug(f'[JobChange] JSON inválido do LLM: {e}')
+        if not empresa_nova:
+            conn.close()
+            return jsonify({'ok': True, 'ignored': 'empresa_nao_identificada'})
+
+        old_norm = (client['company'] or '').strip().lower()
+        new_norm = empresa_nova.strip().lower()
+        if old_norm == new_norm or new_norm in old_norm or old_norm in new_norm:
+            conn.close()
+            return jsonify({'ok': True, 'changed': False})
+
+        # evento duplicado pendente para o mesmo cliente/empresa? não repete
+        c.execute("""SELECT id FROM job_change_events
+                     WHERE client_id = ? AND LOWER(TRIM(empresa_nova)) = ? AND status = 'pendente'""",
+                  (client['id'], new_norm))
+        if c.fetchone():
+            conn.close()
+            return jsonify({'ok': True, 'changed': True, 'duplicate': True})
+
+        c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (empresa_nova,))
+        potential_new = 0 if c.fetchone() else 1
+        c.execute("""INSERT INTO job_change_events
+                     (client_id, empresa_antiga, empresa_nova, cargo_novo, potential_new_account)
+                     VALUES (?, ?, ?, ?, ?)""",
+                  (client['id'], client['company'], empresa_nova, cargo_novo, potential_new))
+        conn.commit()
+        event_id = c.lastrowid
+        conn.close()
+        logger.info(f'[JobChange] {client["name"]}: {client["company"]} → {empresa_nova} (evento {event_id})')
+        return jsonify({'ok': True, 'changed': True, 'event_id': event_id,
+                        'potential_new_account': bool(potential_new)})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/linkedin/auto-capture: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/job-changes/<int:event_id>/open-account', methods=['POST'])
+def job_change_open_account(event_id):
+    """Ação em um clique: cria a conta nova (se não existir) e um card de Kanban
+    'oportunidade a explorar' vinculado ao contato; marca o evento como tratado."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM job_change_events WHERE id = ?', (event_id,))
+        ev = dict_from_row(c.fetchone())
+        if not ev:
+            conn.close()
+            return jsonify({'error': 'Evento não encontrado'}), 404
+        account_id = ensure_account_for_company(c, ev['empresa_nova'])
+        # card na primeira coluna do Kanban (sem duplicar se já houver card do evento)
+        c.execute('SELECT id FROM kanban_columns ORDER BY display_order ASC, id ASC LIMIT 1')
+        col = c.fetchone()
+        card_id = None
+        if col:
+            title = f'Oportunidade a explorar — {ev["empresa_nova"]}'
+            c.execute("""SELECT id FROM kanban_cards WHERE title = ? AND account_id = ?""",
+                      (title, account_id))
+            existing_card = c.fetchone()
+            if existing_card:
+                card_id = existing_card['id']
+            else:
+                c.execute("""INSERT INTO kanban_cards (title, description, account_id, contact_id, urgency, column_id)
+                             VALUES (?, ?, ?, ?, 'Alta', ?)""",
+                          (title,
+                           f'Contato conhecido mudou para a {ev["empresa_nova"]}'
+                           f'{(" como " + ev["cargo_novo"]) if ev.get("cargo_novo") else ""}. '
+                           'Reative o relacionamento e avalie abrir a conta.',
+                           account_id, ev['client_id'], col['id']))
+                card_id = c.lastrowid
+        c.execute("UPDATE job_change_events SET status = 'tratado' WHERE id = ?", (event_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True, 'account_id': account_id, 'card_id': card_id,
+                        'client_id': ev['client_id']})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/job-changes/{event_id}/open-account: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/job-changes/<int:event_id>/archive', methods=['POST'])
+def job_change_archive(event_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("UPDATE job_change_events SET status = 'tratado' WHERE id = ?", (event_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Evento não encontrado'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/job-changes/{event_id}/archive: {e}')
+        return jsonify({'error': str(e)}), 500

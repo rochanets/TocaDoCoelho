@@ -156,6 +156,29 @@ def _radar_generate_ranked(c):
             'target_data': json.dumps({'card_id': row['id']}),
         })
 
+    # ---- 3a. Mudança de emprego detectada pela extensão (Bloco 11) ----
+    c.execute("""
+        SELECT ev.id, ev.empresa_antiga, ev.empresa_nova, ev.cargo_novo,
+               ev.potential_new_account, cl.id AS client_id, cl.name
+        FROM job_change_events ev
+        JOIN clients cl ON cl.id = ev.client_id
+        WHERE ev.status = 'pendente'
+    """)
+    for row in c.fetchall():
+        extra = ' — conta nova em potencial' if row['potential_new_account'] else ''
+        cargo = f' como {row["cargo_novo"]}' if row['cargo_novo'] else ''
+        suggestions.append({
+            'type': 'job_change',
+            'score': 70.0,
+            'title': f'{row["name"]} mudou para {row["empresa_nova"]}',
+            'description': f'Saiu da {row["empresa_antiga"]}{cargo}. Reative o relacionamento e avalie abrir a conta{extra}.',
+            'target_id': row['id'],
+            'target_data': json.dumps({'event_id': row['id'], 'client_id': row['client_id'],
+                                       'empresa_nova': row['empresa_nova'],
+                                       'potential_new_account': bool(row['potential_new_account'])},
+                                      ensure_ascii=False),
+        })
+
     # ---- 3b. Multithreading: contas target single-threaded (Bloco 10) ----
     try:
         grouping_map = _thread_grouping_map(c)
