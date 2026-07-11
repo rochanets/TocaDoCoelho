@@ -63,3 +63,36 @@ def test_auto_capture_mesma_empresa_nao_gera_evento(client, db_path, monkeypatch
         'text': 'Campeao Silva — Diretor de TI na Empresa Velha. ' + 'x' * 300,
     })
     assert resp.get_json()['changed'] is False
+
+
+def test_briefing_cache(client, sample_client_id, db_path, monkeypatch):
+    import app as toca
+    conn = toca.get_db()
+    conn.execute("INSERT INTO commitments (client_id, title, due_date, source_type) "
+                 "VALUES (?, 'Reunião de alinhamento', date('now', 'localtime'), 'activity')",
+                 (sample_client_id,))
+    conn.commit()
+    cid = conn.execute('SELECT id FROM commitments ORDER BY id DESC LIMIT 1').fetchone()[0]
+
+    calls = {'n': 0}
+    def fake_llm(*a, **k):
+        calls['n'] += 1
+        return '## Contexto\n- teste\n## Últimos assuntos\n- x\n## Pendências suas\n- y\n## Pendências dele\n- z\n## Oportunidades em aberto\n- w\n## Sugestão de pauta\n- k'
+    monkeypatch.setattr(toca, '_llm_openrouter_first', fake_llm)
+
+    c = conn.cursor()
+    commitment = dict(conn.execute('SELECT * FROM commitments WHERE id = ?', (cid,)).fetchone())
+    r1 = toca._generate_briefing(c, commitment)
+    conn.commit()
+    assert not r1['cached'] and calls['n'] == 1
+    # segunda chamada usa o cache — não regera
+    r2 = toca._generate_briefing(c, commitment)
+    assert r2['cached'] and calls['n'] == 1
+    # refresh força regeração
+    r3 = toca._generate_briefing(c, commitment, force=True)
+    assert not r3['cached'] and calls['n'] == 2
+    conn.close()
+
+    # GET do cache responde rápido
+    resp = client.get(f'/api/commitments/{cid}/briefing')
+    assert resp.status_code == 200 and 'Contexto' in resp.get_json()['content']

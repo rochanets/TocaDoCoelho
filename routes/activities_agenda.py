@@ -449,3 +449,237 @@ def commitments_alerts():
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/commitments/alerts: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# ===========================================================================
+# Briefing pré-reunião automático + envio matinal por e-mail (Bloco 13)
+# ===========================================================================
+
+def _briefing_gather_context(c, commitment):
+    """Agrega todo o contexto conhecido do contato/conta para o briefing."""
+    client_id = commitment['client_id']
+    c.execute('SELECT * FROM clients WHERE id = ?', (client_id,))
+    client = dict_from_row(c.fetchone()) or {}
+    parts = [
+        f"Reunião: {commitment['title']} em {commitment['due_date']}"
+        + (f" às {commitment['due_time']}" if commitment.get('due_time') else ''),
+        f"Contato: {client.get('name')} — {client.get('position') or ''} na {client.get('company') or ''}",
+    ]
+    c.execute("""SELECT contact_type, information, activity_date FROM activities
+                 WHERE client_id = ? ORDER BY activity_date DESC LIMIT 5""", (client_id,))
+    acts = c.fetchall()
+    if acts:
+        parts.append('Últimas atividades:\n' + '\n'.join(
+            f"- {(a['activity_date'] or '')[:10]} ({a['contact_type']}): {(a['information'] or '')[:250]}"
+            for a in acts))
+    c.execute("""SELECT information FROM activities
+                 WHERE client_id = ? AND contact_type = 'WhatsApp'
+                 ORDER BY activity_date DESC LIMIT 1""", (client_id,))
+    wa = c.fetchone()
+    if wa:
+        parts.append(f"Último resumo de WhatsApp:\n{(wa['information'] or '')[:400]}")
+    c.execute("""SELECT k.title, k.description, k.urgency FROM kanban_cards k
+                 LEFT JOIN kanban_columns col ON col.id = k.column_id
+                 WHERE (k.contact_id = ? OR k.account_id IN (
+                        SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))))
+                   AND LOWER(COALESCE(col.title, '')) NOT LIKE '%conclu%'
+                 LIMIT 5""", (client_id, client.get('company') or ''))
+    cards = c.fetchall()
+    if cards:
+        parts.append('Cards de Kanban abertos:\n' + '\n'.join(
+            f"- [{k['urgency']}] {k['title']}: {(k['description'] or '')[:150]}" for k in cards))
+    c.execute("""SELECT ec.title, er.response FROM environment_responses er
+                 JOIN environment_cards ec ON ec.id = er.card_id
+                 WHERE er.client_id = ? AND er.response IS NOT NULL AND TRIM(er.response) != ''
+                 LIMIT 8""", (client_id,))
+    env = c.fetchall()
+    if env:
+        parts.append('Mapeamento de ambiente:\n' + '\n'.join(
+            f"- {e['title']}: {(e['response'] or '')[:150]}" for e in env))
+    c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))',
+              (client.get('company') or '',))
+    acc = c.fetchone()
+    if acc:
+        try:
+            ws = _account_whitespace(c, acc['id'])
+            if ws['present'] or ws['missing']:
+                parts.append(
+                    f"Ofertas na conta: {', '.join(o['title'] for o in ws['present']) or 'nenhuma'} | "
+                    f"Whitespace (nunca exploradas): {', '.join(o['title'] for o in ws['missing'][:4]) or '-'}")
+            ts = _account_thread_score(c, acc['id'], client.get('company'), 1)
+            parts.append(f"Multithreading: {ts['active_contacts']} contato(s) ativo(s) na conta"
+                         + (' — risco de concentração' if ts['single_threaded'] else ''))
+        except Exception as e:
+            logger.debug(f'[Briefing] contexto de conta indisponível: {e}')
+    return '\n\n'.join(parts), client
+
+
+def _generate_briefing(c, commitment, force=False):
+    """Gera (ou retorna do cache) o briefing estruturado de um compromisso."""
+    if not force:
+        c.execute('SELECT content_md, generated_at FROM meeting_briefings WHERE commitment_id = ?',
+                  (commitment['id'],))
+        cached = c.fetchone()
+        if cached:
+            return {'content': cached['content_md'], 'generated_at': cached['generated_at'], 'cached': True}
+    context, client = _briefing_gather_context(c, commitment)
+    raw = _llm_openrouter_first(
+        'Você é um assistente de vendas B2B. Com base no contexto abaixo, escreva um briefing '
+        'pré-reunião em português do Brasil, em markdown, com EXATAMENTE estas seções '
+        '(use "## " antes de cada título): Contexto, Últimos assuntos, Pendências suas, '
+        'Pendências dele, Oportunidades em aberto, Sugestão de pauta. '
+        'Seja conciso (2 a 4 bullets por seção). Se não houver dado para uma seção, escreva '
+        'uma linha útil mesmo assim (ex.: sugerir levantar a informação na reunião).\n\n'
+        f'CONTEXTO:\n{context}',
+        log_tag='Briefing'
+    )
+    if not raw:
+        raise RuntimeError('Nenhum provedor de LLM configurado ou disponível para gerar o briefing.')
+    content = raw.strip()
+    c.execute("""INSERT INTO meeting_briefings (commitment_id, content_md, generated_at)
+                 VALUES (?, ?, CURRENT_TIMESTAMP)
+                 ON CONFLICT(commitment_id) DO UPDATE SET content_md = excluded.content_md,
+                 generated_at = CURRENT_TIMESTAMP""", (commitment['id'], content))
+    return {'content': content, 'generated_at': datetime.now().isoformat(timespec='seconds'), 'cached': False}
+
+
+@app.route('/api/commitments/<int:commitment_id>/briefing', methods=['GET'])
+def commitment_briefing_get(commitment_id):
+    """Retorna o briefing do cache (rápido); 404 se ainda não gerado."""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT content_md, generated_at FROM meeting_briefings WHERE commitment_id = ?', (commitment_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Briefing ainda não gerado'}), 404
+    return jsonify({'content': row['content_md'], 'generated_at': row['generated_at'], 'cached': True})
+
+
+def _briefing_task_async(task_id, commitment_id, force):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM commitments WHERE id = ?', (commitment_id,))
+        commitment = dict_from_row(c.fetchone())
+        if not commitment:
+            raise RuntimeError('Compromisso não encontrado.')
+        _bg_task_set(task_id, {'step': '🧠 Reunindo contexto e gerando briefing...', 'progress': 30})
+        result = _generate_briefing(c, commitment, force=force)
+        conn.commit()
+        conn.close()
+        _bg_task_set(task_id, {'status': 'done', 'progress': 100, 'step': 'Concluído!', 'result': result})
+        _bg_task_cleanup(task_id)
+    except Exception as e:
+        logger.exception(f'[Briefing] Falha: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/commitments/<int:commitment_id>/briefing', methods=['POST'])
+def commitment_briefing_generate(commitment_id):
+    """Gera o briefing (task assíncrona). ?refresh=1 força regeração."""
+    force = request.args.get('refresh') == '1' or (request.get_json(silent=True) or {}).get('refresh')
+    task_id = uuid.uuid4().hex
+    _bg_task_register_persistent(task_id, 'briefing')
+    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+    threading.Thread(target=_briefing_task_async, args=(task_id, commitment_id, bool(force)), daemon=True).start()
+    return jsonify({'task_id': task_id}), 202
+
+
+def _briefings_to_pdf(title, sections):
+    """Compila seções markdown em um PDF simples. sections: [(subtitulo, texto_md)].
+    Retorna bytes do PDF, ou None se o reportlab não estiver disponível."""
+    try:
+        from io import BytesIO
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    except Exception as e:
+        logger.warning(f'[Briefing] reportlab indisponível para PDF: {e}')
+        return None
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
+                            topMargin=16 * mm, bottomMargin=16 * mm)
+    styles = getSampleStyleSheet()
+    story = [Paragraph(html.escape(title), styles['Title']), Spacer(1, 8)]
+    for subtitle, text in sections:
+        story.append(Paragraph(html.escape(subtitle), styles['Heading2']))
+        for line in (text or '').split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            esc = html.escape(line)
+            if line.startswith('## '):
+                story.append(Paragraph(f'<b>{html.escape(line[3:])}</b>', styles['Heading4']))
+            elif line.startswith(('- ', '* ')):
+                story.append(Paragraph('• ' + esc[2:], styles['Normal']))
+            else:
+                story.append(Paragraph(esc.replace('**', ''), styles['Normal']))
+        story.append(Spacer(1, 10))
+    doc.build(story)
+    return buf.getvalue()
+
+
+def _morning_briefing_job():
+    """Job diário matinal (hora configurável, default 7h): compila os briefings
+    de todas as reuniões do dia em um PDF e envia ao próprio usuário por e-mail."""
+    try:
+        hour = int(_resolve_setting('briefing_email_hour', 'BRIEFING_EMAIL_HOUR') or 7)
+    except Exception:
+        hour = 7
+    if datetime.now().hour < hour:
+        return 'skip'
+    today = datetime.now().strftime('%Y-%m-%d')
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""SELECT co.*, cl.name AS client_name, cl.company
+                 FROM commitments co JOIN clients cl ON cl.id = co.client_id
+                 WHERE co.due_date = ? AND COALESCE(cl.is_archived, 0) = 0
+                 ORDER BY co.due_time ASC""", (today,))
+    meetings = [dict_from_row(r) for r in c.fetchall()]
+    if not meetings:
+        conn.close()
+        logger.info('[Briefing] Sem reuniões hoje — e-mail matinal não enviado')
+        return
+    sections = []
+    for m in meetings:
+        try:
+            result = _generate_briefing(c, m)  # usa cache se o briefing do dia já existir
+            conn.commit()
+            head = f'{m["client_name"]} ({m["company"]})' + (f' — {m["due_time"]}' if m.get('due_time') else '')
+            sections.append((head, result['content']))
+        except Exception as e:
+            logger.warning(f'[Briefing] Falha ao gerar briefing do compromisso {m["id"]}: {e}')
+    conn.close()
+    if not sections:
+        return
+    date_label = datetime.now().strftime('%d/%m/%Y')
+    pdf_bytes = _briefings_to_pdf(f'Briefings de reuniões — {date_label}', sections)
+    attachments = []
+    if pdf_bytes:
+        attachments.append({'name': f'briefings-{today}.pdf',
+                            'content_bytes': base64.b64encode(pdf_bytes).decode('ascii'),
+                            'content_type': 'application/pdf'})
+    body = ('<p>Bom dia! 🐇 Seguem os briefings das reuniões de hoje'
+            + (' (PDF em anexo)' if attachments else '') + ':</p>'
+            + ''.join(f'<h3>{html.escape(s[0])}</h3><pre style="white-space:pre-wrap; font-family:inherit;">{html.escape(s[1])}</pre>'
+                      for s in sections))
+    _outlook_send_mail(None, f'🐇 Briefings do dia — {date_label}', body, attachments)
+
+
+_register_scheduled_job('morning_briefing_last_run', 1, _morning_briefing_job)
+
+
+@app.route('/api/briefings/send-morning-email', methods=['POST'])
+def briefing_send_morning_email_now():
+    """Dispara manualmente a compilação e envio do e-mail matinal."""
+    try:
+        result = _morning_briefing_job()
+        if result == 'skip':
+            return jsonify({'ok': False, 'error': 'Ainda não chegou a hora configurada.'}), 400
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/briefings/send-morning-email: {e}')
+        return jsonify({'error': str(e)}), 500

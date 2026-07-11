@@ -128,3 +128,60 @@
                 }
             } catch (e) { /* atividade é melhor esforço aqui */ }
         }
+
+        // =====================================================
+        // Briefing pré-reunião (Bloco 13) — exibido na Agenda
+        // =====================================================
+
+        async function openBriefingModal(commitmentId, clientName) {
+            const area = document.getElementById(`briefingArea_${commitmentId}`);
+            if (!area) return;
+            if (area.dataset.open === '1') { area.innerHTML = ''; area.dataset.open = '0'; return; }
+            area.dataset.open = '1';
+            area.innerHTML = '<div style="color:#9ca3af; font-size:12px; padding:6px 0;">Carregando briefing... 🐇</div>';
+            // cache primeiro (não regera a cada visualização)
+            try {
+                const cached = await fetch(`${API_BASE}/commitments/${commitmentId}/briefing`);
+                if (cached.ok) {
+                    const data = await cached.json();
+                    _renderBriefing(area, commitmentId, data);
+                    return;
+                }
+            } catch (e) { /* sem cache — gera */ }
+            _generateBriefing(area, commitmentId, false);
+        }
+
+        async function _generateBriefing(area, commitmentId, refresh) {
+            area.innerHTML = '<div style="color:#9ca3af; font-size:12px; padding:6px 0;">🧠 Gerando briefing com IA... 🐇</div>';
+            try {
+                const resp = await fetch(`${API_BASE}/commitments/${commitmentId}/briefing${refresh ? '?refresh=1' : ''}`, { method: 'POST' });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Erro ao gerar briefing.');
+                const poll = setInterval(async () => {
+                    try {
+                        const t = await (await fetch(`${API_BASE}/tasks/${payload.task_id}`)).json();
+                        if (t.status === 'done') { clearInterval(poll); _renderBriefing(area, commitmentId, t.result); }
+                        else if (t.status === 'error' || t.status === 'not_found') {
+                            clearInterval(poll);
+                            area.innerHTML = `<div style="color:#ef4444; font-size:12px;">${escapeHtml(t.error || 'Erro ao gerar briefing.')}</div>`;
+                        }
+                    } catch (e) { /* tenta no próximo ciclo */ }
+                }, 800);
+            } catch (e) {
+                area.innerHTML = `<div style="color:#ef4444; font-size:12px;">${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function _renderBriefing(area, commitmentId, data) {
+            const htmlContent = (typeof marked !== 'undefined' && marked.parse)
+                ? marked.parse(data.content || '')
+                : `<pre style="white-space:pre-wrap; font-family:inherit;">${escapeHtml(data.content || '')}</pre>`;
+            area.innerHTML = `
+                <div style="border:1px solid rgba(16,185,129,.3); border-radius:10px; padding:10px 14px; margin-top:8px; font-size:13px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
+                        <small style="color:#9ca3af;">Gerado em ${escapeHtml((data.generated_at || '').slice(0, 16).replace('T', ' '))}</small>
+                        <button class="btn btn-secondary btn-small" onclick="_generateBriefing(document.getElementById('briefingArea_${commitmentId}'), ${commitmentId}, true)" title="Regerar o briefing"><i class="fas fa-rotate-right"></i> Atualizar</button>
+                    </div>
+                    <div class="briefing-content">${htmlContent}</div>
+                </div>`;
+        }

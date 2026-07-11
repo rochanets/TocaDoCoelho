@@ -53,6 +53,7 @@ from integrations.outlook_graph import (
     fetch_messages as outlook_graph_fetch_messages,
     get_valid_access_token as outlook_graph_get_valid_access_token,
     parse_state as outlook_graph_parse_state,
+    send_mail as outlook_graph_send_mail,
 )
 try:
     import openpyxl
@@ -1221,6 +1222,15 @@ SCHEMA_MIGRATIONS = [
             FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
         )''',
         'CREATE INDEX IF NOT EXISTS idx_job_change_status ON job_change_events(status)',
+    ]),
+    (10, 'meeting_briefings', [
+        '''CREATE TABLE IF NOT EXISTS meeting_briefings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            commitment_id INTEGER NOT NULL UNIQUE,
+            content_md TEXT NOT NULL,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(commitment_id) REFERENCES commitments(id) ON DELETE CASCADE
+        )''',
     ]),
 ]
 
@@ -6589,7 +6599,7 @@ def _graph_make_settings(redirect_uri=''):
         'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
         'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
         'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
-        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read User.Read').strip(),
+        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read Mail.Send User.Read').strip(),
     }
 
 
@@ -6988,6 +6998,24 @@ def _detect_followup_from_text(c, client_id, activity_id, client_name, text):
         (client_id, activity_id, title, (text or '')[:500], due_date, 'outlook')
     )
     return 1
+
+
+def _outlook_send_mail(to, subject, body_html, attachments=None):
+    """Envia e-mail pelo Outlook do próprio usuário via Microsoft Graph
+    (Bloco 13). Se `to` for vazio, envia para o e-mail do próprio usuário.
+    attachments: [{'name', 'content_bytes' (base64), 'content_type'}]."""
+    graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+    conn = get_db()
+    try:
+        access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=1, settings=graph_settings)
+    finally:
+        conn.close()
+    recipient = (to or '').strip() or _graph_get_me_email(access_token)
+    if not recipient:
+        raise OutlookSyncError('Não foi possível determinar o destinatário do e-mail.')
+    outlook_graph_send_mail(access_token, recipient, subject, body_html, attachments)
+    logger.info(f'[Outlook] E-mail "{subject}" enviado para {recipient}')
+    return recipient
 
 
 def _outlook_confirm_async(task_id, activities_to_import):
@@ -10427,7 +10455,9 @@ def _start_scheduled_jobs():
                         except ValueError:
                             pass
                     logger.info(f'[Jobs] Executando job agendado: {key}')
-                    fn()
+                    result = fn()
+                    if result == 'skip':
+                        continue  # fora da janela do job — tenta de novo mais tarde
                     _save_app_setting(key, now.isoformat(timespec='seconds'))
                 except Exception as e:
                     logger.warning(f'[Jobs] Job {key} falhou: {e}')

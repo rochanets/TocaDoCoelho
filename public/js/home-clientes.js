@@ -4078,7 +4078,7 @@
                 html += '<div class="agenda-list">';
                 if (!items.length) html += '<div class="empty-state" style="padding:20px 8px;"><p>Nenhum compromisso neste mês.</p></div>';
                 items.forEach(item => {
-                    html += `<div class=\"history-item\"><div class=\"history-meta\">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company?` (${escapeHtml(item.client_company)})`:''}</div><div>${escapeHtml(item.title || item.notes || '-')}</div></div>`;
+                    html += `<div class=\"history-item\"><div class=\"history-meta\">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company?` (${escapeHtml(item.client_company)})`:''}</div><div style=\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\"><span>${escapeHtml(item.title || item.notes || '-')}</span><button class=\"btn btn-auto-mapping btn-small\" onclick=\"openBriefingModal(${item.id}, '${escapeHtml((item.client_name || '').replace(/'/g, ''))}')\" title=\"Briefing pré-reunião gerado por IA\"><span class=\"ai-star-icon\">✦</span> Briefing</button></div><div id=\"briefingArea_${item.id}\"></div></div>`;
                 });
                 html += '</div></div>';
 
