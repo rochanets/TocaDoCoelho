@@ -156,6 +156,28 @@ def _radar_generate_ranked(c):
             'target_data': json.dumps({'card_id': row['id']}),
         })
 
+    # ---- 3b. Multithreading: contas target single-threaded (Bloco 10) ----
+    try:
+        grouping_map = _thread_grouping_map(c)
+        c.execute("SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1")
+        for acc in c.fetchall():
+            score = _account_thread_score(c, acc['id'], acc['name'], 1, grouping_map, get_thresholds)
+            if not score['single_threaded']:
+                continue
+            missing = score['missing_levels'][0] if score['missing_levels'] else 'outro nível'
+            plural = 'contato ativo' if score['active_contacts'] == 1 else 'contatos ativos'
+            suggestions.append({
+                'type': 'multithreading',
+                'score': 25.0 + (5.0 if score['active_contacts'] == 0 else 0.0),
+                'title': f'Mapear mais um decisor na conta {acc["name"]}',
+                'description': f'{score["active_contacts"]} {plural} — risco de concentração. Nível ausente: {missing}',
+                'target_id': acc['id'],
+                'target_data': json.dumps({'account_id': acc['id'], 'company': acc['name'],
+                                           'missing_level': missing}, ensure_ascii=False),
+            })
+    except Exception as e:
+        logger.debug(f'[Radar] score de multithreading indisponível: {e}')
+
     # ---- 4. Cadastros incompletos (baixa prioridade, consulta agregada) ----
     c.execute("""
         SELECT id, name, company, email, phone, photo_url,

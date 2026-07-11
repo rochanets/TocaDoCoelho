@@ -85,3 +85,26 @@ def test_radar_aniversario_na_semana(client, db_path):
     items = client.get('/api/suggestions/today').get_json()
     bdays = [s for s in items if s['suggestion_type'] == 'birthday']
     assert bdays and 'Aniversariante Silva' in bdays[0]['title']
+
+
+def test_thread_score_single_threaded(client, db_path):
+    import app as toca
+    # conta target com 1 contato ativo => risco
+    client.post('/api/clientes', data={'name': 'Unico Contato', 'company': 'SoloCorp', 'position': 'Gerente de TI'})
+    conn = toca.get_db()
+    conn.execute("UPDATE clients SET last_activity_date = datetime('now', '-1 day') WHERE name = 'Unico Contato'")
+    conn.execute("UPDATE accounts SET is_target = 1 WHERE LOWER(TRIM(name)) = 'solocorp'")
+    row = conn.execute("SELECT id FROM accounts WHERE LOWER(TRIM(name)) = 'solocorp'").fetchone()
+    conn.commit()
+    conn.close()
+    assert row is not None
+    score = client.get(f'/api/accounts/{row[0]}/thread-score').get_json()
+    assert score['single_threaded'] is True
+    assert score['active_contacts'] == 1
+    assert 'C-level' in score['missing_levels']
+
+    # aparece no Radar com o nível ausente
+    items = client.get('/api/suggestions/today').get_json()
+    mt = [s for s in items if s['suggestion_type'] == 'multithreading']
+    assert mt and 'SoloCorp' in mt[0]['title']
+    assert 'C-level' in mt[0]['description']

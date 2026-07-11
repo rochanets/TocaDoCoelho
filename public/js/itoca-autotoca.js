@@ -1749,11 +1749,18 @@
             const el = document.getElementById('accountsContent');
             if (!el) return;
             if (!accounts.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta cadastrada.</p></div>'; return; }
+            // Score de multithreading (Bloco 10) — badge de risco de concentração
+            let threadScores = {};
+            try { threadScores = await (await fetch(`${API_BASE}/accounts/thread-scores`)).json(); } catch (e) { threadScores = {}; }
             const showTerminated = document.getElementById('showTerminatedPresences')?.checked ?? false;
             el.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;">${accounts.map(a => {
                 const visiblePresences = (a.presences||[]).filter(p => showTerminated || !isPresenceTerminated(p));
                 const badges = visiblePresences.map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="${presenceBadgeStyle(p)}">${escapeHtml(p.delivery_name)}</span>`).join('');
-                return `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#e2dfd5;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:rgba(226,223,213,0.7);">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${badges}</div></div>`;
+                const ts = threadScores[String(a.id)];
+                const threadBadge = ts && ts.single_threaded
+                    ? `<div style="margin-top:8px; font-size:11px; font-weight:700; color:#b45309; background:rgba(245,158,11,.15); border:1px solid rgba(245,158,11,.4); border-radius:8px; padding:3px 8px; display:inline-block;" title="Conta sustentada por poucos contatos ativos — mapeie mais decisores (níveis ausentes: ${escapeHtml((ts.missing_levels||[]).join(', '))})">🕸️ ${ts.active_contacts} contato(s) ativo(s) — risco de concentração</div>`
+                    : '';
+                return `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#e2dfd5;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:rgba(226,223,213,0.7);">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div>${threadBadge}<div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${badges}</div></div>`;
             }).join('')}</div>`;
         }
 

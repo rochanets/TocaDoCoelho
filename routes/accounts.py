@@ -787,3 +787,113 @@ def account_planning_segments():
     rows = [r['seg'] for r in c.fetchall()]
     conn.close()
     return jsonify(rows)
+
+
+# ===========================================================================
+# Score de multithreading por conta (Bloco 10)
+# ===========================================================================
+
+_THREAD_LEVEL_ORDER = ['C-level', 'Diretoria', 'Gerência', 'Operação']
+
+
+def _thread_level_of(position, grouping_map):
+    """Mapeia cargo → nível hierárquico: usa job_groupings quando houver,
+    senão heurística por palavra-chave."""
+    p = (position or '').strip().lower()
+    if p in grouping_map:
+        return grouping_map[p]
+    if re.match(r'^c\w{1,2}o\b', p) or 'presidente' in p or 'founder' in p or 'sócio' in p or 'socio' in p:
+        return 'C-level'
+    if 'diretor' in p or 'vp' in p.split() or 'vice-presidente' in p:
+        return 'Diretoria'
+    if 'gerente' in p or 'coordenador' in p or 'head' in p or 'supervisor' in p:
+        return 'Gerência'
+    return 'Operação'
+
+
+def _thread_grouping_map(c):
+    c.execute('''SELECT g.name AS gname, p.position FROM job_grouping_positions p
+                 JOIN job_groupings g ON g.id = p.grouping_id''')
+    return {(r['position'] or '').strip().lower(): r['gname'] for r in c.fetchall()}
+
+
+def _account_thread_score(c, account_id, account_name, is_target, grouping_map=None, get_thresholds=None):
+    """Calcula o score de multithreading de uma conta: contatos totais/ativos e
+    distribuição por nível. 'Ativo' = semáforo em_dia ou atenção, não arquivado."""
+    now_dt = datetime.now()
+    if grouping_map is None:
+        grouping_map = _thread_grouping_map(c)
+    if get_thresholds is None:
+        get_thresholds = _home_status_thresholds(c)
+    c.execute('''SELECT id, name, position, last_activity_date FROM clients
+                 WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))
+                   AND COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0''',
+              (account_name,))
+    contacts = c.fetchall()
+    active = []
+    for cl in contacts:
+        green, yellow = get_thresholds(cl['position'])
+        status, _days = _home_status_for(cl['last_activity_date'], green, yellow, now_dt)
+        if status in ('em_dia', 'atencao'):
+            active.append(cl)
+    levels = {}
+    for cl in active:
+        lvl = _thread_level_of(cl['position'], grouping_map)
+        levels.setdefault(lvl, []).append({'id': cl['id'], 'name': cl['name'], 'position': cl['position']})
+    single_threaded = bool(is_target) and (len(active) <= 1 or len(levels) == 1)
+    present = set(levels.keys())
+    missing_levels = [lvl for lvl in _THREAD_LEVEL_ORDER if lvl not in present]
+    return {
+        'account_id': account_id,
+        'account_name': account_name,
+        'is_target': bool(is_target),
+        'total_contacts': len(contacts),
+        'active_contacts': len(active),
+        'levels': {k: v for k, v in levels.items()},
+        'missing_levels': missing_levels,
+        'single_threaded': single_threaded,
+    }
+
+
+@app.route('/api/accounts/<int:account_id>/thread-score', methods=['GET'])
+def account_thread_score(account_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, name, COALESCE(is_target, 0) AS is_target FROM accounts WHERE id = ?', (account_id,))
+        acc = c.fetchone()
+        if not acc:
+            conn.close()
+            return jsonify({'error': 'Conta não encontrada'}), 404
+        result = _account_thread_score(c, acc['id'], acc['name'], acc['is_target'])
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/accounts/{account_id}/thread-score: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/accounts/thread-scores', methods=['GET'])
+def account_thread_scores_all():
+    """Versão agregada para a listagem de contas (badge de risco)."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        grouping_map = _thread_grouping_map(c)
+        get_thresholds = _home_status_thresholds(c)
+        c.execute('SELECT id, name, COALESCE(is_target, 0) AS is_target FROM accounts')
+        accounts_rows = c.fetchall()
+        out = {}
+        for acc in accounts_rows:
+            score = _account_thread_score(c, acc['id'], acc['name'], acc['is_target'],
+                                          grouping_map, get_thresholds)
+            out[str(acc['id'])] = {
+                'active_contacts': score['active_contacts'],
+                'single_threaded': score['single_threaded'],
+                'missing_levels': score['missing_levels'][:2],
+            }
+        conn.close()
+        return jsonify(out)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/accounts/thread-scores: {e}')
+        return jsonify({'error': str(e)}), 500
