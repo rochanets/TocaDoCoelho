@@ -10,6 +10,37 @@
 # inserindo em daily_suggestions com seus suggestion_type.
 # ===========================================================================
 
+def _radar_birthday_within(birthday_text, now_dt, window_days=7):
+    """Dias até o aniversário se cair nos próximos window_days, senão None.
+    Aceita DD/MM, DD/MM/AAAA, YYYY-MM-DD e MM-DD."""
+    t = (birthday_text or '').strip()
+    if not t:
+        return None
+    m = re.match(r'^(\d{1,2})/(\d{1,2})', t)
+    if m:
+        day, month = int(m.group(1)), int(m.group(2))
+    else:
+        m = re.match(r'^\d{4}-(\d{2})-(\d{2})$', t)
+        if m:
+            month, day = int(m.group(1)), int(m.group(2))
+        else:
+            m = re.match(r'^(\d{2})-(\d{2})$', t)
+            if not m:
+                return None
+            month, day = int(m.group(1)), int(m.group(2))
+    try:
+        bday = datetime(now_dt.year, month, day).date()
+    except ValueError:
+        return None
+    if bday < now_dt.date():
+        try:
+            bday = datetime(now_dt.year + 1, month, day).date()
+        except ValueError:
+            return None
+    delta = (bday - now_dt.date()).days
+    return delta if delta <= window_days else None
+
+
 RADAR_MAX_ACTIVE = 8            # sugestões ativas exibidas por dia
 RADAR_KANBAN_STALL_DAYS = 5     # dias parado para card de urgência Alta
 
@@ -24,7 +55,7 @@ def _radar_generate_ranked(c):
 
     # ---- 1. Contatos atrasados (threshold por cargo) + nunca contatados ----
     c.execute("""
-        SELECT cl.id, cl.name, cl.company, cl.position, cl.last_activity_date,
+        SELECT cl.id, cl.name, cl.company, cl.position, cl.last_activity_date, cl.birthday,
                COALESCE(cl.is_target, 0) AS is_target,
                (SELECT COUNT(*) FROM commitments co
                 WHERE co.client_id = cl.id AND co.due_date < ?
@@ -54,6 +85,26 @@ def _radar_generate_ranked(c):
             'description': desc,
             'target_id': row['id'],
             'target_data': json.dumps({'client_id': row['id'], 'days': days}),
+        })
+
+    # ---- 1b. Aniversários na semana (Bloco 9) ----
+    c.execute("""
+        SELECT id, name, company, birthday FROM clients
+        WHERE COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
+          AND birthday IS NOT NULL AND TRIM(birthday) != ''
+    """)
+    for row in c.fetchall():
+        days_to = _radar_birthday_within(row['birthday'], now_dt)
+        if days_to is None:
+            continue
+        when = 'hoje! 🎉' if days_to == 0 else (f'em {days_to} dia(s)')
+        suggestions.append({
+            'type': 'birthday',
+            'score': 45.0 - days_to,
+            'title': f'Aniversário de {row["name"]} ({row["company"]})',
+            'description': f'Aniversário {when} — bom pretexto para um contato pessoal',
+            'target_id': row['id'],
+            'target_data': json.dumps({'client_id': row['id'], 'birthday': row['birthday']}),
         })
 
     # ---- 2. Follow-ups vencidos sem atividade posterior (fecha o loop) ----
@@ -1184,4 +1235,138 @@ def home_drilldown():
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/home/drilldown: {e}')
         import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ===========================================================================
+# Gatilhos de contato com pretexto pronto (Bloco 9)
+# ===========================================================================
+
+def _context_trigger_scan():
+    """Job semanal: para contas target, busca notícias recentes relevantes via
+    _openrouter_web_prompt (LLM com web) e cria sugestões 'context_trigger'."""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1 ORDER BY name LIMIT 12")
+    target_accounts = c.fetchall()
+    today = datetime.now().strftime('%Y-%m-%d')
+    created = 0
+    for row in target_accounts:
+        raw = _openrouter_web_prompt(
+            f'Procure notícias recentes (últimos 30 dias) relevantes sobre a empresa "{row["name"]}" no Brasil. '
+            'Retorne SOMENTE JSON válido no formato: '
+            '{"noticias": [{"manchete": "...", "resumo": "1 a 2 frases", "data": "YYYY-MM-DD", '
+            '"relevancia": "alta|media|baixa"}]}. '
+            'No máximo 2 notícias, apenas fatos novos com potencial de pretexto comercial '
+            '(expansão, investimento, troca de executivos, resultados, aquisições). '
+            'Se não houver nada relevante, retorne {"noticias": []}.'
+        )
+        if not raw:
+            continue
+        try:
+            parsed = _extract_json_object_from_text(raw) or json.loads(raw)
+        except Exception:
+            continue
+        for news in (parsed or {}).get('noticias', [])[:2]:
+            manchete = (news.get('manchete') or '').strip()
+            if not manchete or (news.get('relevancia') or '').lower() == 'baixa':
+                continue
+            # não repete a mesma manchete nos últimos 14 dias
+            c.execute("""SELECT 1 FROM daily_suggestions
+                         WHERE suggestion_type = 'context_trigger'
+                           AND target_data LIKE ?
+                           AND date >= date('now', 'localtime', '-14 days')""",
+                      (f'%{manchete[:60]}%',))
+            if c.fetchone():
+                continue
+            c.execute("""INSERT INTO daily_suggestions
+                         (date, suggestion_type, title, description, target_id, target_data, score)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                      (today, 'context_trigger',
+                       f'Gatilho: {row["name"]} — {manchete[:80]}',
+                       (news.get('resumo') or '')[:240],
+                       row['id'],
+                       json.dumps({'account_id': row['id'], 'company': row['name'],
+                                   'manchete': manchete, 'resumo': news.get('resumo'),
+                                   'data': news.get('data')}, ensure_ascii=False),
+                       55.0))
+            created += 1
+    conn.commit()
+    conn.close()
+    logger.info(f'[ContextTrigger] {created} gatilhos de contexto criados')
+    return created
+
+
+_register_scheduled_job('context_trigger_last_run', 7, _context_trigger_scan)
+
+
+@app.route('/api/suggestions/context-scan', methods=['POST'])
+def context_trigger_scan_now():
+    """Dispara manualmente o scan de gatilhos (útil para testar)."""
+    try:
+        created = _context_trigger_scan()
+        return jsonify({'ok': True, 'created': created})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/suggestions/context-scan: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/suggestions/<int:suggestion_id>/draft', methods=['POST'])
+def suggestion_generate_draft(suggestion_id):
+    """Gera rascunho de mensagem (OpenRouter → SAI) para uma sugestão do Radar:
+    gatilho + últimas 3 atividades do contato + tom profissional pt-BR."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT * FROM daily_suggestions WHERE id = ?', (suggestion_id,))
+        sug = dict_from_row(c.fetchone())
+        if not sug:
+            conn.close()
+            return jsonify({'error': 'Sugestão não encontrada'}), 404
+        data = json.loads(sug.get('target_data') or '{}')
+
+        # Resolve o contato: direto (client_id) ou principal da conta (mais recente)
+        client = None
+        if data.get('client_id'):
+            c.execute('SELECT * FROM clients WHERE id = ?', (data['client_id'],))
+            client = dict_from_row(c.fetchone())
+        elif data.get('company'):
+            c.execute("""SELECT * FROM clients
+                         WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))
+                           AND COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
+                         ORDER BY last_activity_date DESC NULLS LAST LIMIT 1""", (data['company'],))
+            client = dict_from_row(c.fetchone())
+        if not client:
+            conn.close()
+            return jsonify({'error': 'Nenhum contato ativo encontrado para esta sugestão.'}), 404
+
+        c.execute("""SELECT contact_type, information, activity_date FROM activities
+                     WHERE client_id = ? ORDER BY activity_date DESC LIMIT 3""", (client['id'],))
+        acts = c.fetchall()
+        conn.close()
+        history = '\n'.join(
+            f"- {a['activity_date'][:10] if a['activity_date'] else ''} ({a['contact_type']}): {(a['information'] or '')[:200]}"
+            for a in acts
+        ) or '(sem atividades registradas)'
+
+        gatilho = f"{sug['title']}\n{sug.get('description') or ''}"
+        if data.get('manchete'):
+            gatilho += f"\nNotícia: {data['manchete']} — {data.get('resumo') or ''}"
+
+        raw = _llm_openrouter_first(
+            f"Escreva uma mensagem curta de WhatsApp (3 a 5 frases, tom profissional e caloroso, "
+            f"português do Brasil, sem assinatura) de um executivo de contas para {client['name']} "
+            f"({client.get('position') or 'contato'} na {client.get('company') or 'empresa'}). "
+            f"Pretexto do contato:\n{gatilho}\n\n"
+            f"Últimas interações (use algo daqui para personalizar):\n{history}\n\n"
+            "Retorne SOMENTE o texto da mensagem, sem aspas nem comentários.",
+            log_tag='RadarDraft'
+        )
+        if not raw:
+            return jsonify({'error': 'Nenhum provedor de LLM configurado ou disponível.'}), 503
+        return jsonify({
+            'draft': raw.strip(),
+            'client': {'id': client['id'], 'name': client['name'], 'phone': client.get('phone')},
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/suggestions/{suggestion_id}/draft: {e}')
         return jsonify({'error': str(e)}), 500

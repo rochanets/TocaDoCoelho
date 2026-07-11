@@ -1205,6 +1205,9 @@ SCHEMA_MIGRATIONS = [
         )''',
         "CREATE INDEX IF NOT EXISTS idx_wa_sends_date ON whatsapp_sends(sent_at)",
     ]),
+    (8, 'clients_birthday', [
+        'ALTER TABLE clients ADD COLUMN birthday TEXT',
+    ]),
 ]
 
 
@@ -10362,6 +10365,63 @@ def _inbound_feed_from_outlook(c, emails_data, clients_map):
             _inbound_mark_responded(c, client_id, 'email', slot['out'][:19].replace('T', ' '))
 
 
+# ---------------------------------------------------------------------------
+# Jobs agendados leves (Blocos 9/13/14): cada job registra sua última execução
+# em app_settings e roda quando o intervalo vence. Registrados pelos módulos
+# de rotas via _register_scheduled_job().
+# ---------------------------------------------------------------------------
+_SCHEDULED_JOBS = []
+_scheduled_jobs_started = False
+
+
+def _register_scheduled_job(settings_key, interval_days, fn, only_after_hour=None):
+    """only_after_hour: se definido, o job só roda a partir dessa hora local."""
+    _SCHEDULED_JOBS.append((settings_key, interval_days, fn, only_after_hour))
+
+
+def _save_app_setting(key, value):
+    conn = get_db()
+    conn.execute(
+        'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+        (key, str(value))
+    )
+    conn.commit()
+    conn.close()
+
+
+def _start_scheduled_jobs():
+    global _scheduled_jobs_started
+    if _scheduled_jobs_started or os.environ.get('TOCA_DISABLE_BG_JOBS') == '1':
+        return
+    _scheduled_jobs_started = True
+
+    def _loop():
+        while True:
+            time.sleep(30 * 60)  # verifica a cada 30 min o que está vencido
+            now = datetime.now()
+            for key, interval_days, fn, only_after_hour in list(_SCHEDULED_JOBS):
+                try:
+                    if only_after_hour is not None and now.hour < only_after_hour:
+                        continue
+                    last_raw = _resolve_setting(key, '')
+                    if last_raw:
+                        try:
+                            last = datetime.fromisoformat(last_raw)
+                            if (now - last) < timedelta(days=interval_days):
+                                continue
+                        except ValueError:
+                            pass
+                    logger.info(f'[Jobs] Executando job agendado: {key}')
+                    fn()
+                    _save_app_setting(key, now.isoformat(timespec='seconds'))
+                except Exception as e:
+                    logger.warning(f'[Jobs] Job {key} falhou: {e}')
+
+    threading.Thread(target=_loop, daemon=True).start()
+    logger.info(f'[Jobs] Agendador iniciado ({len(_SCHEDULED_JOBS)} jobs registrados)')
+
+
 _inbound_poller_started = False
 
 
@@ -11619,6 +11679,7 @@ def _load_route_modules():
 
 _load_route_modules()
 _start_inbound_poller()
+_start_scheduled_jobs()
 
 
 if __name__ == '__main__':

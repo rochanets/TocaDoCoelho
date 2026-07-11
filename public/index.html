@@ -1401,6 +1401,10 @@
                     <input type="tel" name="phone">
                 </div>
                 <div class="form-group">
+                    <label>Aniversário (opcional)</label>
+                    <input type="text" name="birthday" id="clientBirthdayInput" placeholder="DD/MM" maxlength="10" title="Dia e mês do aniversário — gera lembrete no Radar do Dia na semana do aniversário">
+                </div>
+                <div class="form-group">
                     <label>LinkedIn (opcional)</label>
                     <input type="url" name="linkedin" id="clientLinkedinInput" placeholder="https://www.linkedin.com/in/...">
                     <button type="button" class="btn btn-auto-mapping btn-small" onclick="openClientLinkedinModal()" id="clientLinkedinFillBtn" style="margin-top:8px; width:100%;">
@@ -1697,6 +1701,7 @@
     <script src="/js/account-planning.js"></script>
     <script src="/js/radar.js"></script>
     <script src="/js/waha-dispatch.js"></script>
+    <script src="/js/radar-actions.js"></script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <!-- html2canvas + jsPDF para exportação do resumo LinkedIn -->
