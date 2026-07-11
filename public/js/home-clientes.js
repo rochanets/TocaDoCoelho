@@ -4320,7 +4320,7 @@
             html += '<p style="color:#6b7280; margin-bottom: 16px;">Digite o conteúdo do e-mail. Ao confirmar, será aberto um novo e-mail no Outlook/local para revisão antes do envio.</p>';
             html += '<div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text" placeholder="Assunto do e-mail"></div>';
             html += '<div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="6" placeholder="Escreva o corpo do e-mail..."></textarea></div>';
-            html += `<div style="display:flex; gap:10px; justify-content:flex-end;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div>`;
+            html += `<div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;"><button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button><button class="btn btn-secondary" onclick="scheduleFromEmailDraft(${client.id})" title="Agendar o envio para uma data e horário"><i class="fas fa-clock"></i> Agendar</button><button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button></div>`;
             html += '</div></div>';
             document.body.insertAdjacentHTML('beforeend', html);
         }

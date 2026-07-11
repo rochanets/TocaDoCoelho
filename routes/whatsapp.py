@@ -535,3 +535,207 @@ def whatsapp_send_batch():
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/whatsapp/send-batch: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# ===========================================================================
+# Envio agendado de WhatsApp/e-mail (ajuste pós-roadmap)
+# O worker envia no horário marcado se o sistema estiver ativo; envios que
+# venceram com o sistema desligado ficam como "perdidos" e o usuário decide
+# no próximo login se ainda quer enviar.
+# ===========================================================================
+
+_SCHEDULED_SEND_GRACE_MINUTES = 3  # janela em que o worker ainda envia sozinho
+
+
+def _scheduled_send_execute(c, row):
+    """Executa um envio agendado. Retorna (ok, error)."""
+    channel = row['channel']
+    if channel == 'whatsapp':
+        result = _waha_send_and_register(c, row['client_id'], row['phone'] or '', row['message'])
+        if not result.get('ok'):
+            return False, result.get('error') or 'Falha no envio via WAHA.'
+        return True, None
+    if channel == 'email':
+        body_html = '<p>' + html.escape(row['message']).replace('\n', '<br>') + '</p>'
+        try:
+            _outlook_send_mail(row['email_to'], row['subject'] or 'Mensagem', body_html)
+        except Exception as e:
+            return False, str(e)
+        if row['client_id']:
+            info = f"E-mail enviado (agendado): {row['subject'] or ''}\n{row['message'][:400]}"
+            c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, 'Email', ?)",
+                      (row['client_id'], info))
+            c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (row['client_id'],))
+            _inbound_mark_responded(c, row['client_id'], 'email')
+        return True, None
+    return False, f'Canal desconhecido: {channel}'
+
+
+def _scheduled_send_finish(c, send_id, ok, error):
+    if ok:
+        c.execute("UPDATE scheduled_sends SET status = 'sent', sent_at = CURRENT_TIMESTAMP, error = NULL WHERE id = ?",
+                  (send_id,))
+    else:
+        c.execute("UPDATE scheduled_sends SET status = 'error', error = ? WHERE id = ?",
+                  ((error or '')[:300], send_id))
+
+
+def _scheduled_sends_worker_tick():
+    now = datetime.now()
+    now_str = now.strftime('%Y-%m-%d %H:%M')
+    grace_str = (now - timedelta(minutes=_SCHEDULED_SEND_GRACE_MINUTES)).strftime('%Y-%m-%d %H:%M')
+    conn = get_db()
+    c = conn.cursor()
+    # Só envia sozinho o que venceu há pouco (sistema ativo na hora marcada).
+    # O que venceu com o sistema desligado fica pendente e vira pergunta no login.
+    c.execute("""SELECT * FROM scheduled_sends
+                 WHERE status = 'pending' AND scheduled_for <= ? AND scheduled_for >= ?""",
+              (now_str, grace_str))
+    due = [dict_from_row(r) for r in c.fetchall()]
+    for row in due:
+        ok, error = _scheduled_send_execute(c, row)
+        _scheduled_send_finish(c, row['id'], ok, error)
+        logger.info(f'[Agendados] Envio {row["id"]} ({row["channel"]}): {"ok" if ok else error}')
+    conn.commit()
+    conn.close()
+    return len(due)
+
+
+_scheduled_sends_worker_started = False
+
+
+def _start_scheduled_sends_worker():
+    global _scheduled_sends_worker_started
+    if _scheduled_sends_worker_started or os.environ.get('TOCA_DISABLE_BG_JOBS') == '1':
+        return
+    _scheduled_sends_worker_started = True
+
+    def _loop():
+        while True:
+            time.sleep(60)
+            try:
+                _scheduled_sends_worker_tick()
+            except Exception as e:
+                logger.debug(f'[Agendados] tick falhou: {e}')
+
+    threading.Thread(target=_loop, daemon=True).start()
+    logger.info('[Agendados] Worker de envios agendados iniciado')
+
+
+_start_scheduled_sends_worker()
+
+
+@app.route('/api/scheduled-sends', methods=['POST'])
+def scheduled_sends_create():
+    """Agenda 1 envio (ou vários, via 'items') de WhatsApp/e-mail."""
+    try:
+        data = request.get_json(force=True) or {}
+        items = data.get('items') or [data]
+        scheduled_for = (data.get('scheduled_for') or '').strip()
+        if not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$', scheduled_for):
+            return jsonify({'error': 'Data/hora inválida — use o formato AAAA-MM-DD HH:MM.'}), 400
+        if scheduled_for <= datetime.now().strftime('%Y-%m-%d %H:%M'):
+            return jsonify({'error': 'A data/hora do agendamento precisa estar no futuro.'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        created = []
+        for item in items:
+            channel = (item.get('channel') or 'whatsapp').strip()
+            message = (item.get('message') or '').strip()
+            if not message:
+                continue
+            if channel == 'whatsapp' and not (item.get('phone') or '').strip():
+                continue
+            if channel == 'email' and not (item.get('email_to') or '').strip():
+                continue
+            c.execute("""INSERT INTO scheduled_sends
+                         (channel, client_id, phone, email_to, subject, message, scheduled_for)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                      (channel, item.get('client_id'), (item.get('phone') or '').strip() or None,
+                       (item.get('email_to') or '').strip() or None,
+                       (item.get('subject') or '').strip() or None, message, scheduled_for))
+            created.append(c.lastrowid)
+        conn.commit()
+        conn.close()
+        if not created:
+            return jsonify({'error': 'Nenhum item válido para agendar (verifique telefone/e-mail e mensagem).'}), 400
+        return jsonify({'ok': True, 'ids': created, 'scheduled_for': scheduled_for}), 201
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/scheduled-sends: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-sends', methods=['GET'])
+def scheduled_sends_list():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT ss.*, cl.name AS client_name FROM scheduled_sends ss
+                     LEFT JOIN clients cl ON cl.id = ss.client_id
+                     WHERE ss.status = 'pending'
+                     ORDER BY ss.scheduled_for ASC""")
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/scheduled-sends: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-sends/missed', methods=['GET'])
+def scheduled_sends_missed():
+    """Envios que venceram enquanto o sistema estava desligado — o usuário
+    decide no login se ainda quer enviar."""
+    try:
+        cutoff = (datetime.now() - timedelta(minutes=_SCHEDULED_SEND_GRACE_MINUTES)).strftime('%Y-%m-%d %H:%M')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT ss.*, cl.name AS client_name FROM scheduled_sends ss
+                     LEFT JOIN clients cl ON cl.id = ss.client_id
+                     WHERE ss.status = 'pending' AND ss.scheduled_for < ?
+                     ORDER BY ss.scheduled_for ASC""", (cutoff,))
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/scheduled-sends/missed: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-sends/<int:send_id>/send-now', methods=['POST'])
+def scheduled_send_now(send_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT * FROM scheduled_sends WHERE id = ? AND status = 'pending'", (send_id,))
+        row = dict_from_row(c.fetchone())
+        if not row:
+            conn.close()
+            return jsonify({'error': 'Agendamento não encontrado (ou já processado).'}), 404
+        ok, error = _scheduled_send_execute(c, row)
+        _scheduled_send_finish(c, send_id, ok, error)
+        conn.commit()
+        conn.close()
+        if not ok:
+            return jsonify({'ok': False, 'error': error}), 502
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/scheduled-sends/{send_id}/send-now: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-sends/<int:send_id>/cancel', methods=['POST'])
+def scheduled_send_cancel(send_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("UPDATE scheduled_sends SET status = 'cancelled' WHERE id = ? AND status = 'pending'", (send_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Agendamento não encontrado (ou já processado).'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/scheduled-sends/{send_id}/cancel: {e}')
+        return jsonify({'error': str(e)}), 500

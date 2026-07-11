@@ -1232,6 +1232,23 @@ SCHEMA_MIGRATIONS = [
             FOREIGN KEY(commitment_id) REFERENCES commitments(id) ON DELETE CASCADE
         )''',
     ]),
+    (11, 'scheduled_sends', [
+        '''CREATE TABLE IF NOT EXISTS scheduled_sends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT NOT NULL DEFAULT 'whatsapp',
+            client_id INTEGER,
+            phone TEXT,
+            email_to TEXT,
+            subject TEXT,
+            message TEXT NOT NULL,
+            scheduled_for TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sent_at TIMESTAMP
+        )''',
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_sends_due ON scheduled_sends(status, scheduled_for)",
+    ]),
 ]
 
 

@@ -35,6 +35,7 @@
                             <button class="btn btn-auto-mapping btn-small" id="radarDraftGenBtn" onclick="radarGenerateDraft(${id})"><span class="ai-star-icon">✦</span> Gerar rascunho</button>
                             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                                 <button class="btn btn-secondary btn-small" onclick="radarDraftOpenWeb(${id})"><i class="fab fa-whatsapp"></i> Abrir no WhatsApp</button>
+                                <button class="btn btn-secondary btn-small" onclick="scheduleFromRadarDraft(${id})" title="Agendar o envio para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
                                 <button class="btn btn-primary btn-small" onclick="radarDraftSendWaha(${id})"><i class="fas fa-bolt"></i> Enviar via WAHA</button>
                             </div>
                         </div>

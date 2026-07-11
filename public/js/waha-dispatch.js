@@ -192,6 +192,7 @@
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap;">
                             <button class="btn btn-secondary" onclick="quickContactOpenWeb(${clientId})" title="Abrir no WhatsApp Web/desktop (contingência)"><i class="fab fa-whatsapp"></i> Abrir no WhatsApp</button>
+                            <button class="btn btn-secondary" onclick="scheduleFromQuickContact(${clientId})" title="Agendar o envio para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
                             <button class="btn btn-auto-mapping" onclick="quickContactSendWaha(${clientId})"><span class="ai-star-icon">✦</span> Enviar via WAHA</button>
                         </div>
                     </div>

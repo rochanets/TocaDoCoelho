@@ -2301,6 +2301,7 @@
 
             const batchBtnHtml = isWpp
                 ? `<button class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaWahaAll()" title="Envia toda a fila direto via WAHA, com intervalo aleatório entre mensagens"><span class="ai-star-icon">✦</span> Enviar todos via WAHA</button>
+                   <button class="btn btn-secondary btn-small" onclick="scheduleMailingViaWaha()" title="Agendar o envio de toda a fila via WAHA para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
                    <span id="mailingWahaQuota" style="font-size:12px; color:#6b7280;"></span>
                    <button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-forward-step"></i> Abrir próximo no WhatsApp</button>`
                 : `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;

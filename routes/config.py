@@ -949,3 +949,86 @@ def get_system_config():
         'env': os.environ.get('TOCA_ENV', 'production'),
         'version': APP_VERSION
     })
+
+
+# ===========================================================================
+# Primeiro acesso pós-instalação + aviso de atualização da extensão
+# (ajustes pós-roadmap)
+# ===========================================================================
+
+def _extension_bundled_version():
+    """Versão da extensão AutoToca empacotada com este build (manifest.json)."""
+    try:
+        manifest_path = Path(app.static_folder) / 'autotoca-extension' / 'autotoca-chrome-extension' / 'manifest.json'
+        with open(manifest_path, encoding='utf-8') as f:
+            return (json.load(f).get('version') or '').strip()
+    except Exception as e:
+        logger.debug(f'[Extensao] manifest indisponível: {e}')
+        return ''
+
+
+@app.route('/api/config/first-run', methods=['GET'])
+def config_first_run_status():
+    """Primeira abertura após INSTALAÇÃO (não update): sem cadastro de usuário
+    e sem marca de primeiro acesso — o frontend leva direto para Configurações."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) FROM user_profile')
+        has_profile = c.fetchone()[0] > 0
+        conn.close()
+        seen = bool(_resolve_setting('first_run_seen', ''))
+        return jsonify({'first_run': (not has_profile) and (not seen)})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/first-run: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/first-run/seen', methods=['POST'])
+def config_first_run_seen():
+    try:
+        _save_app_setting('first_run_seen', datetime.now().isoformat(timespec='seconds'))
+        # Instalação nova: a extensão empacotada já é a atual — não avisar update
+        version = _extension_bundled_version()
+        if version:
+            _save_app_setting('extension_version_seen', version)
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/first-run/seen: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/extension/update-status', methods=['GET'])
+def extension_update_status():
+    """Após um update do app que trouxe extensão nova, avisa o usuário para
+    baixar e reinstalar o plugin do navegador."""
+    try:
+        current = _extension_bundled_version()
+        seen = _resolve_setting('extension_version_seen', '')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) FROM user_profile')
+        has_profile = c.fetchone()[0] > 0
+        conn.close()
+        first_run = (not has_profile) and (not _resolve_setting('first_run_seen', ''))
+        update_available = bool(current) and (seen != current) and not first_run
+        return jsonify({
+            'current': current,
+            'seen': seen or None,
+            'update_available': update_available,
+            'download_url': '/autotoca-extension/autotoca-chrome-extension.zip',
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/extension/update-status: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/extension/update-status/seen', methods=['POST'])
+def extension_update_seen():
+    try:
+        version = _extension_bundled_version()
+        _save_app_setting('extension_version_seen', version or 'desconhecida')
+        return jsonify({'ok': True, 'version': version})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/extension/update-status/seen: {e}')
+        return jsonify({'error': str(e)}), 500
