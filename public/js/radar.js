@@ -187,3 +187,55 @@
                     </div>`;
             } catch (e) { el.innerHTML = ''; }
         }
+
+        // =====================================================
+        // Minha Semana (Bloco 14) — resumo semanal sob demanda
+        // =====================================================
+
+        let _weekReviewLoaded = false;
+
+        async function toggleWeekReview() {
+            const el = document.getElementById('weekReviewContent');
+            const toggle = document.getElementById('weekReviewToggle');
+            if (!el) return;
+            const showing = el.style.display !== 'none';
+            el.style.display = showing ? 'none' : '';
+            if (toggle) toggle.textContent = showing ? 'mostrar ▾' : 'ocultar ▴';
+            if (showing || _weekReviewLoaded) return;
+            el.innerHTML = '<div style="color:#9ca3af; font-size:13px;">Carregando resumo da semana... 🐇</div>';
+            try {
+                const resp = await fetch(`${API_BASE}/week-review`);
+                const d = await resp.json();
+                if (!resp.ok) throw new Error(d.error || 'erro');
+                _weekReviewLoaded = true;
+                const cooled = (d.cooled || []).map(c =>
+                    `<li>${escapeHtml(c.name)} (${escapeHtml(c.company || '')}) → ${c.status === 'atrasado' ? '🔴 atrasado' : '🟡 atenção'}</li>`).join('');
+                const planByDay = {};
+                (d.next_week_plan || []).forEach(p => { (planByDay[p.day] = planByDay[p.day] || []).push(p.title); });
+                const plan = Object.entries(planByDay).map(([day, items]) =>
+                    `<div style="margin-top:6px;"><b>${day}</b><ul style="margin:2px 0 0 18px;">${items.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul></div>`).join('');
+                el.innerHTML = `
+                    <div style="display:flex; gap:18px; flex-wrap:wrap; font-size:13.5px; margin-bottom:8px;">
+                        <div>✋ <b>${d.touches}</b> toques na semana</div>
+                        <div>⏰ follow-ups: <b>${d.followups_created}</b> criados · <b>${d.followups_done}</b> cumpridos</div>
+                        <div>📡 <b>${(d.pending_suggestions || []).length}</b> sugestão(ões) pendente(s) hoje</div>
+                    </div>
+                    ${cooled ? `<div style="font-size:13px;"><b>Esfriaram na semana:</b><ul style="margin:4px 0 0 18px;">${cooled}</ul></div>`
+                             : '<div style="font-size:13px; color:#059669;">Nenhum contato esfriou nesta semana 🎉</div>'}
+                    <div style="font-size:13px; margin-top:10px;"><b>Plano da próxima semana</b> (pré-priorizado pelo Radar):${plan || ' <span style=\"color:#9ca3af;\">sem pendências</span>'}</div>
+                    <div style="margin-top:10px;">
+                        <button class="btn btn-secondary btn-small" onclick="event.stopPropagation(); sendWeekReviewEmail()" title="Enviar este resumo + plano por e-mail (Outlook)"><i class="fas fa-envelope"></i> Enviar por e-mail agora</button>
+                    </div>`;
+            } catch (e) {
+                el.innerHTML = `<div style="color:#ef4444; font-size:13px;">${escapeHtml(e.message || 'Erro ao carregar.')}</div>`;
+            }
+        }
+
+        async function sendWeekReviewEmail() {
+            try {
+                const resp = await fetch(`${API_BASE}/week-review/send-email`, { method: 'POST' });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Falha ao enviar e-mail.');
+                showSuccess('Revisão enviada para o seu e-mail!');
+            } catch (e) { showError(e.message); }
+        }

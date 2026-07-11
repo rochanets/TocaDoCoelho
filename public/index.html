@@ -176,6 +176,15 @@
                     <div id="inboundContent" style="display:flex; flex-direction:column; gap:6px;"></div>
                 </div>
 
+                <!-- Minha Semana (Bloco 14) — resumo sempre disponível -->
+                <div id="weekReviewPanel" class="card" style="margin-bottom:18px; padding:16px 18px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; cursor:pointer;" onclick="toggleWeekReview()">
+                        <h2 style="margin:0; font-size:17px;">📅 Minha Semana</h2>
+                        <span id="weekReviewToggle" style="color:#9ca3af; font-size:13px;">mostrar ▾</span>
+                    </div>
+                    <div id="weekReviewContent" style="display:none; margin-top:10px;"></div>
+                </div>
+
                 <div class="home-kpi-row">
                     <div class="home-kpi-card kpi-accent-cyan home-kpi-clickable" onclick="openHomeDrill('accounts')" title="Ver todas as contas">
                         <div class="home-kpi-icon"><i class="fas fa-people-group"></i></div>

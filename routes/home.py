@@ -1448,3 +1448,173 @@ def suggestion_generate_draft(suggestion_id):
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/suggestions/{suggestion_id}/draft: {e}')
         return jsonify({'error': str(e)}), 500
+
+# ===========================================================================
+# Revisão de sexta + plano de segunda (Bloco 14)
+# ===========================================================================
+
+def _weekly_review_data(c):
+    """Compila os dados reais da semana: toques, contatos que esfriaram,
+    follow-ups criados vs. cumpridos e sugestões pendentes do Radar."""
+    now_dt = datetime.now()
+    week_ago = now_dt - timedelta(days=7)
+    get_thresholds = _home_status_thresholds(c)
+
+    c.execute("SELECT COUNT(*) FROM activities WHERE activity_date >= ?",
+              (week_ago.strftime('%Y-%m-%d %H:%M:%S'),))
+    touches = c.fetchone()[0]
+
+    # Esfriaram: estavam 'em_dia' há 7 dias e hoje estão 'atenção'/'atrasado'
+    cooled = []
+    c.execute("""SELECT id, name, company, position, last_activity_date FROM clients
+                 WHERE COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
+                   AND last_activity_date IS NOT NULL""")
+    for row in c.fetchall():
+        green, yellow = get_thresholds(row['position'])
+        status_now, _ = _home_status_for(row['last_activity_date'], green, yellow, now_dt)
+        status_before, _ = _home_status_for(row['last_activity_date'], green, yellow, week_ago)
+        if status_before == 'em_dia' and status_now in ('atencao', 'atrasado'):
+            cooled.append({'id': row['id'], 'name': row['name'], 'company': row['company'],
+                           'status': status_now})
+
+    c.execute("SELECT COUNT(*) FROM commitments WHERE created_at >= ?",
+              (week_ago.strftime('%Y-%m-%d %H:%M:%S'),))
+    fups_created = c.fetchone()[0]
+    c.execute("""SELECT COUNT(*) FROM commitments co
+                 WHERE co.due_date >= ? AND co.due_date <= ?
+                   AND EXISTS (SELECT 1 FROM activities a
+                               WHERE a.client_id = co.client_id
+                                 AND date(a.activity_date) >= co.due_date)""",
+              (week_ago.strftime('%Y-%m-%d'), now_dt.strftime('%Y-%m-%d')))
+    fups_done = c.fetchone()[0]
+
+    c.execute("""SELECT title, suggestion_type FROM daily_suggestions
+                 WHERE date = ? AND completed = 0
+                   AND (snoozed_until IS NULL OR snoozed_until <= ?)
+                 ORDER BY score DESC""",
+              (now_dt.strftime('%Y-%m-%d'), now_dt.strftime('%Y-%m-%d')))
+    pending = [dict(r) for r in c.fetchall()]
+
+    # Plano da próxima semana: ranking do Radar distribuído pelos dias úteis
+    ranked = _radar_generate_ranked(c)[:10]
+    weekdays = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta']
+    plan = []
+    for i, sug in enumerate(ranked):
+        # 2 itens por dia útil, transbordando para sexta
+        plan.append({'day': weekdays[min(i // 2, 4)], 'title': sug['title'], 'type': sug['type']})
+    return {
+        'week_start': week_ago.strftime('%Y-%m-%d'),
+        'touches': touches,
+        'cooled': cooled,
+        'followups_created': fups_created,
+        'followups_done': fups_done,
+        'pending_suggestions': pending,
+        'next_week_plan': plan,
+    }
+
+
+@app.route('/api/week-review', methods=['GET'])
+def week_review():
+    """Versão 'Minha Semana' — disponível a qualquer momento na Home."""
+    try:
+        conn = get_db()
+        data = _weekly_review_data(conn.cursor())
+        conn.close()
+        return jsonify(data)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/week-review: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _weekly_review_text(data):
+    lines = [
+        f"Toques significativos na semana: {data['touches']}",
+        f"Follow-ups criados: {data['followups_created']} | cumpridos: {data['followups_done']}",
+    ]
+    if data['cooled']:
+        lines.append('Contatos que esfriaram na semana:')
+        lines += [f"- {c['name']} ({c['company']}) → {c['status']}" for c in data['cooled'][:15]]
+    else:
+        lines.append('Nenhum contato esfriou nesta semana. 🎉')
+    if data['pending_suggestions']:
+        lines.append(f"Sugestões do Radar não tratadas hoje: {len(data['pending_suggestions'])}")
+        lines += [f"- {s['title']}" for s in data['pending_suggestions'][:10]]
+    return '\n'.join(lines)
+
+
+def _weekly_plan_text(data):
+    if not data['next_week_plan']:
+        return 'Sem pendências priorizadas — bom descanso!'
+    lines = []
+    current_day = None
+    for item in data['next_week_plan']:
+        if item['day'] != current_day:
+            current_day = item['day']
+            lines.append(f"## {current_day}")
+        lines.append(f"- {item['title']}")
+    return '\n'.join(lines)
+
+
+def _friday_review_job():
+    """Sexta-feira após o meio-dia (hora configurável): compila revisão da
+    semana + plano da próxima e envia por e-mail (mecanismo do Bloco 13)."""
+    now = datetime.now()
+    if now.weekday() != 4:  # 4 = sexta
+        return 'skip'
+    try:
+        hour = int(_resolve_setting('weekly_review_hour', 'WEEKLY_REVIEW_HOUR') or 12)
+    except Exception:
+        hour = 12
+    if now.hour < hour:
+        return 'skip'
+    conn = get_db()
+    data = _weekly_review_data(conn.cursor())
+    conn.close()
+    date_label = now.strftime('%d/%m/%Y')
+    sections = [
+        ('Revisão da semana', _weekly_review_text(data)),
+        ('Plano da próxima semana (pré-priorizado pelo Radar do Dia)', _weekly_plan_text(data)),
+    ]
+    pdf_bytes = _briefings_to_pdf(f'Revisão de sexta — {date_label}', sections)
+    attachments = []
+    if pdf_bytes:
+        attachments.append({'name': f'revisao-semana-{now.strftime("%Y-%m-%d")}.pdf',
+                            'content_bytes': base64.b64encode(pdf_bytes).decode('ascii'),
+                            'content_type': 'application/pdf'})
+    body = ('<p>Sexta-feira! 🐇 Segue a revisão da semana e o plano de segunda'
+            + (' (PDF em anexo)' if attachments else '') + ':</p>'
+            + ''.join(f'<h3>{html.escape(s[0])}</h3><pre style="white-space:pre-wrap; font-family:inherit;">{html.escape(s[1])}</pre>'
+                      for s in sections))
+    _outlook_send_mail(None, f'🐇 Revisão de sexta + plano de segunda — {date_label}', body, attachments)
+
+
+_register_scheduled_job('weekly_review_last_run', 1, _friday_review_job)
+
+
+@app.route('/api/week-review/send-email', methods=['POST'])
+def week_review_send_now():
+    """Dispara manualmente o e-mail de revisão (ignora dia/hora)."""
+    try:
+        conn = get_db()
+        data = _weekly_review_data(conn.cursor())
+        conn.close()
+        now = datetime.now()
+        date_label = now.strftime('%d/%m/%Y')
+        sections = [
+            ('Revisão da semana', _weekly_review_text(data)),
+            ('Plano da próxima semana (pré-priorizado pelo Radar do Dia)', _weekly_plan_text(data)),
+        ]
+        pdf_bytes = _briefings_to_pdf(f'Revisão de sexta — {date_label}', sections)
+        attachments = []
+        if pdf_bytes:
+            attachments.append({'name': f'revisao-semana-{now.strftime("%Y-%m-%d")}.pdf',
+                                'content_bytes': base64.b64encode(pdf_bytes).decode('ascii'),
+                                'content_type': 'application/pdf'})
+        body = ('<p>Segue a revisão da semana e o plano de segunda:</p>'
+                + ''.join(f'<h3>{html.escape(s[0])}</h3><pre style="white-space:pre-wrap; font-family:inherit;">{html.escape(s[1])}</pre>'
+                          for s in sections))
+        _outlook_send_mail(None, f'🐇 Revisão da semana — {date_label}', body, attachments)
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/week-review/send-email: {e}')
+        return jsonify({'error': str(e)}), 500

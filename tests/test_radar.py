@@ -138,3 +138,17 @@ def test_whitespace_por_conta(client, db_path):
     ws_sugs = [s for s in items if s['suggestion_type'] == 'whitespace']
     assert ws_sugs and 'Cybersecurity' in ws_sugs[0]['title']
     assert 'Cloud Services' not in ws_sugs[0]['title']
+
+
+def test_week_review(client, sample_client_id, db_path):
+    import app as toca
+    client.post('/api/atividades', json={
+        'client_id': sample_client_id, 'contact_type': 'Ligação',
+        'information': 'Toque da semana',
+    })
+    data = client.get('/api/week-review').get_json()
+    assert data['touches'] >= 1
+    assert 'followups_created' in data and 'next_week_plan' in data
+    # plano é coerente com o ranking do Radar (dias úteis)
+    if data['next_week_plan']:
+        assert data['next_week_plan'][0]['day'] == 'Segunda'
