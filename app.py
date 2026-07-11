@@ -15438,25 +15438,116 @@ def _autotoca_account_info_via_llm(account_name: str) -> dict:
 
 
 
-@app.route('/api/autotoca/chamado-juridico/playwright', methods=['POST'])
-def autotoca_chamado_juridico_playwright():
+# ─────────────────────────────────────────
+#  Chamado Jurídico — Robô de preenchimento do Microsoft Forms
+#  (Playwright visível: preenche, o usuário revisa/anexa e envia)
+# ─────────────────────────────────────────
+
+AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = (
+    'https://forms.office.com/Pages/ResponsePage.aspx'
+    '?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu'
+)
+
+_forms_robot_tasks = {}
+_forms_robot_tasks_lock = threading.Lock()
+
+
+def _forms_robot_task_set(task_id, updates):
+    with _forms_robot_tasks_lock:
+        task = _forms_robot_tasks.get(task_id, {})
+        task.update(updates)
+        _forms_robot_tasks[task_id] = task
+
+
+def _forms_robot_task_get(task_id):
+    with _forms_robot_tasks_lock:
+        return dict(_forms_robot_tasks.get(task_id) or {})
+
+
+def _forms_robot_task_cleanup(task_id, delay=300):
+    def _cleanup():
+        time.sleep(delay)
+        with _forms_robot_tasks_lock:
+            _forms_robot_tasks.pop(task_id, None)
+    threading.Thread(target=_cleanup, daemon=True).start()
+
+
+def _forms_robot_build_fields(data):
+    """Monta os campos na ordem de matching (termos mais específicos primeiro)."""
+    return [
+        {'key': 'cnpj', 'label': 'CNPJ', 'terms': ['cnpj'],
+         'value': (data.get('cnpj') or '').strip()},
+        {'key': 'empresa_grupo', 'label': 'Empresa do Grupo Stefanini',
+         'terms': ['empresa do grupo stefanini', 'grupo stefanini', 'empresa stefanini'],
+         'value': (data.get('empresa_grupo') or '').strip()},
+        {'key': 'razao_social', 'label': 'Razão Social', 'terms': ['razao social'],
+         'value': (data.get('razao_social') or '').strip()},
+        {'key': 'endereco', 'label': 'Endereço', 'terms': ['endereco'],
+         'value': (data.get('endereco') or '').strip()},
+        {'key': 'conta', 'label': 'Conta',
+         'terms': ['nome da conta', 'nome do cliente', 'conta', 'cliente'],
+         'value': (data.get('conta') or '').strip()},
+    ]
+
+
+def _forms_robot_process_async(task_id, data):
+    from integrations.forms_robot import run_chamado_juridico_robot, FormsRobotError
+
+    def on_progress(pct, step):
+        _forms_robot_task_set(task_id, {'progress': pct, 'step': step})
+
+    try:
+        result = run_chamado_juridico_robot(
+            AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL,
+            _forms_robot_build_fields(data),
+            on_progress,
+        )
+        if result.get('submitted'):
+            final_step = 'Chamado Jurídico enviado com sucesso!'
+        else:
+            final_step = 'Preenchimento concluído — conclua a revisão e o envio na janela do robô.'
+        _forms_robot_task_set(task_id, {
+            'status': 'done', 'progress': 100, 'step': final_step, 'result': result,
+        })
+    except FormsRobotError as e:
+        logger.warning(f'[AutoToca][FormsRobot] {e}')
+        _forms_robot_task_set(task_id, {'status': 'error', 'error': str(e)})
+    except Exception as e:
+        logger.exception('[AutoToca][FormsRobot] Falha inesperada')
+        _forms_robot_task_set(task_id, {'status': 'error', 'error': f'Falha inesperada no robô: {e}'})
+    finally:
+        _forms_robot_task_cleanup(task_id)
+
+
+@app.route('/api/autotoca/chamado-juridico/robot', methods=['POST'])
+def autotoca_chamado_juridico_robot():
     try:
         data = request.get_json(force=True) or {}
-        conta = (data.get('conta') or '').strip()
-        if not conta:
-            return jsonify({'ok': False, 'error': 'Conta é obrigatória.'}), 400
-        payload = {'forms_url': data.get('forms_url'), 'target_value': conta}
-        try:
-            result = _run_autotoca_playwright_fill(payload)
-        except Exception as exc:
-            logger.exception('[AutoToca] Falha no Playwright')
-            result = {'ok': False, 'strategy': 'playwright', 'reason': 'playwright_failed', 'error': str(exc)}
-        if not result.get('ok'):
-            result['fallback'] = _run_autotoca_selenium_fill(payload)
-        return jsonify(result)
+        if not (data.get('conta') or '').strip():
+            return jsonify({'error': 'Conta é obrigatória.'}), 400
+        if not (data.get('endereco') or '').strip():
+            return jsonify({'error': 'Endereço é obrigatório.'}), 400
+
+        with _forms_robot_tasks_lock:
+            busy = any(t.get('status') == 'processing' for t in _forms_robot_tasks.values())
+        if busy:
+            return jsonify({'error': 'O robô já está em execução. Aguarde ele terminar.'}), 409
+
+        task_id = uuid.uuid4().hex
+        _forms_robot_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
+        threading.Thread(target=_forms_robot_process_async, args=(task_id, data), daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/chamado-juridico/playwright: {e}')
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        logger.exception(f'[AutoToca] POST /api/autotoca/chamado-juridico/robot: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/chamado-juridico/robot/tasks/<task_id>', methods=['GET'])
+def autotoca_chamado_juridico_robot_task(task_id):
+    task = _forms_robot_task_get(task_id)
+    if not task:
+        return jsonify({'error': 'Tarefa não encontrada.'}), 404
+    return jsonify(task)
 
 @app.route('/api/autotoca/linkedin/teste', methods=['POST'])
 def autotoca_teste_linkedin():

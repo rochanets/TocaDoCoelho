@@ -4232,9 +4232,26 @@
                     </div>
 
                     <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
-                        <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px;">
-                            <span class="ai-star-icon">✦</span> Abrir Formulário
+                        <button class="btn btn-auto-mapping" type="button" id="autotocaRobotBtn" onclick="runChamadoJuridicoRobot(event)" style="padding:10px 16px;">
+                            <span class="ai-star-icon">✦</span> Preencher com Robô 🐇
                         </button>
+                        <button class="btn btn-secondary" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px;">
+                            Abrir Formulário
+                        </button>
+                    </div>
+                    <div id="autotocaRobotProgress" style="display:none; padding:20px 4px 12px;">
+                        <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="autotocaRobotStep">Iniciando o robô...</div>
+                        <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                            <div id="autotocaRobotBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                <span class="chamado-robot-bunny">🐇</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
+                            <div style="font-size:12px; color:#10b981;">
+                                <span class="chamado-robot-paw">🐾</span><span class="chamado-robot-paw">🐾</span><span class="chamado-robot-paw">🐾</span>
+                            </div>
+                            <div style="font-size:11px; color:#6b7280;" id="autotocaRobotPct">5%</div>
+                        </div>
                     </div>
                     <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
                 </form>
@@ -8013,6 +8030,111 @@
             iframe.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_EMBED_URL;
 
             showInfo('Formulário carregado no container. Se o Microsoft Forms bloquear a incorporação, use “Abrir em nova aba”.');
+        }
+
+        function _chamadoRobotEnsureStyles() {
+            if (document.getElementById('chamado-robot-bunny-style')) return;
+            const style = document.createElement('style');
+            style.id = 'chamado-robot-bunny-style';
+            style.textContent = `
+                @keyframes chamado-robot-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
+                @keyframes chamado-robot-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
+                .chamado-robot-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:chamado-robot-hop .5s ease-in-out infinite; pointer-events:none; }
+                .chamado-robot-paw { display:inline-block; font-size:10px; animation:chamado-robot-paw-fade 1s ease-in-out infinite; }
+                .chamado-robot-paw:nth-child(2){animation-delay:.2s} .chamado-robot-paw:nth-child(3){animation-delay:.4s}
+            `;
+            document.head.appendChild(style);
+        }
+
+        function _chamadoRobotSetProgress(pct, step) {
+            const bar = document.getElementById('autotocaRobotBar');
+            const stepEl = document.getElementById('autotocaRobotStep');
+            const pctEl = document.getElementById('autotocaRobotPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        function _chamadoRobotToggleRunning(running) {
+            const robotBtn = document.getElementById('autotocaRobotBtn');
+            const progressArea = document.getElementById('autotocaRobotProgress');
+            if (robotBtn) robotBtn.disabled = running;
+            if (progressArea) progressArea.style.display = running ? 'block' : 'none';
+        }
+
+        async function runChamadoJuridicoRobot(event) {
+            event?.preventDefault?.();
+
+            const conta = document.getElementById('autotocaConta').value === 'OUTRO'
+                ? document.getElementById('autotocaContaOutro').value.trim()
+                : document.getElementById('autotocaConta').value;
+            const endereco = document.getElementById('autotocaEnderecoFinal').value.trim();
+            if (!conta || !endereco) {
+                showError('Preencha Conta e Endereço antes de acionar o robô.');
+                return;
+            }
+
+            const payload = {
+                conta,
+                endereco,
+                razao_social: (document.getElementById('autotocaRazaoSocial')?.value || '').trim(),
+                cnpj: (document.getElementById('autotocaCnpj')?.value || '').trim(),
+                empresa_grupo: (document.getElementById('autotocaEmpresaGrupoStefanini')?.value || '').trim(),
+            };
+
+            _chamadoRobotEnsureStyles();
+            _chamadoRobotToggleRunning(true);
+            _chamadoRobotSetProgress(5, 'Iniciando o robô...');
+            _autoTocaAppendLog('Robô do Chamado Jurídico iniciado. Uma janela do navegador será aberta.', 'info');
+
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/robot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                const taskId = data.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
+
+                const progressEl = document.getElementById('autotocaRobotProgress');
+                _attachBgTaskControls(
+                    progressEl, taskId,
+                    () => _chamadoRobotToggleRunning(false),
+                    () => { _chamadoRobotToggleRunning(false); showError('Acompanhamento do robô cancelado — a janela dele pode continuar aberta.'); }
+                );
+
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/autotoca/chamado-juridico/robot/tasks/${taskId}`,
+                    'Robô do Chamado Jurídico',
+                    sourceTab,
+                    (result) => {
+                        _chamadoRobotToggleRunning(false);
+                        const filled = result?.filled?.length ? `Campos preenchidos: ${result.filled.join(', ')}.` : '';
+                        const unmatched = result?.unmatched?.length ? ` Não localizei no formulário: ${result.unmatched.join(', ')}.` : '';
+                        if (result?.submitted) {
+                            showSuccess('Chamado Jurídico enviado com sucesso pelo Microsoft Forms!');
+                            _autoTocaAppendLog(`Envio confirmado pelo Forms. ${filled}${unmatched}`, 'success');
+                        } else {
+                            showInfo('Preenchimento concluído. Revise, anexe os arquivos e clique em Enviar na janela do robô.');
+                            _autoTocaAppendLog(`Preenchimento concluído — envio pendente de revisão. ${filled}${unmatched}`, 'warning');
+                        }
+                    },
+                    (errMsg) => {
+                        _chamadoRobotToggleRunning(false);
+                        showError(errMsg || 'Erro no robô do Chamado Jurídico.');
+                        _autoTocaAppendLog(`Robô falhou: ${errMsg || 'erro desconhecido'}`, 'error');
+                    },
+                    (pct, step) => _chamadoRobotSetProgress(pct, step)
+                );
+            } catch (error) {
+                _chamadoRobotToggleRunning(false);
+                showError(error.message || 'Erro ao iniciar o robô.');
+                _autoTocaAppendLog(`Robô não iniciou: ${error.message || 'erro desconhecido'}`, 'error');
+            }
         }
 
 
