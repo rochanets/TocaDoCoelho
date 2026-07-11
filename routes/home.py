@@ -201,6 +201,35 @@ def _radar_generate_ranked(c):
     except Exception as e:
         logger.debug(f'[Radar] score de multithreading indisponível: {e}')
 
+    # ---- 3c. Whitespace de ofertas em contas target (Bloco 12) ----
+    try:
+        c.execute("SELECT COUNT(*) FROM portfolio_offers")
+        if c.fetchone()[0] > 0:
+            c.execute("""SELECT a.id, a.name FROM accounts a
+                         WHERE COALESCE(a.is_target, 0) = 1
+                           AND EXISTS (SELECT 1 FROM account_presences p
+                                       WHERE p.account_id = a.id
+                                         AND COALESCE(p.early_terminated, 0) = 0)""")
+            for acc in c.fetchall():
+                ws = _account_whitespace(c, acc['id'])
+                if not ws['missing']:
+                    continue
+                offer = ws['missing'][0]
+                present_names = ', '.join(o['title'] for o in ws['present'][:3]) or 'nenhuma oferta ainda'
+                suggestions.append({
+                    'type': 'whitespace',
+                    'score': 12.0,
+                    'title': f'Apresentar {offer["title"]} para a conta {acc["name"]}',
+                    'description': f'Oferta nunca explorada nesta conta (já usa: {present_names})',
+                    'target_id': acc['id'],
+                    'target_data': json.dumps({'account_id': acc['id'], 'company': acc['name'],
+                                               'offer': offer['title'],
+                                               'present': [o['title'] for o in ws['present'][:5]]},
+                                              ensure_ascii=False),
+                })
+    except Exception as e:
+        logger.debug(f'[Radar] whitespace indisponível: {e}')
+
     # ---- 4. Cadastros incompletos (baixa prioridade, consulta agregada) ----
     c.execute("""
         SELECT id, name, company, email, phone, photo_url,
@@ -1396,6 +1425,10 @@ def suggestion_generate_draft(suggestion_id):
         gatilho = f"{sug['title']}\n{sug.get('description') or ''}"
         if data.get('manchete'):
             gatilho += f"\nNotícia: {data['manchete']} — {data.get('resumo') or ''}"
+        if data.get('offer'):
+            usados = ', '.join(data.get('present') or []) or 'nenhuma oferta contratada ainda'
+            gatilho += (f"\nAbordagem consultiva sobre a oferta '{data['offer']}', nunca explorada nesta conta. "
+                        f"A conta já usa: {usados} — cite isso como contexto.")
 
         raw = _llm_openrouter_first(
             f"Escreva uma mensagem curta de WhatsApp (3 a 5 frases, tom profissional e caloroso, "

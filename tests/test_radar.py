@@ -108,3 +108,33 @@ def test_thread_score_single_threaded(client, db_path):
     mt = [s for s in items if s['suggestion_type'] == 'multithreading']
     assert mt and 'SoloCorp' in mt[0]['title']
     assert 'C-level' in mt[0]['description']
+
+
+def test_whitespace_por_conta(client, db_path):
+    import app as toca
+    client.post('/api/clientes', data={'name': 'Contato WS', 'company': 'WhiteCorp', 'position': 'CEO'})
+    conn = toca.get_db()
+    conn.execute("UPDATE accounts SET is_target = 1 WHERE LOWER(TRIM(name)) = 'whitecorp'")
+    acc_id = conn.execute("SELECT id FROM accounts WHERE LOWER(TRIM(name)) = 'whitecorp'").fetchone()[0]
+    conn.execute("INSERT INTO portfolio_offers (title) VALUES ('Cloud Services')")
+    conn.execute("INSERT INTO portfolio_offers (title) VALUES ('Cybersecurity')")
+    conn.execute("INSERT INTO account_presences (account_id, delivery_name) VALUES (?, 'Cloud Services')", (acc_id,))
+    conn.commit()
+    conn.close()
+
+    ws = client.get(f'/api/accounts/{acc_id}/whitespace').get_json()
+    assert [o['title'] for o in ws['present']] == ['Cloud Services']
+    assert [o['title'] for o in ws['missing']] == ['Cybersecurity']
+
+    matrix = client.get('/api/portfolio/whitespace-matrix').get_json()
+    row = next(r for r in matrix['rows'] if r['name'] == 'WhiteCorp')
+    cyber = next(o for o in matrix['offers'] if o['title'] == 'Cybersecurity')
+    cloud = next(o for o in matrix['offers'] if o['title'] == 'Cloud Services')
+    assert row['cells'][str(cloud['id'])] is True
+    assert row['cells'][str(cyber['id'])] is False
+
+    # sugestão no Radar não repete oferta presente
+    items = client.get('/api/suggestions/today').get_json()
+    ws_sugs = [s for s in items if s['suggestion_type'] == 'whitespace']
+    assert ws_sugs and 'Cybersecurity' in ws_sugs[0]['title']
+    assert 'Cloud Services' not in ws_sugs[0]['title']

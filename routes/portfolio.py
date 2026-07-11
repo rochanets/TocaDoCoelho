@@ -378,3 +378,70 @@ def delete_iata_record(record_id):
     except Exception as e:
         logger.exception(f'[iAta] Erro ao remover registro {record_id}: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# ===========================================================================
+# Whitespace de ofertas / share of wallet (Bloco 12)
+# ===========================================================================
+
+def _ws_normalize(s):
+    return re.sub(r'\s+', ' ', (s or '').strip().lower())
+
+
+def _account_whitespace(c, account_id):
+    """Cruza portfolio_offers com account_presences da conta (por nome):
+    ofertas presentes vs. nunca entregues/mencionadas."""
+    c.execute('SELECT id, title FROM portfolio_offers ORDER BY title COLLATE NOCASE')
+    offers = c.fetchall()
+    c.execute("""SELECT delivery_name FROM account_presences
+                 WHERE account_id = ? AND COALESCE(early_terminated, 0) = 0""", (account_id,))
+    presences = [_ws_normalize(r['delivery_name']) for r in c.fetchall()]
+    present, missing = [], []
+    for offer in offers:
+        t = _ws_normalize(offer['title'])
+        has = any(t and p and (t in p or p in t) for p in presences)
+        (present if has else missing).append({'id': offer['id'], 'title': offer['title']})
+    return {'present': present, 'missing': missing,
+            'presences': [r for r in presences]}
+
+
+@app.route('/api/accounts/<int:account_id>/whitespace', methods=['GET'])
+def account_whitespace(account_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, name FROM accounts WHERE id = ?', (account_id,))
+        acc = c.fetchone()
+        if not acc:
+            conn.close()
+            return jsonify({'error': 'Conta não encontrada'}), 404
+        result = _account_whitespace(c, account_id)
+        result['account_id'] = account_id
+        result['account_name'] = acc['name']
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/accounts/{account_id}/whitespace: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/whitespace-matrix', methods=['GET'])
+def portfolio_whitespace_matrix():
+    """Matriz contas target × ofertas para a view Whitespace do Portfólio."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT id, title FROM portfolio_offers ORDER BY title COLLATE NOCASE')
+        offers = [dict(r) for r in c.fetchall()]
+        c.execute("SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1 ORDER BY name COLLATE NOCASE")
+        rows = []
+        for acc in c.fetchall():
+            ws = _account_whitespace(c, acc['id'])
+            present_ids = {o['id'] for o in ws['present']}
+            rows.append({'account_id': acc['id'], 'name': acc['name'],
+                         'cells': {str(o['id']): (o['id'] in present_ids) for o in offers}})
+        conn.close()
+        return jsonify({'offers': offers, 'rows': rows})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/portfolio/whitespace-matrix: {e}')
+        return jsonify({'error': str(e)}), 500

@@ -714,6 +714,9 @@
                 <button id="portfolioSubBtn_iata" class="btn btn-secondary" onclick="switchPortfolioSubmodule('iata')">
                     <i class="fas fa-file-alt"></i> iAta
                 </button>
+                <button id="portfolioSubBtn_whitespace" class="btn btn-secondary" onclick="switchPortfolioSubmodule('whitespace')">
+                    <i class="fas fa-table-cells"></i> Whitespace
+                </button>
             </div>
 
             <div id="portfolioSubPanel_stf">
@@ -731,6 +734,13 @@
                     <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
                 </div>
                 <div id="iataContent"></div>
+            </div>
+
+            <div id="portfolioSubPanel_whitespace" style="display:none;">
+                <p style="color:#9ca3af; font-size:13px; margin-bottom:10px;">
+                    Contas target × ofertas do portfólio: ✅ já presente na conta, ⬜ nunca explorada (whitespace / share of wallet).
+                </p>
+                <div id="whitespaceContent"></div>
             </div>
         </div>
 

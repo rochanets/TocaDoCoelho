@@ -3499,7 +3499,7 @@
         }
 
         function switchPortfolioSubmodule(subTab) {
-            const tabs = ['stf', 'iata'];
+            const tabs = ['stf', 'iata', 'whitespace'];
             tabs.forEach(tab => {
                 const panel = document.getElementById(`portfolioSubPanel_${tab}`);
                 const btn = document.getElementById(`portfolioSubBtn_${tab}`);
@@ -3510,6 +3510,34 @@
             _portfolioCurrentSubTab = subTab;
             if (subTab === 'stf') _loadSTFSolutions();
             else if (subTab === 'iata') loadIAta();
+            else if (subTab === 'whitespace') loadWhitespaceMatrix();
+        }
+
+        // Whitespace de ofertas (Bloco 12) — matriz contas target × ofertas
+        async function loadWhitespaceMatrix() {
+            const el = document.getElementById('whitespaceContent');
+            if (!el) return;
+            el.innerHTML = '<p style="color:#6b7280;">Carregando matriz...</p>';
+            try {
+                const resp = await fetch(`${API_BASE}/portfolio/whitespace-matrix`);
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Erro ao carregar a matriz.');
+                if (!data.offers.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma oferta cadastrada no Portfólio.</p></div>'; return; }
+                if (!data.rows.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta marcada como target.</p></div>'; return; }
+                const head = data.offers.map(o => `<th style="padding:8px 6px; font-size:11px; max-width:110px; word-break:break-word;">${escapeHtml(o.title)}</th>`).join('');
+                const body = data.rows.map(r => {
+                    const cells = data.offers.map(o => {
+                        const has = r.cells[String(o.id)];
+                        return `<td style="text-align:center; padding:6px;" title="${escapeHtml(r.name)} × ${escapeHtml(o.title)}: ${has ? 'presente' : 'nunca explorada'}">${has ? '✅' : '⬜'}</td>`;
+                    }).join('');
+                    return `<tr><td style="font-weight:600; padding:6px 10px; white-space:nowrap;">${escapeHtml(r.name)}</td>${cells}</tr>`;
+                }).join('');
+                el.innerHTML = `<div style="overflow-x:auto;"><table class="data-table" style="min-width:520px;">
+                    <thead><tr><th style="padding:8px 10px;">Conta target</th>${head}</tr></thead>
+                    <tbody>${body}</tbody></table></div>`;
+            } catch (e) {
+                el.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(e.message)}</div>`;
+            }
         }
 
         async function _loadSTFSolutions() {
