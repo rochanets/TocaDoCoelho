@@ -58,15 +58,22 @@ def poll(task_id):
     return jsonify(_task_get(task_id))
 ```
 
-**Padrão frontend — barra verde com coelhinho 🐇:**
+**Padrão frontend — barra verde com o coelho verde correndo:**
 ```javascript
 // Modal deve ter #formArea e #progressArea separados
 // _setProgress(pct, step) atualiza a barra
 // Polling a cada 800ms até status === 'done' ou 'error'
-// Coelhinho animado na ponta da barra (ver openIAtaModal() como exemplo)
+// Coelho verde correndo na ponta da barra (ver openIAtaModal() como exemplo)
 ```
 
-A animação do coelhinho usa CSS keyframes injetados em `<head>` via `document.createElement('style')` (id único para não duplicar). Exemplo em `openIAtaModal()` em `index.html`.
+**A animação padrão do coelho é o WebP transparente `/images/coelho-correndo.webp` com a classe global `.coelho-run`** (definida no `<style>` principal do `index.html`). NUNCA usar o emoji 🐇 (coelho branco genérico) nem keyframes de "pulinho":
+
+```html
+<!-- dentro do div da barra de progresso (track com position:relative e overflow:visible) -->
+<img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+```
+
+O asset foi gerado a partir de `public/videos/Loading_Bunny.mp4` removendo o fundo preto e a marca d'água (script em `scripts/gerar_assets_coelho.py`). O mesmo coelho em pose estática está no `coelho_icon_transparent.ico` (ícone multi-tamanho 16–256px usado pelo exe, atalhos e bandeja).
 
 ---
 
