@@ -9860,7 +9860,7 @@
             if (!container) return;
 
             if (!clients || clients.length === 0) {
-                container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                container.innerHTML = '<div class="empty-state"><img src="/images/missing-contact/coelho-triste.png" class="empty-bunny-img" alt=""><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 return;
             }
 
@@ -15652,12 +15652,19 @@
             document.querySelectorAll('.theme-option-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.theme === (theme || 'verde-classico'));
             });
-            // Troca de logo para temas pearl
+            // Troca de logo por tema (pearl e blue-space têm logos próprios)
             const isPearl = theme === 'baby-pink' || theme === 'white-pearl';
+            const isBlueSpace = theme === 'blue-space';
             const logoExpanded  = document.querySelector('.sidebar-logo-expanded');
             const logoCollapsed = document.querySelector('.sidebar-logo-collapsed');
-            if (logoExpanded)  logoExpanded.src  = isPearl ? '/logo-coelho-pearl.png'        : '/logo-coelho.png';
-            if (logoCollapsed) logoCollapsed.src = isPearl ? '/images/favicon-toca-pearl.png' : '/images/favicon-toca.png';
+            if (logoExpanded) {
+                logoExpanded.src = isBlueSpace ? '/logo-toca-blue-space.png'
+                    : isPearl ? '/logo-coelho-pearl.png' : '/logo-coelho.png';
+            }
+            if (logoCollapsed) {
+                logoCollapsed.src = isBlueSpace ? '/images/favicon-toca-blue-space.png'
+                    : isPearl ? '/images/favicon-toca-pearl.png' : '/images/favicon-toca.png';
+            }
         }
 
         async function loadThemeConfig() {
