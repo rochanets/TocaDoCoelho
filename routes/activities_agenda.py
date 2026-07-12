@@ -455,6 +455,23 @@ def commitments_alerts():
 # Briefing pré-reunião automático + envio matinal por e-mail (Bloco 13)
 # ===========================================================================
 
+def _briefing_header_info(c, commitment):
+    """Contato (nome/foto) e conta (nome/logo) para o cabeçalho do briefing."""
+    c.execute('SELECT id, name, position, company, photo_url FROM clients WHERE id = ?',
+              (commitment['client_id'],))
+    cl = dict_from_row(c.fetchone()) or {}
+    account = None
+    if cl.get('company'):
+        c.execute('SELECT id, name, logo_url FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))',
+                  (cl['company'],))
+        account = dict_from_row(c.fetchone())
+    return {
+        'client': {'id': cl.get('id'), 'name': cl.get('name'), 'position': cl.get('position'),
+                   'company': cl.get('company'), 'photo_url': cl.get('photo_url')},
+        'account': account,
+    }
+
+
 def _briefing_gather_context(c, commitment):
     """Agrega todo o contexto conhecido do contato/conta para o briefing."""
     client_id = commitment['client_id']
@@ -523,7 +540,7 @@ def _generate_briefing(c, commitment, force=False):
         if cached:
             return {'content': cached['content_md'], 'generated_at': cached['generated_at'], 'cached': True}
     context, client = _briefing_gather_context(c, commitment)
-    raw = _llm_openrouter_first(
+    raw = _llm_prompt(
         'Você é um assistente de vendas B2B. Com base no contexto abaixo, escreva um briefing '
         'pré-reunião em português do Brasil, em markdown, com EXATAMENTE estas seções '
         '(use "## " antes de cada título): Contexto, Últimos assuntos, Pendências suas, '
@@ -550,10 +567,15 @@ def commitment_briefing_get(commitment_id):
     c = conn.cursor()
     c.execute('SELECT content_md, generated_at FROM meeting_briefings WHERE commitment_id = ?', (commitment_id,))
     row = c.fetchone()
-    conn.close()
     if not row:
+        conn.close()
         return jsonify({'error': 'Briefing ainda não gerado'}), 404
-    return jsonify({'content': row['content_md'], 'generated_at': row['generated_at'], 'cached': True})
+    c.execute('SELECT * FROM commitments WHERE id = ?', (commitment_id,))
+    commitment = dict_from_row(c.fetchone())
+    header = _briefing_header_info(c, commitment) if commitment else {}
+    conn.close()
+    return jsonify({'content': row['content_md'], 'generated_at': row['generated_at'],
+                    'cached': True, **header})
 
 
 def _briefing_task_async(task_id, commitment_id, force):
@@ -566,6 +588,7 @@ def _briefing_task_async(task_id, commitment_id, force):
             raise RuntimeError('Compromisso não encontrado.')
         _bg_task_set(task_id, {'step': '🧠 Reunindo contexto e gerando briefing...', 'progress': 30})
         result = _generate_briefing(c, commitment, force=force)
+        result.update(_briefing_header_info(c, commitment))
         conn.commit()
         conn.close()
         _bg_task_set(task_id, {'status': 'done', 'progress': 100, 'step': 'Concluído!', 'result': result})

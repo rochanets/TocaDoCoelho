@@ -3401,3 +3401,47 @@
         html[data-theme="black-cat"] .dashboard-table tbody tr:hover { background: #F8F8FF; }
         html[data-theme="blue-space"] .dashboard-table tbody tr:hover { background: #ccd5ff; }
 
+
+        /* ==================================================================
+           Texto adaptável aos temas — usado pelos módulos novos
+           (Account Planning, Whitespace, Radar, Briefing, Pendentes).
+           Temas claros usam os cinzas padrão; escuros recebem tons legíveis.
+           ================================================================== */
+        .toca-text-strong { color: #1f2937; }
+        .toca-text        { color: #4b5563; }
+        .toca-text-muted  { color: #6b7280; }
+        html[data-theme="blue-space"] .toca-text-strong,
+        html[data-theme="black-cat"] .toca-text-strong { color: #e2e8f5 !important; }
+        html[data-theme="blue-space"] .toca-text,
+        html[data-theme="black-cat"] .toca-text { color: #b4c0d8 !important; }
+        html[data-theme="blue-space"] .toca-text-muted,
+        html[data-theme="black-cat"] .toca-text-muted { color: #93a8bc !important; }
+
+        /* Briefing (Agenda): tipografia e alinhamento do markdown */
+        .briefing-content h2 { font-size: 15px; margin: 12px 0 4px; color: inherit; }
+        .briefing-content h3, .briefing-content h4 { font-size: 14px; margin: 10px 0 4px; }
+        .briefing-content ul { margin: 2px 0 8px; padding-left: 22px; list-style-position: outside; }
+        .briefing-content li { margin: 2px 0; line-height: 1.45; }
+        .briefing-content p { margin: 4px 0; line-height: 1.5; }
+
+        /* Risco de concentração (Gestão de Conta): "!" com tooltip opaco no hover */
+        .toca-risk-flag {
+            position: relative;
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 20px; height: 20px; border-radius: 50%;
+            background: #f59e0b; color: #ffffff;
+            font-weight: 800; font-size: 13px; line-height: 1;
+            cursor: help; flex-shrink: 0;
+            box-shadow: 0 2px 6px rgba(245,158,11,.45);
+        }
+        .toca-risk-tooltip {
+            display: none;
+            position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
+            width: 260px; padding: 12px 14px; border-radius: 10px;
+            background: #1f2937; color: #f9fafb;   /* opaco, sem transparência */
+            font-size: 12.5px; font-weight: 400; line-height: 1.5; text-align: left;
+            box-shadow: 0 10px 28px rgba(0,0,0,.35);
+            z-index: 5000;
+        }
+        .toca-risk-tooltip b { color: #fbbf24; }
+        .toca-risk-flag:hover .toca-risk-tooltip { display: block; }

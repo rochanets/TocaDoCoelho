@@ -1674,8 +1674,9 @@
                 <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#4b5563; margin-bottom:12px;">
                     <input type="checkbox" id="whatsUseDesktop" ${prefDesktop ? 'checked' : ''}> Abrir no WhatsApp Desktop (sem reload do Web)
                 </label>
-                <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
                     <button class="btn btn-secondary" onclick="closeWhatsAppModal()">Cancelar</button>
+                    <button class="btn btn-secondary" onclick="scheduleFromDashboardWhatsApp(${client.id})" title="Agendar o envio para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
                     <button class="btn btn-primary" onclick="openWhatsAppWeb(${client.id})">Enviar mensagem</button>
                 </div>
             </div>`;
@@ -1708,8 +1709,9 @@
                 ${tagsBar}
                 <div class="form-group"><label>Assunto</label><input id="emailDraftSubject" type="text" placeholder="Ex: Olá &lt;nome do contato&gt;, oportunidade para &lt;conta&gt;"></div>
                 <div class="form-group"><label>Mensagem</label><textarea id="emailDraftBody" rows="8"></textarea></div>
-                <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
                     <button class="btn btn-secondary" onclick="closeEmailDraftModal()">Cancelar</button>
+                    <button class="btn btn-secondary" onclick="scheduleFromDashboardEmail(${client.id})" title="Agendar o envio para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
                     <button class="btn btn-primary" onclick="openOutlookDraft(${client.id})">Abrir no Outlook</button>
                 </div>
             </div>`;
@@ -1757,10 +1759,16 @@
                 const visiblePresences = (a.presences||[]).filter(p => showTerminated || !isPresenceTerminated(p));
                 const badges = visiblePresences.map(p=>`<span onclick="event.stopPropagation();openPresenceModal(${a.id},${p.id})" style="${presenceBadgeStyle(p)}">${escapeHtml(p.delivery_name)}</span>`).join('');
                 const ts = threadScores[String(a.id)];
-                const threadBadge = ts && ts.single_threaded
-                    ? `<div style="margin-top:8px; font-size:11px; font-weight:700; color:#b45309; background:rgba(245,158,11,.15); border:1px solid rgba(245,158,11,.4); border-radius:8px; padding:3px 8px; display:inline-block;" title="Conta sustentada por poucos contatos ativos — mapeie mais decisores (níveis ausentes: ${escapeHtml((ts.missing_levels||[]).join(', '))})">🕸️ ${ts.active_contacts} contato(s) ativo(s) — risco de concentração</div>`
+                const riskFlag = ts && ts.single_threaded
+                    ? `<span class="toca-risk-flag" onclick="event.stopPropagation();">!
+                           <span class="toca-risk-tooltip"><b>Risco de concentração</b><br>
+                           Esta conta é sustentada por <b>${ts.active_contacts} contato(s) ativo(s)</b>.
+                           Se essa pessoa sair da empresa, o relacionamento inteiro fica exposto.
+                           Mapeie mais decisores${(ts.missing_levels||[]).length ? ` — níveis ausentes: <b>${escapeHtml(ts.missing_levels.join(', '))}</b>` : ''}.
+                           Use o Account Planning para encontrar novos contatos.</span>
+                       </span>`
                     : '';
-                return `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div><div style="font-weight:700; color:#e2dfd5;">${escapeHtml(a.name)}</div><div style="font-size:12px; color:rgba(226,223,213,0.7);">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div>${threadBadge}<div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${badges}</div></div>`;
+                return `<div onclick="openAccountViewModal(${a.id})" style="cursor:pointer; padding:14px; border-radius:16px; background:rgba(255,255,255,.45); border:1px solid rgba(16,185,129,.35); backdrop-filter:blur(8px); box-shadow:0 10px 24px rgba(4,120,87,.14);"><div style="display:flex; gap:10px; align-items:center;"><img src="${a.logo_url || '/logo-coelho.png'}" style="width:42px; height:42px; border-radius:12px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.2);"><div style="flex:1;"><div style="font-weight:700; color:#e2dfd5; display:flex; align-items:center; gap:6px;">${escapeHtml(a.name)}${riskFlag}</div><div style="font-size:12px; color:rgba(226,223,213,0.7);">${Number(a.is_target)===1?'Target':'Não target'}</div></div></div><div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">${badges}</div></div>`;
             }).join('')}</div>`;
         }
 
@@ -3517,23 +3525,23 @@
         async function loadWhitespaceMatrix() {
             const el = document.getElementById('whitespaceContent');
             if (!el) return;
-            el.innerHTML = '<p style="color:#6b7280;">Carregando matriz...</p>';
+            el.innerHTML = '<p class="toca-text">Carregando matriz...</p>';
             try {
                 const resp = await fetch(`${API_BASE}/portfolio/whitespace-matrix`);
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.error || 'Erro ao carregar a matriz.');
                 if (!data.offers.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma oferta cadastrada no Portfólio.</p></div>'; return; }
                 if (!data.rows.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta marcada como target.</p></div>'; return; }
-                const head = data.offers.map(o => `<th style="padding:8px 6px; font-size:11px; max-width:110px; word-break:break-word;">${escapeHtml(o.title)}</th>`).join('');
+                const head = data.offers.map(o => `<th class="toca-text-strong" style="padding:8px 6px; font-size:11px; max-width:110px; word-break:break-word;">${escapeHtml(o.title)}</th>`).join('');
                 const body = data.rows.map(r => {
                     const cells = data.offers.map(o => {
                         const has = r.cells[String(o.id)];
                         return `<td style="text-align:center; padding:6px;" title="${escapeHtml(r.name)} × ${escapeHtml(o.title)}: ${has ? 'presente' : 'nunca explorada'}">${has ? '✅' : '⬜'}</td>`;
                     }).join('');
-                    return `<tr><td style="font-weight:600; padding:6px 10px; white-space:nowrap;">${escapeHtml(r.name)}</td>${cells}</tr>`;
+                    return `<tr><td class="toca-text-strong" style="font-weight:600; padding:6px 10px; white-space:nowrap;">${escapeHtml(r.name)}</td>${cells}</tr>`;
                 }).join('');
                 el.innerHTML = `<div style="overflow-x:auto;"><table class="data-table" style="min-width:520px;">
-                    <thead><tr><th style="padding:8px 10px;">Conta target</th>${head}</tr></thead>
+                    <thead><tr><th class="toca-text-strong" style="padding:8px 10px;">Conta target</th>${head}</tr></thead>
                     <tbody>${body}</tbody></table></div>`;
             } catch (e) {
                 el.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(e.message)}</div>`;

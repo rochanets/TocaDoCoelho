@@ -98,3 +98,39 @@ def test_first_run_e_extensao(client, db_path):
     # usuário instala e confirma
     assert client.post('/api/extension/update-status/seen').status_code == 200
     assert client.get('/api/extension/update-status').get_json()['update_available'] is False
+
+
+def test_agendamento_cria_atividade_provisoria_e_promove(client, sample_client_id, db_path, monkeypatch):
+    import app as toca
+    monkeypatch.setattr(toca, '_waha_send_text', lambda chat_id, text: (True, None))
+
+    sid = _schedule(client, sample_client_id).get_json()['ids'][0]
+    conn = toca.get_db()
+    # atividade provisória criada com relógio, SEM atualizar o status do contato
+    act = conn.execute('SELECT id, information FROM activities WHERE client_id = ?', (sample_client_id,)).fetchone()
+    assert act and act[1].startswith('⏰ [AGENDADO')
+    last = conn.execute('SELECT last_activity_date FROM clients WHERE id = ?', (sample_client_id,)).fetchone()[0]
+    assert last is None
+
+    # enviar agora => atividade promovida (sem relógio) e status atualizado
+    assert client.post(f'/api/scheduled-sends/{sid}/send-now').status_code == 200
+    info = conn.execute('SELECT information FROM activities WHERE id = ?', (act[0],)).fetchone()[0]
+    assert not info.startswith('⏰') and 'agendada' in info
+    last = conn.execute('SELECT last_activity_date FROM clients WHERE id = ?', (sample_client_id,)).fetchone()[0]
+    assert last is not None
+    # não duplicou atividade
+    n = conn.execute('SELECT COUNT(*) FROM activities WHERE client_id = ?', (sample_client_id,)).fetchone()[0]
+    assert n == 1
+    conn.close()
+
+
+def test_cancelamento_remove_atividade_provisoria(client, sample_client_id, db_path):
+    import app as toca
+    sid = _schedule(client, sample_client_id).get_json()['ids'][0]
+    conn = toca.get_db()
+    assert conn.execute('SELECT COUNT(*) FROM activities WHERE client_id = ?', (sample_client_id,)).fetchone()[0] == 1
+    conn.close()
+    assert client.post(f'/api/scheduled-sends/{sid}/cancel').status_code == 200
+    conn = toca.get_db()
+    assert conn.execute('SELECT COUNT(*) FROM activities WHERE client_id = ?', (sample_client_id,)).fetchone()[0] == 0
+    conn.close()

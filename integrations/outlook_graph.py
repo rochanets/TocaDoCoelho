@@ -91,6 +91,12 @@ def _http_form_post(url, form_data):
     except urllib.error.HTTPError as e:
         body = _safe_json_loads(e.read())
         err = body.get('error_description') or body.get('error') or str(e)
+        if 'AADSTS65001' in str(err) or 'consent' in str(err).lower() or 'interaction_required' in str(body.get('error') or ''):
+            raise OutlookOAuthError(
+                'A permissão de envio de e-mail (Mail.Send) ainda não foi concedida. '
+                'Vá em Configurações > Integrações > Outlook, clique em DESCONECTAR e '
+                'depois em CONECTAR novamente para aprovar a nova permissão.'
+            ) from e
         raise OutlookOAuthError(f'Falha OAuth no token endpoint: {err}') from e
     except Exception as e:
         raise OutlookOAuthError(f'Falha de conexão no token endpoint: {e}') from e
@@ -247,6 +253,9 @@ def build_authorize_url(user_id: int, settings=None):
         'state': make_state(user_id),
         'code_challenge': _pkce_make_challenge(verifier),
         'code_challenge_method': 'S256',
+        # Garante a tela de consentimento — obrigatório quando o escopo muda
+        # (ex.: Mail.Send adicionado), senão o token endpoint devolve AADSTS65001.
+        'prompt': 'consent',
     }
     return f"{cfg['authorize_url']}?{urllib.parse.urlencode(params)}"
 

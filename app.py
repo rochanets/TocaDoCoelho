@@ -1249,6 +1249,9 @@ SCHEMA_MIGRATIONS = [
         )''',
         "CREATE INDEX IF NOT EXISTS idx_scheduled_sends_due ON scheduled_sends(status, scheduled_for)",
     ]),
+    (12, 'scheduled_sends_activity_link', [
+        'ALTER TABLE scheduled_sends ADD COLUMN activity_id INTEGER',
+    ]),
 ]
 
 
@@ -1475,10 +1478,24 @@ def _extract_bing_image_urls(raw_html, log_prefix='[AutoPic]'):
     return urls
 
 
-def _llm_openrouter_first(question, log_tag='llm', temperature=0.1):
-    """Chamada de LLM no padrão do projeto para features novas:
-    OpenRouter primeiro, _sai_simple_prompt como fallback.
+def _llm_prompt(question, log_tag='llm', temperature=0.1, web=False):
+    """REGRA DE DESENVOLVIMENTO (ver CLAUDE.md): toda automação com IA usa
+    SAI primeiro e OpenRouter como fallback. Única exceção: perguntas que
+    exigem busca ativa na internet (web=True) — aí o OpenRouter (com plugin
+    de web) vem primeiro, já que os templates SAI não têm acesso à web.
     Retorna str com a resposta, ou None se nenhum provider respondeu."""
+    if web:
+        raw = _openrouter_web_prompt(question)
+        if raw and str(raw).strip():
+            logger.info(f'[{log_tag}][OpenRouter/web] Resposta gerada com sucesso')
+            return raw
+        return _sai_simple_prompt(question)
+
+    raw = _sai_simple_prompt(question)
+    if raw and str(raw).strip():
+        logger.info(f'[{log_tag}][SAI] Resposta gerada com sucesso')
+        return raw
+
     or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
     if or_key:
         or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
@@ -1504,12 +1521,12 @@ def _llm_openrouter_first(question, log_tag='llm', temperature=0.1):
             choices = data.get('choices') or []
             raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
             if raw and str(raw).strip():
-                logger.info(f'[{log_tag}][OpenRouter] Resposta gerada com sucesso')
+                logger.info(f'[{log_tag}][OpenRouter] Resposta gerada com sucesso (fallback)')
                 return raw
-            logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia, tentando SAI.')
+            logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia.')
         except Exception as e:
-            logger.warning(f'[{log_tag}][OpenRouter] Falha: {e}. Tentando SAI.')
-    return _sai_simple_prompt(question)
+            logger.warning(f'[{log_tag}][OpenRouter] Falha no fallback: {e}')
+    return None
 
 
 def _find_image_candidates_on_web(query, limit=3):
@@ -6982,7 +6999,7 @@ def _detect_followup_from_text(c, client_id, activity_id, client_name, text):
     if not text:
         return 0
     today_str = datetime.now().strftime('%Y-%m-%d')
-    raw = _llm_openrouter_first(
+    raw = _llm_prompt(
         f"A data de hoje é {today_str}. Analise a comunicação abaixo entre o usuário e '{client_name}'. "
         'Retorne SOMENTE um JSON válido no formato '
         '{"followup": {"data": "YYYY-MM-DD", "titulo": "descrição curta do retorno/compromisso combinado"}}. '

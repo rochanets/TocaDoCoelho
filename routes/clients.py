@@ -272,7 +272,6 @@ def create_client():
         area_of_activity = request.form.get('area_of_activity', '').strip()
         is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
-        birthday = (request.form.get('birthday') or '').strip() or None
         force_create = request.form.get('force_create') in ('1', 'true', 'on')
         autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         
@@ -316,9 +315,9 @@ def create_client():
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, birthday, is_archived)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, birthday))
+        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact))
         client_id = c.lastrowid
         ensure_account_for_company(c, company)
         conn.commit()
@@ -354,7 +353,6 @@ def update_client(client_id):
         remove_photo = request.form.get('remove_photo', '0') == '1'
         autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
         is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
-        birthday = (request.form.get('birthday') or '').strip() or None
         
         if not name or not company or not position:
             return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
@@ -383,9 +381,9 @@ def update_client(client_id):
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
         
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, birthday = ?, is_archived = CASE WHEN TRIM(?) != '' THEN 0 ELSE is_archived END, updated_at = CURRENT_TIMESTAMP
+        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, is_archived = CASE WHEN TRIM(?) != '' THEN 0 ELSE is_archived END, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, birthday, company, client_id))
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, company, client_id))
         ensure_account_for_company(c, company)
         conn.commit()
         conn.close()
@@ -945,7 +943,7 @@ def linkedin_auto_capture():
             conn.close()
             return jsonify({'ok': True, 'ignored': 'nao_cadastrado'})
 
-        raw = _llm_openrouter_first(
+        raw = _llm_prompt(
             'A partir do texto visível de um perfil público do LinkedIn abaixo, extraia o emprego ATUAL '
             'da pessoa. Retorne SOMENTE JSON válido: {"empresa_atual": "...", "cargo_atual": "..."}. '
             'Use null se não conseguir identificar com segurança.\n\n'

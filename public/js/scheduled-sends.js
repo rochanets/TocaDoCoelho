@@ -107,6 +107,33 @@
             });
         }
 
+        function scheduleFromDashboardWhatsApp(clientId) {
+            const client = (typeof clients !== 'undefined' && clients.find(c => c.id === clientId)) || {};
+            const raw = (document.getElementById('whatsMessageText')?.value || '').trim();
+            if (!raw) { showError('Escreva a mensagem antes de agendar.'); return; }
+            if (!client.phone) { showError('Este contato não tem telefone cadastrado.'); return; }
+            const message = applyMergeFields(raw, client);
+            openScheduleSendModal({
+                channel: 'whatsapp',
+                items: [{ client_id: clientId, phone: client.phone, message, name: client.name }],
+                onScheduled: () => closeWhatsAppModal(),
+            });
+        }
+
+        function scheduleFromDashboardEmail(clientId) {
+            const client = (typeof clients !== 'undefined' && clients.find(c => c.id === clientId)) || {};
+            const subject = applyMergeFields((document.getElementById('emailDraftSubject')?.value || '').trim(), client);
+            const raw = (document.getElementById('emailDraftBody')?.value || '').trim();
+            if (!raw) { showError('Escreva a mensagem antes de agendar.'); return; }
+            if (!client.email) { showError('Este contato não tem e-mail cadastrado.'); return; }
+            const message = applyMergeFields(raw, client);
+            openScheduleSendModal({
+                channel: 'email',
+                items: [{ client_id: clientId, email_to: client.email, subject, message, name: client.name }],
+                onScheduled: () => closeEmailDraftModal(),
+            });
+        }
+
         function scheduleMailingViaWaha() {
             const pending = (autoTocaMailingDispatchDrafts || [])
                 .filter(d => d.status !== 'sent' && d.phone);

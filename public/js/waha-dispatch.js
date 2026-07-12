@@ -148,18 +148,25 @@
         // Contato rápido no perfil do cliente (Bloco 8, tarefa 6)
         // -----------------------------------------------------
 
+        const _QUICK_CONTACT_TAGS = ['<nome do contato>', '<sobrenome>', '<conta>', '<cargo>', '<area de atuacao>', '<ultima atividade>'];
+
         function _quickContactMerge(text, client) {
-            const first = (client.name || '').split(' ')[0] || '';
+            const first = getAutoTocaContactFirstName(client.name);
+            const last = getAutoTocaContactLastName(client.name);
             let lastAct = (client.last_activity_date || '').slice(0, 10);
             if (lastAct) { const [y, m, d] = lastAct.split('-'); lastAct = `${d}/${m}/${y}`; }
             return String(text || '')
+                .replaceAll('<nome do contato>', first)
+                .replaceAll('<sobrenome>', last)
+                .replaceAll('<conta>', client.company || '')
+                .replaceAll('<cargo>', client.position || '')
+                .replaceAll('<area de atuacao>', client.area_of_activity || '')
+                .replaceAll('<ultima atividade>', lastAct || 'nosso último contato')
+                // retrocompatibilidade com templates antigos em {chave}
                 .replaceAll('{nome}', first)
                 .replaceAll('{empresa}', client.company || '')
                 .replaceAll('{cargo}', client.position || '')
-                .replaceAll('{ultima_atividade}', lastAct || 'nosso último contato')
-                .replaceAll('<nome do contato>', first)
-                .replaceAll('<conta>', client.company || '')
-                .replaceAll('<cargo>', client.position || '');
+                .replaceAll('{ultima_atividade}', lastAct || 'nosso último contato');
         }
 
         async function openQuickContactModal(clientId) {
@@ -184,11 +191,14 @@
                             <select id="quickContactTemplate" class="input-minimal" style="width:100%;" onchange="quickContactApplyTemplate(${clientId})">
                                 <option value="">Mensagem livre...</option>${options}
                             </select>
-                            <small style="color:#9ca3af; font-size:11px;">Variáveis: {nome}, {empresa}, {cargo}, {ultima_atividade}</small>
                         </div>
                         <div class="form-group">
                             <label>Mensagem</label>
-                            <textarea id="quickContactBody" rows="6" placeholder="Olá {nome}! Tudo bem?"></textarea>
+                            <textarea id="quickContactBody" rows="6" placeholder="Olá <nome do contato>! Tudo bem?"></textarea>
+                            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
+                                ${_QUICK_CONTACT_TAGS.map(tag => `<button type="button" class="btn btn-secondary btn-small" onclick="insertMergeTagInto('quickContactBody', '${tag.replace(/'/g, "\\'")}')">${escapeHtml(tag)}</button>`).join('')}
+                            </div>
+                            <small class="toca-text-muted" style="font-size:11px;">Cada chave é substituída pelo dado real do contato no envio.</small>
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap;">
                             <button class="btn btn-secondary" onclick="quickContactOpenWeb(${clientId})" title="Abrir no WhatsApp Web/desktop (contingência)"><i class="fab fa-whatsapp"></i> Abrir no WhatsApp</button>

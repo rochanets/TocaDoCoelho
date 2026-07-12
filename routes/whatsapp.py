@@ -547,13 +547,56 @@ def whatsapp_send_batch():
 _SCHEDULED_SEND_GRACE_MINUTES = 3  # janela em que o worker ainda envia sozinho
 
 
+def _scheduled_placeholder_info(channel, scheduled_for, message):
+    """Texto da atividade provisória de envio agendado (relógio no canto)."""
+    d, h = scheduled_for.split(' ')
+    y, m, dd = d.split('-')
+    label = 'Mensagem WhatsApp' if channel == 'whatsapp' else 'E-mail'
+    return f'⏰ [AGENDADO para {dd}/{m}/{y} às {h}] {label}:\n{message[:400]}'
+
+
+def _scheduled_send_create_placeholder(c, channel, client_id, scheduled_for, message):
+    """Registra a atividade provisória do agendamento — SEM atualizar o status
+    (last_activity_date) do contato; isso só acontece no envio efetivo."""
+    if not client_id:
+        return None
+    c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, ?, ?)",
+              (client_id, 'WhatsApp' if channel == 'whatsapp' else 'Email',
+               _scheduled_placeholder_info(channel, scheduled_for, message)))
+    return c.lastrowid
+
+
+def _scheduled_send_promote_activity(c, row):
+    """Envio efetivado: converte a atividade provisória em atividade normal
+    (remove o relógio, data = agora) e atualiza o status do contato."""
+    if not row.get('client_id'):
+        return
+    label = 'Mensagem enviada via WhatsApp (agendada)' if row['channel'] == 'whatsapp' \
+        else f"E-mail enviado (agendado): {row.get('subject') or ''}"
+    info = f'{label}\n{(row.get("message") or "")[:400]}'
+    if row.get('activity_id'):
+        c.execute("""UPDATE activities SET information = ?, activity_date = CURRENT_TIMESTAMP,
+                     created_at = CURRENT_TIMESTAMP WHERE id = ?""", (info, row['activity_id']))
+        if c.rowcount == 0:
+            c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, ?, ?)",
+                      (row['client_id'], 'WhatsApp' if row['channel'] == 'whatsapp' else 'Email', info))
+    else:
+        c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, ?, ?)",
+                  (row['client_id'], 'WhatsApp' if row['channel'] == 'whatsapp' else 'Email', info))
+    c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (row['client_id'],))
+    _inbound_mark_responded(c, row['client_id'], row['channel'])
+
+
 def _scheduled_send_execute(c, row):
     """Executa um envio agendado. Retorna (ok, error)."""
     channel = row['channel']
     if channel == 'whatsapp':
-        result = _waha_send_and_register(c, row['client_id'], row['phone'] or '', row['message'])
+        # register_activity=False: a atividade provisória do agendamento é promovida abaixo
+        result = _waha_send_and_register(c, row['client_id'], row['phone'] or '', row['message'],
+                                         register_activity=False)
         if not result.get('ok'):
             return False, result.get('error') or 'Falha no envio via WAHA.'
+        _scheduled_send_promote_activity(c, row)
         return True, None
     if channel == 'email':
         body_html = '<p>' + html.escape(row['message']).replace('\n', '<br>') + '</p>'
@@ -561,12 +604,7 @@ def _scheduled_send_execute(c, row):
             _outlook_send_mail(row['email_to'], row['subject'] or 'Mensagem', body_html)
         except Exception as e:
             return False, str(e)
-        if row['client_id']:
-            info = f"E-mail enviado (agendado): {row['subject'] or ''}\n{row['message'][:400]}"
-            c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, 'Email', ?)",
-                      (row['client_id'], info))
-            c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (row['client_id'],))
-            _inbound_mark_responded(c, row['client_id'], 'email')
+        _scheduled_send_promote_activity(c, row)
         return True, None
     return False, f'Canal desconhecido: {channel}'
 
@@ -648,12 +686,14 @@ def scheduled_sends_create():
                 continue
             if channel == 'email' and not (item.get('email_to') or '').strip():
                 continue
+            activity_id = _scheduled_send_create_placeholder(
+                c, channel, item.get('client_id'), scheduled_for, message)
             c.execute("""INSERT INTO scheduled_sends
-                         (channel, client_id, phone, email_to, subject, message, scheduled_for)
-                         VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                         (channel, client_id, phone, email_to, subject, message, scheduled_for, activity_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                       (channel, item.get('client_id'), (item.get('phone') or '').strip() or None,
                        (item.get('email_to') or '').strip() or None,
-                       (item.get('subject') or '').strip() or None, message, scheduled_for))
+                       (item.get('subject') or '').strip() or None, message, scheduled_for, activity_id))
             created.append(c.lastrowid)
         conn.commit()
         conn.close()
@@ -729,10 +769,14 @@ def scheduled_send_cancel(send_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("UPDATE scheduled_sends SET status = 'cancelled' WHERE id = ? AND status = 'pending'", (send_id,))
-        if c.rowcount == 0:
+        c.execute("SELECT activity_id FROM scheduled_sends WHERE id = ? AND status = 'pending'", (send_id,))
+        row = c.fetchone()
+        if not row:
             conn.close()
             return jsonify({'error': 'Agendamento não encontrado (ou já processado).'}), 404
+        c.execute("UPDATE scheduled_sends SET status = 'cancelled' WHERE id = ?", (send_id,))
+        if row['activity_id']:
+            c.execute('DELETE FROM activities WHERE id = ?', (row['activity_id'],))
         conn.commit()
         conn.close()
         return jsonify({'ok': True})

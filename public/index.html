@@ -155,16 +155,17 @@
                     </div>
                 </div>
 
-                <!-- Radar do Dia (Bloco 5) — sugestões priorizadas do dia -->
-                <div id="radarDoDia" class="card" style="margin-bottom:18px; padding:16px 18px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
-                        <h2 style="margin:0; font-size:17px; display:flex; align-items:center; gap:8px;">📡 Radar do Dia</h2>
-                        <button class="btn btn-secondary btn-small" onclick="loadRadarDoDia()" title="Atualizar sugestões"><i class="fas fa-rotate-right"></i></button>
+                <!-- Radar do Dia (Bloco 5) — inicia comprimido; badge mostra o nº de itens -->
+                <div id="radarDoDia" class="card" style="margin-bottom:18px; padding:14px 18px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; cursor:pointer;" onclick="toggleRadarDoDia()" title="Mostrar/ocultar as sugestões do dia">
+                        <h2 style="margin:0; font-size:17px; display:flex; align-items:center; gap:6px;">📡 Radar do Dia<span id="radarBadge" style="display:none; background:#ef4444; color:#fff; font-size:11px; font-weight:700; border-radius:99px; min-width:19px; height:19px; line-height:19px; text-align:center; padding:0 5px; margin-left:2px;"></span></h2>
+                        <span style="display:flex; align-items:center; gap:8px;">
+                            <button class="btn btn-secondary btn-small" onclick="event.stopPropagation(); loadRadarDoDia()" title="Atualizar sugestões"><i class="fas fa-rotate-right"></i></button>
+                            <span id="radarToggle" class="toca-text-muted" style="font-size:13px;">mostrar ▾</span>
+                        </span>
                     </div>
-                    <div id="radarBanner"></div>
-                    <div id="radarContent" style="display:flex; flex-direction:column; gap:6px;">
-                        <div style="color:#9ca3af; font-size:13px;">Carregando sugestões...</div>
-                    </div>
+                    <div id="radarBanner" style="margin-top:8px;"></div>
+                    <div id="radarContent" style="display:none; flex-direction:column; gap:6px; margin-top:8px;"></div>
                 </div>
 
                 <!-- Pendentes de Resposta (Bloco 6) — inbound WhatsApp/Outlook -->
@@ -1418,10 +1419,6 @@
                 <div class="form-group">
                     <label>Telefone</label>
                     <input type="tel" name="phone">
-                </div>
-                <div class="form-group">
-                    <label>Aniversário (opcional)</label>
-                    <input type="text" name="birthday" id="clientBirthdayInput" placeholder="DD/MM" maxlength="10" title="Dia e mês do aniversário — gera lembrete no Radar do Dia na semana do aniversário">
                 </div>
                 <div class="form-group">
                     <label>LinkedIn (opcional)</label>

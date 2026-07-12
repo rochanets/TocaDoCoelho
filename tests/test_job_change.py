@@ -17,7 +17,7 @@ def test_auto_capture_gera_evento_e_sugestao(client, db_path, monkeypatch):
     wl = client.get('/api/linkedin/watchlist').get_json()
     assert any(w['slug'] == 'campeao-silva' for w in wl)
 
-    monkeypatch.setattr(toca, '_llm_openrouter_first',
+    monkeypatch.setattr(toca, '_llm_prompt',
                         lambda *a, **k: '{"empresa_atual": "Empresa Nova SA", "cargo_atual": "CIO"}')
     resp = client.post('/api/linkedin/auto-capture', json={
         'url': 'https://www.linkedin.com/in/campeao-silva/',
@@ -56,7 +56,7 @@ def test_auto_capture_gera_evento_e_sugestao(client, db_path, monkeypatch):
 def test_auto_capture_mesma_empresa_nao_gera_evento(client, db_path, monkeypatch):
     import app as toca
     _mk_linkedin_client(client)
-    monkeypatch.setattr(toca, '_llm_openrouter_first',
+    monkeypatch.setattr(toca, '_llm_prompt',
                         lambda *a, **k: '{"empresa_atual": "Empresa Velha", "cargo_atual": "Diretor de TI"}')
     resp = client.post('/api/linkedin/auto-capture', json={
         'url': 'https://www.linkedin.com/in/campeao-silva/',
@@ -78,7 +78,7 @@ def test_briefing_cache(client, sample_client_id, db_path, monkeypatch):
     def fake_llm(*a, **k):
         calls['n'] += 1
         return '## Contexto\n- teste\n## Últimos assuntos\n- x\n## Pendências suas\n- y\n## Pendências dele\n- z\n## Oportunidades em aberto\n- w\n## Sugestão de pauta\n- k'
-    monkeypatch.setattr(toca, '_llm_openrouter_first', fake_llm)
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
 
     c = conn.cursor()
     commitment = dict(conn.execute('SELECT * FROM commitments WHERE id = ?', (cid,)).fetchone())

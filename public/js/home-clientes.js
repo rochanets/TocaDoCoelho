@@ -5312,7 +5312,6 @@
             document.getElementById('clientForm').email.value = client.email || '';
             document.getElementById('clientForm').phone.value = formatPhone(client.phone || '');
             if (document.getElementById('clientForm').linkedin) document.getElementById('clientForm').linkedin.value = client.linkedin || '';
-            if (document.getElementById('clientForm').birthday) document.getElementById('clientForm').birthday.value = client.birthday || '';
             document.getElementById('clientIsTarget').value = Number(client.is_target) === 1 ? '1' : '0';
             document.getElementById('clientColdContact').value = Number(client.is_cold_contact) === 1 ? '1' : '0';
             document.getElementById('clientForm').area_of_activity.value = client.area_of_activity || '';

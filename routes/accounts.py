@@ -618,7 +618,7 @@ def _ap_parse_linkedin_title(title):
 def _ap_normalize_with_llm(title, snippet, company):
     """Usa LLM só para normalizar nome/cargo a partir do texto do resultado —
     nunca como fonte da URL."""
-    raw = _llm_openrouter_first(
+    raw = _llm_prompt(
         'A partir do título e trecho abaixo, vindos de um resultado de busca de um '
         'perfil público do LinkedIn, extraia o nome da pessoa e o cargo dela na '
         f'empresa "{company}". Retorne SOMENTE JSON válido no formato '
@@ -776,17 +776,29 @@ def account_planning_run_detail(run_id):
     return jsonify(payload)
 
 
+_MARKET_SEGMENTS = [
+    'Agronegócio', 'Alimentos e Bebidas', 'Automobilístico', 'Bancos e Serviços Financeiros',
+    'Bens de Consumo', 'Construção e Engenharia', 'Educação', 'Energia e Utilities',
+    'Farmacêutico (Pharma)', 'Governo e Setor Público', 'Indústria / Manufatura',
+    'Logística e Transportes', 'Mineração e Siderurgia', 'Química e Petroquímica',
+    'Saúde (Hospitais e Laboratórios)', 'Seguros', 'Serviços', 'Tecnologia',
+    'Telecomunicações', 'Turismo e Hotelaria', 'Varejo e E-commerce',
+]
+
+
 @app.route('/api/account-planning/segments', methods=['GET'])
 def account_planning_segments():
-    """Sugestões de segmento a partir das áreas de atuação já cadastradas."""
+    """Segmentos de mercado para o Account Planning: lista curada de áreas reais
+    de mercado + setores já usados nas contas cadastradas."""
     conn = get_db()
     c = conn.cursor()
-    c.execute("""SELECT DISTINCT TRIM(area_of_activity) AS seg FROM clients
-                 WHERE area_of_activity IS NOT NULL AND TRIM(area_of_activity) != ''
-                 ORDER BY seg""")
-    rows = [r['seg'] for r in c.fetchall()]
+    c.execute("""SELECT DISTINCT TRIM(sector) AS seg FROM accounts
+                 WHERE sector IS NOT NULL AND TRIM(sector) != ''""")
+    extras = [r['seg'] for r in c.fetchall()]
     conn.close()
-    return jsonify(rows)
+    seen = {s.lower() for s in _MARKET_SEGMENTS}
+    merged = list(_MARKET_SEGMENTS) + sorted(s for s in extras if s.lower() not in seen)
+    return jsonify(merged)
 
 
 # ===========================================================================

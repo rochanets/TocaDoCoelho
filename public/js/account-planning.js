@@ -118,15 +118,15 @@
             const el = document.getElementById('apResultsContent');
             if (!el) return;
             if (!_apState.candidates.length) {
-                el.innerHTML = `<div class="card" style="padding:18px; color:#6b7280;">Nenhum decisor com presença pública no LinkedIn foi encontrado para "<b>${escapeHtml(_apState.company)}</b>". Tente variar o nome da empresa.</div>`;
+                el.innerHTML = `<div class="card toca-text" style="padding:18px;">Nenhum decisor com presença pública no LinkedIn foi encontrado para "<b>${escapeHtml(_apState.company)}</b>". Tente variar o nome da empresa.</div>`;
                 return;
             }
             const rows = _apState.candidates.map((cand, idx) => _apRowHtml(cand, idx)).join('');
             el.innerHTML = `
                 <div class="card" style="padding:14px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
-                        <h3 style="margin:0; font-size:15px;">Decisores encontrados — ${escapeHtml(_apState.company)}</h3>
-                        <small style="color:#9ca3af;">Fotos são aproximadas (busca por nome+empresa) — confirme antes de salvar.</small>
+                        <h3 class="toca-text-strong" style="margin:0; font-size:15px;">Decisores encontrados — ${escapeHtml(_apState.company)}</h3>
+                        <small class="toca-text-muted">Fotos são aproximadas (busca por nome+empresa) — confirme antes de salvar.</small>
                     </div>
                     <div id="apRowsContainer">${rows}</div>
                 </div>`;
@@ -150,8 +150,8 @@
                 <div class="ap-row" id="apRow_${idx}" style="display:flex; align-items:center; gap:12px; padding:10px 6px; border-bottom:1px solid rgba(148,163,184,.2);">
                     ${photo}
                     <div style="flex:1; min-width:180px;">
-                        <div style="font-weight:600;">${escapeHtml(cand.name)}</div>
-                        <div style="font-size:12px; color:#9ca3af;">${escapeHtml(cand.position || cand.target)} · <span style="color:#6b7280;">${escapeHtml(cand.target)}</span></div>
+                        <div class="toca-text-strong" style="font-weight:600;">${escapeHtml(cand.name)}</div>
+                        <div class="toca-text-muted" style="font-size:12px;">${escapeHtml(cand.position || cand.target)} · <span>${escapeHtml(cand.target)}</span></div>
                     </div>
                     <a href="${escapeHtml(cand.linkedin)}" target="_blank" rel="noopener" class="btn btn-secondary btn-small" title="Abrir perfil público no LinkedIn"><i class="fab fa-linkedin"></i> LinkedIn</a>
                     <div style="display:flex; gap:6px; align-items:center;" id="apActions_${idx}">${actions}</div>

@@ -13,11 +13,26 @@
             missing_position:   { icon: '👥', label: 'Cargo faltante' },
             map_environment:    { icon: '🗺️', label: 'Mapear ambiente' },
             context_trigger:    { icon: '📰', label: 'Gatilho de contexto' },
-            birthday:           { icon: '🎂', label: 'Aniversário' },
             multithreading:     { icon: '🕸️', label: 'Risco de concentração' },
             job_change:         { icon: '🚀', label: 'Mudança de emprego' },
             whitespace:         { icon: '⬜', label: 'Oferta não explorada' },
         };
+
+        function toggleRadarDoDia() {
+            const el = document.getElementById('radarContent');
+            const toggle = document.getElementById('radarToggle');
+            if (!el) return;
+            const showing = el.style.display !== 'none';
+            el.style.display = showing ? 'none' : 'flex';
+            if (toggle) toggle.textContent = showing ? 'mostrar ▾' : 'ocultar ▴';
+        }
+
+        function _radarSetBadge(count) {
+            const badge = document.getElementById('radarBadge');
+            if (!badge) return;
+            badge.style.display = count > 0 ? '' : 'none';
+            badge.textContent = count;
+        }
 
         async function loadRadarDoDia() {
             const el = document.getElementById('radarContent');
@@ -28,6 +43,7 @@
                 if (!resp.ok) throw new Error(items.error || 'Erro ao carregar o Radar do Dia.');
                 const active = (items || []).filter(s => !s.completed);
                 const done = (items || []).filter(s => s.completed);
+                _radarSetBadge(active.length);
                 if (!active.length && !done.length) {
                     el.innerHTML = '<div style="color:#9ca3af; font-size:13px;">Nenhuma sugestão para hoje — carteira em dia! 🐇</div>';
                     return;
@@ -84,9 +100,8 @@
             try { data = JSON.parse(targetDataJson || '{}'); } catch (e) { /* segue com vazio */ }
             window.currentSuggestion = { id, type, data };
             if (type === 'contact_overdue' && data.client_id) {
-                await openActivityModal();
-                const sel = document.getElementById('clientSelect');
-                if (sel) sel.value = String(data.client_id);
+                if (typeof clients === 'undefined' || !clients.length) await loadClients();
+                openProfileModal(data.client_id);
             } else if (type === 'incomplete_profile' && data.client_id) {
                 await apCompleteInfos(data.client_id);
             } else if (type === 'followup_overdue') {
@@ -95,7 +110,7 @@
                 switchTab(null, 'kanban');
             } else if (type === 'multithreading' && data.company) {
                 openAccountPlanningFor(data.company);
-            } else if (type === 'whitespace' || type === 'context_trigger' || type === 'birthday' || type === 'job_change') {
+            } else if (type === 'whitespace' || type === 'context_trigger' || type === 'job_change') {
                 if (typeof radarActExtended === 'function') radarActExtended(id, type, data);
             }
         }

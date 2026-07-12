@@ -74,19 +74,6 @@ def test_radar_completar_repoe_e_snooze_esconde(client, db_path):
     assert sid2 not in [s['id'] for s in items3]
 
 
-def test_radar_aniversario_na_semana(client, db_path):
-    from datetime import datetime, timedelta
-    bday = (datetime.now() + timedelta(days=2)).strftime('%d/%m')
-    resp = client.post('/api/clientes', data={
-        'name': 'Aniversariante Silva', 'company': 'ACME', 'position': 'CEO',
-        'birthday': bday,
-    })
-    assert resp.status_code == 201
-    items = client.get('/api/suggestions/today').get_json()
-    bdays = [s for s in items if s['suggestion_type'] == 'birthday']
-    assert bdays and 'Aniversariante Silva' in bdays[0]['title']
-
-
 def test_thread_score_single_threaded(client, db_path):
     import app as toca
     # conta target com 1 contato ativo => risco

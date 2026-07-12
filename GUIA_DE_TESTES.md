@@ -8,7 +8,7 @@ Roteiro para validar manualmente cada ponto alterado no PR #236. Siga na ordem �
 
 | Integração | Necessária para | Observação |
 |---|---|---|
-| OpenRouter (ou SAI) | Rascunhos IA, briefings, gatilhos, follow-up por e-mail | Ordem: OpenRouter primeiro, SAI fallback |
+| SAI (ou OpenRouter) | Rascunhos IA, briefings, gatilhos, follow-up por e-mail | Regra: SAI primeiro, OpenRouter fallback (exceção: busca web = OpenRouter primeiro) |
 | Tavily | Account Planning (Bloco 4) | Sem ela, o botão mostra erro claro (isso também é um teste ✓) |
 | WAHA conectado | Pendentes de Resposta, envio direto, agendamento WhatsApp | QR code lido e sessão ativa |
 | Outlook (Graph) | Follow-up por e-mail, briefing matinal, revisão de sexta, agendamento de e-mail | ⚠️ **Reconectar a integração uma vez** — o escopo novo `Mail.Send` exige novo consentimento |
@@ -30,7 +30,7 @@ Roteiro para validar manualmente cada ponto alterado no PR #236. Siga na ordem �
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 2.1 | Suíte automatizada | `python -m pytest tests/ -v` na pasta do projeto | **32 testes verdes** |
+| 2.1 | Suíte automatizada | `python -m pytest tests/ -v` na pasta do projeto | **33 testes verdes** |
 | 2.2 | Erros no app.log | Provocar um erro (ex.: Account Planning sem Tavily) | Erro aparece no `app.log` em `%AppData%\toca-do-coelho` com contexto, não só no console |
 | 2.3 | CI | Abrir a aba Actions do GitHub no PR | Workflow "Testes" verde |
 
@@ -49,24 +49,26 @@ Gestão de Conta > botão **✦ Account Planning**.
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
 | 4.1 | Erro sem Tavily | Buscar com a Tavily desconfigurada | Mensagem clara apontando Configurações > Integrações (não tela vazia) |
+| 4.1b | Segmentos | Abrir o campo Segmento | Sugestões são áreas de MERCADO (Varejo, Saúde, Pharma, Automobilístico, Serviços...), não cargos |
 | 4.2 | Busca real | Empresa real conhecida (ex.: um cliente seu) + segmento; clicar **Mapear Decisores** | Barra verde com coelhinho 🐇; ao final, linhas por candidato com foto (com aviso "aproximada"), nome, cargo, link LinkedIn |
 | 4.3 | URLs reais | Clicar no link LinkedIn de 2–3 candidatos | Todos abrem perfis reais (nenhuma URL inventada) |
 | 4.4 | Salvar contato | Clicar **Salvar** em um candidato | Contato criado; botão vira **✦ Completar infos** sem recarregar a lista |
 | 4.5 | Completar infos | Clicar **Completar infos** | Abre o modal de edição do contato recém-criado |
 | 4.6 | Já cadastrado | Buscar uma empresa de um contato que já tem LinkedIn cadastrado | Linha marcada "✓ Já cadastrado", sem botão Salvar |
 | 4.7 | Reabrir busca | Selecionar a busca no dropdown "Buscas recentes..." | Resultado reaparece sem nova chamada à Tavily |
+| 4.8 | Tema escuro | Trocar para o tema Blue Space e refazer uma busca | Nomes, cargos e avisos dos resultados legíveis |
 
 ## Bloco 5 — Radar do Dia
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 5.1 | Painel visível | Abrir a Home | "📡 Radar do Dia" é a primeira seção, com até 8 sugestões |
+| 5.1 | Painel comprimido | Abrir a Home | "📡 Radar do Dia" aparece COMPRIMIDO, com círculo vermelho ao lado do título mostrando o nº de itens; clicar expande/recolhe e não cobre os gráficos |
 | 5.2 | Nunca contatado no topo | Criar um contato novo sem atividade | Ele aparece como "Nunca contatado" ANTES de contatos atrasados |
 | 5.3 | Threshold por cargo | Configurar regra de status para um cargo (ex.: CEO 3/5 dias) e ter um CEO 6 dias sem contato | Descrição da sugestão cita o limite do cargo, não o padrão |
 | 5.4 | Arquivados/frios fora | Arquivar um contato atrasado e atualizar o Radar | Ele some de todas as categorias |
 | 5.5 | Concluir repõe | Clicar ✔ em uma sugestão | Ela sai e OUTRA entra no lugar (continua com 8) |
 | 5.6 | Adiar | Clicar no relógio | Sugestão some hoje e volta amanhã |
-| 5.7 | Agir | Clicar no texto de um "Contato atrasado" | Abre Nova Atividade com o cliente pré-selecionado |
+| 5.7 | Agir | Clicar no texto de um "Contato atrasado" | Abre o CARD do contato (perfil), não a janela de atividade |
 
 ## Bloco 6 — Pendentes de Resposta
 
@@ -93,7 +95,7 @@ Gestão de Conta > botão **✦ Account Planning**.
 |---|---|---|---|
 | 8.1 | Contato rápido | Perfil do contato > **Contato rápido** > escolher template > **Enviar via WAHA** | Mensagem chega no WhatsApp do contato SEM abrir janela; toast "atividade registrada — desfazer" |
 | 8.2 | Desfazer | Clicar **Desfazer** no toast em até 10s | Atividade removida do histórico |
-| 8.3 | Variáveis | Template com `{nome}`, `{empresa}`, `{ultima_atividade}` | Renderizadas com os dados reais do contato |
+| 8.3 | Variáveis | No Contato rápido, usar os BOTÕES de chave (`<nome do contato>`, `<conta>`, `<cargo>`, `<ultima atividade>`...) | Botões inserem a chave no cursor; no envio, substituídas pelos dados reais |
 | 8.4 | Lote | Mala Direta com ~5 contatos > **✦ Enviar todos via WAHA** | Barra 🐇 com progresso por contato; intervalo de 8–15s entre envios; falha em 1 não para a fila; resumo final |
 | 8.5 | Limite diário | Configurações: setar `waha_daily_send_limit` = 2 (ou enviar até o limite) | 3º envio recusado com aviso claro; contador "cota WAHA: x/y" no modal |
 | 8.6 | Contingência | Botão "Abrir no WhatsApp" continua funcionando | Abre web.whatsapp.com como antes |
@@ -102,15 +104,14 @@ Gestão de Conta > botão **✦ Account Planning**.
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 9.1 | Aniversário | Editar um contato e preencher **Aniversário** com uma data nos próximos 7 dias | Sugestão "🎂 Aniversário" no Radar |
-| 9.2 | Gatilho de notícia | Ter contas marcadas como target + OpenRouter configurado; disparar `POST /api/suggestions/context-scan` (ou aguardar o job semanal) | Sugestões "📰 Gatilho" com manchete real e fonte no Radar |
-| 9.3 | Fluxo 3 cliques | Clicar na sugestão (1) > rascunho gerado automaticamente citando o gatilho e o histórico > **Enviar via WAHA** (2) | Mensagem enviada, atividade registrada, sugestão concluída |
+| 9.1 | Gatilho de notícia | Ter contas marcadas como target + OpenRouter configurado; disparar `POST /api/suggestions/context-scan` (ou aguardar o job semanal) | Sugestões "📰 Gatilho" com manchete real e fonte no Radar |
+| 9.2 | Fluxo 3 cliques | Clicar na sugestão (1) > rascunho gerado automaticamente citando o gatilho e o histórico > **Enviar via WAHA** (2) | Mensagem enviada, atividade registrada, sugestão concluída |
 
 ## Bloco 10 — Multithreading
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 10.1 | Badge de risco | Conta target com apenas 1 contato ativo (em dia/atenção) | Card da conta mostra "🕸️ 1 contato ativo — risco de concentração" |
+| 10.1 | Sinal de risco | Conta target com apenas 1 contato ativo (em dia/atenção) | Card da conta mostra um círculo laranja com "!" ao lado do nome; passar o mouse abre um tooltip OPACO explicando o risco e os níveis ausentes |
 | 10.2 | Conta saudável | Conta com contatos ativos em 3+ níveis (C-level, diretoria, gerência) | Sem badge |
 | 10.3 | Sugestão com nível | Radar mostra "Mapear mais um decisor na conta X" | Descrição aponta o NÍVEL hierárquico ausente (ex.: C-level), não cargo genérico |
 | 10.4 | Ação | Clicar na sugestão | Abre o Account Planning com a empresa já preenchida |
@@ -130,7 +131,7 @@ Gestão de Conta > botão **✦ Account Planning**.
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 12.1 | Matriz | Portfólio > aba **Whitespace** (com ofertas cadastradas e contas target com serviços) | Tabela contas × ofertas com ✅ (presente) e ⬜ (nunca explorada), refletindo os serviços reais |
+| 12.1 | Matriz | Portfólio > aba **Whitespace** (com ofertas cadastradas e contas target com serviços) | Tabela contas × ofertas com ✅/⬜ refletindo os serviços reais; textos legíveis em TODOS os temas (testar em Blue Space) |
 | 12.2 | Sugestão | Radar mostra "Apresentar [oferta] para a conta X" | A oferta sugerida NÃO está presente na conta |
 | 12.3 | Rascunho consultivo | Clicar na sugestão > Gerar rascunho | Texto menciona a oferta ausente E cita o que a conta já usa |
 
@@ -140,7 +141,7 @@ Gestão de Conta > botão **✦ Account Planning**.
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 13.1 | Briefing na Agenda | Agenda > compromisso de reunião > botão **✦ Briefing** | Gera e exibe as 6 seções (Contexto, Últimos assuntos, Pendências suas/dele, Oportunidades, Sugestão de pauta); com histórico rico, 3+ seções têm dado real |
+| 13.1 | Briefing na Agenda | Agenda > compromisso de reunião > botão **✦ Briefing** | Topo mostra FOTO+nome do contato e LOGO+nome da conta; 6 seções bem alinhadas (bullets com recuo correto); com histórico rico, 3+ seções têm dado real |
 | 13.2 | Cache | Fechar e clicar em Briefing de novo | Abre instantâneo (mesmo texto, mesma hora de geração); **Atualizar** regera |
 | 13.3 | Sem histórico | Briefing de contato sem atividades | Ainda gera algo minimamente útil |
 | 13.4 | E-mail matinal | Ter reunião marcada para hoje e disparar `POST /api/briefings/send-morning-email` (ou aguardar o job após as 7h) | E-mail chega na SUA caixa com PDF anexado contendo os briefings do dia |
@@ -162,12 +163,13 @@ Gestão de Conta > botão **✦ Account Planning**.
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
 | A1.1 | Botão presente | Abrir: Contato rápido, rascunho do Radar, e-mail individual e despacho da Mala Direta | Botão **Agendar** ao lado de enviar nos 4 lugares |
-| A1.2 | Agendar próximo | Contato rápido > escrever mensagem > **Agendar** para daqui a 2–3 minutos > manter o app aberto | Mensagem sai sozinha no horário (tolerância ~1 min); atividade registrada; log `[Agendados]` |
+| A1.2 | Agendar próximo | Contato rápido > escrever mensagem > **Agendar** para daqui a 2–3 minutos > manter o app aberto | Ao agendar: atividade com ⏰ aparece no histórico do contato SEM mudar o status dele. No horário: mensagem sai, a atividade perde o ⏰ e vira atividade normal, e o status do contato é atualizado |
 | A1.3 | Validações | Tentar agendar para o passado | Recusado com mensagem clara |
 | A1.4 | Sistema desligado | Agendar para daqui a 2 min > FECHAR o app > esperar passar o horário > reabrir | Envio NÃO sai sozinho; modal "⏰ Envios agendados pendentes" pergunta se ainda quer enviar |
-| A1.5 | Enviar agora / Cancelar | No modal, testar os dois botões | "Enviar agora" dispara na hora; "Cancelar" descarta; "Decidir depois" mantém para o próximo login |
+| A1.5 | Enviar agora / Cancelar | No modal, testar os dois botões | "Enviar agora" dispara na hora (atividade ⏰ vira normal); "Cancelar" descarta e REMOVE a atividade ⏰ do histórico; "Decidir depois" mantém para o próximo login |
 | A1.6 | E-mail agendado | Contato com e-mail > Novo e-mail > **Agendar** | No horário, e-mail sai via Outlook (verificar Itens Enviados) + atividade registrada |
-| A1.7 | Fila agendada | Mala Direta > despacho > **Agendar** (fila toda) | Todos os itens saem via WAHA no horário, com o intervalo aleatório entre eles |
+| A1.7 | Fila agendada | Mala Direta > despacho > **Agendar** (fila toda) | Todos os itens saem via WAHA no horário |
+| A1.8 | Dashboard | Dashboard > WhatsApp e Novo e-mail de um contato | Botão **Agendar** presente nos dois modais, com as chaves `<...>` aplicadas no agendamento |
 
 ### Ajuste 2 — Primeiro acesso pós-instalação
 
@@ -196,4 +198,4 @@ Gestão de Conta > botão **✦ Account Planning**.
 4. ☐ Enviar 1 WhatsApp via WAHA pelo Contato rápido (com desfazer)
 5. ☐ Agendar 1 envio para daqui a 2 min e vê-lo sair
 6. ☐ Gerar 1 briefing na Agenda
-7. ☐ `python -m pytest tests/` → 32 verdes
+7. ☐ `python -m pytest tests/` → 33 verdes

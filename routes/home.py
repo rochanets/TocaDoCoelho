@@ -10,37 +10,6 @@
 # inserindo em daily_suggestions com seus suggestion_type.
 # ===========================================================================
 
-def _radar_birthday_within(birthday_text, now_dt, window_days=7):
-    """Dias até o aniversário se cair nos próximos window_days, senão None.
-    Aceita DD/MM, DD/MM/AAAA, YYYY-MM-DD e MM-DD."""
-    t = (birthday_text or '').strip()
-    if not t:
-        return None
-    m = re.match(r'^(\d{1,2})/(\d{1,2})', t)
-    if m:
-        day, month = int(m.group(1)), int(m.group(2))
-    else:
-        m = re.match(r'^\d{4}-(\d{2})-(\d{2})$', t)
-        if m:
-            month, day = int(m.group(1)), int(m.group(2))
-        else:
-            m = re.match(r'^(\d{2})-(\d{2})$', t)
-            if not m:
-                return None
-            month, day = int(m.group(1)), int(m.group(2))
-    try:
-        bday = datetime(now_dt.year, month, day).date()
-    except ValueError:
-        return None
-    if bday < now_dt.date():
-        try:
-            bday = datetime(now_dt.year + 1, month, day).date()
-        except ValueError:
-            return None
-    delta = (bday - now_dt.date()).days
-    return delta if delta <= window_days else None
-
-
 RADAR_MAX_ACTIVE = 8            # sugestões ativas exibidas por dia
 RADAR_KANBAN_STALL_DAYS = 5     # dias parado para card de urgência Alta
 
@@ -55,7 +24,7 @@ def _radar_generate_ranked(c):
 
     # ---- 1. Contatos atrasados (threshold por cargo) + nunca contatados ----
     c.execute("""
-        SELECT cl.id, cl.name, cl.company, cl.position, cl.last_activity_date, cl.birthday,
+        SELECT cl.id, cl.name, cl.company, cl.position, cl.last_activity_date,
                COALESCE(cl.is_target, 0) AS is_target,
                (SELECT COUNT(*) FROM commitments co
                 WHERE co.client_id = cl.id AND co.due_date < ?
@@ -85,26 +54,6 @@ def _radar_generate_ranked(c):
             'description': desc,
             'target_id': row['id'],
             'target_data': json.dumps({'client_id': row['id'], 'days': days}),
-        })
-
-    # ---- 1b. Aniversários na semana (Bloco 9) ----
-    c.execute("""
-        SELECT id, name, company, birthday FROM clients
-        WHERE COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
-          AND birthday IS NOT NULL AND TRIM(birthday) != ''
-    """)
-    for row in c.fetchall():
-        days_to = _radar_birthday_within(row['birthday'], now_dt)
-        if days_to is None:
-            continue
-        when = 'hoje! 🎉' if days_to == 0 else (f'em {days_to} dia(s)')
-        suggestions.append({
-            'type': 'birthday',
-            'score': 45.0 - days_to,
-            'title': f'Aniversário de {row["name"]} ({row["company"]})',
-            'description': f'Aniversário {when} — bom pretexto para um contato pessoal',
-            'target_id': row['id'],
-            'target_data': json.dumps({'client_id': row['id'], 'birthday': row['birthday']}),
         })
 
     # ---- 2. Follow-ups vencidos sem atividade posterior (fecha o loop) ----
@@ -1430,7 +1379,7 @@ def suggestion_generate_draft(suggestion_id):
             gatilho += (f"\nAbordagem consultiva sobre a oferta '{data['offer']}', nunca explorada nesta conta. "
                         f"A conta já usa: {usados} — cite isso como contexto.")
 
-        raw = _llm_openrouter_first(
+        raw = _llm_prompt(
             f"Escreva uma mensagem curta de WhatsApp (3 a 5 frases, tom profissional e caloroso, "
             f"português do Brasil, sem assinatura) de um executivo de contas para {client['name']} "
             f"({client.get('position') or 'contato'} na {client.get('company') or 'empresa'}). "
