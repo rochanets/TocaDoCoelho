@@ -15491,19 +15491,19 @@ def _forms_robot_task_cleanup(task_id, delay=300):
 # quando o usuário não anexa nada.
 CHAMADO_JURIDICO_FILE_FIELDS = {
     'aditivos_anteriores':        {'multiple': True,  'fallback': False},
-    'contrato_anterior':          {'multiple': False, 'fallback': False},
+    'contrato_anterior':          {'multiple': False, 'fallback': True},
     'minuta_cliente':             {'multiple': False, 'fallback': True},
     'aprovacao_reajuste':         {'multiple': False, 'fallback': True},
     'proposta_comercial_tecnica': {'multiple': False, 'fallback': False},
 }
 
 # Sim/Não simples, replicados 1:1 no formulário — chave -> texto da mensagem de validação
+# (assinatura_plataforma não entra aqui: usa valores 'cliente'/'stefanini', validado à parte)
 CHAMADO_JURIDICO_YES_NO_LABELS = {
     'havera_reajuste': 'se haverá reajuste',
     'houve_reoneracao': 'se houve reoneração',
     'inclui_novos_servicos': 'se inclui novos serviços',
     'e_prorrogacao_vigencia': 'se é prorrogação de vigência',
-    'assinatura_plataforma': 'sobre a assinatura pela plataforma',
 }
 
 
@@ -15638,7 +15638,9 @@ def _forms_robot_build_fields(payload, files_by_field):
         {'key': 'assinatura_plataforma', 'label': 'Assinatura pela plataforma Stefanini ou do cliente?',
          'type': 'radio_yes_no', 'q': 20,
          'terms': ['assinatura pela plataforma', 'plataforma stefanini ou do cliente'],
-         'value': yes_no('assinatura_plataforma')},
+         # No Toca o usuário escolhe "Stefanini" ou "Cliente"; no formulário isso vira
+         # Sim (Stefanini) / Não (Cliente) — mapeamento pedido explicitamente.
+         'value': 'Sim' if (payload.get('assinatura_plataforma') or '').strip().lower() == 'stefanini' else 'Não'},
         {'key': 'descricao_pedido', 'label': 'Descrição do pedido', 'type': 'text', 'q': 22,
          'terms': ['conte brevemente sobre o que se trata esse pedido', 'brevemente sobre o que se trata'],
          'value': (payload.get('descricao_pedido') or '').strip()},
@@ -15711,6 +15713,8 @@ def autotoca_chamado_juridico_robot():
             errors.append('Endereço é obrigatório.')
         if payload['minuta_tipo'] not in ('cliente', 'stefanini'):
             errors.append('Informe se a Minuta/Contrato é do cliente ou da Stefanini.')
+        if payload['assinatura_plataforma'] not in ('cliente', 'stefanini'):
+            errors.append('Informe se a assinatura é pela plataforma Stefanini ou do cliente.')
         if not payload['descricao_pedido']:
             errors.append('Descreva brevemente o pedido.')
         for key, label in CHAMADO_JURIDICO_YES_NO_LABELS.items():
@@ -15733,11 +15737,6 @@ def autotoca_chamado_juridico_robot():
                 reuse_row = dict_from_row(row)
 
         reuse_files = json.loads(reuse_row['files_json']) if reuse_row else {}
-
-        has_contrato_anterior = bool(request.files.getlist('contrato_anterior')) and \
-            request.files.getlist('contrato_anterior')[0].filename
-        if not has_contrato_anterior and not reuse_files.get('contrato_anterior'):
-            errors.append('Anexe o Contrato Anterior (ou selecione um histórico com esse arquivo).')
 
         if errors:
             return jsonify({'error': ' '.join(errors)}), 400

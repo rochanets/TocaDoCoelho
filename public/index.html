@@ -4290,8 +4290,8 @@
                             <label>Assinatura pela plataforma Stefanini ou do cliente? <span style="color:#dc2626;">*</span></label>
                             <select id="cjAssinaturaPlataforma" required>
                                 <option value="">Selecione</option>
-                                <option value="Sim">Sim</option>
-                                <option value="Não">Não</option>
+                                <option value="stefanini">Stefanini</option>
+                                <option value="cliente">Cliente</option>
                             </select>
                         </div>
 
@@ -4307,7 +4307,7 @@
                     <div class="form-group" style="max-width:360px; margin-bottom:16px;">
                         <label>Arquivos de Apoio (se necessário)</label>
                         <div id="autotocaSupportFilesList" style="display:flex; flex-direction:column; gap:8px; min-height:60px;"></div>
-                        <small style="color:#9ca3af; font-size:11px;">Usado automaticamente como anexo padrão nos itens 10, 13 e 15 quando o usuário não sobe um arquivo próprio.</small>
+                        <small style="color:#9ca3af; font-size:11px;">Usado automaticamente como anexo padrão nos itens 9, 10, 13 e 15 quando o usuário não sobe um arquivo próprio.</small>
                     </div>
 
                     <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
@@ -5597,6 +5597,7 @@
 
             if (previousTab === 'autotoca' && tabName !== 'autotoca') {
                 _addinStopPolling();
+                if (typeof _cjResetForm === 'function') _cjResetForm();
             }
 
             if (tabName === 'home') loadHome();
@@ -6674,6 +6675,7 @@
             if (!targetId) return;
             const target = document.getElementById(targetId);
             if (!target) return;
+            const chamadoWasVisible = document.getElementById('autoTocaChamadoJuridico')?.style.display === 'block';
             // Fecha também os painéis de Reports
             ['reportsPanel_preparar-reuniao', 'reportsPanel_relationship-report'].forEach(id => {
                 const el = document.getElementById(id);
@@ -6689,6 +6691,10 @@
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });
+            // Sair do Chamado Jurídico (fechar ou trocar de módulo) limpa o formulário
+            if (chamadoWasVisible && !(isOpening && key === 'chamado-juridico') && typeof _cjResetForm === 'function') {
+                _cjResetForm();
+            }
             resetAutoTocaModuleButtons();
             // Abre o selecionado (toggle)
             if (isOpening) {
@@ -6711,10 +6717,12 @@
             const target = document.getElementById(targetId);
             if (!target) return;
             // Fecha também os painéis de automação do AutoToca
+            const chamadoWasVisible = document.getElementById('autoTocaChamadoJuridico')?.style.display === 'block';
             ['autoTocaChamadoJuridico', 'autoTocaMalaDireta', 'autoTocaSyncOutlook'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });
+            if (chamadoWasVisible && typeof _cjResetForm === 'function') _cjResetForm();
             resetAutoTocaModuleButtons();
             const isOpening = target.style.display === 'none';
             // Fecha todos os painéis
@@ -7906,15 +7914,39 @@
                 <div class="form-group">
                     <label>${escapeHtml(f.label)}</label>
                     <input type="file" id="${_cjFileInputId(f.key)}" ${f.multiple ? 'multiple' : ''} onchange="_cjOnFileChange('${f.key}')">
+                    <div id="${_cjFileInputId(f.key)}List" style="margin-top:4px;"></div>
                     <div id="${_cjFileInputId(f.key)}Reuse" style="font-size:11px; color:#059669; margin-top:4px; display:none;"></div>
                 </div>
             `).join('');
+        }
+
+        function _cjRenderFileList(key) {
+            const input = document.getElementById(_cjFileInputId(key));
+            const listEl = document.getElementById(`${_cjFileInputId(key)}List`);
+            if (!input || !listEl) return;
+            const files = Array.from(input.files || []);
+            listEl.innerHTML = files.map((f, idx) => `
+                <span style="display:inline-flex; align-items:center; gap:4px; background:#f3f4f6; border-radius:12px; padding:2px 8px; margin:2px 4px 2px 0; font-size:11px;">
+                    ${escapeHtml(f.name)}
+                    <button type="button" onclick="_cjRemoveFile('${key}', ${idx})" title="Remover arquivo" style="border:0; background:transparent; color:#dc2626; cursor:pointer; font-weight:700; padding:0 2px; line-height:1;">×</button>
+                </span>
+            `).join('');
+        }
+
+        function _cjRemoveFile(key, index) {
+            const input = document.getElementById(_cjFileInputId(key));
+            if (!input) return;
+            const dt = new DataTransfer();
+            Array.from(input.files || []).forEach((f, i) => { if (i !== index) dt.items.add(f); });
+            input.files = dt.files;
+            _cjRenderFileList(key);
         }
 
         function _cjOnFileChange(key) {
             // Selecionar um arquivo novo substitui o reaproveitamento do histórico para esse campo.
             const reuseEl = document.getElementById(`${_cjFileInputId(key)}Reuse`);
             if (reuseEl) reuseEl.style.display = 'none';
+            _cjRenderFileList(key);
         }
 
         function _cjToggleConditional(triggerId, wrapId) {
@@ -7932,6 +7964,38 @@
         }
 
         let _cjReuseHistoryId = '';
+
+        // Limpa todos os campos do Chamado Jurídico — chamado ao sair do módulo/aba,
+        // para que o usuário sempre encontre o formulário em branco na próxima visita.
+        function _cjResetForm() {
+            const textIds = [
+                'autotocaContaOutro', 'autotocaRazaoSocial', 'autotocaCnpj', 'autotocaEnderecoFinal',
+                'cjMinutaTipo', 'cjOppSalesforce', 'cjDataAssinatura', 'cjHaveraReajuste', 'cjValoresReajuste',
+                'cjHouveReoneracao', 'cjInclutNovosServicos', 'cjProrrogacaoVigencia', 'cjVigenciaDatas',
+                'cjAssinaturaPlataforma', 'cjDescricaoPedido',
+            ];
+            textIds.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+
+            const contaSelect = document.getElementById('autotocaConta');
+            if (contaSelect) contaSelect.selectedIndex = 0;
+            const contaOutroWrap = document.getElementById('autotocaContaOutroWrap');
+            if (contaOutroWrap) contaOutroWrap.style.display = 'none';
+
+            _cjToggleConditional('cjHaveraReajuste', 'cjValoresReajusteWrap');
+            _cjToggleConditional('cjProrrogacaoVigencia', 'cjVigenciaDatasWrap');
+
+            CJ_FILE_FIELDS.forEach(f => {
+                const input = document.getElementById(_cjFileInputId(f.key));
+                if (input) input.value = '';
+                const reuseEl = document.getElementById(`${_cjFileInputId(f.key)}Reuse`);
+                if (reuseEl) reuseEl.style.display = 'none';
+                _cjRenderFileList(f.key);
+            });
+
+            _cjReuseHistoryId = '';
+            const historySelect = document.getElementById('cjHistorySelect');
+            if (historySelect) historySelect.value = '';
+        }
 
         async function loadChamadoJuridicoHistory() {
             const select = document.getElementById('cjHistorySelect');
@@ -7991,6 +8055,7 @@
                     const input = document.getElementById(_cjFileInputId(f.key));
                     const reuseEl = document.getElementById(`${_cjFileInputId(f.key)}Reuse`);
                     if (input) input.value = '';
+                    _cjRenderFileList(f.key);
                     const files = (entry.files || {})[f.key] || [];
                     if (reuseEl) {
                         if (files.length) {
@@ -8029,10 +8094,6 @@
             if (document.getElementById('cjProrrogacaoVigencia').value === 'Sim' && !document.getElementById('cjVigenciaDatas').value.trim()) {
                 return 'Informe a data inicial e final da vigência.';
             }
-            const contratoInput = document.getElementById(_cjFileInputId('contrato_anterior'));
-            const hasContratoFile = contratoInput?.files?.length > 0;
-            const hasContratoReuse = document.getElementById(`${_cjFileInputId('contrato_anterior')}Reuse`)?.style.display === 'block';
-            if (!hasContratoFile && !hasContratoReuse) return 'Anexe o Contrato Anterior (item 9).';
             return null;
         }
 

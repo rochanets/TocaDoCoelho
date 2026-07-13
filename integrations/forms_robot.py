@@ -55,7 +55,13 @@ CALENDAR_BUTTON_SELECTOR = (
     'button[aria-label*="alend" i], button[data-icon-name="Calendar"], '
     'button[aria-label*="data" i]'
 )
-DATEPICKER_HEADER_SELECTOR = '.ms-DatePicker-monthAndYear, [class*="monthAndYear"]'
+# Fluent UI trocou de versão (v8 "ms-DatePicker-*" -> v9 classes com hash) mais de
+# uma vez ao longo do tempo; por isso cada seletor abaixo tenta o padrão clássico
+# primeiro e cai para atributos ARIA genéricos, estáveis entre versões.
+DATEPICKER_HEADER_SELECTOR = (
+    '.ms-DatePicker-monthAndYear, [class*="monthAndYear"], '
+    '[role="grid"] [aria-live], [role="dialog"] [aria-live]'
+)
 DATEPICKER_NEXT_SELECTOR = (
     'button[aria-label*="róxim" i], button[aria-label*="next" i], '
     '[data-automation-id="DatePickerNextMonthNavButton"]'
@@ -64,9 +70,20 @@ DATEPICKER_PREV_SELECTOR = (
     'button[aria-label*="nterior" i], button[aria-label*="prev" i], '
     '[data-automation-id="DatePickerPrevMonthNavButton"]'
 )
-DATEPICKER_DAY_SELECTOR = '.ms-DatePicker-day:not(.ms-DatePicker-day--outfocus)'
+DATEPICKER_DAY_SELECTOR = (
+    '.ms-DatePicker-day:not(.ms-DatePicker-day--outfocus), '
+    '[role="gridcell"] button:not([aria-disabled="true"]), '
+    '[role="grid"] button:not([aria-disabled="true"])'
+)
 SUBMIT_SELECTOR = 'button[data-automation-id="submitButton"]'
 THANK_YOU_SELECTOR = '[data-automation-id="thankYouPageMessage"]'
+
+# Tempo de espera após o formulário ficar "pronto" (perguntas no DOM) antes de
+# começar a preencher — a SPA do Forms segue anexando handlers de evento por um
+# instante depois da primeira pintura; interagir cedo demais com as primeiras
+# perguntas pode não disparar nada, mesmo com o elemento já visível.
+FORM_STABILIZE_SECONDS = 2.0
+FILL_VERIFY_RETRIES = 1
 
 _PT_MONTHS = [
     'janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho',
@@ -254,15 +271,27 @@ def _fill_text(page, question, value):
     target = question.locator(TEXT_INPUT_SELECTOR).first
     target.scroll_into_view_if_needed(timeout=8000)
     _highlight_and_point(page, question, target)
-    target.click(timeout=8000)
-    target.fill('')
-    target.type(str(value), delay=TYPE_DELAY_MS)
+    expected = str(value)
+
+    for attempt in range(1 + FILL_VERIFY_RETRIES):
+        target.click(timeout=8000)
+        target.fill('')
+        target.type(expected, delay=TYPE_DELAY_MS)
+        actual = (target.input_value(timeout=4000) or '').strip()
+        if actual == expected.strip():
+            return
+        if attempt < FILL_VERIFY_RETRIES:
+            page.wait_for_timeout(500)
+    raise FormsRobotError(
+        f'o campo não reteve o valor digitado (esperado "{expected}", ficou "{actual}")'
+    )
 
 
 def _select_radio_option(page, question, option_terms):
     options = question.locator(RADIO_OPTION_SELECTOR)
     count = options.count()
     normalized_terms = [_normalize(t) for t in option_terms]
+    seen_labels = []
     for i in range(count):
         option = options.nth(i)
         try:
@@ -274,18 +303,33 @@ def _select_radio_option(page, question, option_terms):
                         ? labelledBy.split(' ').map(id => document.getElementById(id)?.innerText || '').join(' ')
                         : '';
                     const closestLabel = el.closest('label')?.innerText || '';
+                    // Padrão nativo <input id=x><label for=x> — o label é IRMÃO do
+                    // input, não ancestral, então closest('label') não o encontra.
+                    const forLabel = el.id ? (document.querySelector(`label[for="${el.id}"]`)?.innerText || '') : '';
                     const parentText = el.parentElement?.innerText || '';
-                    return [aria, byId, closestLabel, parentText].join(' | ');
+                    return [aria, byId, closestLabel, forLabel, parentText].join(' | ');
                 }
             """)
         except Exception:
             continue
+        seen_labels.append(label_text.strip()[:60])
         norm = _normalize(label_text)
         if any(term and term in norm for term in normalized_terms):
             _highlight_and_point(page, question, option)
-            option.click(timeout=8000, force=True)
-            return True
-    return False
+            for attempt in range(1 + FILL_VERIFY_RETRIES):
+                option.click(timeout=8000, force=True)
+                page.wait_for_timeout(150)
+                checked = option.evaluate(
+                    "(el) => el.getAttribute('aria-checked') === 'true' || el.checked === true"
+                )
+                if checked:
+                    return True
+                if attempt < FILL_VERIFY_RETRIES:
+                    page.wait_for_timeout(400)
+            raise FormsRobotError('opção encontrada e clicada, mas não ficou marcada como selecionada')
+    raise FormsRobotError(
+        f'nenhuma opção bateu com {option_terms!r} — opções vistas: {seen_labels!r}'
+    )
 
 
 def _parse_calendar_header(text):
@@ -306,35 +350,45 @@ def _parse_calendar_header(text):
 def _fill_date(page, question, iso_value):
     target_date = datetime.strptime(iso_value, '%Y-%m-%d').date()
     calendar_btn = question.locator(CALENDAR_BUTTON_SELECTOR).first
+    if calendar_btn.count() == 0:
+        raise FormsRobotError('não encontrei o botão de calendário nesta pergunta')
     calendar_btn.scroll_into_view_if_needed(timeout=8000)
     _highlight_and_point(page, question, calendar_btn)
     calendar_btn.click(timeout=8000)
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(500)
 
     header = page.locator(DATEPICKER_HEADER_SELECTOR).first
+    if header.count() == 0:
+        raise FormsRobotError('o calendário abriu, mas não achei o cabeçalho de mês/ano para navegar')
+    last_header_text = ''
     for _ in range(CALENDAR_MAX_MONTH_CLICKS):
-        header_text = header.inner_text(timeout=4000)
-        month, year = _parse_calendar_header(header_text)
+        last_header_text = header.inner_text(timeout=4000)
+        month, year = _parse_calendar_header(last_header_text)
         if month == target_date.month and year == target_date.year:
             break
         if month is None or year is None:
-            raise FormsRobotError('não foi possível ler o mês/ano exibido no calendário do Forms')
+            raise FormsRobotError(
+                f'não consegui interpretar o mês/ano do calendário (texto visto: "{last_header_text}")'
+            )
         target_ord = target_date.year * 12 + target_date.month
         current_ord = year * 12 + month
         nav_selector = DATEPICKER_NEXT_SELECTOR if target_ord > current_ord else DATEPICKER_PREV_SELECTOR
         page.locator(nav_selector).first.click(timeout=4000)
-        page.wait_for_timeout(250)
+        page.wait_for_timeout(300)
     else:
-        raise FormsRobotError('não cheguei ao mês/ano esperado no calendário do Forms')
+        raise FormsRobotError(
+            f'não cheguei ao mês/ano esperado navegando o calendário (parado em "{last_header_text}")'
+        )
 
     day_str = str(target_date.day)
     days = page.locator(DATEPICKER_DAY_SELECTOR)
-    for i in range(days.count()):
+    day_count = days.count()
+    for i in range(day_count):
         day_el = days.nth(i)
         if (day_el.inner_text(timeout=2000) or '').strip() == day_str:
             day_el.click(timeout=4000)
             return
-    raise FormsRobotError(f'não localizei o dia {day_str} no calendário do Forms')
+    raise FormsRobotError(f'não localizei o dia {day_str} entre {day_count} células de calendário encontradas')
 
 
 def _fill_file(question, file_paths):
@@ -420,9 +474,14 @@ def _run_locked(forms_url, fields, on_progress):
                 on_progress(20, 'Aguardando seu login Microsoft na janela do robô...')
             time.sleep(1.0)
 
-        on_progress(35, 'Formulário carregado. Iniciando preenchimento...')
+        on_progress(30, 'Formulário carregado. Aguardando estabilizar...')
         page.evaluate(_CURSOR_JS)
+        # A SPA do Forms pinta as primeiras perguntas antes de terminar de anexar
+        # os handlers de evento; sem essa pausa, os primeiros campos às vezes não
+        # respondem a clique/digitação mesmo já visíveis no DOM.
+        page.wait_for_timeout(int(FORM_STABILIZE_SECONDS * 1000))
 
+        on_progress(35, 'Iniciando preenchimento...')
         match = page.evaluate(_MATCH_JS, {
             'questionSelector': QUESTION_SELECTOR,
             'fields': [{'key': f['key'], 'terms': f.get('terms') or []} for f in fields],
@@ -464,13 +523,11 @@ def _run_locked(forms_url, fields, on_progress):
                     _fill_file(question, field['file_paths'])
                 elif ftype == 'radio':
                     question.scroll_into_view_if_needed(timeout=8000)
-                    if not _select_radio_option(page, question, field['option_terms']):
-                        raise FormsRobotError('opção não encontrada entre as escolhas do formulário')
+                    _select_radio_option(page, question, field['option_terms'])
                 elif ftype == 'radio_yes_no':
                     question.scroll_into_view_if_needed(timeout=8000)
                     terms = ['sim'] if field['value'] == 'Sim' else ['nao']
-                    if not _select_radio_option(page, question, terms):
-                        raise FormsRobotError('opção Sim/Não não encontrada no formulário')
+                    _select_radio_option(page, question, terms)
                 filled.append(label)
                 if used_position:
                     positional.append(label)
