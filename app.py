@@ -10413,10 +10413,11 @@ def _inbound_scan_whatsapp():
                             datetime.fromtimestamp(last_in).isoformat(timespec='seconds'),
                             text or '(mensagem sem texto)', source_id)
             pending += 1
+            conn.commit()
         elif last_out:
             _inbound_mark_responded(c, row['id'], 'whatsapp',
                                     datetime.fromtimestamp(last_out).isoformat(timespec='seconds'))
-    conn.commit()
+            conn.commit()
     conn.close()
     logger.info(f'[Inbound] Scan WhatsApp: {scanned} conversas verificadas, {pending} pendências registradas')
     return {'scanned': scanned, 'pending': pending}
