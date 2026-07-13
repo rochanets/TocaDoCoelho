@@ -15708,6 +15708,8 @@ def autotoca_chamado_juridico_robot():
         form = request.form
         payload = {
             'conta': (form.get('conta') or '').strip(),
+            'razao_social': (form.get('razao_social') or '').strip(),
+            'cnpj': (form.get('cnpj') or '').strip(),
             'endereco': (form.get('endereco') or '').strip(),
             'minuta_tipo': (form.get('minuta_tipo') or '').strip(),
             'opp_salesforce': (form.get('opp_salesforce') or '').strip(),

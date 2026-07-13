@@ -8068,6 +8068,8 @@
                 const p = entry.payload || {};
 
                 const setVal = (id, value) => { const el = document.getElementById(id); if (el) el.value = value || ''; };
+                setVal('autotocaRazaoSocial', p.razao_social);
+                setVal('autotocaCnpj', p.cnpj);
                 setVal('autotocaEnderecoFinal', p.endereco);
                 setVal('cjMinutaTipo', p.minuta_tipo);
                 setVal('cjOppSalesforce', p.opp_salesforce);
@@ -8148,6 +8150,8 @@
 
             const fd = new FormData();
             fd.append('conta', conta);
+            fd.append('razao_social', document.getElementById('autotocaRazaoSocial').value.trim());
+            fd.append('cnpj', document.getElementById('autotocaCnpj').value.trim());
             fd.append('endereco', endereco);
             fd.append('minuta_tipo', document.getElementById('cjMinutaTipo').value);
             fd.append('opp_salesforce', document.getElementById('cjOppSalesforce').value.trim());
