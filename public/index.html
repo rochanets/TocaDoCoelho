@@ -684,15 +684,22 @@
                         <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Empresa (cliente potencial)</label>
                         <input id="apCompanyInput" type="text" class="input-minimal" placeholder="Nome da empresa" style="width:100%;">
                     </div>
-                    <div style="min-width:220px; width:280px;">
+                    <div style="min-width:200px; width:240px;">
                         <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">Segmento</label>
                         <input id="apSegmentInput" type="text" class="input-minimal" list="apSegmentOptions" placeholder="Ex.: Varejo, Indústria..." style="width:100%;">
                         <datalist id="apSegmentOptions"></datalist>
                     </div>
-                    <button class="btn btn-auto-mapping" onclick="startAccountPlanningSearch()"><span class="ai-star-icon">✦</span> Mapear Decisores</button>
+                    <div style="min-width:170px; width:200px;">
+                        <label style="display:block; margin-bottom:6px; font-size:12px; font-weight:600; color:#e2dfd5;">País</label>
+                        <input id="apCountryInput" type="text" class="input-minimal" list="apCountryOptions" placeholder="Ex.: Brasil" value="Brasil" title="Foca a busca em decisores deste país (evita trazer C-level de outras filiais globais)" style="width:100%;">
+                        <datalist id="apCountryOptions">
+                            <option value="Brasil"><option value="Portugal"><option value="Estados Unidos"><option value="Argentina"><option value="México"><option value="Chile"><option value="Colômbia"><option value="Espanha"><option value="Reino Unido"><option value="Alemanha">
+                        </datalist>
+                    </div>
                     <select id="apRecentRuns" class="input-minimal" style="min-width:220px;" onchange="if(this.value) loadAccountPlanningRun(this.value)">
                         <option value="">Buscas recentes...</option>
                     </select>
+                    <button class="btn btn-auto-mapping" onclick="startAccountPlanningSearch()"><span class="ai-star-icon">✦</span> Mapear Decisores</button>
                 </div>
                 <div id="apProgressArea" style="display:none; padding:16px 4px 10px; max-width:640px;">
                     <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="apProgressStep">Iniciando...</div>

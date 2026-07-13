@@ -30,7 +30,7 @@ Roteiro para validar manualmente cada ponto alterado no PR #236. Siga na ordem �
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 2.1 | Suíte automatizada | `python -m pytest tests/ -v` na pasta do projeto | **33 testes verdes** |
+| 2.1 | Suíte automatizada | `python -m pytest tests/ -v` na pasta do projeto | **34 testes verdes** |
 | 2.2 | Erros no app.log | Provocar um erro (ex.: Account Planning sem Tavily) | Erro aparece no `app.log` em `%AppData%\toca-do-coelho` com contexto, não só no console |
 | 2.3 | CI | Abrir a aba Actions do GitHub no PR | Workflow "Testes" verde |
 
@@ -50,6 +50,8 @@ Gestão de Conta > botão **✦ Account Planning**.
 |---|---|---|---|
 | 4.1 | Erro sem Tavily | Buscar com a Tavily desconfigurada | Mensagem clara apontando Configurações > Integrações (não tela vazia) |
 | 4.1b | Segmentos | Abrir o campo Segmento | Sugestões são áreas de MERCADO (Varejo, Saúde, Pharma, Automobilístico, Serviços...), não cargos |
+| 4.1c | País e ordem | Ver a barra do formulário | Ordem: Empresa · Segmento · **País** (default Brasil) · Buscas recentes · botão **Mapear Decisores** (botão por último) |
+| 4.1d | Foco por país | Empresa multinacional + País = Brasil | Resultados privilegiam decisores da filial do Brasil, não C-level global de outras geografias |
 | 4.2 | Busca real | Empresa real conhecida (ex.: um cliente seu) + segmento; clicar **Mapear Decisores** | Barra verde com coelhinho 🐇; ao final, linhas por candidato com foto (com aviso "aproximada"), nome, cargo, link LinkedIn |
 | 4.3 | URLs reais | Clicar no link LinkedIn de 2–3 candidatos | Todos abrem perfis reais (nenhuma URL inventada) |
 | 4.4 | Salvar contato | Clicar **Salvar** em um candidato | Contato criado; botão vira **✦ Completar infos** sem recarregar a lista |
@@ -131,7 +133,7 @@ Gestão de Conta > botão **✦ Account Planning**.
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 12.1 | Matriz | Portfólio > aba **Whitespace** (com ofertas cadastradas e contas target com serviços) | Tabela contas × ofertas com ✅/⬜ refletindo os serviços reais; textos legíveis em TODOS os temas (testar em Blue Space) |
+| 12.1 | Matriz | Portfólio > aba **Whitespace** (com ofertas cadastradas e contas target com serviços) | Tabela contas × ofertas com ✅/⬜ refletindo os serviços reais; textos legíveis em TODOS os temas — no tema **Verde**, o cabeçalho (Conta target + ofertas) aparece em verde-escuro sobre verde-claro |
 | 12.2 | Sugestão | Radar mostra "Apresentar [oferta] para a conta X" | A oferta sugerida NÃO está presente na conta |
 | 12.3 | Rascunho consultivo | Clicar na sugestão > Gerar rascunho | Texto menciona a oferta ausente E cita o que a conta já usa |
 
@@ -198,4 +200,4 @@ Gestão de Conta > botão **✦ Account Planning**.
 4. ☐ Enviar 1 WhatsApp via WAHA pelo Contato rápido (com desfazer)
 5. ☐ Agendar 1 envio para daqui a 2 min e vê-lo sair
 6. ☐ Gerar 1 briefing na Agenda
-7. ☐ `python -m pytest tests/` → 33 verdes
+7. ☐ `python -m pytest tests/` → 34 verdes

@@ -4,7 +4,7 @@
         // indexados do LinkedIn — sem scraping) e permite salvar como contato.
         // =====================================================
 
-        let _apState = { candidates: [], company: '', segment: '' };
+        let _apState = { candidates: [], company: '', segment: '', country: '' };
 
         function _apEnsureBunnyStyle() {
             if (document.getElementById('iata-bunny-style')) return;
@@ -62,6 +62,7 @@
         async function startAccountPlanningSearch() {
             const company = (document.getElementById('apCompanyInput')?.value || '').trim();
             const segment = (document.getElementById('apSegmentInput')?.value || '').trim();
+            const country = (document.getElementById('apCountryInput')?.value || '').trim();
             if (!company) { showError('Informe o nome da empresa.'); return; }
             const progressArea = document.getElementById('apProgressArea');
             const resultsEl = document.getElementById('apResultsContent');
@@ -72,7 +73,7 @@
                 const resp = await fetch(`${API_BASE}/account-planning/search`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ company, segment })
+                    body: JSON.stringify({ company, segment, country })
                 });
                 const payload = await resp.json().catch(() => ({}));
                 if (!resp.ok) throw new Error(payload.error || 'Erro ao iniciar a busca.');
@@ -103,6 +104,10 @@
                 const resp = await fetch(`${API_BASE}/account-planning/runs/${runId}`);
                 const payload = await resp.json();
                 if (!resp.ok) throw new Error(payload.error || 'Erro ao carregar busca.');
+                const setVal = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+                setVal('apCompanyInput', payload.company);
+                setVal('apSegmentInput', payload.segment);
+                setVal('apCountryInput', payload.country);
                 renderAccountPlanningResults(payload);
             } catch (e) {
                 showError(e.message || 'Erro ao carregar busca.');
@@ -113,7 +118,8 @@
             _apState = {
                 candidates: (payload && payload.candidates) || [],
                 company: (payload && payload.company) || '',
-                segment: (payload && payload.segment) || ''
+                segment: (payload && payload.segment) || '',
+                country: (payload && payload.country) || ''
             };
             const el = document.getElementById('apResultsContent');
             if (!el) return;

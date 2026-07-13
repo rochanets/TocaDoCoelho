@@ -636,7 +636,7 @@ def _ap_normalize_with_llm(title, snippet, company):
         return None, None
 
 
-def _account_planning_search_async(task_id, company, segment):
+def _account_planning_search_async(task_id, company, segment, country=''):
     try:
         api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
         _bg_task_set(task_id, {'step': 'Preparando busca de decisores...', 'progress': 5})
@@ -654,7 +654,11 @@ def _account_planning_search_async(task_id, company, segment):
                 'step': f'🔎 Buscando {label}... ({i + 1}/{total})',
                 'progress': 5 + int((i / total) * 70)
             })
+            # País entra na query para focar decisores da filial certa (evita
+            # trazer C-level global de outras geografias em empresas multinacionais).
             query = f'site:linkedin.com/in "{term}" "{company}"'
+            if country:
+                query += f' "{country}"'
             try:
                 raw_results = _run_tavily_request(api_key, query, max_results=max_cands + 3)
             except Exception as e:
@@ -709,6 +713,7 @@ def _account_planning_search_async(task_id, company, segment):
         payload = {
             'company': company,
             'segment': segment,
+            'country': country,
             'candidates': results,
         }
         c.execute('INSERT INTO account_planning_runs (company, segment, result_json) VALUES (?, ?, ?)',
@@ -731,6 +736,7 @@ def account_planning_search():
     data = request.get_json(force=True) or {}
     company = (data.get('company') or '').strip()
     segment = (data.get('segment') or '').strip()
+    country = (data.get('country') or '').strip()
     if not company:
         return jsonify({'error': 'Informe o nome da empresa.'}), 400
     api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
@@ -739,7 +745,7 @@ def account_planning_search():
     task_id = uuid.uuid4().hex
     _bg_task_register_persistent(task_id, 'account_planning')
     _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 3})
-    threading.Thread(target=_account_planning_search_async, args=(task_id, company, segment), daemon=True).start()
+    threading.Thread(target=_account_planning_search_async, args=(task_id, company, segment, country), daemon=True).start()
     return jsonify({'task_id': task_id}), 202
 
 

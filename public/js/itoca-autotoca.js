@@ -3532,7 +3532,7 @@
                 if (!resp.ok) throw new Error(data.error || 'Erro ao carregar a matriz.');
                 if (!data.offers.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma oferta cadastrada no Portfólio.</p></div>'; return; }
                 if (!data.rows.length) { el.innerHTML = '<div class="empty-state"><p>Nenhuma conta marcada como target.</p></div>'; return; }
-                const head = data.offers.map(o => `<th class="toca-text-strong" style="padding:8px 6px; font-size:11px; max-width:110px; word-break:break-word;">${escapeHtml(o.title)}</th>`).join('');
+                const head = data.offers.map(o => `<th style="padding:8px 6px; font-size:11px; max-width:110px; word-break:break-word;">${escapeHtml(o.title)}</th>`).join('');
                 const body = data.rows.map(r => {
                     const cells = data.offers.map(o => {
                         const has = r.cells[String(o.id)];
@@ -3541,7 +3541,7 @@
                     return `<tr><td class="toca-text-strong" style="font-weight:600; padding:6px 10px; white-space:nowrap;">${escapeHtml(r.name)}</td>${cells}</tr>`;
                 }).join('');
                 el.innerHTML = `<div style="overflow-x:auto;"><table class="data-table" style="min-width:520px;">
-                    <thead><tr><th class="toca-text-strong" style="padding:8px 10px;">Conta target</th>${head}</tr></thead>
+                    <thead><tr><th style="padding:8px 10px;">Conta target</th>${head}</tr></thead>
                     <tbody>${body}</tbody></table></div>`;
             } catch (e) {
                 el.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(e.message)}</div>`;
