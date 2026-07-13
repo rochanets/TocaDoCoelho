@@ -91,6 +91,12 @@ def _http_form_post(url, form_data):
     except urllib.error.HTTPError as e:
         body = _safe_json_loads(e.read())
         err = body.get('error_description') or body.get('error') or str(e)
+        if 'AADSTS65001' in str(err) or 'consent' in str(err).lower() or 'interaction_required' in str(body.get('error') or ''):
+            raise OutlookOAuthError(
+                'A permissão de envio de e-mail (Mail.Send) ainda não foi concedida. '
+                'Vá em Configurações > Integrações > Outlook, clique em DESCONECTAR e '
+                'depois em CONECTAR novamente para aprovar a nova permissão.'
+            ) from e
         raise OutlookOAuthError(f'Falha OAuth no token endpoint: {err}') from e
     except Exception as e:
         raise OutlookOAuthError(f'Falha de conexão no token endpoint: {e}') from e
@@ -212,12 +218,12 @@ def _oauth_config(settings=None):
         tenant = (settings.get('tenant') or 'common').strip()
         client_id = (settings.get('client_id') or '').strip()
         redirect_uri = (settings.get('redirect_uri') or '').strip()
-        scope = (settings.get('scope') or 'offline_access Mail.Read').strip()
+        scope = (settings.get('scope') or 'offline_access Mail.Read Mail.Send').strip()
     else:
         tenant = (os.environ.get('OUTLOOK_GRAPH_TENANT_ID') or 'common').strip()
         client_id = (os.environ.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
         redirect_uri = (os.environ.get('OUTLOOK_GRAPH_REDIRECT_URI') or '').strip()
-        scope = (os.environ.get('OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read').strip()
+        scope = (os.environ.get('OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read Mail.Send').strip()
 
     if not client_id or not redirect_uri:
         raise OutlookOAuthError(
@@ -247,6 +253,9 @@ def build_authorize_url(user_id: int, settings=None):
         'state': make_state(user_id),
         'code_challenge': _pkce_make_challenge(verifier),
         'code_challenge_method': 'S256',
+        # Garante a tela de consentimento — obrigatório quando o escopo muda
+        # (ex.: Mail.Send adicionado), senão o token endpoint devolve AADSTS65001.
+        'prompt': 'consent',
     }
     return f"{cfg['authorize_url']}?{urllib.parse.urlencode(params)}"
 
@@ -411,3 +420,41 @@ def fetch_messages(access_token: str, start_date: datetime, end_date: datetime, 
     inbox = collect('inbox', 'received')
     sent = collect('sentitems', 'sent')
     return inbox + sent
+
+
+def send_mail(access_token: str, to: str, subject: str, body_html: str, attachments=None):
+    """Envia e-mail via Microsoft Graph POST /me/sendMail (requer escopo Mail.Send).
+    attachments: lista de dicts {'name', 'content_bytes' (base64 str), 'content_type'}.
+    Após adicionar Mail.Send ao escopo, o usuário precisa reconectar a
+    integração uma vez para conceder a nova permissão."""
+    message = {
+        'subject': subject,
+        'body': {'contentType': 'HTML', 'content': body_html},
+        'toRecipients': [{'emailAddress': {'address': to}}],
+    }
+    if attachments:
+        message['attachments'] = [
+            {
+                '@odata.type': '#microsoft.graph.fileAttachment',
+                'name': att['name'],
+                'contentType': att.get('content_type') or 'application/octet-stream',
+                'contentBytes': att['content_bytes'],
+            }
+            for att in attachments
+        ]
+    payload = json.dumps({'message': message, 'saveToSentItems': True}).encode('utf-8')
+    req = urllib.request.Request(
+        f'{GRAPH_BASE_URL}/me/sendMail',
+        data=payload,
+        method='POST',
+        headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')[:200]
+        raise OutlookSyncError(f'Falha ao enviar e-mail via Graph: HTTP {e.code} — {body}') from e
+    if status not in (200, 202):
+        raise OutlookSyncError(f'Falha ao enviar e-mail via Graph: HTTP {status}')
+    return True

@@ -53,6 +53,7 @@ from integrations.outlook_graph import (
     fetch_messages as outlook_graph_fetch_messages,
     get_valid_access_token as outlook_graph_get_valid_access_token,
     parse_state as outlook_graph_parse_state,
+    send_mail as outlook_graph_send_mail,
 )
 try:
     import openpyxl
@@ -1107,8 +1108,8 @@ def init_db():
         if 'angle_area' not in camp_act_cols:
             c.execute('ALTER TABLE campaign_actions ADD COLUMN angle_area TEXT')
         conn.commit()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f'[init_db] exceção ignorada: {e}')
     
     conn.close()
     logger.info('[Database] Banco de dados inicializado')
@@ -1121,7 +1122,7 @@ def run_automatic_db_backup(interval_days=3):
         c.execute('SELECT value FROM app_settings WHERE key = ?', ('db_last_backup_at',))
         row = c.fetchone()
 
-        now = datetime.utcnow()
+        now = datetime.now()
         should_backup = True
 
         if row and row[0]:
@@ -1149,19 +1150,193 @@ def run_automatic_db_backup(interval_days=3):
     except Exception as e:
         logger.exception(f'[Backup] Falha ao executar backup automático: {e}')
 
-init_db()
+# ---------------------------------------------------------------------------
+# Sistema de migração versionada do schema.
+# A migração 1 é a "baseline" legada: o init_db() idempotente (CREATE TABLE IF
+# NOT EXISTS + ALTER TABLE condicionais via PRAGMA table_info), que cobre tanto
+# bancos novos quanto bancos antigos dos usuários (o instalador atualiza os
+# binários mas mantém o .db em %AppData%). Novas mudanças de schema devem ser
+# adicionadas como entradas numeradas em SCHEMA_MIGRATIONS — nunca mais como
+# ALTER TABLE ad-hoc no init_db.
+# ---------------------------------------------------------------------------
+SCHEMA_MIGRATIONS = [
+    (1, 'baseline_legacy_init', None),  # None => roda init_db()
+    (2, 'indices_consultas_frequentes', [
+        'CREATE INDEX IF NOT EXISTS idx_activities_client_date ON activities(client_id, activity_date)',
+        'CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company)',
+        'CREATE INDEX IF NOT EXISTS idx_clients_last_activity ON clients(last_activity_date)',
+        'CREATE INDEX IF NOT EXISTS idx_commitments_due_date ON commitments(due_date)',
+        'CREATE INDEX IF NOT EXISTS idx_account_activities_account ON account_activities(account_id)',
+    ]),
+    (3, 'background_tasks_persistentes', [
+        '''CREATE TABLE IF NOT EXISTS background_tasks (
+            task_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'processing',
+            step TEXT,
+            progress INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+    ]),
+    (4, 'account_planning_runs', [
+        '''CREATE TABLE IF NOT EXISTS account_planning_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            segment TEXT,
+            result_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_account_planning_created ON account_planning_runs(created_at)',
+    ]),
+    (5, 'radar_do_dia_score_snooze', [
+        'ALTER TABLE daily_suggestions ADD COLUMN score REAL DEFAULT 0',
+        'ALTER TABLE daily_suggestions ADD COLUMN snoozed_until TEXT',
+    ]),
+    (6, 'inbound_messages', [
+        '''CREATE TABLE IF NOT EXISTS inbound_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'whatsapp',
+            received_at TEXT NOT NULL,
+            preview TEXT,
+            responded_at TEXT,
+            source_msg_id TEXT UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_inbound_pending ON inbound_messages(responded_at, received_at)',
+        'CREATE INDEX IF NOT EXISTS idx_inbound_client ON inbound_messages(client_id, channel)',
+    ]),
+    (7, 'whatsapp_sends', [
+        '''CREATE TABLE IF NOT EXISTS whatsapp_sends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            phone TEXT,
+            message TEXT,
+            status TEXT NOT NULL DEFAULT 'sent',
+            error TEXT,
+            sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        "CREATE INDEX IF NOT EXISTS idx_wa_sends_date ON whatsapp_sends(sent_at)",
+    ]),
+    (8, 'clients_birthday', [
+        'ALTER TABLE clients ADD COLUMN birthday TEXT',
+    ]),
+    (9, 'job_change_events', [
+        '''CREATE TABLE IF NOT EXISTS job_change_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            empresa_antiga TEXT,
+            empresa_nova TEXT,
+            cargo_novo TEXT,
+            potential_new_account INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pendente',
+            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_job_change_status ON job_change_events(status)',
+    ]),
+    (10, 'meeting_briefings', [
+        '''CREATE TABLE IF NOT EXISTS meeting_briefings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            commitment_id INTEGER NOT NULL UNIQUE,
+            content_md TEXT NOT NULL,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(commitment_id) REFERENCES commitments(id) ON DELETE CASCADE
+        )''',
+    ]),
+    (11, 'scheduled_sends', [
+        '''CREATE TABLE IF NOT EXISTS scheduled_sends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT NOT NULL DEFAULT 'whatsapp',
+            client_id INTEGER,
+            phone TEXT,
+            email_to TEXT,
+            subject TEXT,
+            message TEXT NOT NULL,
+            scheduled_for TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sent_at TIMESTAMP
+        )''',
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_sends_due ON scheduled_sends(status, scheduled_for)",
+    ]),
+    (12, 'scheduled_sends_activity_link', [
+        'ALTER TABLE scheduled_sends ADD COLUMN activity_id INTEGER',
+    ]),
+]
+
+
+def _run_schema_migrations():
+    conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            name TEXT,
+            applied_at TEXT
+        )''')
+        conn.commit()
+        c.execute('SELECT MAX(version) FROM schema_version')
+        row = c.fetchone()
+        current = row[0] if row and row[0] else 0
+        for version, name, statements in SCHEMA_MIGRATIONS:
+            if version <= current:
+                continue
+            if statements is None:
+                # Baseline legada: init_db() usa a própria conexão.
+                init_db()
+            else:
+                for stmt in statements:
+                    c.execute(stmt)
+            c.execute(
+                'INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)',
+                (version, name, datetime.now().isoformat(timespec='seconds'))
+            )
+            conn.commit()
+            logger.info(f'[Database] Migração {version} ({name}) aplicada')
+    finally:
+        conn.close()
+
+
+def _mark_interrupted_background_tasks():
+    """Ao subir, marca tasks 'processing' de execuções anteriores como interrompidas."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
+        conn.execute(
+            "UPDATE background_tasks SET status = 'interrupted', updated_at = CURRENT_TIMESTAMP "
+            "WHERE status = 'processing'"
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.debug(f'[Tasks] Falha ao marcar tasks interrompidas: {e}')
+
+
+_run_schema_migrations()
+_mark_interrupted_background_tasks()
 run_automatic_db_backup(interval_days=3)
 
 # Funcoes auxiliares
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('PRAGMA foreign_keys=ON')
+    except Exception as e:
+        logger.debug(f'[Database] Falha ao aplicar PRAGMAs de conexão: {e}')
     # Garante que o arquivo de banco só seja acessível pelo usuário atual do SO
     try:
         import stat as _stat
         os.chmod(str(DB_PATH), _stat.S_IRUSR | _stat.S_IWUSR)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[get_db] exceção ignorada: {e}')
     return conn
 
 def dict_from_row(row):
@@ -1178,8 +1353,6 @@ def _load_app_settings_map(keys):
     mapping = {row['key']: row['value'] for row in c.fetchall()}
     conn.close()
     return mapping
-
-
 
 
 def _normalize_version(version):
@@ -1317,6 +1490,57 @@ def _extract_bing_image_urls(raw_html, log_prefix='[AutoPic]'):
         if url.startswith('http://') or url.startswith('https://'):
             urls.append(url)
     return urls
+
+
+def _llm_prompt(question, log_tag='llm', temperature=0.1, web=False):
+    """REGRA DE DESENVOLVIMENTO (ver CLAUDE.md): toda automação com IA usa
+    SAI primeiro e OpenRouter como fallback. Única exceção: perguntas que
+    exigem busca ativa na internet (web=True) — aí o OpenRouter (com plugin
+    de web) vem primeiro, já que os templates SAI não têm acesso à web.
+    Retorna str com a resposta, ou None se nenhum provider respondeu."""
+    if web:
+        raw = _openrouter_web_prompt(question)
+        if raw and str(raw).strip():
+            logger.info(f'[{log_tag}][OpenRouter/web] Resposta gerada com sucesso')
+            return raw
+        return _sai_simple_prompt(question)
+
+    raw = _sai_simple_prompt(question)
+    if raw and str(raw).strip():
+        logger.info(f'[{log_tag}][SAI] Resposta gerada com sucesso')
+        return raw
+
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if or_key:
+        or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+        model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+        site_url = (or_settings.get('openrouter_site_url') or 'http://localhost').strip() or 'http://localhost'
+        app_name = (or_settings.get('openrouter_app_name') or 'TocaDoCoelho').strip() or 'TocaDoCoelho'
+        try:
+            resp = requests.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                json={
+                    'model': model,
+                    'messages': [{'role': 'user', 'content': question}],
+                    'temperature': temperature
+                },
+                headers={
+                    'Authorization': f'Bearer {or_key}',
+                    'HTTP-Referer': site_url,
+                    'X-Title': app_name
+                },
+                timeout=90
+            )
+            data = resp.json()
+            choices = data.get('choices') or []
+            raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+            if raw and str(raw).strip():
+                logger.info(f'[{log_tag}][OpenRouter] Resposta gerada com sucesso (fallback)')
+                return raw
+            logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia.')
+        except Exception as e:
+            logger.warning(f'[{log_tag}][OpenRouter] Falha no fallback: {e}')
+    return None
 
 
 def _find_image_candidates_on_web(query, limit=3):
@@ -3358,8 +3582,8 @@ def _itoca_build_snippet(row_dict):
             try:
                 dt = datetime.strptime(text[:10], '%Y-%m-%d')
                 text = dt.strftime('%d/%m/%Y')
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_itoca_build_snippet] exceção ignorada: {e}')
         # Trunca campos muito longos
         if len(text) > 500:
             text = text[:500] + '...'
@@ -3705,8 +3929,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                         enriched['empresa'] = rd_cl['company']
                     if rd_cl.get('position'):
                         enriched['cargo'] = rd_cl['position']
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
         # Remove o campo de FK bruto para não aparecer no snippet
         enriched.pop(fk_field, None)
 
@@ -3722,8 +3946,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                     enriched['nome_conta'] = rd_ac['name']
                 if rd_ac.get('sector'):
                     enriched['setor'] = rd_ac['sector']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('account_id', None)
 
     # Resolve column_id -> título da coluna do Kanban
@@ -3736,8 +3960,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                 rd_col = dict_from_row(r)
                 if rd_col.get('title'):
                     enriched['coluna_kanban'] = rd_col['title']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('column_id', None)
 
     # Resolve card_id -> título do card
@@ -3750,8 +3974,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                 rd_card = dict_from_row(r)
                 if rd_card.get('title'):
                     enriched['mapeamento'] = rd_card['title']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('card_id', None)
 
     # Resolve grouping_id -> nome do agrupamento
@@ -3764,8 +3988,8 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
                 rd_grp = dict_from_row(r)
                 if rd_grp.get('name'):
                     enriched['agrupamento'] = rd_grp['name']
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_itoca_enrich_snippet_with_joins] exceção ignorada: {e}')
     enriched.pop('grouping_id', None)
 
     # Remove outros campos de FK que não foram resolvidos
@@ -3809,8 +4033,8 @@ def _itoca_find_tesseract_cmd():
         result = subprocess.run(['tesseract', '--version'], capture_output=True, timeout=5)
         if result.returncode == 0:
             return 'tesseract'
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[_itoca_find_tesseract_cmd] exceção ignorada: {e}')
 
     # 3. Caminhos padrão do Windows
     if sys.platform == 'win32':
@@ -3951,8 +4175,8 @@ def _itoca_extract_text_from_file(file_path_str):
         elif ext == '.txt':
             try:
                 text_parts.append(path.read_text(encoding='utf-8', errors='replace'))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_itoca_extract_text_from_file] exceção ignorada: {e}')
 
     except Exception as e:
         logger.warning(f'[iToca] Erro geral ao extrair texto de {file_path_str}: {e}')
@@ -4189,8 +4413,8 @@ def _itoca_build_activities_items(conn):
                         cm_title = (cm_row[0] if not isinstance(cm_row, sqlite3.Row) else cm_row['title'] if 'title' in cm_row.keys() else cm_row[0]) or ''
                         if cm_title:
                             parts.append(f'compromisso_vinculado: {cm_title[:120]}')
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_itoca_build_activities_items] exceção ignorada: {e}')
 
             snippet = ' | '.join(parts)
             if snippet:
@@ -4232,8 +4456,8 @@ def _itoca_build_presences_items(conn):
                 try:
                     receita = int(rd['current_revenue_cents']) / 100
                     parts.append(f'receita_atual: R$ {receita:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_itoca_build_presences_items] exceção ignorada: {e}')
             if rd.get('validity_month'):
                 parts.append(f'validade: {rd["validity_month"]}')
             snippet = ' | '.join(parts)
@@ -4593,8 +4817,8 @@ def _itoca_update_cached_base(progress_cb=None, incremental=False):
                 if row and (dict_from_row(row).get('cnt') or 0) > 0:
                     generic_changed = True
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_progress] exceção ignorada: {e}')
 
         # Verifica se houve alterações nas tabelas especializadas
         specialized_changed_tables = set()
@@ -4660,8 +4884,8 @@ def _itoca_update_cached_base(progress_cb=None, incremental=False):
                         snippet = _itoca_build_snippet(rd)
                         if snippet:
                             kept_items.append({'table': table, 'id': rd.get('id'), 'snippet': snippet, 'search_text': snippet.lower()})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_progress] exceção ignorada: {e}')
 
         # Re-indexa tabelas especializadas alteradas
         if 'user_profile' in tables_to_refresh:
@@ -4972,8 +5196,8 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
             obj = json.loads(text.strip())
             if isinstance(obj, dict):
                 return obj
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_llm_json] exceção ignorada: {e}')
         # Tentativa 2: extrai o primeiro objeto JSON da string
         obj = _extract_json_object_from_text(text)
         if obj and isinstance(obj, dict):
@@ -5052,8 +5276,8 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
     if answer_text.startswith('"') and answer_text.endswith('"') and len(answer_text) > 2:
         try:
             answer_text = json.loads(answer_text)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_llm_json] exceção ignorada: {e}')
 
     if not answer_text:
         answer_text = 'Sem resposta disponível.'
@@ -5184,8 +5408,7 @@ def sync_accounts_from_clients():
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f'[WARN] sync_accounts_from_clients: {e}')
-
+        logger.warning(f'[WARN] sync_accounts_from_clients: {e}')
 
 
 sync_accounts_from_clients()
@@ -5448,8 +5671,6 @@ def _run_tavily_search(company, country, industry):
     return all_results, section_errors, execution_meta
 
 
-
-
 def _default_llm_summary(sections):
     summary = {}
     for section_key in (sections or {}).keys():
@@ -5526,8 +5747,8 @@ def _extract_json_object_from_text(text):
     if stripped.startswith('{'):
         try:
             return json.loads(stripped)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_extract_json_object_from_text] exceção ignorada: {e}')
 
     # Busca o primeiro '{' e tenta balancear as chaves
     start = text.find('{')
@@ -5668,7 +5889,7 @@ def _run_openrouter_synthesis(result_payload):
             'api_key_prefix': api_key[:7] if api_key else '',
             'sent_headers': ['Content-Type', 'Authorization', 'HTTP-Referer', 'X-Title']
         }
-        print(f'[ERROR][OpenRouter] HTTPError diagnostics={diagnostics} body={detail[:500]}')
+        logger.exception(f'[ERROR][OpenRouter] HTTPError diagnostics={diagnostics} body={detail[:500]}')
         hint = ' Verifique se OPENROUTER_API_KEY é a chave da OpenRouter (prefixo sk-or-) e se foi exportada no mesmo terminal do app.' if diagnostics.get('status') == 401 else ''
         raise RuntimeError(f'OpenRouter HTTP {diagnostics["status"]} - body: {detail[:400]} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}{hint}')
     except Exception as e:
@@ -5677,7 +5898,7 @@ def _run_openrouter_synthesis(result_payload):
             'has_api_key': bool(api_key),
             'api_key_prefix': api_key[:7] if api_key else ''
         }
-        print(f'[ERROR][OpenRouter] Exception diagnostics={diagnostics} error={e}')
+        logger.exception(f'[ERROR][OpenRouter] Exception diagnostics={diagnostics} error={e}')
         raise RuntimeError(f'Falha inesperada OpenRouter: {str(e)} | diagnostics: {json.dumps(diagnostics, ensure_ascii=False)}')
 
     choices = data.get('choices') or []
@@ -5784,8 +6005,8 @@ def extract_future_commitment_dates(text):
                 dt = datetime(y + 1, month, day)
             if dt.date() >= now.date():
                 matches.append(dt.date().isoformat())
-        except ValueError:
-            pass
+        except Exception as e:
+            logger.debug(f'[add_date] exceção ignorada: {e}')
 
     for m in re.finditer(r'\b(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-](\d{2,4}))?\b', text):
         add_date(int(m.group(1)), int(m.group(2)), int(m.group(3)) if m.group(3) else None)
@@ -5934,13 +6155,13 @@ def transcribe_audio():
         return ('', 204)
 
     if TRANSCRIPTION_DEBUG:
-        print('[Transcription][DEBUG] Requisição recebida em /api/transcribe-audio')
-        print(f"[Transcription][DEBUG] Content-Type: {request.content_type}")
-        print(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
+        logger.debug('[Transcription][DEBUG] Requisição recebida em /api/transcribe-audio')
+        logger.debug(f"[Transcription][DEBUG] Content-Type: {request.content_type}")
+        logger.debug(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
     if not WHISPER_AVAILABLE:
         details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
-        print(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
+        logger.error(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
         return jsonify({'error': 'Biblioteca faster-whisper não está disponível neste ambiente.'}), 503
 
     audio_file = request.files.get('audio')
@@ -5949,7 +6170,7 @@ def transcribe_audio():
 
     ffmpeg_path = configure_ffmpeg_for_whisper()
     if TRANSCRIPTION_DEBUG and not ffmpeg_path:
-        print('[Transcription][DEBUG] FFmpeg externo não encontrado; continuando com decoder da stack local.')
+        logger.debug('[Transcription][DEBUG] FFmpeg externo não encontrado; continuando com decoder da stack local.')
 
     suffix = Path(audio_file.filename or 'audio.webm').suffix or '.webm'
     temp_path = None
@@ -5959,9 +6180,9 @@ def transcribe_audio():
             temp_path = tmp.name
 
         if TRANSCRIPTION_DEBUG:
-            print(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
-            print(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
-            print(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
+            logger.debug(f"[Transcription][DEBUG] Arquivo salvo temporariamente: {temp_path}")
+            logger.debug(f"[Transcription][DEBUG] Nome original: {audio_file.filename}")
+            logger.debug(f"[Transcription][DEBUG] FFmpeg em uso: {ffmpeg_path or 'decoder interno'}")
 
         model = get_whisper_model()
         if model is None:
@@ -5971,11 +6192,11 @@ def transcribe_audio():
         text = ''.join(segment.text for segment in segments).strip()
 
         if TRANSCRIPTION_DEBUG:
-            print(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
+            logger.debug(f"[Transcription][DEBUG] Texto transcrito (primeiros 200 chars): {text[:200]}")
 
         return jsonify({'text': text})
     except Exception as e:
-        print(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
+        logger.error(f'[Transcription][ERROR] POST /api/transcribe-audio: {e}')
         if TRANSCRIPTION_DEBUG:
             traceback.print_exc()
         return jsonify({'error': f'Falha ao transcrever áudio com faster-whisper: {e}'}), 500
@@ -5983,349 +6204,12 @@ def transcribe_audio():
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
             if TRANSCRIPTION_DEBUG:
-                print(f"[Transcription][DEBUG] Arquivo temporário removido: {temp_path}")
+                logger.debug(f"[Transcription][DEBUG] Arquivo temporário removido: {temp_path}")
 
 # API - Clientes (rotas alternativas para compatibilidade)
-@app.route('/api/clientes', methods=['GET'])
-def get_clientes():
-    return get_clients()
-
-@app.route('/api/clients', methods=['GET'])
-def get_clients():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM clients ORDER BY name')
-        clients = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(clients)
-    except Exception as e:
-        print(f'[ERROR] GET /api/clients: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/cargos', methods=['GET'])
-def get_positions():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != "" ORDER BY position')
-        positions = [row['position'] for row in c.fetchall()]
-        conn.close()
-        return jsonify(positions)
-    except Exception as e:
-        print(f'[ERROR] GET /api/cargos: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/mala-direta/positions', methods=['GET'])
-def get_autotoca_mailing_positions():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != "" ORDER BY position COLLATE NOCASE')
-        positions = [row['position'] for row in c.fetchall()]
-        conn.close()
-        return jsonify(positions)
-    except Exception as e:
-        print(f'[ERROR] GET /api/autotoca/mala-direta/positions: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/mala-direta/areas', methods=['GET'])
-def get_autotoca_mailing_areas():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT DISTINCT area_of_activity FROM clients WHERE area_of_activity IS NOT NULL AND TRIM(area_of_activity) != "" ORDER BY area_of_activity COLLATE NOCASE')
-        areas = [row['area_of_activity'] for row in c.fetchall()]
-        conn.close()
-        return jsonify(areas)
-    except Exception as e:
-        print(f'[ERROR] GET /api/autotoca/mala-direta/areas: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/empresas', methods=['GET'])
-def get_companies():
-    try:
-        sync_accounts_from_clients()
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
-                     WHERE name IS NOT NULL AND TRIM(name) != ''
-                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''')
-        companies = [row['name'] for row in c.fetchall()]
-        conn.close()
-        return jsonify(companies)
-    except Exception as e:
-        print(f'[ERROR] GET /api/empresas: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/status', methods=['GET'])
-def get_status_config():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days", "target_green_days", "target_yellow_days", "cold_green_days", "cold_yellow_days")')
-        settings = {row['key']: row['value'] for row in c.fetchall()}
-        c.execute('SELECT id, position, green_days, yellow_days FROM status_rules ORDER BY position')
-        rules = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-
-        return jsonify({
-            'universal': {
-                'green_days': int(settings.get('status_green_days', '7')),
-                'yellow_days': int(settings.get('status_yellow_days', '14'))
-            },
-            'rules': rules,
-            'target': {
-                'green_days': int(settings.get('target_green_days', '5')),
-                'yellow_days': int(settings.get('target_yellow_days', '10'))
-            },
-            'cold': {
-                'green_days': int(settings.get('cold_green_days', '45')),
-                'yellow_days': int(settings.get('cold_yellow_days', '60'))
-            }
-        })
-    except Exception as e:
-        print(f'[ERROR] GET /api/config/status: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/status/universal', methods=['PUT'])
-def update_universal_status_config():
-    try:
-        data = request.get_json() or {}
-        green_days = int(data.get('green_days', 7))
-        yellow_days = int(data.get('yellow_days', 14))
-
-        if green_days < 0 or yellow_days <= green_days:
-            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(green_days), 'status_green_days'))
-        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(yellow_days), 'status_yellow_days'))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Configuração universal atualizada'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/config/status/universal: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-
-@app.route('/api/config/status/target', methods=['PUT'])
-def update_target_status_config():
-    try:
-        data = request.get_json() or {}
-        green_days = int(data.get('green_days', 5))
-        yellow_days = int(data.get('yellow_days', 10))
-
-        if green_days < 0 or yellow_days <= green_days:
-            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(green_days), 'target_green_days'))
-        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(yellow_days), 'target_yellow_days'))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Configuração Target atualizada'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/config/status/target: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-@app.route('/api/config/status/cold', methods=['PUT'])
-def update_cold_status_config():
-    try:
-        data = request.get_json() or {}
-        green_days = int(data.get('green_days', 45))
-        yellow_days = int(data.get('yellow_days', 60))
-
-        if green_days < 0 or yellow_days <= green_days:
-            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(green_days), 'cold_green_days'))
-        c.execute('UPDATE app_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?', (str(yellow_days), 'cold_yellow_days'))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Configuração de contato frio atualizada'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/config/status/cold: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/position-groupings', methods=['GET'])
-def list_position_groupings():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id, name FROM job_groupings ORDER BY name')
-        groups = [dict_from_row(row) for row in c.fetchall()]
-        for group in groups:
-            c.execute('SELECT position FROM job_grouping_positions WHERE grouping_id = ? ORDER BY position', (group['id'],))
-            group['positions'] = [row['position'] for row in c.fetchall()]
-        conn.close()
-        return jsonify(groups)
-    except Exception as e:
-        print(f'[ERROR] GET /api/config/position-groupings: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/position-groupings', methods=['POST'])
-def create_position_grouping():
-    try:
-        data = request.get_json() or {}
-        name = (data.get('name') or '').strip()
-        positions = sorted(set([(p or '').strip() for p in (data.get('positions') or []) if (p or '').strip()]))
-
-        if not name or len(positions) < 2:
-            return jsonify({'error': 'Informe um nome e ao menos 2 cargos'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('INSERT INTO job_groupings (name, updated_at) VALUES (?, CURRENT_TIMESTAMP)', (name,))
-        grouping_id = c.lastrowid
-        for position in positions:
-            c.execute('INSERT INTO job_grouping_positions (grouping_id, position) VALUES (?, ?)', (grouping_id, position))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Agrupamento criado'})
-    except Exception as e:
-        print(f'[ERROR] POST /api/config/position-groupings: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/position-groupings/<int:grouping_id>', methods=['DELETE'])
-def delete_position_grouping(grouping_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM job_groupings WHERE id = ?', (grouping_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Agrupamento removido'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/config/position-groupings/{grouping_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/status/rules', methods=['POST'])
-def create_or_update_status_rule():
-    try:
-        data = request.get_json() or {}
-        position = (data.get('position') or '').strip()
-        green_days = int(data.get('green_days', 7))
-        yellow_days = int(data.get('yellow_days', 14))
-
-        if not position:
-            return jsonify({'error': 'Cargo é obrigatório'}), 400
-        if green_days < 0 or yellow_days <= green_days:
-            return jsonify({'error': 'Faixas inválidas: amarelo deve ser maior que verde'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''INSERT INTO status_rules (position, green_days, yellow_days, updated_at)
-                     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                     ON CONFLICT(position) DO UPDATE SET
-                        green_days = excluded.green_days,
-                        yellow_days = excluded.yellow_days,
-                        updated_at = CURRENT_TIMESTAMP''',
-                  (position, green_days, yellow_days))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Regra por cargo salva'})
-    except Exception as e:
-        print(f'[ERROR] POST /api/config/status/rules: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/status/rules/<int:rule_id>', methods=['DELETE'])
-def delete_status_rule(rule_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM status_rules WHERE id = ?', (rule_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Regra removida'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/config/status/rules/{rule_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/profile', methods=['GET'])
-def get_profile_config():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM user_profile WHERE id = 1')
-        profile = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify(profile or {})
-    except Exception as e:
-        print(f'[ERROR] GET /api/config/profile: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-
-@app.route('/api/config/ui', methods=['GET'])
-def get_ui_config():
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT key, value FROM app_settings WHERE key IN ("iata_video_path")')
-        settings = {row['key']: row['value'] for row in c.fetchall()}
-        conn.close()
-        return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
-    except Exception as e:
-        print(f'[ERROR] GET /api/config/ui: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 _VALID_THEMES = {'verde-classico', 'baby-pink', 'black-cat', 'white-pearl', 'blue-space'}
-
-
-@app.route('/api/config/theme', methods=['GET'])
-def get_theme_config():
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT value FROM app_settings WHERE key = "ui_color_theme"')
-        row = c.fetchone()
-        conn.close()
-        theme = row['value'] if row and row['value'] in _VALID_THEMES else 'verde-classico'
-        return jsonify({'theme': theme})
-    except Exception as e:
-        print(f'[ERROR] GET /api/config/theme: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/theme', methods=['PUT'])
-def put_theme_config():
-    try:
-        data = request.get_json(force=True) or {}
-        theme = data.get('theme', 'verde-classico')
-        if theme not in _VALID_THEMES:
-            return jsonify({'error': 'Tema inválido'}), 400
-        conn = get_db(); c = conn.cursor()
-        c.execute(
-            'INSERT INTO app_settings (key, value) VALUES ("ui_color_theme", ?) '
-            'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP',
-            (theme,)
-        )
-        conn.commit()
-        conn.close()
-        return jsonify({'theme': theme})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/config/theme: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 # =====================================================
@@ -6337,421 +6221,6 @@ def put_theme_config():
 # =====================================================
 
 _CLIENT_LOGGER = logging.getLogger('toca-do-coelho.client')
-
-
-@app.route('/api/config/logs', methods=['GET'])
-def get_debug_logs():
-    try:
-        try:
-            lines_limit = int(request.args.get('limit', 500))
-        except (TypeError, ValueError):
-            lines_limit = 500
-        lines_limit = max(50, min(lines_limit, 5000))
-
-        if not LOG_FILE.exists():
-            return jsonify({
-                'lines': [],
-                'path': str(LOG_FILE),
-                'total_lines': 0,
-                'returned_lines': 0,
-                'size': 0
-            })
-
-        with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
-            all_lines = f.readlines()
-
-        tail = all_lines[-lines_limit:] if len(all_lines) > lines_limit else all_lines
-        return jsonify({
-            'lines': [line.rstrip('\n') for line in tail],
-            'path': str(LOG_FILE),
-            'total_lines': len(all_lines),
-            'returned_lines': len(tail),
-            'size': LOG_FILE.stat().st_size
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/config/logs: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/logs/client', methods=['POST'])
-def receive_client_logs():
-    try:
-        data = request.get_json(silent=True) or {}
-        entries = data.get('entries') or []
-        if not isinstance(entries, list):
-            return jsonify({'error': 'entries deve ser uma lista'}), 400
-
-        accepted = 0
-        for entry in entries[:500]:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                ts = str(entry.get('ts') or '')
-                tag = str(entry.get('tag') or 'client')
-                message = str(entry.get('message') or '')
-                payload = entry.get('data')
-                if payload is None:
-                    payload_str = ''
-                else:
-                    try:
-                        payload_str = json.dumps(payload, ensure_ascii=False, default=str)
-                    except Exception:
-                        payload_str = str(payload)
-                _CLIENT_LOGGER.info(
-                    f'[client:{tag}] ts={ts} msg={message} data={payload_str}'
-                )
-                accepted += 1
-            except Exception:
-                continue
-
-        return jsonify({'received': accepted})
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/config/logs/client: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/integrations', methods=['GET'])
-def get_integrations_config():
-    try:
-        settings_map = _load_app_settings_map([
-            'tavily_api_key',
-            'openrouter_api_key',
-            'openrouter_model',
-            'openrouter_site_url',
-            'openrouter_app_name',
-            'itoca_sai_api_key',
-            'itoca_sai_template_id',
-            'itoca_sai_base_url'
-        ])
-
-        tavily_key = (settings_map.get('tavily_api_key') or '').strip() or (os.environ.get('TAVILY_API_KEY', '') or '').strip()
-        openrouter_key = (settings_map.get('openrouter_api_key') or '').strip() or (os.environ.get('OPENROUTER_API_KEY', '') or '').strip()
-        model = (settings_map.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-        site_url = (settings_map.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-        app_name = (settings_map.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-        itoca_sai_key = (settings_map.get('itoca_sai_api_key') or '').strip() or (os.environ.get('ITOCA_SAI_API_KEY', '') or '').strip()
-        itoca_sai_template_id = (settings_map.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
-        itoca_sai_base_url = (settings_map.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-
-        return jsonify({
-            'tavily_configured': bool(tavily_key),
-            'tavily_key_preview': tavily_key[:6] + '...' if tavily_key else '',
-            'openrouter_configured': bool(openrouter_key),
-            'openrouter_key_preview': openrouter_key[:9] + '...' if openrouter_key else '',
-            'openrouter_model': model,
-            'openrouter_site_url': site_url,
-            'openrouter_app_name': app_name,
-            'itoca_sai_configured': bool(itoca_sai_key),
-            'itoca_sai_key_preview': itoca_sai_key[:6] + '...' if itoca_sai_key else '',
-            'itoca_sai_template_id': itoca_sai_template_id,
-            'itoca_sai_base_url': itoca_sai_base_url
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/config/integrations: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/integrations', methods=['PUT'])
-def save_integrations_config():
-    try:
-        data = request.get_json() or {}
-        tavily_api_key = (data.get('tavily_api_key') or '').strip()
-        openrouter_api_key = (data.get('openrouter_api_key') or '').strip()
-        openrouter_model = (data.get('openrouter_model') or '').strip() or 'stepfun/step-3.5-flash:free'
-        openrouter_site_url = (data.get('openrouter_site_url') or '').strip() or 'http://localhost'
-        openrouter_app_name = (data.get('openrouter_app_name') or '').strip() or 'TocaDoCoelho'
-        itoca_sai_api_key = (data.get('itoca_sai_api_key') or '').strip()
-        itoca_sai_template_id = (data.get('itoca_sai_template_id') or '').strip() or '69ac3c87024adc2d2bdc19f5'
-        itoca_sai_base_url = (data.get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-
-        if openrouter_api_key:
-            key_ok, key_msg = _validate_openrouter_api_key(openrouter_api_key)
-            if not key_ok:
-                return jsonify({'error': f'OpenRouter inválida: {key_msg}'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        updates = [
-            ('tavily_api_key', tavily_api_key),
-            ('openrouter_api_key', openrouter_api_key),
-            ('openrouter_model', openrouter_model),
-            ('openrouter_site_url', openrouter_site_url),
-            ('openrouter_app_name', openrouter_app_name),
-            ('itoca_sai_api_key', itoca_sai_api_key),
-            ('itoca_sai_template_id', itoca_sai_template_id),
-            ('itoca_sai_base_url', itoca_sai_base_url)
-        ]
-        for key, value in updates:
-            c.execute(
-                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
-                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
-                (key, value)
-            )
-        conn.commit()
-        conn.close()
-
-        return jsonify({'message': 'Integrações salvas com sucesso.'})
-    except Exception as e:
-        logger.exception(f'[ERROR] PUT /api/config/integrations: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-
-@app.route('/api/config/update-source', methods=['GET'])
-def get_update_source_config():
-    try:
-        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo', 'update_github_token'])
-        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
-        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
-        token = (settings_map.get('update_github_token') or '').strip() or (os.environ.get('TOCA_UPDATE_GITHUB_TOKEN', '') or '').strip()
-        return jsonify({
-            'current_version': APP_VERSION,
-            'github_owner': owner,
-            'github_repo': repo,
-            'github_token_configured': bool(token),
-            'github_token_preview': (token[:7] + '...') if token else '',
-            'configured': bool(owner and repo)
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/config/update-source: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/update-source', methods=['PUT'])
-def save_update_source_config():
-    try:
-        data = request.get_json() or {}
-        owner = (data.get('github_owner') or '').strip()
-        repo = (data.get('github_repo') or '').strip()
-        token = (data.get('github_token') or '').strip()
-
-        conn = get_db()
-        c = conn.cursor()
-        updates = [
-            ('update_github_owner', owner),
-            ('update_github_repo', repo)
-        ]
-        # Só grava o token quando um valor é enviado, para não apagá-lo ao salvar owner/repo.
-        if token:
-            updates.append(('update_github_token', token))
-        for key, value in updates:
-            c.execute(
-                'INSERT INTO app_settings (key, value) VALUES (?, ?) '
-                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
-                (key, value)
-            )
-        conn.commit()
-        conn.close()
-
-        return jsonify({'message': 'Fonte de atualização salva com sucesso.'})
-    except Exception as e:
-        logger.exception(f'[ERROR] PUT /api/config/update-source: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/check-updates', methods=['GET'])
-def check_updates():
-    try:
-        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo'])
-        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
-        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
-
-        if not owner or not repo:
-            return jsonify({
-                'update_available': False,
-                'configured': False,
-                'current_version': APP_VERSION,
-                'message': 'Configure GitHub Owner e Repositório em Configurações para verificar updates.'
-            }), 400
-
-        github_token = _resolve_setting('update_github_token', 'TOCA_UPDATE_GITHUB_TOKEN')
-        api_headers = {
-            'Accept': 'application/vnd.github+json',
-            'User-Agent': 'TocaDoCoelho-Updater'
-        }
-        if github_token:
-            api_headers['Authorization'] = f'Bearer {github_token}'
-
-        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
-        req = urllib.request.Request(api_url, headers=api_headers)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            payload = json.loads(response.read().decode('utf-8'))
-
-        latest_tag = (payload.get('tag_name') or '').strip()
-        latest_version = _normalize_version(latest_tag)
-        current_version = _normalize_version(APP_VERSION)
-
-        if not latest_version:
-            return jsonify({'error': 'Tag da release mais recente está vazia no GitHub.'}), 502
-
-        update_available = _version_key(latest_version) > _version_key(current_version)
-
-        # Localiza o instalador (.exe) anexado como asset da release — usado pela
-        # atualização automática para baixar e executar a nova versão.
-        installer_url = ''
-        installer_name = ''
-        installer_size = 0
-        for asset in (payload.get('assets') or []):
-            asset_name = (asset.get('name') or '').strip()
-            if asset_name.lower().endswith('.exe'):
-                installer_url = (asset.get('browser_download_url') or '').strip()
-                installer_name = asset_name
-                installer_size = int(asset.get('size') or 0)
-                break
-
-        branch = DEFAULT_GITHUB_BRANCH or 'main'
-        commits_ahead = None
-        commits_ahead_list = []
-        commits_check_ok = False
-        commits_check_error = ''
-        branch_html_url = f'https://github.com/{owner}/{repo}/tree/{branch}'
-        compare_html_url = ''
-        try:
-            compare_url = f'https://api.github.com/repos/{owner}/{repo}/compare/{latest_tag}...{branch}'
-            compare_req = urllib.request.Request(compare_url, headers=api_headers)
-            with urllib.request.urlopen(compare_req, timeout=10) as compare_response:
-                compare_payload = json.loads(compare_response.read().decode('utf-8'))
-            commits_ahead = int(compare_payload.get('ahead_by') or 0)
-            compare_html_url = compare_payload.get('html_url') or ''
-            for commit_entry in (compare_payload.get('commits') or [])[-10:]:
-                sha = (commit_entry.get('sha') or '')[:7]
-                message = ((commit_entry.get('commit') or {}).get('message') or '').splitlines()[0]
-                commits_ahead_list.append({'sha': sha, 'message': message})
-            commits_check_ok = True
-        except urllib.error.HTTPError as compare_error:
-            if compare_error.code == 403:
-                commits_check_error = ('Limite da API do GitHub atingido. Configure um Token do GitHub '
-                                       'em Configurações para evitar isso.')
-            elif compare_error.code == 401:
-                commits_check_error = 'Token do GitHub inválido ou expirado. Revise-o em Configurações.'
-            else:
-                commits_check_error = f'Falha ao comparar com a branch (HTTP {compare_error.code}).'
-            logger.warning('[Update] Falha ao comparar tag %s com branch %s: %s', latest_tag, branch, compare_error)
-        except Exception as compare_error:
-            commits_check_error = 'Não foi possível verificar os commits da branch (falha de rede ou GitHub indisponível).'
-            logger.warning('[Update] Falha ao comparar tag %s com branch %s: %s', latest_tag, branch, compare_error)
-
-        return jsonify({
-            'configured': True,
-            'github_owner': owner,
-            'github_repo': repo,
-            'github_branch': branch,
-            'current_version': current_version,
-            'latest_version': latest_version,
-            'latest_tag': latest_tag,
-            'update_available': update_available,
-            'release_name': payload.get('name') or latest_tag,
-            'release_notes': payload.get('body') or '',
-            'html_url': payload.get('html_url') or '',
-            'published_at': payload.get('published_at'),
-            'commits_ahead': commits_ahead,
-            'commits_ahead_list': commits_ahead_list,
-            'commits_check_ok': commits_check_ok,
-            'commits_check_error': commits_check_error,
-            'installer_url': installer_url,
-            'installer_name': installer_name,
-            'installer_size': installer_size,
-            'can_auto_install': bool(installer_url),
-            'branch_html_url': branch_html_url,
-            'compare_html_url': compare_html_url
-        })
-    except urllib.error.HTTPError as e:
-        logger.exception(f'[ERROR] GET /api/config/check-updates (HTTP): {e}')
-        if e.code == 404:
-            return jsonify({'error': 'Nenhuma release encontrada nesse repositório ou repositório inválido.'}), 404
-        if e.code == 401:
-            return jsonify({'error': 'Token do GitHub inválido ou expirado. Revise-o em Configurações.'}), 401
-        if e.code == 403:
-            return jsonify({'error': 'Limite da API do GitHub atingido. Configure um Token do GitHub em Configurações para evitar isso.'}), 429
-        return jsonify({'error': f'Falha ao consultar GitHub Releases (HTTP {e.code}).'}), 502
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/config/check-updates: {e}')
-        return jsonify({'error': f'Erro ao verificar updates: {e}'}), 500
-
-
-@app.route('/api/config/startup-update-check', methods=['GET'])
-def startup_update_check():
-    """Verificação silenciosa de update ao iniciar o app. Respeita o snooze de 5 dias."""
-    try:
-        settings_map = _load_app_settings_map(['update_github_owner', 'update_github_repo', 'update_snooze_until'])
-        snooze_until = (settings_map.get('update_snooze_until') or '').strip()
-        if snooze_until:
-            try:
-                snooze_dt = datetime.fromisoformat(snooze_until)
-                if datetime.now() < snooze_dt:
-                    return jsonify({'snoozed': True, 'snooze_until': snooze_until})
-            except ValueError:
-                pass
-
-        owner = (settings_map.get('update_github_owner') or DEFAULT_GITHUB_OWNER or '').strip()
-        repo = (settings_map.get('update_github_repo') or DEFAULT_GITHUB_REPO or '').strip()
-        if not owner or not repo:
-            return jsonify({'update_available': False, 'configured': False})
-
-        github_token = _resolve_setting('update_github_token', 'TOCA_UPDATE_GITHUB_TOKEN')
-        api_headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'TocaDoCoelho-Updater'}
-        if github_token:
-            api_headers['Authorization'] = f'Bearer {github_token}'
-
-        api_url = f'https://api.github.com/repos/{owner}/{repo}/releases/latest'
-        req = urllib.request.Request(api_url, headers=api_headers)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            payload = json.loads(response.read().decode('utf-8'))
-
-        latest_tag = (payload.get('tag_name') or '').strip()
-        latest_version = _normalize_version(latest_tag)
-        current_version = _normalize_version(APP_VERSION)
-
-        if not latest_version:
-            return jsonify({'update_available': False})
-
-        update_available = _version_key(latest_version) > _version_key(current_version)
-        if not update_available:
-            return jsonify({'update_available': False, 'current_version': current_version})
-
-        installer_url = ''
-        installer_name = ''
-        installer_size = 0
-        for asset in (payload.get('assets') or []):
-            asset_name = (asset.get('name') or '').strip()
-            if asset_name.lower().endswith('.exe'):
-                installer_url = (asset.get('browser_download_url') or '').strip()
-                installer_name = asset_name
-                installer_size = int(asset.get('size') or 0)
-                break
-
-        return jsonify({
-            'update_available': True,
-            'current_version': current_version,
-            'latest_version': latest_version,
-            'latest_tag': latest_tag,
-            'release_name': payload.get('name') or latest_tag,
-            'release_notes': payload.get('body') or '',
-            'html_url': payload.get('html_url') or '',
-            'published_at': payload.get('published_at'),
-            'installer_url': installer_url,
-            'installer_name': installer_name,
-            'installer_size': installer_size,
-            'can_auto_install': bool(installer_url),
-        })
-    except Exception as e:
-        logger.warning('[startup-update-check] Falha silenciosa: %s', e)
-        return jsonify({'update_available': False})
-
-
-@app.route('/api/config/snooze-update', methods=['POST'])
-def snooze_update():
-    """Salva snooze de 5 dias para a notificação de update."""
-    try:
-        snooze_until = (datetime.now() + timedelta(days=5)).isoformat()
-        db = get_db()
-        db.execute("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('update_snooze_until', ?, CURRENT_TIMESTAMP)", (snooze_until,))
-        db.commit()
-        return jsonify({'ok': True, 'snooze_until': snooze_until})
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/config/snooze-update: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -6798,133 +6267,6 @@ def _download_update_async(task_id, url, name):
         logger.exception(f'[Update] Falha no download da atualização: {e}')
         _bg_task_set(task_id, {'status': 'error', 'error': f'Falha ao baixar a atualização: {e}'})
         _bg_task_cleanup(task_id, delay=600)
-
-
-@app.route('/api/config/download-update', methods=['POST'])
-def download_update():
-    try:
-        data = request.get_json() or {}
-        url = (data.get('installer_url') or '').strip()
-        name = (data.get('installer_name') or '').strip()
-        if not url or not url.lower().startswith('https://'):
-            return jsonify({'error': 'URL do instalador inválida.'}), 400
-
-        task_id = uuid.uuid4().hex
-        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando download...', 'progress': 1})
-        threading.Thread(target=_download_update_async, args=(task_id, url, name), daemon=True).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/config/download-update: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/update-tasks/<task_id>', methods=['GET'])
-def get_update_task(task_id):
-    return jsonify(_bg_task_get(task_id))
-
-
-@app.route('/api/config/install-update', methods=['POST'])
-def install_update():
-    try:
-        import subprocess
-
-        data = request.get_json() or {}
-        installer_path = (data.get('installer_path') or '').strip()
-        if not installer_path:
-            return jsonify({'error': 'Caminho do instalador não informado.'}), 400
-
-        installer = Path(installer_path).resolve()
-        # Segurança: só executa um .exe que está dentro da pasta de updates.
-        if (installer.parent != UPDATE_DOWNLOAD_DIR.resolve()
-                or installer.suffix.lower() != '.exe'
-                or not installer.is_file()):
-            return jsonify({'error': 'Instalador inválido ou não encontrado.'}), 400
-
-        if sys.platform == 'win32':
-            # NUNCA usar o verbo 'runas' aqui: o instalador é per-user
-            # (RequestExecutionLevel user) e não precisa de elevação. Em contas sem
-            # admin, o prompt UAC do 'runas' pedia credenciais de OUTRA conta e o
-            # instalador rodava como ela — registro, atalhos e banco iam para o
-            # perfil errado (o app "sumia" de instalados e abria com banco vazio).
-            import ctypes
-            ret = ctypes.windll.shell32.ShellExecuteW(
-                None,           # hwnd
-                'open',         # verbo — executa como o usuário atual, sem elevação
-                str(installer), # executável
-                None,           # parâmetros
-                None,           # diretório de trabalho (None = diretório do executável)
-                1,              # SW_SHOWNORMAL
-            )
-            # ShellExecuteW retorna > 32 em sucesso
-            if ret <= 32:
-                raise OSError(f'ShellExecuteW falhou com código {ret}')
-        else:
-            subprocess.Popen([str(installer)], close_fds=True)
-
-        # Encerra o app logo após responder, liberando os arquivos para o instalador.
-        def _shutdown():
-            time.sleep(2)
-            os._exit(0)
-        threading.Thread(target=_shutdown, daemon=True).start()
-
-        return jsonify({
-            'message': 'Instalador iniciado. O aplicativo será encerrado para concluir a atualização.'
-        }), 202
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/config/install-update: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/startup', methods=['GET'])
-def get_startup_config():
-    if sys.platform != 'win32':
-        return jsonify({'enabled': False, 'supported': False})
-    try:
-        import winreg
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r'Software\Microsoft\Windows\CurrentVersion\Run',
-            0, winreg.KEY_READ
-        )
-        try:
-            winreg.QueryValueEx(key, 'TocaDoCoelho')
-            enabled = True
-        except FileNotFoundError:
-            enabled = False
-        finally:
-            winreg.CloseKey(key)
-        return jsonify({'enabled': enabled, 'supported': True})
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/config/startup: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/startup', methods=['POST'])
-def set_startup_config():
-    if sys.platform != 'win32':
-        return jsonify({'error': 'Não suportado nesta plataforma.'}), 400
-    try:
-        data = request.get_json() or {}
-        enable = bool(data.get('enabled', False))
-        import winreg
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r'Software\Microsoft\Windows\CurrentVersion\Run',
-            0, winreg.KEY_SET_VALUE
-        )
-        if enable:
-            exe_path = str(Path(sys.executable).resolve())
-            winreg.SetValueEx(key, 'TocaDoCoelho', 0, winreg.REG_SZ, f'"{exe_path}"')
-        else:
-            try:
-                winreg.DeleteValue(key, 'TocaDoCoelho')
-            except FileNotFoundError:
-                pass
-        winreg.CloseKey(key)
-        return jsonify({'enabled': enable, 'message': 'Configuração salva com sucesso.'})
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/config/startup: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 def _outlook_fetch_via_powershell(days=60):
@@ -7065,8 +6407,8 @@ $results | ConvertTo-Json -Depth 5 -Compress
         if tmp_path:
             try:
                 os.unlink(tmp_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_DISABLED_outlook_fetch_via_powershell_legacy] exceção ignorada: {e}')
 
 
 def _outlook_extract_smtp_from_recipient(recipient):
@@ -7100,8 +6442,8 @@ def _outlook_get_all_subfolders(folder):
     try:
         for sub in folder.Folders:
             result.extend(_outlook_get_all_subfolders(sub))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[_outlook_get_all_subfolders] exceção ignorada: {e}')
     return result
 
 
@@ -7121,15 +6463,15 @@ def _outlook_extract_email(item, direction, cutoff_dt):
                 try:
                     email = _outlook_extract_smtp_from_recipient(r)
                     recipients.append({'name': (r.Name or '').strip(), 'email': email})
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as e:
+                    logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
+        except Exception as e:
+            logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
         body_preview = ''
         try:
             body_preview = (item.Body or '')[:1500].strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
         return {
             'subject': (item.Subject or '').strip(),
             'date': dt.strftime('%Y-%m-%dT%H:%M:%S'),
@@ -7153,18 +6495,18 @@ def _outlook_process_folder(folder, direction, cutoff_dt, emails):
         field = 'ReceivedTime' if direction == 'received' else 'SentOn'
         try:
             items = items.Restrict(f"[{field}] >= '{date_str}'")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
         for item in items:
             try:
                 data = _outlook_extract_email(item, direction, cutoff_dt)
                 if data:
                     emails.append(data)
                     count += 1
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
+    except Exception as e:
+        logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
     return count
 
 
@@ -7253,11 +6595,18 @@ def _outlook_import_emails(emails_data, conn):
                    VALUES (?, 'Email', ?, ?)''',
                 (client_id, information, email_date)
             )
+            _addin_activity_id = c.lastrowid
             c.execute(
                 '''UPDATE clients SET last_activity_date = ?
                    WHERE id = ? AND (last_activity_date IS NULL OR last_activity_date < ?)''',
                 (email_date, client_id, email_date)
             )
+            # Follow-up combinado detectado via LLM (Bloco 7 — ingest do add-in)
+            try:
+                _detect_followup_from_text(c, client_id, _addin_activity_id, candidate_name,
+                                           f'{subject}\n{body_preview}')
+            except Exception as e:
+                logger.debug(f'[FollowupDetect] falha no ingest do add-in: {e}')
             imported += 1
 
         if not matched_any:
@@ -7272,148 +6621,6 @@ def _outlook_call_llm(prompt):
     e-mail não deve ser enviado a provedores externos não homologados (LGPD)."""
     raw = _sai_simple_prompt(prompt)
     return raw.strip() if raw else None
-
-
-@app.route('/api/outlook/diagnose', methods=['GET'])
-def outlook_diagnose():
-    """Retorna diagnóstico de configuração e conectividade para o sync do Outlook."""
-    checks = []
-
-    is_win = sys.platform == 'win32'
-    checks.append({
-        'label': 'Windows (COM)',
-        'ok': is_win,
-        'detail': 'ok' if is_win else 'Não é Windows — conector COM indisponível'
-    })
-
-    has_graph_creds = bool(
-        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID')
-    )
-    checks.append({
-        'label': 'Graph API (credenciais)',
-        'ok': has_graph_creds,
-        'detail': 'Client ID e Secret configurados' if has_graph_creds else 'Configure Tenant ID / Client ID / Client Secret nas Configurações'
-    })
-
-    has_graph_token = False
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM user_integrations WHERE provider = 'outlook_graph' LIMIT 1")
-        has_graph_token = c.fetchone() is not None
-        conn.close()
-    except Exception:
-        pass
-    checks.append({
-        'label': 'OAuth Graph autenticado',
-        'ok': has_graph_token,
-        'detail': 'Token OAuth ativo' if has_graph_token else 'Não autenticado — use "Conectar Outlook via Graph"'
-    })
-
-    total_clients = 0
-    clients_with_email = 0
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT COUNT(*) FROM clients')
-        total_clients = (c.fetchone() or [0])[0]
-        c.execute('SELECT COUNT(*) FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
-        clients_with_email = (c.fetchone() or [0])[0]
-        conn.close()
-    except Exception:
-        pass
-    email_pct = int(clients_with_email / total_clients * 100) if total_clients else 0
-    checks.append({
-        'label': 'Clientes com email',
-        'ok': clients_with_email > 0,
-        'detail': f'{clients_with_email}/{total_clients} ({email_pct}%) — emails são usados para match com remetentes'
-    })
-
-    has_sai = bool(_resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY'))
-    has_or = bool(_resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY'))
-    has_llm = has_sai or has_or
-    llm_detail = (('SAI' if has_sai else '') + (' + ' if has_sai and has_or else '') + ('OpenRouter' if has_or else '')) if has_llm else 'Nenhum LLM configurado — resumos desativados'
-    checks.append({'label': 'LLM (resumos)', 'ok': has_llm, 'detail': llm_detail})
-
-    can_sync = is_win or has_graph_token
-    connector = 'graph' if has_graph_token else ('com' if is_win else 'none')
-
-    return jsonify({
-        'can_sync': can_sync,
-        'connector': connector,
-        'clients_with_email': clients_with_email,
-        'total_clients': total_clients,
-        'checks': checks
-    })
-
-
-@app.route('/api/outlook/sync', methods=['POST'])
-def sync_outlook_emails():
-    """Lê o Outlook via PowerShell e importa os emails como atividades."""
-    if sys.platform != 'win32':
-        return jsonify({'error': 'Sincronização com Outlook disponível somente no Windows.'}), 400
-    try:
-        data = request.get_json() or {}
-        days = max(1, min(int(data.get('days', 60)), 365))
-        emails = _outlook_fetch_via_powershell(days)
-        if not emails:
-            return jsonify({
-                'imported': 0, 'skipped_duplicates': 0, 'skipped_no_match': 0,
-                'total_read': 0,
-                'message': f'Nenhum email encontrado nos últimos {days} dias.'
-            })
-        conn = get_db()
-        imported, skipped_duplicates, skipped_no_match = _outlook_import_emails(emails, conn)
-        conn.close()
-        msg = f'{imported} atividade(s) importada(s)'
-        if skipped_duplicates:
-            msg += f', {skipped_duplicates} duplicata(s) ignorada(s)'
-        msg += f'. ({len(emails)} emails lidos do Outlook)'
-        return jsonify({
-            'imported': imported,
-            'skipped_duplicates': skipped_duplicates,
-            'skipped_no_match': skipped_no_match,
-            'total_read': len(emails),
-            'message': msg
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/outlook/sync: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/outlook/sync-stream', methods=['GET'])
-def sync_outlook_stream():
-    """SSE: roteia para COM legado ou Graph de acordo com OUTLOOK_CONNECTOR_MODE."""
-    mode = (os.environ.get('OUTLOOK_CONNECTOR_MODE') or 'auto').strip().lower()
-    if mode not in {'com', 'graph', 'auto'}:
-        mode = 'auto'
-
-    # comportamento legado explícito
-    if mode == 'com':
-        return _outlook_sync_stream_com()
-
-    # Graph explícito
-    if mode == 'graph':
-        return _outlook_sync_stream_graph()
-
-    # auto: prioriza Graph se houver integração conectada; fallback para COM em Windows
-    user_id = max(1, int(request.args.get('user_id', 1)))
-    has_graph_integration = False
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            "SELECT 1 FROM user_integrations WHERE user_id = ? AND provider = 'outlook_graph' LIMIT 1",
-            (user_id,)
-        )
-        has_graph_integration = c.fetchone() is not None
-        conn.close()
-    except Exception:
-        has_graph_integration = False
-
-    if has_graph_integration:
-        return _outlook_sync_stream_graph()
-    return _outlook_sync_stream_com()
 
 
 def _outlook_sync_stream_com():
@@ -7440,123 +6647,8 @@ def _graph_make_settings(redirect_uri=''):
         'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
         'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
         'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
-        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read User.Read').strip(),
+        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read Mail.Send User.Read').strip(),
     }
-
-
-@app.route('/api/outlook/sync-stream-graph', methods=['GET'])
-def sync_outlook_stream_graph():
-    """SSE dedicado do conector Graph (OAuth + Graph API)."""
-    return _outlook_sync_stream_graph()
-
-
-@app.route('/api/outlook/oauth/start', methods=['GET'])
-def outlook_oauth_start():
-    try:
-        user_id = max(1, int(request.args.get('user_id', 1)))
-        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
-        auth_url = outlook_graph_build_authorize_url(user_id=user_id, settings=settings)
-        return jsonify({'auth_url': auth_url, 'provider': 'outlook_graph', 'user_id': user_id})
-    except OutlookOAuthError as e:
-        logger.error(f'[Outlook][OAuth] Falha ao iniciar OAuth: {e}')
-        return jsonify({'error': str(e), 'error_type': 'oauth_authentication'}), 400
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/outlook/oauth/start: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/outlook/oauth/callback', methods=['GET'])
-def outlook_oauth_callback():
-    try:
-        error = (request.args.get('error') or '').strip()
-        if error:
-            desc = request.args.get('error_description') or error
-            return redirect(f'/?graph_error={urllib.parse.quote(str(desc))}', 302)
-
-        code = (request.args.get('code') or '').strip()
-        state = (request.args.get('state') or '').strip()
-        if not code or not state:
-            return redirect('/outlook-connected.html?error=Par%C3%A2metros+OAuth+incompletos', 302)
-
-        user_id = outlook_graph_parse_state(state)
-        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
-        conn = get_db()
-        outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id, settings=settings)
-        conn.close()
-        return redirect('/outlook-connected.html', 302)
-    except OutlookOAuthError as e:
-        logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')
-        return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/outlook/oauth/callback: {e}')
-        return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
-
-
-@app.route('/api/outlook/graph-config', methods=['GET', 'POST'])
-def outlook_graph_config():
-    """Lê ou salva credenciais do Microsoft Graph nas configurações do app."""
-    if request.method == 'GET':
-        tenant = _resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT
-        client_id = _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID
-        return jsonify({
-            'tenant_id': tenant,
-            'client_id': client_id,
-            'configured': bool(tenant and client_id),
-        })
-    data = request.get_json() or {}
-    tenant = (data.get('tenant_id') or '').strip()
-    client_id = (data.get('client_id') or '').strip()
-    conn = get_db()
-    c = conn.cursor()
-    for key, value in [('outlook_graph_tenant_id', tenant), ('outlook_graph_client_id', client_id)]:
-        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', (key, value))
-    conn.commit()
-    conn.close()
-    return jsonify({'ok': True})
-
-
-@app.route('/api/outlook/graph-status', methods=['GET'])
-def outlook_graph_status_endpoint():
-    """Retorna se o usuário está conectado ao Microsoft Graph e com qual email."""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT expires_at FROM user_integrations WHERE provider = 'outlook_graph' AND user_id = 1 LIMIT 1")
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            return jsonify({'connected': False})
-        email = None
-        try:
-            settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
-            conn2 = get_db()
-            token = outlook_graph_get_valid_access_token(conn=conn2, user_id=1, settings=settings)
-            conn2.close()
-            req = urllib.request.Request('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', method='GET')
-            req.add_header('Authorization', f'Bearer {token}')
-            req.add_header('Accept', 'application/json')
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                me = json.loads(resp.read())
-                email = me.get('mail') or me.get('userPrincipalName')
-        except Exception:
-            pass
-        return jsonify({'connected': True, 'email': email, 'expires_at': row['expires_at']})
-    except Exception as e:
-        return jsonify({'connected': False, 'error': str(e)})
-
-
-@app.route('/api/outlook/graph-disconnect', methods=['DELETE'])
-def outlook_graph_disconnect():
-    """Remove tokens do Microsoft Graph para o usuário."""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("DELETE FROM user_integrations WHERE provider = 'outlook_graph'")
-        conn.commit()
-        conn.close()
-        return jsonify({'ok': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
 def _outlook_sync_stream_graph():
@@ -7878,8 +6970,8 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
         finally:
             try:
                 pythoncom.CoUninitialize()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_finalize] exceção ignorada: {e}')
 
     return Response(
         stream_with_context(generate()),
@@ -7897,6 +6989,8 @@ def _outlook_confirm_task_set(task_id, update):
         if task_id not in _outlook_confirm_tasks:
             _outlook_confirm_tasks[task_id] = {}
         _outlook_confirm_tasks[task_id].update(update)
+        snapshot = dict(_outlook_confirm_tasks[task_id])
+    _bg_task_persist(task_id, 'outlook_confirm', snapshot)
 
 
 def _outlook_confirm_task_get(task_id):
@@ -7910,6 +7004,66 @@ def _outlook_confirm_task_cleanup(task_id, delay=300):
         with _outlook_confirm_tasks_lock:
             _outlook_confirm_tasks.pop(task_id, None)
     threading.Thread(target=_do, daemon=True).start()
+
+
+def _detect_followup_from_text(c, client_id, activity_id, client_name, text):
+    """Detecta follow-up combinado via LLM no mesmo formato JSON do sync WhatsApp
+    ({"followup": {"data", "titulo"}}) e cria o compromisso na agenda (Bloco 7).
+    Retorna 1 se criou compromisso, 0 caso contrário."""
+    if not text:
+        return 0
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    raw = _llm_prompt(
+        f"A data de hoje é {today_str}. Analise a comunicação abaixo entre o usuário e '{client_name}'. "
+        'Retorne SOMENTE um JSON válido no formato '
+        '{"followup": {"data": "YYYY-MM-DD", "titulo": "descrição curta do retorno/compromisso combinado"}}. '
+        "Preencha 'followup' apenas se houver data combinada de retorno, reunião ou ligação "
+        '(resolva datas relativas, ex. "amanhã", a partir de hoje). '
+        'Se NÃO houver compromisso combinado, retorne {"followup": null}.\n\n'
+        f'{text[:3000]}',
+        log_tag='FollowupDetect'
+    )
+    if not raw:
+        return 0
+    try:
+        parsed = _extract_json_object_from_text(raw) or json.loads(raw)
+    except Exception:
+        return 0
+    fu = (parsed or {}).get('followup')
+    if not isinstance(fu, dict):
+        return 0
+    due_date = (fu.get('data') or fu.get('date') or '').strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', due_date):
+        return 0
+    title = ((fu.get('titulo') or fu.get('title') or '').strip() or f'Retorno combinado com {client_name}')[:120]
+    # Não duplica compromisso já criado para a mesma atividade/data (ex.: via regex)
+    c.execute('SELECT id FROM commitments WHERE activity_id = ? AND due_date = ?', (activity_id, due_date))
+    if c.fetchone():
+        return 0
+    c.execute(
+        '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, source_type)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (client_id, activity_id, title, (text or '')[:500], due_date, 'outlook')
+    )
+    return 1
+
+
+def _outlook_send_mail(to, subject, body_html, attachments=None):
+    """Envia e-mail pelo Outlook do próprio usuário via Microsoft Graph
+    (Bloco 13). Se `to` for vazio, envia para o e-mail do próprio usuário.
+    attachments: [{'name', 'content_bytes' (base64), 'content_type'}]."""
+    graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+    conn = get_db()
+    try:
+        access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=1, settings=graph_settings)
+    finally:
+        conn.close()
+    recipient = (to or '').strip() or _graph_get_me_email(access_token)
+    if not recipient:
+        raise OutlookSyncError('Não foi possível determinar o destinatário do e-mail.')
+    outlook_graph_send_mail(access_token, recipient, subject, body_html, attachments)
+    logger.info(f'[Outlook] E-mail "{subject}" enviado para {recipient}')
+    return recipient
 
 
 def _outlook_confirm_async(task_id, activities_to_import):
@@ -7975,8 +7129,8 @@ def _outlook_confirm_async(task_id, activities_to_import):
                         c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
                                   '(user_id, message_id, conversation_id, client_id) VALUES (1, ?, ?, ?)',
                                   (mid, conv_id, client_id))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
                 continue
 
             # Monta o texto consolidado da thread para o resumo do LLM
@@ -8042,11 +7196,16 @@ def _outlook_confirm_async(task_id, activities_to_import):
                     c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
                               '(user_id, message_id, conversation_id, client_id, activity_id) VALUES (1, ?, ?, ?, ?)',
                               (mid, conv_id, client_id, activity_id))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
 
             new_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
             commitments_created += len(new_commitments)
+            # Follow-up combinado detectado via LLM (mesmo formato do sync WhatsApp)
+            try:
+                commitments_created += _detect_followup_from_text(c, client_id, activity_id, cname, thread_text)
+            except Exception as e:
+                logger.debug(f'[FollowupDetect] falha na thread de {cname}: {e}')
 
             if analysis_text:
                 stage_raw = _outlook_call_llm(
@@ -8128,8 +7287,8 @@ def _outlook_confirm_async(task_id, activities_to_import):
                                         'reason': (kanban_data.get('reason') or '')[:120],
                                         'client_id': client_id
                                     })
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
 
         conn.commit()
         conn.close()
@@ -8160,67 +7319,6 @@ def _outlook_confirm_async(task_id, activities_to_import):
         logger.exception(f'[ERROR] _outlook_confirm_async task={task_id}: {e}')
         _outlook_confirm_task_set(task_id, {'status': 'error', 'step': str(e), 'progress': 0})
         _outlook_confirm_task_cleanup(task_id)
-
-
-@app.route('/api/outlook/confirm-import', methods=['POST'])
-def confirm_import_outlook():
-    """Inicia importação assíncrona das atividades confirmadas, retorna task_id para polling."""
-    try:
-        data = request.get_json() or {}
-        activities = data.get('activities', [])
-        if not activities:
-            return jsonify({'imported': 0, 'message': 'Nenhuma atividade para importar.'})
-
-        task_id = uuid.uuid4().hex
-        _outlook_confirm_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(target=_outlook_confirm_async, args=(task_id, activities), daemon=True).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/outlook/confirm-import: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/outlook/confirm-tasks/<task_id>', methods=['GET'])
-def outlook_confirm_task_status(task_id):
-    """Polling do status da importação assíncrona de emails."""
-    return jsonify(_outlook_confirm_task_get(task_id))
-
-
-@app.route('/api/outlook/apply-suggestions', methods=['POST'])
-def outlook_apply_suggestions():
-    """Aplica sugestões de status e Kanban aprovadas pelo usuário."""
-    try:
-        data = request.get_json() or {}
-        status_updates = data.get('status_updates', [])
-        kanban_moves = data.get('kanban_moves', [])
-
-        conn = get_db()
-        c = conn.cursor()
-        applied = 0
-
-        for upd in status_updates:
-            client_id = upd.get('client_id')
-            stage = (upd.get('stage') or '').strip()
-            if client_id and stage:
-                c.execute('UPDATE clients SET relationship_stage = ? WHERE id = ?', (stage, client_id))
-                applied += 1
-
-        for mv in kanban_moves:
-            card_id = mv.get('card_id')
-            col_id = mv.get('column_id')
-            if card_id and col_id:
-                c.execute(
-                    'UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                    (col_id, card_id)
-                )
-                applied += 1
-
-        conn.commit()
-        conn.close()
-        return jsonify({'applied': applied, 'message': f'{applied} sugestão(ões) aplicada(s).'})
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/outlook/apply-suggestions: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 # ── Outlook Add-in (task pane EWS) ──────────────────────────────────────────
@@ -8349,219 +7447,14 @@ def _outlook_match_emails(emails_data, conn):
                 'body_preview': body_preview[:180]
             })
 
+    # Caixa de respostas pendentes (Bloco 6): e-mails de clientes sem resposta sua
+    try:
+        _inbound_feed_from_outlook(c, emails_data, clients_map)
+        conn.commit()
+    except Exception as e:
+        logger.debug(f'[Inbound] Falha ao alimentar pendências via Outlook: {e}')
+
     return activities, unmatched, all_clients
-
-
-@app.route('/api/outlook/addon-preview', methods=['POST'])
-def outlook_addon_preview():
-    """Conta matched/unmatched sem armazenar — usado pela task pane para mostrar estatísticas."""
-    try:
-        data = request.get_json() or {}
-        emails = data.get('emails') or []
-        if not emails:
-            return jsonify({'matched': 0, 'unmatched': 0})
-        conn = get_db()
-        activities, unmatched, _ = _outlook_match_emails(emails, conn)
-        conn.close()
-        return jsonify({'matched': len(activities), 'unmatched': len(unmatched)})
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/outlook/addon-preview: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/outlook/ingest-from-addon', methods=['POST'])
-def outlook_ingest_from_addon():
-    """Recebe emails da task pane do Outlook Add-in, faz matching e armazena como pendente."""
-    try:
-        data = request.get_json() or {}
-        emails = data.get('emails') or []
-        if not emails:
-            return jsonify({'message': 'Nenhum email recebido.', 'matched': 0, 'unmatched': 0})
-
-        conn = get_db()
-        activities, unmatched, all_clients = _outlook_match_emails(emails, conn)
-        conn.close()
-
-        payload = {
-            'total_read': len(emails),
-            'activities': activities,
-            'unmatched': unmatched,
-            'all_clients': all_clients,
-            'message': f'{len(activities)} email(s) com cliente · {len(unmatched)} sem correspondência · {len(emails)} lidos'
-        }
-        _addin_set_pending(payload)
-
-        return jsonify({
-            'message': f'{len(activities)} email(s) prontos para revisão no Toca.',
-            'matched': len(activities),
-            'unmatched': len(unmatched),
-            'total': len(emails)
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/outlook/ingest-from-addon: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/outlook/addon-pending', methods=['GET'])
-def outlook_addon_pending():
-    """Retorna dados pendentes do add-in (se existirem e não expirarem)."""
-    pending = _addin_get_pending()
-    if pending is None:
-        return jsonify({'has_data': False})
-    return jsonify(dict(has_data=True, **pending))
-
-
-@app.route('/api/outlook/addon-pending', methods=['DELETE'])
-def outlook_addon_pending_clear():
-    """Limpa dados pendentes do add-in."""
-    _addin_clear_pending()
-    return jsonify({'ok': True})
-
-
-@app.route('/api/outlook/manifest.xml')
-def outlook_addin_manifest():
-    """Serve o manifest do Outlook Add-in com a URL base correta para o host atual."""
-    base_url = f"{request.scheme}://{request.host}"
-    addin_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
-           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
-           xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
-           xsi:type="MailApp">
-  <Id>{addin_id}</Id>
-  <Version>1.1.0.0</Version>
-  <ProviderName>TocaDoCoelho</ProviderName>
-  <DefaultLocale>pt-BR</DefaultLocale>
-  <DisplayName DefaultValue="Toca do Coelho"/>
-  <Description DefaultValue="Exporta emails do Outlook para atividades no Toca"/>
-  <IconUrl DefaultValue="{base_url}/favicon.png"/>
-  <HighResolutionIconUrl DefaultValue="{base_url}/favicon.png"/>
-  <SupportUrl DefaultValue="{base_url}"/>
-  <AppDomains>
-    <AppDomain>{base_url}</AppDomain>
-  </AppDomains>
-  <Hosts>
-    <Host Name="Mailbox"/>
-  </Hosts>
-  <Requirements>
-    <Sets>
-      <Set Name="MailBox" MinVersion="1.1"/>
-    </Sets>
-  </Requirements>
-  <FormSettings>
-    <Form xsi:type="ItemRead">
-      <DesktopSettings>
-        <SourceLocation DefaultValue="{base_url}/outlook-addin/taskpane.html"/>
-        <RequestedHeight>220</RequestedHeight>
-      </DesktopSettings>
-    </Form>
-  </FormSettings>
-  <Permissions>ReadWriteMailbox</Permissions>
-  <Rule xsi:type="RuleCollection" Mode="Or">
-    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
-  </Rule>
-  <DisableEntityHighlighting>false</DisableEntityHighlighting>
-</OfficeApp>"""
-    resp = Response(xml, mimetype='application/xml')
-    if request.args.get('download'):
-        resp.headers['Content-Disposition'] = 'attachment; filename="toca-manifest.xml"'
-    return resp
-
-
-@app.route('/api/outlook/install-addin.bat')
-def outlook_install_addin_bat():
-    """Gera instalador .bat do suplemento Outlook com a URL base correta."""
-    base_url = f"{request.scheme}://{request.host}"
-    manifest_url = f"{base_url}/api/outlook/manifest.xml"
-    catalog_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-
-    bat = (
-        "@echo off\r\n"
-        "setlocal enabledelayedexpansion\r\n"
-        "chcp 65001 >nul 2>&1\r\n"
-        "echo ======================================\r\n"
-        "echo  Instalador do Suplemento Toca do Coelho\r\n"
-        "echo ======================================\r\n"
-        "echo.\r\n"
-        "set ADDIN_DIR=%USERPROFILE%\\TocaAddin\r\n"
-        "if not exist \"%ADDIN_DIR%\" mkdir \"%ADDIN_DIR%\"\r\n"
-        "echo Baixando manifest do suplemento...\r\n"
-        f"powershell -Command \"Invoke-WebRequest -Uri '{manifest_url}' -OutFile '%ADDIN_DIR%\\manifest.xml' -UseBasicParsing\"\r\n"
-        "if not exist \"%ADDIN_DIR%\\manifest.xml\" (\r\n"
-        "    echo ERRO: Nao foi possivel baixar o manifest.\r\n"
-        f"    echo Verifique que o Toca esta rodando em {base_url}\r\n"
-        "    pause\r\n"
-        "    exit /b 1\r\n"
-        ")\r\n"
-        "echo Configurando catalogo confiavel do Outlook...\r\n"
-        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v Url /t REG_SZ /d \"%ADDIN_DIR%\\\" /f >nul\r\n"
-        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v Flags /t REG_DWORD /d 1 /f >nul\r\n"
-        f"reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\WEF\\TrustedCatalogs\\{{{catalog_guid}}}\" /v DisplayName /t REG_SZ /d \"Toca do Coelho\" /f >nul\r\n"
-        "echo.\r\n"
-        "echo Suplemento instalado com sucesso!\r\n"
-        "echo.\r\n"
-        "echo PROXIMOS PASSOS:\r\n"
-        "echo 1. Feche e reabra o Outlook\r\n"
-        "echo 2. No Outlook: Pagina Inicial ^> Obter Suplementos\r\n"
-        "echo 3. Clique em \"Pasta Compartilhada\" e ative \"Toca do Coelho\"\r\n"
-        "echo 4. Ao abrir qualquer email, o painel Toca aparece na ribbon\r\n"
-        "echo 5. Carregue os emails e clique em \"Enviar para Toca\"\r\n"
-        "echo.\r\n"
-        "pause\r\n"
-    )
-    resp = Response(bat, mimetype='application/octet-stream')
-    resp.headers['Content-Disposition'] = 'attachment; filename="instalar-suplemento-toca.bat"'
-    return resp
-
-
-@app.route('/api/outlook/import', methods=['POST'])
-def import_outlook_emails():
-    """Importação via arquivo JSON (fallback / uso avançado)."""
-    try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'Nenhum arquivo enviado'}), 400
-        file = request.files['file']
-        if not (file.filename or '').lower().endswith('.json'):
-            return jsonify({'error': 'Formato inválido. Envie um arquivo .json com emails do Outlook.'}), 400
-        file.seek(0, 2)
-        if file.tell() > 20 * 1024 * 1024:
-            return jsonify({'error': 'Arquivo muito grande. Máximo: 20MB.'}), 400
-        file.seek(0)
-        try:
-            data = json.loads(file.read().decode('utf-8'))
-        except Exception:
-            return jsonify({'error': 'Arquivo JSON inválido.'}), 400
-        emails = data.get('emails', [])
-        if not emails:
-            return jsonify({'imported': 0, 'skipped_duplicates': 0, 'skipped_no_match': 0,
-                            'message': 'Nenhum email encontrado no arquivo.'}), 200
-        conn = get_db()
-        imported, skipped_duplicates, skipped_no_match = _outlook_import_emails(emails, conn)
-        conn.close()
-        msg = f'{imported} atividade(s) importada(s)'
-        if skipped_duplicates:
-            msg += f', {skipped_duplicates} duplicata(s) ignorada(s)'
-        msg += '.'
-        return jsonify({'imported': imported, 'skipped_duplicates': skipped_duplicates,
-                        'skipped_no_match': skipped_no_match, 'message': msg})
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/outlook/import: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/itoca/base-status', methods=['GET'])
-def itoca_base_status():
-    try:
-        snapshot_items, updated_at = _itoca_get_cached_base()
-        return jsonify({
-            'has_base': len(snapshot_items) > 0,
-            'items_count': len(snapshot_items),
-            'updated_at': updated_at
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/itoca/base-status: {e}')
-        return jsonify({'error': f'Erro ao consultar status da base iToca: {e}'}), 500
 
 
 def _itoca_base_update_async(task_id, incremental):
@@ -8589,19 +7482,6 @@ def _itoca_base_update_async(task_id, incremental):
         _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
     finally:
         _bg_task_cleanup(task_id)
-
-
-@app.route('/api/itoca/base-update', methods=['POST'])
-def itoca_base_update():
-    """Inicia a atualização da base iToca de forma assíncrona (polling via /api/tasks/<task_id>).
-    Aceita parâmetro JSON: { "incremental": true } para indexação incremental (só o que mudou).
-    """
-    req_data = request.get_json(silent=True) or {}
-    incremental = bool(req_data.get('incremental', False))
-    task_id = uuid.uuid4().hex
-    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-    threading.Thread(target=_itoca_base_update_async, args=(task_id, incremental), daemon=True).start()
-    return jsonify({'task_id': task_id}), 202
 
 
 def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, history_rows):
@@ -8790,558 +7670,6 @@ def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, 
         _bg_task_cleanup(task_id, delay=300)
 
 
-@app.route('/api/itoca/ask', methods=['POST'])
-def itoca_ask():
-    """Inicia o processamento da pergunta de forma assíncrona.
-    Salva a mensagem do usuário imediatamente (antes do LLM) para garantir persistência.
-    Retorna {task_id} para polling via /api/tasks/<task_id>.
-    """
-    try:
-        data = request.get_json() or {}
-        question = (data.get('question') or '').strip()
-        session_id = (data.get('session_id') or '').strip()
-        if not question:
-            return jsonify({'error': 'Pergunta obrigatória.'}), 400
-
-        snapshot_items, updated_at = _itoca_get_cached_base()
-        if not snapshot_items:
-            return jsonify({
-                'error': 'Base iToca ainda não foi atualizada. Clique em "Base Update" antes da primeira pergunta.',
-                'base_ready': False
-            }), 409
-
-        # Busca histórico ANTES de salvar a mensagem do usuário (para não incluir a pergunta atual no contexto)
-        history_rows = []
-        if session_id:
-            try:
-                conn_h = get_db()
-                c_h = conn_h.cursor()
-                c_h.execute(
-                    'SELECT role, content FROM itoca_chat_history WHERE session_id = ? ORDER BY created_at ASC LIMIT 12',
-                    (session_id,)
-                )
-                history_rows = [dict_from_row(r) for r in c_h.fetchall()]
-                conn_h.close()
-            except Exception as he:
-                logger.warning(f'[iToca] Erro ao buscar histórico: {he}')
-
-        # Salva a pergunta do usuário IMEDIATAMENTE — garante que esteja no histórico
-        # mesmo que o usuário navegue para outra tela antes da resposta chegar.
-        if session_id:
-            try:
-                conn_h = get_db()
-                c_h = conn_h.cursor()
-                c_h.execute(
-                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)',
-                    (session_id, 'user', question, '')
-                )
-                conn_h.commit()
-                conn_h.close()
-            except Exception as he:
-                logger.warning(f'[iToca] Erro ao salvar pergunta no histórico: {he}')
-
-        # Inicia processamento LLM em background com etapas visíveis ao frontend
-        task_id = uuid.uuid4().hex
-        _bg_task_set(task_id, {'status': 'processing', 'step': '🔍 Iniciando busca...', 'progress': 5})
-        threading.Thread(
-            target=_itoca_ask_async,
-            args=(task_id, question, session_id, snapshot_items, updated_at, history_rows),
-            daemon=True
-        ).start()
-        return jsonify({'task_id': task_id, 'base_ready': True}), 202
-
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/itoca/ask: {e}')
-        return jsonify({'error': f'Erro ao consultar iToca: {e}'}), 500
-
-
-@app.route('/api/itoca/execute-action', methods=['POST'])
-def itoca_execute_action():
-    """Executa a ação sugerida pelo detector de intenção após confirmação do usuário.
-
-    Payload esperado:
-        action_type  (str)   — tipo da ação (kanban_card, activity, new_contact, etc.)
-        fields       (dict)  — campos extraídos pelo LLM
-
-    Retorna:
-        success      (bool)
-        message      (str)   — mensagem de confirmação
-        created_id   (int)   — ID do registro criado (quando aplicável)
-        action_type  (str)
-    """
-    try:
-        data = request.get_json() or {}
-        action_type = (data.get('action_type') or '').strip().lower()
-        fields = data.get('fields') or {}
-
-        if not action_type or action_type not in _ITOCA_ACTION_LABELS:
-            return jsonify({'error': f'Tipo de ação inválido: {action_type!r}'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-
-        # ------------------------------------------------------------------ #
-        # kanban_card — cria card na primeira coluna do Kanban                #
-        # ------------------------------------------------------------------ #
-        if action_type == 'kanban_card':
-            title = (fields.get('title') or '').strip()
-            description = (fields.get('description') or fields.get('title') or '').strip()
-            urgency = (fields.get('urgency') or 'Média').strip()
-            if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
-                urgency = 'Média'
-            account_name = (fields.get('account_name') or fields.get('company') or '').strip()
-            contact_name = (fields.get('contact_name') or '').strip()
-
-            if not title:
-                conn.close()
-                return jsonify({'error': 'Título do card é obrigatório.'}), 400
-
-            # Resolve account_id e contact_id se fornecidos
-            account_id = None
-            if account_name:
-                account_id = ensure_account_for_company(c, account_name)
-
-            contact_id = None
-            if contact_name:
-                c.execute('SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) LIMIT 1', (f'%{contact_name}%',))
-                row = c.fetchone()
-                if row:
-                    contact_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
-
-            tag = infer_kanban_tag(description)
-            c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
-            first_col = c.fetchone()
-            if not first_col:
-                conn.close()
-                return jsonify({'error': 'Nenhuma coluna disponível no Kanban.'}), 400
-            col_id = first_col[0] if not isinstance(first_col, sqlite3.Row) else first_col['id']
-
-            c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (col_id,))
-            next_order = (c.fetchone()[0] or 0) + 1
-            c.execute(
-                '''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, urgency, column_id, display_order)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                (title, description, tag, account_id, contact_id, urgency, col_id, next_order)
-            )
-            conn.commit()
-            created_id = c.lastrowid
-            conn.close()
-            return jsonify({
-                'success': True,
-                'message': f'Card “{title}” criado no Kanban com sucesso!',
-                'created_id': created_id,
-                'action_type': action_type
-            }), 201
-
-        # ------------------------------------------------------------------ #
-        # activity — registra atividade vinculada a um contato               #
-        # ------------------------------------------------------------------ #
-        elif action_type == 'activity':
-            contact_name = (fields.get('contact_name') or fields.get('name') or '').strip()
-            company = (fields.get('company') or fields.get('account_name') or '').strip()
-            description = (fields.get('description') or fields.get('information') or '').strip()
-            contact_type = (fields.get('contact_type') or 'Outro').strip()
-
-            if not description:
-                conn.close()
-                return jsonify({'error': 'Descrição da atividade é obrigatória.'}), 400
-
-            # Tenta encontrar o contato pelo nome e/ou empresa
-            client_id = None
-            if contact_name:
-                query = 'SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?))'
-                params = [f'%{contact_name}%']
-                if company:
-                    query += ' AND LOWER(TRIM(company)) LIKE LOWER(TRIM(?))'
-                    params.append(f'%{company}%')
-                query += ' LIMIT 1'
-                c.execute(query, params)
-                row = c.fetchone()
-                if row:
-                    client_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
-
-            if not client_id:
-                conn.close()
-                return jsonify({
-                    'error': f'Contato “{contact_name or "(não informado)"}” não encontrado. Verifique o nome e tente novamente.',
-                    'needs_contact_selection': True
-                }), 404
-
-            c.execute(
-                '''INSERT INTO activities (client_id, contact_type, information)
-                   VALUES (?, ?, ?)''',
-                (client_id, contact_type, description)
-            )
-            c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (client_id,))
-            conn.commit()
-            created_id = c.lastrowid
-            conn.close()
-            return jsonify({
-                'success': True,
-                'message': f'Atividade registrada para “{contact_name}” com sucesso!',
-                'created_id': created_id,
-                'action_type': action_type
-            }), 201
-
-        # ------------------------------------------------------------------ #
-        # new_contact — adiciona novo contato/cliente                        #
-        # ------------------------------------------------------------------ #
-        elif action_type == 'new_contact':
-            name = (fields.get('name') or fields.get('contact_name') or '').strip()
-            company = (fields.get('company') or fields.get('account_name') or '').strip()
-            position = (fields.get('position') or fields.get('cargo') or '').strip()
-            email = (fields.get('email') or '').strip()
-            phone = (fields.get('phone') or fields.get('telefone') or '').strip()
-
-            if not name or not company or not position:
-                conn.close()
-                return jsonify({'error': 'Nome, empresa e cargo são obrigatórios para criar um contato.'}), 400
-
-            # Verifica duplicidade simples
-            c.execute(
-                'SELECT id FROM clients WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1',
-                (name, company)
-            )
-            if c.fetchone():
-                conn.close()
-                return jsonify({
-                    'error': f'Contato “{name}” da empresa “{company}” já existe no sistema.',
-                    'duplicate': True
-                }), 409
-
-            c.execute(
-                '''INSERT INTO clients (name, company, position, email, phone, updated_at)
-                   VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                (name, company, position, email or None, phone or None)
-            )
-            conn.commit()
-            created_id = c.lastrowid
-            conn.close()
-            return jsonify({
-                'success': True,
-                'message': f'Contato “{name}” ({position} na {company}) adicionado com sucesso!',
-                'created_id': created_id,
-                'action_type': action_type
-            }), 201
-
-        # ------------------------------------------------------------------ #
-        # wiki_entry — salva conhecimento no WikiToca                        #
-        # ------------------------------------------------------------------ #
-        elif action_type == 'wiki_entry':
-            title = (fields.get('title') or '').strip()
-            content = (fields.get('content') or fields.get('description') or '').strip()
-            category = (fields.get('category') or '').strip() or None
-            tags = (fields.get('tags') or '').strip() or None
-
-            if not title or not content:
-                conn.close()
-                return jsonify({'error': 'Título e conteúdo são obrigatórios para criar um conhecimento.'}), 400
-
-            c.execute(
-                '''INSERT INTO wiki_entries (title, category, content, tags, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                (title, category, content, tags)
-            )
-            conn.commit()
-            created_id = c.lastrowid
-            conn.close()
-            return jsonify({
-                'success': True,
-                'message': f'Conhecimento “{title}” salvo no WikiToca com sucesso!',
-                'created_id': created_id,
-                'action_type': action_type
-            }), 201
-
-        # ------------------------------------------------------------------ #
-        # commitment — agenda compromisso                                    #
-        # ------------------------------------------------------------------ #
-        elif action_type == 'commitment':
-            title = (fields.get('title') or '').strip()
-            due_date = (fields.get('due_date') or '').strip()
-            due_time = (fields.get('due_time') or '').strip() or None
-            notes = (fields.get('notes') or fields.get('description') or title or '').strip()
-            contact_name = (fields.get('contact_name') or '').strip()
-
-            if not due_date:
-                conn.close()
-                return jsonify({'error': 'Data do compromisso é obrigatória.'}), 400
-
-            # Tenta encontrar o contato
-            client_id = None
-            if contact_name:
-                c.execute('SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) LIMIT 1', (f'%{contact_name}%',))
-                row = c.fetchone()
-                if row:
-                    client_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
-
-            if not client_id:
-                conn.close()
-                return jsonify({
-                    'error': f'Contato “{contact_name or "(não informado)"}” não encontrado para vincular o compromisso.',
-                    'needs_contact_selection': True
-                }), 404
-
-            c.execute(
-                '''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (client_id, title or 'Compromisso via iToca', notes, due_date, due_time, 'itoca')
-            )
-            conn.commit()
-            created_id = c.lastrowid
-            conn.close()
-            return jsonify({
-                'success': True,
-                'message': f'Compromisso “{title or due_date}” agendado com sucesso!',
-                'created_id': created_id,
-                'action_type': action_type
-            }), 201
-
-        # ------------------------------------------------------------------ #
-        # environment_mapping — registra resposta de mapeamento de ambiente  #
-        # ------------------------------------------------------------------ #
-        elif action_type == 'environment_mapping':
-            company = (fields.get('company') or fields.get('account_name') or '').strip()
-            card_title = (fields.get('card_title') or fields.get('question') or '').strip()
-            response_text = (fields.get('response') or fields.get('answer') or fields.get('content') or '').strip()
-
-            if not company or not response_text:
-                conn.close()
-                return jsonify({'error': 'Empresa e resposta são obrigatórios para o mapeamento.'}), 400
-
-            # Encontra ou cria a conta
-            account_id = ensure_account_for_company(c, company)
-
-            # Encontra o card de mapeamento pelo título (ou cria um genérico)
-            card_id = None
-            if card_title:
-                c.execute(
-                    'SELECT id FROM environment_cards WHERE LOWER(TRIM(title)) LIKE LOWER(TRIM(?)) LIMIT 1',
-                    (f'%{card_title}%',)
-                )
-                row = c.fetchone()
-                if row:
-                    card_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
-
-            if not card_id:
-                # Cria um card genérico para a resposta
-                c.execute(
-                    '''INSERT INTO environment_cards (title, description, created_at, updated_at)
-                       VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                    (card_title or 'Informação via iToca', '')
-                )
-                conn.commit()
-                card_id = c.lastrowid
-
-            c.execute(
-                '''INSERT INTO environment_responses (card_id, account_id, response, created_at, updated_at)
-                   VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                (card_id, account_id, response_text)
-            )
-            conn.commit()
-            created_id = c.lastrowid
-            conn.close()
-            return jsonify({
-                'success': True,
-                'message': f'Mapeamento de “{company}” registrado com sucesso!',
-                'created_id': created_id,
-                'action_type': action_type
-            }), 201
-
-        conn.close()
-        return jsonify({'error': f'Ação “{action_type}” não implementada.'}), 501
-
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/itoca/execute-action: {e}')
-        return jsonify({'error': f'Erro ao executar ação: {e}'}), 500
-
-
-@app.route('/api/itoca/history', methods=['GET'])
-def itoca_history_list():
-    """Lista sessões de histórico do iToca dos últimos 30 dias."""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        # Purga registros com mais de 30 dias
-        c.execute("DELETE FROM itoca_chat_history WHERE created_at < datetime('now', '-30 days')")
-        conn.commit()
-        # Retorna sessões distintas com data e primeira pergunta
-        c.execute('''
-            SELECT session_id,
-                   MIN(created_at) AS started_at,
-                   MAX(created_at) AS last_at,
-                   COUNT(*) AS msg_count,
-                   (SELECT content FROM itoca_chat_history h2
-                    WHERE h2.session_id = h.session_id AND h2.role = 'user'
-                    ORDER BY h2.created_at ASC LIMIT 1) AS first_question
-            FROM itoca_chat_history h
-            GROUP BY session_id
-            ORDER BY last_at DESC
-            LIMIT 60
-        ''')
-        sessions = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-        return jsonify(sessions)
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/itoca/history: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/itoca/history/<session_id>', methods=['GET'])
-def itoca_history_session(session_id):
-    """Retorna todas as mensagens de uma sessão específica."""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            'SELECT id, role, content, confidence_percent, needs_refinement, refinement_hint, created_at FROM itoca_chat_history WHERE session_id = ? ORDER BY created_at ASC',
-            (session_id,)
-        )
-        messages = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-        return jsonify(messages)
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/itoca/history/{session_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/itoca/history/<session_id>', methods=['DELETE'])
-def itoca_history_delete(session_id):
-    """Deleta uma sessão específica do histórico."""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM itoca_chat_history WHERE session_id = ?', (session_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Sessão removida do histórico.'})
-    except Exception as e:
-        logger.exception(f'[ERROR] DELETE /api/itoca/history/{session_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/profile', methods=['POST'])
-def save_profile_config():
-    try:
-        full_name = request.form.get('full_name', '').strip()
-        nickname = request.form.get('nickname', '').strip()
-        position = request.form.get('position', '').strip()
-        email = request.form.get('email', '').strip()
-        phone = normalize_phone(request.form.get('phone', '').strip())
-        boss_name = request.form.get('boss_name', '').strip() or None
-        boss_email = request.form.get('boss_email', '').strip() or None
-
-        if not full_name or not nickname or not position or not email or not phone:
-            return jsonify({'error': 'Nome completo, apelido, cargo, email e telefone são obrigatórios'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT photo_url FROM user_profile WHERE id = 1')
-        row = c.fetchone()
-        photo_url = row['photo_url'] if row else None
-
-        if 'photo' in request.files:
-            file = request.files['photo']
-            if file and file.filename:
-                filename = f'profile-{uuid.uuid4().hex}.jpg'
-                filepath = UPLOAD_DIR / filename
-                _save_avatar_photo(file, filepath)
-                photo_url = f'/uploads/{filename}'
-
-        if not photo_url:
-            return jsonify({'error': 'Foto é obrigatória'}), 400
-
-        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, email, phone, photo_url, boss_name, boss_email, updated_at)
-                     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                     ON CONFLICT(id) DO UPDATE SET
-                        full_name = excluded.full_name,
-                        nickname = excluded.nickname,
-                        position = excluded.position,
-                        email = excluded.email,
-                        phone = excluded.phone,
-                        photo_url = excluded.photo_url,
-                        boss_name = excluded.boss_name,
-                        boss_email = excluded.boss_email,
-                        updated_at = CURRENT_TIMESTAMP''',
-                  (full_name, nickname, position, email, phone, photo_url, boss_name, boss_email))
-        conn.commit()
-        conn.close()
-
-        return jsonify({'message': 'Perfil salvo'})
-    except Exception as e:
-        print(f'[ERROR] POST /api/config/profile: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/profile', methods=['DELETE'])
-def delete_profile_config():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM user_profile WHERE id = 1')
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Usuário excluído com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/config/profile: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/clients/<int:client_id>', methods=['GET'])
-def get_client(client_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM clients WHERE id = ?', (client_id,))
-        client = dict_from_row(c.fetchone())
-        conn.close()
-        
-        if not client:
-            return jsonify({'error': 'Cliente nao encontrado'}), 404
-        return jsonify(client)
-    except Exception as e:
-        print(f'[ERROR] GET /api/clients/{client_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-@app.route('/api/clients/check-duplicate', methods=['POST'])
-def check_duplicate_client():
-    try:
-        data = request.get_json() or {}
-        name = (data.get('name') or '').strip()
-        email = (data.get('email') or '').strip()
-        phone = normalize_phone((data.get('phone') or '').strip())
-        exclude_id = data.get('exclude_id')
-
-        clauses = []
-        params = []
-        if name:
-            clauses.append('LOWER(TRIM(name)) = LOWER(TRIM(?))')
-            params.append(name)
-        if email:
-            clauses.append('LOWER(TRIM(email)) = LOWER(TRIM(?))')
-            params.append(email)
-        if phone:
-            clauses.append('TRIM(phone) = TRIM(?)')
-            params.append(phone)
-
-        if not clauses:
-            return jsonify({'matches': []})
-
-        where = ' OR '.join(f'({c})' for c in clauses)
-        sql = f'SELECT * FROM clients WHERE {where}'
-        if exclude_id:
-            sql += ' AND id != ?'
-            params.append(int(exclude_id))
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(sql, params)
-        matches = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify({'matches': matches})
-    except Exception as e:
-        print(f'[ERROR] POST /api/clients/check-duplicate: {e}')
-        return jsonify({'error': str(e)}), 500
-
 def _autopic_get_role_via_llm(name, company):
     """Usa o SAI (ou OpenRouter como fallback) para descobrir o cargo da pessoa na empresa.
     Retorna string com o cargo, ou None se não conseguir.
@@ -9399,89 +7727,6 @@ def _autopic_get_role_via_llm(name, company):
     return None
 
 
-@app.route('/api/clients/autofind-photo-candidates', methods=['GET'])
-def clients_autofind_photo_candidates():
-    try:
-        name = (request.args.get('name') or '').strip()
-        company = (request.args.get('company') or '').strip()
-        logger.info(f'[AutoPic] GET /autofind-photo-candidates: name={name!r} company={company!r}')
-
-        if not name and not company:
-            logger.warning('[AutoPic] GET /autofind-photo-candidates: nome e empresa vazios, abortando.')
-            return jsonify({'error': 'Informe ao menos nome ou empresa.'}), 400
-
-        candidates = []
-        queries_tried = []
-
-        # Enriquecimento via LLM: descobrir o cargo da pessoa — limitado a 10s para não travar a UI.
-        # O _sai_simple_prompt tem timeout de 45s; usamos concurrent.futures para encurtar.
-        role = None
-        if name and company:
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
-                    _fut = _ex.submit(_autopic_get_role_via_llm, name, company)
-                    try:
-                        role = _fut.result(timeout=10)
-                    except concurrent.futures.TimeoutError:
-                        logger.warning(f'[AutoPic] Timeout 10s ao buscar cargo via LLM para {name!r}, prosseguindo sem cargo.')
-            except Exception as e:
-                logger.warning(f'[AutoPic] Falha ao obter cargo via LLM: {e}')
-
-        def _merge_candidates(existing, new_urls, limit=6):
-            seen = set(existing)
-            result = list(existing)
-            for u in new_urls:
-                if u not in seen:
-                    seen.add(u)
-                    result.append(u)
-            return result[:limit]
-
-        # Estratégia 1 (primária): nome ENTRE ASPAS + empresa sem aspas.
-        # As aspas no nome são essenciais: sem elas "Henrique Netto" vira dois tokens separados
-        # e o Bing pode combinar com a dupla sertaneja "Netto & Henrique" ou similares.
-        # Com aspas, o Bing exige a frase exata e prioriza o profissional da empresa.
-        if name and company:
-            q1 = f'"{name}" {company}'
-            queries_tried.append(q1)
-            logger.info(f'[AutoPic] Estratégia 1 (nome entre aspas + empresa): query={q1!r}')
-            candidates = _find_image_candidates_on_web(q1, limit=6)
-            logger.info(f'[AutoPic] Estratégia 1 retornou {len(candidates)} candidato(s)')
-
-        # Estratégia 2: nome entre aspas + cargo (LLM) + empresa — mais precisa quando há namesakes
-        if len(candidates) < 3 and name and company and role:
-            q2 = f'"{name}" {role} {company}'
-            queries_tried.append(q2)
-            logger.info(f'[AutoPic] Estratégia 2 (nome aspas + cargo LLM + empresa): query={q2!r}')
-            extra = _find_image_candidates_on_web(q2, limit=6)
-            logger.info(f'[AutoPic] Estratégia 2 retornou {len(extra)} candidato(s)')
-            candidates = _merge_candidates(candidates, extra)
-
-        # Estratégia 3: nome + empresa sem aspas (mais abrangente, pode trazer mais resultados)
-        if len(candidates) < 3 and name and company:
-            q3 = f'{name} {company}'
-            queries_tried.append(q3)
-            logger.info(f'[AutoPic] Estratégia 3 (sem aspas): query={q3!r}')
-            extra = _find_image_candidates_on_web(q3, limit=6)
-            logger.info(f'[AutoPic] Estratégia 3 retornou {len(extra)} candidato(s)')
-            candidates = _merge_candidates(candidates, extra)
-
-        # Estratégia 4: apenas nome (último recurso)
-        if len(candidates) < 3:
-            q4 = name or company
-            queries_tried.append(q4)
-            logger.info(f'[AutoPic] Estratégia 4 (apenas nome): query={q4!r}')
-            extra = _find_image_candidates_on_web(q4, limit=6)
-            logger.info(f'[AutoPic] Estratégia 4 retornou {len(extra)} candidato(s)')
-            candidates = _merge_candidates(candidates, extra)
-
-        logger.info(f'[AutoPic] Total final: {len(candidates)} candidato(s) após {len(queries_tried)} estratégia(s). '
-                    f'Queries tentadas: {queries_tried}. Cargo LLM: {role!r}')
-        return jsonify({'query': queries_tried[0] if queries_tried else '', 'candidates': candidates, 'role': role})
-    except Exception as e:
-        logger.exception(f'[AutoPic] ERRO em GET /autofind-photo-candidates: {e}')
-        return jsonify({'error': f'Erro ao buscar imagens: {e}'}), 500
-
-
 def _save_photo_from_base64(data_url, person_name='linkedin'):
     """Recebe um data URL base64 (data:image/...;base64,...), salva localmente e retorna '/uploads/<filename>'.
     Retorna None se o data_url não for válido."""
@@ -9507,716 +7752,7 @@ def _save_photo_from_base64(data_url, person_name='linkedin'):
         return None
 
 
-@app.route('/api/clients/autofind-photo', methods=['POST'])
-def clients_autofind_photo():
-    try:
-        data = request.get_json() or {}
-        image_url = (data.get('image_url') or '').strip()
-        person_name = (data.get('name') or '').strip() or 'autofind'
-        logger.info(f'[AutoPic] POST /autofind-photo: person_name={person_name!r} image_url={image_url[:120]!r}')
-        if not image_url:
-            return jsonify({'error': 'URL da imagem não informada.'}), 400
-
-        safe_prefix = secure_filename(person_name) or 'autofind'
-        photo_url = _download_remote_image_to_uploads(image_url, prefix=safe_prefix)
-        logger.info(f'[AutoPic] POST /autofind-photo: imagem salva com sucesso em {photo_url!r}')
-        return jsonify({'photo_url': photo_url})
-    except Exception as e:
-        logger.exception(f'[AutoPic] ERRO em POST /autofind-photo: {type(e).__name__}: {e}')
-        return jsonify({'error': f'Erro ao importar imagem selecionada: {e}'}), 500
-
-
-@app.route('/api/clients/autofind-photo-base64', methods=['POST'])
-def clients_autofind_photo_base64():
-    """Recebe uma imagem em base64 (data URL), salva no servidor e retorna a URL local."""
-    try:
-        data = request.get_json() or {}
-        data_url = (data.get('data_url') or '').strip()
-        person_name = (data.get('name') or '').strip() or 'autofind'
-        if not data_url:
-            return jsonify({'error': 'data_url não informada.'}), 400
-
-        # Formato esperado: data:image/jpeg;base64,<dados>
-        if not data_url.startswith('data:image/'):
-            return jsonify({'error': 'Formato de data URL inválido.'}), 400
-
-        header, encoded = data_url.split(',', 1)
-        # Extrair extensão do tipo MIME
-        mime_type = header.split(';')[0].replace('data:', '')
-        ext_map = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif'}
-        ext = ext_map.get(mime_type, '.jpg')
-
-        img_data = base64.b64decode(encoded)
-        if len(img_data) > 6 * 1024 * 1024:
-            return jsonify({'error': 'Imagem muito grande (máximo 6MB).'}), 400
-
-        safe_prefix = secure_filename(person_name) or 'autofind'
-        filename = secure_filename(f"{safe_prefix}-{int(time.time()*1000)}{ext}")
-        path = UPLOAD_DIR / filename
-        with open(path, 'wb') as f:
-            f.write(img_data)
-
-        return jsonify({'photo_url': f'/uploads/{filename}'})
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/clients/autofind-photo-base64: {e}')
-        return jsonify({'error': f'Erro ao salvar imagem: {e}'}), 500
-
-
-@app.route('/api/clientes', methods=['POST'])
-def create_cliente():
-    return create_client()
-
-@app.route('/api/clients', methods=['POST'])
-def create_client():
-    try:
-        print('[DEBUG] POST /api/clients')
-        print(f'[DEBUG] Content-Type: {request.content_type}')
-        print(f'[DEBUG] Form data: {request.form}')
-        print(f'[DEBUG] Files: {request.files}')
-        
-        name = request.form.get('name', '').strip()
-        company = request.form.get('company', '').strip()
-        position = request.form.get('position', '').strip()
-        email = request.form.get('email', '').strip()
-        phone = normalize_phone(request.form.get('phone', '').strip())
-        linkedin = request.form.get('linkedin', '').strip()
-        area_of_activity = request.form.get('area_of_activity', '').strip()
-        is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
-        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
-        force_create = request.form.get('force_create') in ('1', 'true', 'on')
-        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
-        
-        if not name or not company or not position:
-            return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
-        
-        if not force_create:
-            duplicate_clauses = []
-            duplicate_params = []
-            if name:
-                duplicate_clauses.append('LOWER(TRIM(name)) = LOWER(TRIM(?))')
-                duplicate_params.append(name)
-            if email:
-                duplicate_clauses.append('LOWER(TRIM(email)) = LOWER(TRIM(?))')
-                duplicate_params.append(email)
-            if phone:
-                duplicate_clauses.append('TRIM(phone) = TRIM(?)')
-                duplicate_params.append(phone)
-            if duplicate_clauses:
-                conn = get_db()
-                c = conn.cursor()
-                c.execute(f"SELECT * FROM clients WHERE {' OR '.join([f'({cl})' for cl in duplicate_clauses])} ORDER BY id DESC LIMIT 1", duplicate_params)
-                existing = dict_from_row(c.fetchone())
-                conn.close()
-                if existing:
-                    return jsonify({'error': 'Possível duplicidade encontrada', 'duplicate': existing}), 409
-
-        # Suporte a foto em base64 (enviada pela extensão AutoToca)
-        if autofind_photo_url and autofind_photo_url.startswith('data:image/'):
-            saved = _save_photo_from_base64(autofind_photo_url, person_name=name or 'linkedin')
-            photo_url = saved or None
-        else:
-            photo_url = autofind_photo_url or None
-        if 'photo' in request.files:
-            file = request.files['photo']
-            if file and file.filename:
-                filename = secure_filename(file.filename)
-                filepath = UPLOAD_DIR / filename
-                file.save(str(filepath))
-                photo_url = f'/uploads/{filename}'
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact))
-        client_id = c.lastrowid
-        ensure_account_for_company(c, company)
-        conn.commit()
-        conn.close()
-        
-        print(f'[DEBUG] Cliente criado com ID: {client_id}')
-        return jsonify({'id': client_id, 'message': 'Cliente criado'}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/clients: {e}')
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/clientes/<int:client_id>', methods=['PUT'])
-def update_cliente(client_id):
-    return update_client(client_id)
-
-@app.route('/api/clients/<int:client_id>', methods=['PUT'])
-def update_client(client_id):
-    try:
-        print(f'[DEBUG] PUT /api/clients/{client_id}')
-        
-        name = request.form.get('name', '').strip()
-        company = request.form.get('company', '').strip()
-        position = request.form.get('position', '').strip()
-        email = request.form.get('email', '').strip()
-        phone = normalize_phone(request.form.get('phone', '').strip())
-        linkedin = request.form.get('linkedin', '').strip()
-        area_of_activity = request.form.get('area_of_activity', '').strip()
-        is_cold_contact = 1 if request.form.get('is_cold_contact') in ('1', 'true', 'on') else 0
-        remove_photo = request.form.get('remove_photo', '0') == '1'
-        autofind_photo_url = (request.form.get('autofind_photo_url') or '').strip()
-        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'on') else 0
-        
-        if not name or not company or not position:
-            return jsonify({'error': 'Nome, empresa e cargo sao obrigatorios'}), 400
-        
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Obter cliente atual
-        c.execute('SELECT * FROM clients WHERE id = ?', (client_id,))
-        client = dict_from_row(c.fetchone())
-        if not client:
-            conn.close()
-            return jsonify({'error': 'Cliente nao encontrado'}), 404
-        
-        # Suporte a foto em base64 (enviada pela extensão AutoToca)
-        if autofind_photo_url and autofind_photo_url.startswith('data:image/'):
-            saved = _save_photo_from_base64(autofind_photo_url, person_name=name or 'linkedin')
-            photo_url = None if remove_photo else (saved or client['photo_url'])
-        else:
-            photo_url = None if remove_photo else (autofind_photo_url or client['photo_url'])
-        if 'photo' in request.files:
-            file = request.files['photo']
-            if file and file.filename:
-                filename = secure_filename(file.filename)
-                filepath = UPLOAD_DIR / filename
-                file.save(str(filepath))
-                photo_url = f'/uploads/{filename}'
-        
-        c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, is_archived = CASE WHEN TRIM(?) != '' THEN 0 ELSE is_archived END, updated_at = CURRENT_TIMESTAMP
-                     WHERE id = ?''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, company, client_id))
-        ensure_account_for_company(c, company)
-        conn.commit()
-        conn.close()
-        
-        print(f'[DEBUG] Cliente {client_id} atualizado')
-        return jsonify({'message': 'Cliente atualizado'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/clients/{client_id}: {e}')
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/clientes/<int:client_id>', methods=['DELETE'])
-def delete_cliente(client_id):
-    return delete_client(client_id)
-
-@app.route('/api/clients/<int:client_id>', methods=['DELETE'])
-def delete_client(client_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM clients WHERE id = ?', (client_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Cliente deletado'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/clients/{client_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/clientes/<int:client_id>/arquivar', methods=['POST'])
-def archive_cliente(client_id):
-    return archive_client(client_id)
-
-@app.route('/api/clients/<int:client_id>/archive', methods=['POST'])
-def archive_client(client_id):
-    try:
-        payload = request.get_json(silent=True) or {}
-        remove_company = bool(payload.get('remove_company'))
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id, company FROM clients WHERE id = ?', (client_id,))
-        existing = dict_from_row(c.fetchone())
-        if not existing:
-            conn.close()
-            return jsonify({'error': 'Cliente nao encontrado'}), 404
-
-        old_company = (existing.get('company') or '').strip()
-        if remove_company:
-            c.execute('''UPDATE clients
-                         SET company = '', is_archived = 1, updated_at = CURRENT_TIMESTAMP
-                         WHERE id = ?''', (client_id,))
-
-            c.execute(
-                '''INSERT INTO activities (client_id, contact_type, information, description)
-                   VALUES (?, ?, ?, ?)''',
-                (
-                    client_id,
-                    'Sistema',
-                    f'Usuario arquivado. Empresa removida: {old_company or "-"}',
-                    'Registro automático de arquivamento'
-                )
-            )
-        else:
-            c.execute('''UPDATE clients
-                         SET is_archived = 1, updated_at = CURRENT_TIMESTAMP
-                         WHERE id = ?''', (client_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Contato arquivado'})
-    except Exception as e:
-        print(f'[ERROR] POST /api/clients/{client_id}/archive: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/clientes/<int:client_id>/desarquivar', methods=['POST'])
-def unarchive_client(client_id):
-    try:
-        payload = request.get_json(silent=True) or {}
-        new_company = (payload.get('company') or '').strip()
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id, company FROM clients WHERE id = ?', (client_id,))
-        existing = dict_from_row(c.fetchone())
-        if not existing:
-            conn.close()
-            return jsonify({'error': 'Cliente nao encontrado'}), 404
-
-        current_company = (existing.get('company') or '').strip()
-        if not current_company and not new_company:
-            conn.close()
-            return jsonify({'error': 'Informe a conta para desarquivar este contato'}), 400
-
-        if new_company and new_company != current_company:
-            c.execute('''UPDATE clients
-                         SET company = ?, is_archived = 0, updated_at = CURRENT_TIMESTAMP
-                         WHERE id = ?''', (new_company, client_id))
-            c.execute(
-                '''INSERT INTO activities (client_id, contact_type, information, description)
-                   VALUES (?, ?, ?, ?)''',
-                (
-                    client_id,
-                    'Sistema',
-                    f'Usuario desarquivado. Empresa atribuida: {new_company}',
-                    'Registro automático de desarquivamento'
-                )
-            )
-        else:
-            c.execute('''UPDATE clients
-                         SET is_archived = 0, updated_at = CURRENT_TIMESTAMP
-                         WHERE id = ?''', (client_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Contato desarquivado'})
-    except Exception as e:
-        print(f'[ERROR] POST /api/clientes/{client_id}/desarquivar: {e}')
-        return jsonify({'error': str(e)}), 500
-
 # API - Atividades (rotas alternativas para compatibilidade)
-@app.route('/api/atividades', methods=['GET'])
-def get_atividades():
-    return get_activities()
-
-@app.route('/api/activities', methods=['GET'])
-def get_activities():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''SELECT a.*, c.name, c.company, c.position FROM activities a
-                     JOIN clients c ON a.client_id = c.id
-                     ORDER BY a.activity_date DESC''')
-        activities = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(activities)
-    except Exception as e:
-        print(f'[ERROR] GET /api/activities: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/atividades', methods=['POST'])
-def create_atividade():
-    try:
-        print('[DEBUG] POST /api/atividades')
-        # Aceitar tanto JSON quanto FormData
-        if request.is_json:
-            data = request.get_json()
-            client_id = data.get('client_id')
-            contact_type = data.get('contact_type', 'Outro')
-            information = data.get('information', '').strip()
-        else:
-            client_id = request.form.get('client_id')
-            contact_type = request.form.get('contact_type', 'Outro')
-            information = request.form.get('information', '').strip()
-        
-        print(f'[DEBUG] client_id: {client_id}, contact_type: {contact_type}, information: {information}')
-        
-        if not client_id or not information:
-            return jsonify({'error': 'Cliente e informacoes sao obrigatorios'}), 400
-        
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Verificar se cliente existe
-        c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Cliente nao encontrado'}), 404
-        
-        # Salvar com campos separados
-        c.execute('''INSERT INTO activities (client_id, contact_type, information)
-                     VALUES (?, ?, ?)''',
-                  (client_id, contact_type, information))
-        conn.commit()
-        activity_id = c.lastrowid
-
-        # Detectar compromissos futuros no texto da atividade e registrar na agenda
-        created_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
-        created_commitments = enrich_commitments_with_client_data(c, created_commitments, client_id)
-        conn.commit()
-        
-        # Atualizar last_activity_date do cliente
-        c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
-                  (client_id,))
-        conn.commit()
-        conn.close()
-        
-        print(f'[DEBUG] Atividade criada com ID: {activity_id}')
-        return jsonify({'id': activity_id, 'message': 'Atividade registrada', 'commitments_created': created_commitments}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/atividades: {e}')
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/activities', methods=['POST'])
-def create_activity():
-    try:
-        print('[DEBUG] POST /api/activities')
-        data = request.get_json()
-        print(f'[DEBUG] Data: {data}')
-        
-        client_id = data.get('client_id')
-        description = data.get('description', '').strip()
-        
-        if not client_id or not description:
-            return jsonify({'error': 'Cliente e descricao sao obrigatorios'}), 400
-        
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Verificar se cliente existe
-        c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Cliente nao encontrado'}), 404
-        
-        c.execute('''INSERT INTO activities (client_id, information)
-                     VALUES (?, ?)''',
-                  (client_id, description))
-        conn.commit()
-        activity_id = c.lastrowid
-
-        # Detectar compromissos futuros no texto da atividade e registrar na agenda
-        created_commitments = create_commitments_from_activity(c, client_id, activity_id, description)
-        created_commitments = enrich_commitments_with_client_data(c, created_commitments, client_id)
-        conn.commit()
-        
-        # Atualizar last_activity_date do cliente
-        c.execute('''UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?''',
-                  (client_id,))
-        conn.commit()
-        conn.close()
-        
-        print(f'[DEBUG] Atividade criada com ID: {activity_id}')
-        return jsonify({'id': activity_id, 'message': 'Atividade registrada', 'commitments_created': created_commitments}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/activities: {e}')
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/atividades/<int:activity_id>', methods=['PUT'])
-def update_atividade(activity_id):
-    try:
-        print(f'[DEBUG] PUT /api/atividades/{activity_id}')
-        # Aceitar tanto JSON quanto FormData
-        if request.is_json:
-            data = request.get_json()
-            contact_type = data.get('contact_type', 'Outro')
-            information = data.get('information', '').strip()
-        else:
-            contact_type = request.form.get('contact_type', 'Outro')
-            information = request.form.get('information', '').strip()
-        
-        if not information:
-            return jsonify({'error': 'Informacoes sao obrigatorias'}), 400
-        
-        conn = get_db()
-        c = conn.cursor()
-        
-        c.execute('''UPDATE activities SET contact_type = ?, information = ? WHERE id = ?''',
-                  (contact_type, information, activity_id))
-        conn.commit()
-        conn.close()
-        
-        print(f'[DEBUG] Atividade {activity_id} atualizada')
-        return jsonify({'message': 'Atividade atualizada'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/atividades/{activity_id}: {e}')
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/atividades/<int:activity_id>', methods=['DELETE'])
-def delete_atividade(activity_id):
-    return delete_activity(activity_id)
-
-@app.route('/api/activities/<int:activity_id>', methods=['DELETE'])
-def delete_activity(activity_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM activities WHERE id = ?', (activity_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Atividade deletada'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/activities/{activity_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-@app.route('/api/agenda', methods=['GET'])
-def get_agenda():
-    try:
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-
-        conn = get_db()
-        c = conn.cursor()
-
-        query = '''SELECT CAST(cm.id AS TEXT) as id, cm.client_id, cm.activity_id, cm.title, cm.notes, cm.due_date, cm.due_time, cm.source_type,
-                          cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
-                   FROM commitments cm
-                   JOIN clients cl ON cm.client_id = cl.id'''
-        params = []
-
-        if start_date and end_date:
-            query += ' WHERE DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
-            params.extend([start_date, end_date])
-
-        query += ''' UNION ALL SELECT "acc-" || CAST(ev.id AS TEXT) as id, NULL as client_id, NULL as activity_id, ev.title, ev.title as notes, ev.due_date, ev.due_time, "account_presence" as source_type,
-                          ac.name as client_name, ac.name as client_company, "Conta" as client_position, NULL as client_email, ac.logo_url as client_photo
-                   FROM account_renewal_events ev
-                   JOIN accounts ac ON ev.account_id = ac.id'''
-        if start_date and end_date:
-            query += ' WHERE DATE(ev.due_date) >= ? AND DATE(ev.due_date) <= ?'
-            params.extend([start_date, end_date])
-
-        query += ' ORDER BY due_date ASC, id ASC'
-        c.execute(query, params)
-        items = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(items)
-    except Exception as e:
-        print(f'[ERROR] GET /api/agenda: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/agenda', methods=['POST'])
-def create_agenda_item():
-    try:
-        data = request.get_json() or {}
-        client_id = data.get('client_id')
-        due_date = (data.get('due_date') or '').strip()
-        due_time = (data.get('due_time') or '').strip() or None
-        title = (data.get('title') or '').strip()
-        notes = (data.get('notes') or '').strip()
-
-        if not client_id or not due_date:
-            return jsonify({'error': 'Cliente e data são obrigatórios'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Cliente não encontrado'}), 404
-
-        c.execute('''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type)
-                     VALUES (?, ?, ?, ?, ?, ?)''',
-                  (client_id, title or 'Agenda manual', notes or title or 'Agenda manual', due_date, due_time, 'manual'))
-        commitment_id = c.lastrowid
-        conn.commit()
-
-        c.execute('''SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
-                     FROM commitments cm JOIN clients cl ON cm.client_id = cl.id WHERE cm.id = ?''', (commitment_id,))
-        item = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify({'message': 'Compromisso criado', 'item': item}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/agenda: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/agenda/<int:commitment_id>/time', methods=['PUT'])
-def update_agenda_time(commitment_id):
-    try:
-        data = request.get_json() or {}
-        due_time = (data.get('due_time') or '').strip()
-        if not due_time:
-            return jsonify({'error': 'Horário obrigatório'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('UPDATE commitments SET due_time = ? WHERE id = ?', (due_time, commitment_id))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Horário atualizado'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/agenda/{commitment_id}/time: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-
-@app.route('/api/agenda/<int:commitment_id>', methods=['DELETE'])
-def delete_agenda_item(commitment_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM commitments WHERE id = ?', (commitment_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Compromisso removido'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/agenda/{commitment_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/agenda/<int:commitment_id>/ics', methods=['GET'])
-def download_agenda_ics(commitment_id):
-    try:
-        attendee = (request.args.get('attendee') or '').strip()
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.email as client_email FROM commitments cm JOIN clients cl ON cm.client_id = cl.id WHERE cm.id = ?', (commitment_id,))
-        item = dict_from_row(c.fetchone())
-        conn.close()
-
-        if not item:
-            return jsonify({'error': 'Compromisso não encontrado'}), 404
-
-        due_date = item.get('due_date')
-        due_time = item.get('due_time') or '09:00'
-        dtstart = datetime.fromisoformat(f"{due_date}T{due_time}:00")
-        dtend = dtstart + timedelta(hours=1)
-
-        uid = f"toca-{commitment_id}@local"
-        stamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
-        start = dtstart.strftime('%Y%m%dT%H%M%S')
-        end = dtend.strftime('%Y%m%dT%H%M%S')
-        summary = (item.get('title') or 'Compromisso').replace('\n', ' ')
-        description = (item.get('notes') or '').replace('\n', '\\n')
-
-        attendee_lines = ''
-        if attendee:
-            attendee_lines = f"ATTENDEE;CN={attendee}:mailto:{attendee}\r\n"
-
-        ics = (
-            "BEGIN:VCALENDAR\r\n"
-            "VERSION:2.0\r\n"
-            "PRODID:-//Toca do Coelho//Agenda//PT-BR\r\n"
-            "BEGIN:VEVENT\r\n"
-            f"UID:{uid}\r\n"
-            f"DTSTAMP:{stamp}\r\n"
-            f"DTSTART:{start}\r\n"
-            f"DTEND:{end}\r\n"
-            f"SUMMARY:{summary}\r\n"
-            f"DESCRIPTION:{description}\r\n"
-            f"LOCATION:{item.get('client_company') or ''}\r\n"
-            f"{attendee_lines}"
-            "END:VEVENT\r\n"
-            "END:VCALENDAR\r\n"
-        )
-
-        from flask import Response
-        response = Response(ics, mimetype='text/calendar')
-        response.headers['Content-Disposition'] = f'attachment; filename=agenda-{commitment_id}.ics'
-        return response
-    except Exception as e:
-        print(f'[ERROR] GET /api/agenda/{commitment_id}/ics: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/agenda/semana-atual-count', methods=['GET'])
-def get_week_commitments_count():
-    try:
-        today = datetime.now().date()
-        start_week = today - timedelta(days=today.weekday())
-        end_week = start_week + timedelta(days=6)
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''SELECT COUNT(*) as total FROM commitments
-                     WHERE DATE(due_date) >= ? AND DATE(due_date) <= ?''',
-                  (start_week.isoformat(), end_week.isoformat()))
-        total = c.fetchone()['total']
-        conn.close()
-
-        return jsonify({
-            'total': total,
-            'start_week': start_week.isoformat(),
-            'end_week': end_week.isoformat()
-        })
-    except Exception as e:
-        print(f'[ERROR] GET /api/agenda/semana-atual-count: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/clients/<int:client_id>/target', methods=['PUT'])
-def update_client_target(client_id):
-    try:
-        data = request.get_json() or {}
-        is_target = 1 if data.get('is_target') else 0
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('UPDATE clients SET is_target = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (is_target, client_id))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Target atualizado'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/clients/{client_id}/target: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/clients/target-bulk', methods=['POST'])
-def update_target_bulk():
-    try:
-        data = request.get_json() or {}
-        company = (data.get('company') or '').strip()
-        position = (data.get('position') or '').strip()
-
-        if not company and not position:
-            return jsonify({'error': 'Informe empresa ou cargo'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        where = []
-        params = []
-        if company:
-            where.append('company = ?')
-            params.append(company)
-        if position:
-            where.append('position = ?')
-            params.append(position)
-
-        c.execute(f"UPDATE clients SET is_target = 1, updated_at = CURRENT_TIMESTAMP WHERE {' AND '.join(where)}", params)
-        affected = c.rowcount
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Target em massa aplicado', 'affected': affected})
-    except Exception as e:
-        print(f'[ERROR] POST /api/clients/target-bulk: {e}')
-        return jsonify({'error': str(e)}), 500
-
 
 
 @app.route('/api/export/group-xlsx', methods=['GET'])
@@ -10289,691 +7825,18 @@ def export_group_xlsx():
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/export/group-xlsx: {e}')
+        logger.exception(f'[ERROR] GET /api/export/group-xlsx: {e}')
         return jsonify({'error': str(e)}), 500
 
 
 # Rotas de exportacao
-@app.route('/api/export/clientes', methods=['GET'])
-def export_clientes():
-    try:
-        import csv
-        from io import StringIO
 
-        allowed_fields = {
-            'id': ('id', 'ID'),
-            'name': ('name', 'Nome'),
-            'company': ('company', 'Empresa'),
-            'position': ('position', 'Cargo'),
-            'area_of_activity': ('area_of_activity', 'Área de Atuação'),
-            'email': ('email', 'Email'),
-            'phone': ('phone', 'Telefone'),
-            'linkedin': ('linkedin', 'LinkedIn'),
-            'photo_url': ('photo_url', 'Foto (URL)'),
-            'is_target': ('is_target', 'Contato-Alvo'),
-            'is_cold_contact': ('is_cold_contact', 'Contato Frio'),
-            'created_at': ('created_at', 'Data de Cadastro'),
-            'updated_at': ('updated_at', 'Última Atualização'),
-        }
-
-        default_fields = ['id', 'name', 'company', 'position', 'email', 'phone', 'linkedin', 'created_at']
-        requested_fields = (request.args.get('fields') or '').strip()
-
-        selected_fields = []
-        if requested_fields:
-            seen = set()
-            for raw_field in requested_fields.split(','):
-                field = raw_field.strip()
-                if not field or field in seen:
-                    continue
-                if field in allowed_fields:
-                    selected_fields.append(field)
-                    seen.add(field)
-
-            if not selected_fields:
-                return jsonify({'error': 'Nenhum campo válido foi informado para exportação.'}), 400
-        else:
-            selected_fields = default_fields
-
-        conn = get_db()
-        c = conn.cursor()
-        db_fields = ', '.join([allowed_fields[field][0] for field in selected_fields])
-        c.execute(f'SELECT {db_fields} FROM clients ORDER BY name')
-        rows = c.fetchall()
-        conn.close()
-        
-        # Criar CSV em memoria
-        output = StringIO()
-        writer = csv.writer(output)
-        writer.writerow([allowed_fields[field][1] for field in selected_fields])
-
-        for row in rows:
-            writer.writerow([row[field] if row[field] is not None else '' for field in selected_fields])
-        
-        # Retornar como arquivo
-        from flask import Response
-        response = Response(output.getvalue(), mimetype='text/csv')
-        response.headers['Content-Disposition'] = 'attachment; filename=clientes.csv'
-        return response
-    except Exception as e:
-        print(f'[ERROR] GET /api/export/clientes: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/export/atividades', methods=['GET'])
-def export_atividades():
-    try:
-        import csv
-        from io import StringIO
-        
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        
-        conn = get_db()
-        c = conn.cursor()
-        
-        if start_date and end_date:
-            c.execute('''SELECT a.id, c.name, c.company, c.position, a.description, a.created_at 
-                        FROM activities a
-                        JOIN clients c ON a.client_id = c.id
-                        WHERE DATE(a.created_at) >= ? AND DATE(a.created_at) <= ?
-                        ORDER BY a.created_at DESC''',
-                     (start_date, end_date))
-        else:
-            c.execute('''SELECT a.id, c.name, c.company, c.position, a.description, a.created_at 
-                        FROM activities a
-                        JOIN clients c ON a.client_id = c.id
-                        ORDER BY a.created_at DESC''')
-        
-        rows = c.fetchall()
-        conn.close()
-        
-        # Criar CSV em memoria
-        output = StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['ID', 'Cliente', 'Empresa', 'Cargo', 'Informacoes', 'Data'])
-        
-        for row in rows:
-            writer.writerow([
-                row['id'],
-                row['name'],
-                row['company'],
-                row['position'],
-                row['description'],
-                row['created_at']
-            ])
-        
-        # Retornar como arquivo
-        from flask import Response
-        response = Response(output.getvalue(), mimetype='text/csv')
-        response.headers['Content-Disposition'] = 'attachment; filename=atividades.csv'
-        return response
-    except Exception as e:
-        print(f'[ERROR] GET /api/export/atividades: {e}')
-        return jsonify({'error': str(e)}), 500
 
 # Template Excel para importacao de clientes/contatos
-@app.route('/api/importar-clientes/template-xlsx', methods=['GET'])
-def download_import_clients_template():
-    try:
-        if not OPENPYXL_AVAILABLE:
-            return jsonify({'error': 'Geração de template XLSX requer openpyxl instalado'}), 500
-
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        from io import BytesIO
-
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = 'Clientes'
-        headers = ['Nome', 'Empresa', 'Cargo', 'Email', 'Telefone', 'Linkedin']
-        ws.append(headers)
-        header_fill = PatternFill(start_color='34D399', end_color='34D399', fill_type='solid')
-        for col_idx, _ in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.font = Font(bold=True, color='FFFFFF')
-            cell.fill = header_fill
-            cell.alignment = Alignment(horizontal='center')
-        for col_letter, width in zip('ABCDEF', [25, 25, 20, 30, 18, 30]):
-            ws.column_dimensions[col_letter].width = width
-
-        ws.append(['João Silva', 'Tech Corp', 'Gerente', 'joao@techcorp.com', '11999999999', ''])
-        ws.append(['Maria Santos', 'Inovação Ltd', 'Diretora', 'maria@inovacao.com', '21988888888', ''])
-
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        from flask import send_file
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name='template_clientes.xlsx',
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    except Exception as e:
-        print(f'[ERROR] GET /api/importar-clientes/template-xlsx: {e}')
-        return jsonify({'error': str(e)}), 500
 
 # Importar clientes via CSV/Excel (suporta CSV e XLSX) COM VALIDACOES
-@app.route('/api/importar-clientes', methods=['POST'])
-def import_clients():
-    try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'Nenhum arquivo enviado'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'Nenhum arquivo selecionado'}), 400
-        
-        import csv
-        import io
-        import tempfile
-        
-        filename = file.filename.lower()
-        rows = []
-        
-        # VALIDACAO 1: Verificar tamanho do arquivo (maximo 5MB)
-        file.seek(0, 2)
-        file_size = file.tell()
-        file.seek(0)
-        
-        MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
-        if file_size > MAX_FILE_SIZE:
-            return jsonify({'error': f'Arquivo muito grande. Maximo: 5MB. Tamanho: {file_size / 1024 / 1024:.2f}MB'}), 400
-        
-        # Detectar tipo de arquivo
-        if filename.endswith('.xls') and not filename.endswith('.xlsx'):
-            return jsonify({'error': 'Formato .xls não suportado. Salve como .xlsx ou .csv.'}), 400
-
-        if filename.endswith('.xlsx'):
-            try:
-                if OPENPYXL_AVAILABLE:
-                    from openpyxl import load_workbook
-
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                        file.save(tmp.name)
-                        tmp_path = tmp.name
-
-                    try:
-                        wb = load_workbook(tmp_path, data_only=True)
-                        ws = wb.active
-
-                        for idx, row in enumerate(ws.iter_rows(values_only=True)):
-                            if idx == 0:
-                                continue
-                            row_data = []
-                            for cell in row:
-                                if cell is None:
-                                    row_data.append('')
-                                else:
-                                    val = str(cell).strip()
-                                    if any(ord(c) > 127 and ord(c) < 160 for c in val):
-                                        val = val.encode('utf-8', errors='ignore').decode('utf-8')
-                                    row_data.append(val)
-                            rows.append(row_data)
-
-                        wb.close()
-                    finally:
-                        os.unlink(tmp_path)
-                else:
-                    parsed_rows = parse_xlsx_without_openpyxl(file)
-                    for idx, row in enumerate(parsed_rows):
-                        if idx == 0:
-                            continue
-                        rows.append(row)
-            except Exception as e:
-                print(f'[ERROR] Excel parsing: {e}')
-                return jsonify({'error': f'Erro ao ler Excel: {str(e)}'}), 400
-        else:
-            try:
-                # Ler arquivo e detectar encoding
-                file_content = file.stream.read()
-
-                # Detectar encoding com chardet quando disponivel,
-                # mas manter fallback para nao quebrar importacao.
-                if CHARDET_AVAILABLE:
-                    detected = chardet.detect(file_content)
-                    encoding = detected.get('encoding', 'utf-8') or 'utf-8'
-                    try:
-                        text = file_content.decode(encoding)
-                    except:
-                        text = file_content.decode('utf-8', errors='ignore')
-                else:
-                    # fallback sem dependencia externa
-                    try:
-                        text = file_content.decode('utf-8')
-                    except UnicodeDecodeError:
-                        text = file_content.decode('latin-1', errors='ignore')
-                
-                stream = io.StringIO(text, newline=None)
-                csv_data = csv.reader(stream)
-                
-                for idx, row in enumerate(csv_data):
-                    if idx == 0:
-                        continue
-                    rows.append(row)
-            except Exception as e:
-                print(f'[ERROR] CSV parsing: {e}')
-                return jsonify({'error': f'Erro ao ler CSV: {str(e)}'}), 400
-        
-        # VALIDACAO 2: Verificar quantidade de linhas (maximo 1000)
-        MAX_ROWS = 1000
-        if len(rows) > MAX_ROWS:
-            return jsonify({'error': f'Arquivo contem muitas linhas. Maximo: {MAX_ROWS}. Enviado: {len(rows)}'}), 400
-        
-        if len(rows) == 0:
-            return jsonify({'error': 'Arquivo vazio ou sem dados validos'}), 400
-        
-        # VALIDACAO 3: Validar estrutura dos dados
-        invalid_rows = []
-        valid_rows = []
-        
-        for idx, row in enumerate(rows):
-            if len(row) < 3:
-                invalid_rows.append(f'Linha {idx + 2}: Dados incompletos (minimo 3 campos)')
-                continue
-            
-            name = row[0].strip() if len(row) > 0 else ''
-            company = row[1].strip() if len(row) > 1 else ''
-            position = row[2].strip() if len(row) > 2 else ''
-            email = row[3].strip() if len(row) > 3 else None
-            phone = row[4].strip() if len(row) > 4 else None
-            linkedin = row[5].strip() if len(row) > 5 else None
-            
-            # VALIDACAO 4: Campos obrigatorios nao podem estar vazios
-            if not name or not company or not position:
-                invalid_rows.append(f'Linha {idx + 2}: Nome, Empresa ou Cargo vazios')
-                continue
-            
-            # VALIDACAO 5: Validar tamanho dos campos
-            if len(name) > 100 or len(company) > 100 or len(position) > 100:
-                invalid_rows.append(f'Linha {idx + 2}: Campos muito longos (maximo 100 caracteres)')
-                continue
-            
-            # VALIDACAO 6: Validar email se fornecido
-            if email and '@' not in email:
-                invalid_rows.append(f'Linha {idx + 2}: Email invalido')
-                continue
-            
-            valid_rows.append({
-                'name': name,
-                'company': company,
-                'position': position,
-                'email': email,
-                'phone': phone,
-                'linkedin': linkedin
-            })
-        
-        # Se houver erros de validacao, retornar sem importar nada
-        if invalid_rows:
-            error_msg = 'Erros encontrados no arquivo:\n' + '\n'.join(invalid_rows[:10])
-            if len(invalid_rows) > 10:
-                error_msg += f'\n... e mais {len(invalid_rows) - 10} erros'
-            return jsonify({'error': error_msg}), 400
-        
-        # IMPORTACAO: Usar transacao para garantir consistencia
-        conn = sqlite3.connect(str(DB_PATH))
-        c = conn.cursor()
-        
-        try:
-            imported_count = 0
-            duplicates_count = 0
-            
-            for row_data in valid_rows:
-                # Verificar se cliente ja existe
-                c.execute('SELECT id FROM clients WHERE name = ? AND company = ?', 
-                         (row_data['name'], row_data['company']))
-                if c.fetchone():
-                    duplicates_count += 1
-                    continue
-                
-                # Inserir novo cliente
-                c.execute('''INSERT INTO clients (name, company, position, email, phone, linkedin, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                         (row_data['name'], row_data['company'], row_data['position'], 
-                          row_data['email'], row_data['phone'], row_data.get('linkedin')))
-                ensure_account_for_company(c, row_data['company'])
-                imported_count += 1
-            
-            conn.commit()
-            
-            msg = f'Importados {imported_count} clientes'
-            if duplicates_count > 0:
-                msg += f'. {duplicates_count} duplicatas ignoradas'
-            
-            return jsonify({'imported': imported_count, 'duplicates': duplicates_count, 'message': msg}), 200
-        
-        except Exception as e:
-            conn.rollback()
-            print(f'[ERROR] Import transaction failed: {e}')
-            return jsonify({'error': f'Erro ao importar dados: {str(e)}'}), 500
-        finally:
-            conn.close()
-    
-    except Exception as e:
-        print(f'[ERROR] POST /api/importar-clientes: {e}')
-        return jsonify({'error': str(e)}), 500
 
 # Rotas de Kanban
-@app.route('/api/kanban/columns', methods=['GET'])
-def list_kanban_columns():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("""SELECT kc.*, COUNT(kb.id) AS cards_count
-                     FROM kanban_columns kc
-                     LEFT JOIN kanban_cards kb ON kb.column_id = kc.id
-                     GROUP BY kc.id
-                     ORDER BY kc.display_order, kc.id""")
-        rows = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(rows)
-    except Exception as e:
-        print(f'[ERROR] GET /api/kanban/columns: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/columns', methods=['POST'])
-def create_kanban_column():
-    try:
-        title = (request.json.get('title') or '').strip()
-        if not title:
-            return jsonify({'error': 'Título é obrigatório'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_columns')
-        next_order = (c.fetchone()[0] or 0) + 1
-        c.execute('INSERT INTO kanban_columns (title, display_order) VALUES (?, ?)', (title, next_order))
-        conn.commit()
-        new_id = c.lastrowid
-        conn.close()
-        return jsonify({'id': new_id, 'message': 'Sessão criada com sucesso'}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/kanban/columns: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/columns/<int:column_id>', methods=['PUT'])
-def update_kanban_column(column_id):
-    try:
-        title = (request.json.get('title') or '').strip()
-        if not title:
-            return jsonify({'error': 'Título é obrigatório'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM kanban_columns WHERE id = ?', (column_id,))
-        current = c.fetchone()
-        if not current:
-            conn.close()
-            return jsonify({'error': 'Sessão não encontrada'}), 404
-        current = dict_from_row(current)
-        if int(current.get('is_locked') or 0) == 1:
-            conn.close()
-            return jsonify({'error': 'Sessão bloqueada não pode ser editada'}), 403
-
-        c.execute('UPDATE kanban_columns SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (title, column_id))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Sessão atualizada com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/kanban/columns/{column_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/columns/<int:column_id>', methods=['DELETE'])
-def delete_kanban_column(column_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM kanban_columns WHERE id = ?', (column_id,))
-        current = c.fetchone()
-        if not current:
-            conn.close()
-            return jsonify({'error': 'Sessão não encontrada'}), 404
-        current = dict_from_row(current)
-        if int(current.get('is_locked') or 0) == 1:
-            conn.close()
-            return jsonify({'error': 'Sessão bloqueada não pode ser apagada'}), 403
-
-        c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
-        first_column = c.fetchone()
-        first_column_id = first_column[0] if first_column else None
-
-        if first_column_id and first_column_id != column_id:
-            c.execute('UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE column_id = ?', (first_column_id, column_id))
-
-        c.execute('DELETE FROM kanban_columns WHERE id = ?', (column_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Sessão removida com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/kanban/columns/{column_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/cards', methods=['GET'])
-def list_kanban_cards():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("""SELECT kb.*,
-                            acc.name AS account_name,
-                            acc.logo_url AS account_logo_url,
-                            cl.name AS contact_name,
-                            cl.photo_url AS contact_photo_url,
-                            (SELECT MAX(kca.created_at) FROM kanban_card_activities kca WHERE kca.card_id = kb.id) AS last_activity_at
-                     FROM kanban_cards kb
-                     LEFT JOIN accounts acc ON acc.id = kb.account_id
-                     LEFT JOIN clients cl ON cl.id = kb.contact_id
-                     ORDER BY kb.column_id, kb.display_order, kb.id""")
-        rows = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(rows)
-    except Exception as e:
-        print(f'[ERROR] GET /api/kanban/cards: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/cards', methods=['POST'])
-def create_kanban_card():
-    try:
-        data = request.json or {}
-        title = (data.get('title') or '').strip()
-        description = (data.get('description') or '').strip()
-        tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
-        account_id = data.get('account_id')
-        contact_id = data.get('contact_id')
-        urgency = (data.get('urgency') or 'Média').strip() or 'Média'
-        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
-            urgency = 'Média'
-        if not title or not description:
-            return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
-        first = c.fetchone()
-        if not first:
-            conn.close()
-            return jsonify({'error': 'Nenhuma sessão disponível no Kanban'}), 400
-        first_column_id = first[0]
-
-        c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (first_column_id,))
-        next_order = (c.fetchone()[0] or 0) + 1
-
-        c.execute('''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, urgency, column_id, display_order)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (title, description, tag, account_id, contact_id, urgency, first_column_id, next_order))
-        conn.commit()
-        new_id = c.lastrowid
-        conn.close()
-        return jsonify({'id': new_id, 'message': 'Card criado com sucesso'}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/kanban/cards: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/cards/<int:card_id>', methods=['PUT'])
-def update_kanban_card(card_id):
-    try:
-        data = request.json or {}
-        title = (data.get('title') or '').strip()
-        description = (data.get('description') or '').strip()
-        tag = (data.get('tag') or '').strip() or infer_kanban_tag(description)
-        account_id = data.get('account_id')
-        contact_id = data.get('contact_id')
-        urgency = (data.get('urgency') or 'Média').strip() or 'Média'
-        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
-            urgency = 'Média'
-        if not title or not description:
-            return jsonify({'error': 'Título e descrição são obrigatórios'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''UPDATE kanban_cards
-                     SET title = ?, description = ?, tag = ?, account_id = ?, contact_id = ?, urgency = ?, updated_at = CURRENT_TIMESTAMP
-                     WHERE id = ?''',
-                  (title, description, tag, account_id, contact_id, urgency, card_id))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Card atualizado com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/kanban/cards/{card_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/cards/<int:card_id>', methods=['GET'])
-def get_kanban_card(card_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''SELECT kb.*, kc.title as column_title,
-                            acc.name AS account_name, acc.logo_url AS account_logo_url,
-                            cl.name AS contact_name, cl.photo_url AS contact_photo_url, cl.position AS contact_position,
-                            (SELECT MAX(kca.created_at) FROM kanban_card_activities kca WHERE kca.card_id = kb.id) AS last_activity_at
-                     FROM kanban_cards kb
-                     JOIN kanban_columns kc ON kc.id = kb.column_id
-                     LEFT JOIN accounts acc ON acc.id = kb.account_id
-                     LEFT JOIN clients cl ON cl.id = kb.contact_id
-                     WHERE kb.id = ?''', (card_id,))
-        row = c.fetchone()
-        if not row:
-            conn.close()
-            return jsonify({'error': 'Card não encontrado'}), 404
-        card = dict_from_row(row)
-        c.execute('SELECT id, content, created_at FROM kanban_card_activities WHERE card_id = ? ORDER BY created_at DESC, id DESC', (card_id,))
-        card['activities'] = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-        return jsonify(card)
-    except Exception as e:
-        print(f'[ERROR] GET /api/kanban/cards/{card_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/cards/<int:card_id>/activities', methods=['POST'])
-def add_kanban_card_activity(card_id):
-    try:
-        content = (request.json.get('content') or '').strip()
-        if not content:
-            return jsonify({'error': 'Atividade é obrigatória'}), 400
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Card não encontrado'}), 404
-        c.execute('INSERT INTO kanban_card_activities (card_id, content) VALUES (?, ?)', (card_id, content))
-        conn.commit()
-        new_id = c.lastrowid
-        c.execute('SELECT id, content, created_at FROM kanban_card_activities WHERE id = ?', (new_id,))
-        created = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify({'message': 'Atividade adicionada', 'activity': created}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/kanban/cards/{card_id}/activities: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/kanban/cards/<int:card_id>', methods=['DELETE'])
-def delete_kanban_card(card_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM kanban_cards WHERE id = ?', (card_id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Card removido com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/kanban/cards/{card_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-
-@app.route('/api/kanban/cards/<int:card_id>/urgency', methods=['PATCH'])
-def update_kanban_card_urgency(card_id):
-    try:
-        urgency = (request.json.get('urgency') or '').strip() or 'Média'
-        if urgency not in ['Baixa', 'Média', 'Alta', 'Crítica']:
-            return jsonify({'error': 'Urgência inválida'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Card não encontrado'}), 404
-
-        c.execute('UPDATE kanban_cards SET urgency = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (urgency, card_id))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Urgência atualizada com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] PATCH /api/kanban/cards/{card_id}/urgency: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/kanban/cards/<int:card_id>/move', methods=['PATCH'])
-def move_kanban_card(card_id):
-    try:
-        data = request.json or {}
-        column_id = data.get('column_id')
-        position = int(data.get('position') or 0)
-        if not column_id:
-            return jsonify({'error': 'Sessão de destino é obrigatória'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Card não encontrado'}), 404
-
-        c.execute('SELECT id FROM kanban_columns WHERE id = ?', (column_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Sessão de destino não encontrada'}), 404
-
-        c.execute('''SELECT id FROM kanban_cards
-                     WHERE column_id = ? AND id != ?
-                     ORDER BY display_order, id''', (column_id, card_id))
-        ids = [row[0] for row in c.fetchall()]
-        if position < 0:
-            position = 0
-        if position > len(ids):
-            position = len(ids)
-        ids.insert(position, card_id)
-
-        for order, cid in enumerate(ids, start=1):
-            c.execute('UPDATE kanban_cards SET column_id = ?, display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                      (column_id, order, cid))
-
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Card movido com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] PATCH /api/kanban/cards/{card_id}/move: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 # Rotas de mapeamento de ambiente
@@ -10987,7 +7850,7 @@ def get_environment_cards():
         conn.close()
         return jsonify(cards)
     except Exception as e:
-        print(f'[ERROR] GET /api/environment/cards: {e}')
+        logger.exception(f'[ERROR] GET /api/environment/cards: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards', methods=['POST'])
@@ -11014,7 +7877,7 @@ def create_environment_card():
         
         return jsonify({'message': 'Card criado com sucesso', 'id': card_id}), 201
     except Exception as e:
-        print(f'[ERROR] POST /api/environment/cards: {e}')
+        logger.exception(f'[ERROR] POST /api/environment/cards: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards/<int:card_id>', methods=['PUT'])
@@ -11035,7 +7898,7 @@ def update_environment_card(card_id):
         
         return jsonify({'message': 'Card atualizado com sucesso'})
     except Exception as e:
-        print(f'[ERROR] PUT /api/environment/cards/{card_id}: {e}')
+        logger.exception(f'[ERROR] PUT /api/environment/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards/<int:card_id>', methods=['DELETE'])
@@ -11055,7 +7918,7 @@ def delete_environment_card(card_id):
         
         return jsonify({'message': 'Card deletado com sucesso'})
     except Exception as e:
-        print(f'[ERROR] DELETE /api/environment/cards/{card_id}: {e}')
+        logger.exception(f'[ERROR] DELETE /api/environment/cards/{card_id}: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/responses', methods=['GET'])
@@ -11085,7 +7948,7 @@ def get_environment_responses():
         conn.close()
         return jsonify(responses)
     except Exception as e:
-        print(f'[ERROR] GET /api/environment/responses: {e}')
+        logger.exception(f'[ERROR] GET /api/environment/responses: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/responses', methods=['POST'])
@@ -11118,7 +7981,7 @@ def save_environment_response():
         
         return jsonify({'message': 'Resposta salva com sucesso'})
     except Exception as e:
-        print(f'[ERROR] POST /api/environment/responses: {e}')
+        logger.exception(f'[ERROR] POST /api/environment/responses: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/card/<int:card_id>/all-responses', methods=['GET'])
@@ -11158,7 +8021,7 @@ def get_card_all_responses(card_id):
             'responses': clients_responses
         })
     except Exception as e:
-        print(f'[ERROR] GET /api/environment/card/{card_id}/all-responses: {e}')
+        logger.exception(f'[ERROR] GET /api/environment/card/{card_id}/all-responses: {e}')
         return jsonify({'error': str(e)}), 500
 
 def _environment_extract_suggestions(company, industry, cards, card_results):
@@ -11368,7 +8231,7 @@ def environment_auto_fill():
         ).start()
         return jsonify({'task_id': task_id}), 202
     except Exception as e:
-        print(f'[ERROR] POST /api/environment/auto-fill: {e}')
+        logger.exception(f'[ERROR] POST /api/environment/auto-fill: {e}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -11578,7 +8441,7 @@ def backup_database():
             mimetype='application/x-sqlite3'
         )
     except Exception as e:
-        print(f'[ERROR] GET /api/backup/database: {e}')
+        logger.exception(f'[ERROR] GET /api/backup/database: {e}')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/restore/database', methods=['POST'])
@@ -11609,7 +8472,7 @@ def restore_database():
         
         import shutil
         shutil.copy2(str(DB_PATH), str(backup_path))
-        print(f'[Database] Backup de segurança criado em {backup_path}')
+        logger.info(f'[Database] Backup de segurança criado em {backup_path}')
 
         # Backup de segurança dos uploads atuais (garante rollback dos arquivos visuais)
         with zipfile.ZipFile(str(backup_uploads_path), mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
@@ -11618,7 +8481,7 @@ def restore_database():
                     if file_path.is_file():
                         rel = file_path.relative_to(UPLOAD_DIR)
                         zf.write(str(file_path), arcname=str(Path('uploads') / rel))
-        print(f'[Database] Backup de segurança dos uploads criado em {backup_uploads_path}')
+        logger.info(f'[Database] Backup de segurança dos uploads criado em {backup_uploads_path}')
         
         # Salvar arquivo temporário
         temp_path = DATA_DIR / 'temp_restore.db'
@@ -11670,7 +8533,7 @@ def restore_database():
 
         # Substituir banco atual
         shutil.move(str(temp_path), str(DB_PATH))
-        print(f'[Database] Banco de dados restaurado com sucesso')
+        logger.info(f'[Database] Banco de dados restaurado com sucesso')
 
         restored_uploads = 0
         if is_zip_backup and temp_zip_path.exists():
@@ -11712,350 +8575,10 @@ def restore_database():
         }), 200
         
     except Exception as e:
-        print(f'[ERROR] POST /api/restore/database: {e}')
+        logger.exception(f'[ERROR] POST /api/restore/database: {e}')
         return jsonify({'error': str(e)}), 500
 
 # Rotas de sugestões diárias
-@app.route('/api/suggestions/today', methods=['GET'])
-def get_today_suggestions():
-    try:
-        today = datetime.now().strftime('%Y-%m-%d')
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Verificar se já existem sugestões para hoje
-        c.execute('SELECT * FROM daily_suggestions WHERE date = ? ORDER BY completed ASC, id ASC', (today,))
-        existing = [dict_from_row(row) for row in c.fetchall()]
-        
-        if existing:
-            conn.close()
-            return jsonify(existing)
-        
-        # Gerar novas sugestões
-        suggestions = []
-        
-        # 1. Clientes com status vermelho (atrasados)
-        c.execute('''
-            SELECT c.id, c.name, c.company, c.last_activity_date
-            FROM clients c
-            WHERE c.last_activity_date IS NOT NULL
-            ORDER BY c.last_activity_date ASC
-        ''')
-        overdue_clients = c.fetchall()
-        
-        for client in overdue_clients:
-            client_id, name, company, last_date = client
-            if last_date:
-                days_diff = (datetime.now() - datetime.fromisoformat(last_date)).days
-                if days_diff > 14:  # Status vermelho
-                    suggestions.append({
-                        'type': 'contact_overdue',
-                        'title': f'Contatar {name} ({company})',
-                        'description': f'Cliente sem contato há {days_diff} dias',
-                        'target_id': client_id,
-                        'target_data': json.dumps({'client_id': client_id, 'days': days_diff})
-                    })
-        
-        # 2. Cargos faltantes em clientes
-        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND position != ""')
-        all_positions = [row[0] for row in c.fetchall()]
-        
-        c.execute('SELECT id, name, company FROM clients')
-        all_clients = c.fetchall()
-        
-        for client_id, client_name, client_company in all_clients:
-            c.execute('SELECT position FROM clients WHERE company = ?', (client_company,))
-            existing_positions = [row[0] for row in c.fetchall()]
-            
-            missing_positions = [pos for pos in all_positions if pos not in existing_positions]
-            
-            if missing_positions:
-                # Sugerir o primeiro cargo faltante
-                position = missing_positions[0]
-                suggestions.append({
-                    'type': 'missing_position',
-                    'title': f'Cadastrar {position} na {client_company}',
-                    'description': f'Cargo {position} não cadastrado para esta empresa',
-                    'target_id': client_id,
-                    'target_data': json.dumps({'company': client_company, 'position': position})
-                })
-        
-        # 3. Mapear itens de cards vazios
-        c.execute('SELECT id, title FROM environment_cards')
-        cards = c.fetchall()
-        
-        c.execute('SELECT id, name, company FROM clients')
-        clients = c.fetchall()
-        
-        for card_id, card_title in cards:
-            for client_id, client_name, client_company in clients:
-                c.execute('SELECT response FROM environment_responses WHERE card_id = ? AND client_id = ?', 
-                          (card_id, client_id))
-                response = c.fetchone()
-                
-                if not response or not response[0]:
-                    suggestions.append({
-                        'type': 'map_environment',
-                        'title': f'Mapear {card_title} da {client_company}',
-                        'description': f'Informação ainda não mapeada',
-                        'target_id': card_id,
-                        'target_data': json.dumps({'card_id': card_id, 'client_id': client_id, 'company': client_company})
-                    })
-        
-        # 4. Cadastros incompletos (sem foto ou campos vazios)
-        c.execute('''
-            SELECT id, name, company, email, phone, photo_url
-            FROM clients
-        ''')
-        clients = c.fetchall()
-        
-        for client_id, name, company, email, phone, photo in clients:
-            missing_fields = []
-            if not email: missing_fields.append('e-mail')
-            if not phone: missing_fields.append('telefone')
-            if not photo: missing_fields.append('foto')
-            
-            if missing_fields:
-                suggestions.append({
-                    'type': 'incomplete_profile',
-                    'title': f'Completar cadastro de {name} ({company})',
-                    'description': 'Faltam: ' + ', '.join(missing_fields),
-                    'target_id': client_id,
-                    'target_data': json.dumps({'client_id': client_id, 'missing': missing_fields})
-                })
-        
-        # Remover sugestões duplicadas (mesmo tipo + mesmo alvo)
-        unique_suggestions = []
-        seen_keys = set()
-        for sug in suggestions:
-            dedupe_key = (sug['type'], sug['target_data'])
-            if dedupe_key in seen_keys:
-                continue
-            seen_keys.add(dedupe_key)
-            unique_suggestions.append(sug)
-
-        # Selecionar até 5 sugestões com diversidade
-        import random
-        
-        # Agrupar por tipo
-        by_type = {
-            'contact_overdue': [],
-            'missing_position': [],
-            'map_environment': [],
-            'incomplete_profile': []
-        }
-        
-        for sug in unique_suggestions:
-            by_type[sug['type']].append(sug)
-        
-        # Embaralhar cada grupo
-        for key in by_type:
-            random.shuffle(by_type[key])
-        
-        # Selecionar com diversidade: máximo 2 de cada tipo
-        selected = []
-        priority_order = ['contact_overdue', 'missing_position', 'map_environment', 'incomplete_profile']
-        
-        # Embaralhar a ordem de prioridade para variar
-        random.shuffle(priority_order)
-        
-        # Primeira rodada: pegar 1 de cada tipo (se disponível)
-        for sug_type in priority_order:
-            if by_type[sug_type] and len(selected) < 5:
-                selected.append(by_type[sug_type].pop(0))
-        
-        # Segunda rodada: pegar mais 1 de cada tipo (máximo 2 por tipo)
-        # Embaralhar novamente para variar a ordem
-        random.shuffle(priority_order)
-        for sug_type in priority_order:
-            if by_type[sug_type] and len(selected) < 5:
-                selected.append(by_type[sug_type].pop(0))
-        
-        # Embaralhar a lista final para evitar padrões
-        random.shuffle(selected)
-        
-        # Inserir no banco
-        for sug in selected:
-            c.execute('''
-                INSERT INTO daily_suggestions (date, suggestion_type, title, description, target_id, target_data)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (today, sug['type'], sug['title'], sug['description'], sug['target_id'], sug['target_data']))
-        
-        conn.commit()
-        
-        # Buscar as sugestões inseridas
-        c.execute('SELECT * FROM daily_suggestions WHERE date = ? ORDER BY id ASC', (today,))
-        result = [dict_from_row(row) for row in c.fetchall()]
-        
-        conn.close()
-        return jsonify(result)
-        
-    except Exception as e:
-        print(f'[ERROR] GET /api/suggestions/today: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/suggestions/<int:suggestion_id>/complete', methods=['POST'])
-def complete_suggestion(suggestion_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-
-        c.execute('SELECT * FROM daily_suggestions WHERE id = ?', (suggestion_id,))
-        suggestion = c.fetchone()
-        if not suggestion:
-            conn.close()
-            return jsonify({'error': 'Sugestão não encontrada'}), 404
-
-        suggestion_dict = dict_from_row(suggestion)
-        target_data = json.loads(suggestion_dict['target_data']) if suggestion_dict.get('target_data') else {}
-
-        is_completed = False
-
-        if suggestion_dict['suggestion_type'] == 'contact_overdue':
-            client_id = target_data.get('client_id')
-            if client_id:
-                c.execute('SELECT id FROM activities WHERE client_id = ? AND date(created_at) = date("now", "localtime")', (client_id,))
-                is_completed = c.fetchone() is not None
-
-        elif suggestion_dict['suggestion_type'] == 'missing_position':
-            company = target_data.get('company')
-            position = target_data.get('position')
-            if company and position:
-                c.execute('''
-                    SELECT id FROM clients
-                    WHERE company = ? AND position = ?
-                ''', (company, position))
-                is_completed = c.fetchone() is not None
-
-        elif suggestion_dict['suggestion_type'] == 'map_environment':
-            card_id = target_data.get('card_id')
-            client_id = target_data.get('client_id')
-            if card_id and client_id:
-                c.execute('''
-                    SELECT response FROM environment_responses
-                    WHERE card_id = ? AND client_id = ?
-                ''', (card_id, client_id))
-                response = c.fetchone()
-                is_completed = bool(response and response[0] and response[0].strip())
-
-        elif suggestion_dict['suggestion_type'] == 'incomplete_profile':
-            client_id = target_data.get('client_id')
-            if client_id:
-                c.execute('SELECT email, phone, photo_url FROM clients WHERE id = ?', (client_id,))
-                client = c.fetchone()
-                if client:
-                    email, phone, photo_url = client
-                    is_completed = bool(email and phone and photo_url)
-
-        if not is_completed:
-            conn.close()
-            return jsonify({'error': 'A sugestão ainda não foi concluída'}), 400
-
-        c.execute('''
-            UPDATE daily_suggestions 
-            SET completed = 1, completed_at = CURRENT_TIMESTAMP 
-            WHERE id = ?
-        ''', (suggestion_id,))
-        
-        conn.commit()
-        conn.close()
-        
-        return jsonify({'message': 'Sugestão marcada como concluída'})
-        
-    except Exception as e:
-        print(f'[ERROR] POST /api/suggestions/{suggestion_id}/complete: {e}')
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/templates', methods=['GET'])
-def list_message_templates():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM message_templates ORDER BY title COLLATE NOCASE')
-        items = [dict_from_row(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(items)
-    except Exception as e:
-        print(f'[ERROR] GET /api/config/templates: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/templates', methods=['POST'])
-def create_message_template():
-    try:
-        data = request.get_json() or {}
-        title = (data.get('title') or '').strip()
-        description = (data.get('description') or '').strip()
-        available_whatsapp = 1 if data.get('available_whatsapp', True) else 0
-        available_email = 1 if data.get('available_email', True) else 0
-        if not title or not description:
-            return jsonify({'error': 'Título e descritivo são obrigatórios'}), 400
-        conn = get_db(); c = conn.cursor()
-        c.execute('''INSERT INTO message_templates (title, description, available_whatsapp, available_email, updated_at)
-                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''', (title, description, available_whatsapp, available_email))
-        template_id = c.lastrowid
-        conn.commit()
-        c.execute('SELECT * FROM message_templates WHERE id = ?', (template_id,))
-        item = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify(item), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/config/templates: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/templates/<int:template_id>', methods=['PUT'])
-def update_message_template(template_id):
-    try:
-        data = request.get_json() or {}
-        title = (data.get('title') or '').strip()
-        description = (data.get('description') or '').strip()
-        available_whatsapp = 1 if data.get('available_whatsapp', True) else 0
-        available_email = 1 if data.get('available_email', True) else 0
-        if not title or not description:
-            return jsonify({'error': 'Título e descritivo são obrigatórios'}), 400
-        conn = get_db(); c = conn.cursor()
-        c.execute('''UPDATE message_templates
-                     SET title = ?, description = ?, available_whatsapp = ?, available_email = ?, updated_at = CURRENT_TIMESTAMP
-                     WHERE id = ?''', (title, description, available_whatsapp, available_email, template_id))
-        conn.commit()
-        c.execute('SELECT * FROM message_templates WHERE id = ?', (template_id,))
-        item = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify(item or {'message': 'Atualizado'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/config/templates/{template_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/config/templates/<int:template_id>', methods=['DELETE'])
-def delete_message_template(template_id):
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('DELETE FROM message_templates WHERE id = ?', (template_id,))
-        conn.commit(); conn.close()
-        return jsonify({'message': 'Modelo removido'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/config/templates/{template_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/support-data', methods=['GET'])
-def get_accounts_support_data():
-    try:
-        sync_accounts_from_clients()
-        conn = get_db(); c = conn.cursor()
-        c.execute('''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
-                     WHERE name IS NOT NULL AND TRIM(name) != ''
-                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''')
-        companies = [row['name'] for row in c.fetchall()]
-        c.execute('SELECT name FROM account_sectors ORDER BY name COLLATE NOCASE')
-        sectors = [row['name'] for row in c.fetchall()]
-        conn.close()
-        return jsonify({'companies': companies, 'sectors': sectors})
-    except Exception as e:
-        print(f'[ERROR] GET /api/accounts/support-data: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 def _create_or_update_presence_event(c, account_name, account_id, presence):
@@ -12073,46 +8596,6 @@ def _create_or_update_presence_event(c, account_name, account_id, presence):
               (account_id, presence['id'], title, due_date))
 
 
-@app.route('/api/accounts', methods=['GET'])
-def list_accounts():
-    try:
-        sync_accounts_from_clients()
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT * FROM accounts ORDER BY name COLLATE NOCASE')
-        accounts = [dict_from_row(r) for r in c.fetchall()]
-        for acc in accounts:
-            c.execute('''SELECT p.* FROM account_presences p WHERE p.account_id = ? ORDER BY p.delivery_name COLLATE NOCASE''', (acc['id'],))
-            acc['presences'] = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-        return jsonify(accounts)
-    except Exception as e:
-        print(f'[ERROR] GET /api/accounts: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>', methods=['GET'])
-def get_account(account_id):
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
-        account = dict_from_row(c.fetchone())
-        if not account:
-            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''SELECT c.id, c.name, c.position, c.photo_url, c.email
-                     FROM clients c
-                     WHERE LOWER(TRIM(c.company)) = LOWER(TRIM(?))
-                     ORDER BY c.name''', (account['name'],))
-        account['contacts'] = [dict_from_row(r) for r in c.fetchall()]
-        c.execute('''SELECT client_id FROM account_main_contacts WHERE account_id = ? ORDER BY id''', (account_id,))
-        account['main_contact_ids'] = [row['client_id'] for row in c.fetchall()]
-        c.execute('SELECT * FROM account_presences WHERE account_id = ? ORDER BY delivery_name COLLATE NOCASE', (account_id,))
-        account['presences'] = [dict_from_row(r) for r in c.fetchall()]
-        conn.close(); return jsonify(account)
-    except Exception as e:
-        print(f'[ERROR] GET /api/accounts/{account_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
 def _account_autofill_parse_llm_raw(raw):
     """Extrai dict de dados corporativos de uma resposta bruta de LLM (SAI ou OpenRouter)."""
     def _try_parse_json(value):
@@ -12126,16 +8609,16 @@ def _account_autofill_parse_llm_raw(raw):
             parsed = json.loads(value.strip())
             if isinstance(parsed, dict):
                 return parsed
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_json] exceção ignorada: {e}')
         m = re.search(r'\{[^{}]*\}', value, re.DOTALL)
         if m:
             try:
                 parsed = json.loads(m.group(0))
                 if isinstance(parsed, dict):
                     return parsed
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_try_parse_json] exceção ignorada: {e}')
         return None
 
     parsed = _try_parse_json(raw) or {}
@@ -12293,8 +8776,8 @@ def _portfolio_parse_llm_raw(raw):
                 return parsed
             if isinstance(parsed, list):
                 return {'items': parsed}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_try_parse_json] exceção ignorada: {e}')
         parsed = _extract_json_object_from_text(stripped)
         if isinstance(parsed, dict):
             return parsed
@@ -12413,6 +8896,30 @@ def _portfolio_generate_offer_from_llm(raw_input, image_data=None, image_mime=No
 # ---------------------------------------------------------------------------
 _bg_tasks: dict = {}
 _bg_tasks_lock = threading.Lock()
+# Tasks registradas aqui têm estado mínimo espelhado na tabela background_tasks
+# (sobrevive a restart — ao subir, 'processing' antigas viram 'interrupted').
+_bg_persistent_kinds: dict = {}
+
+
+def _bg_task_register_persistent(task_id, kind):
+    _bg_persistent_kinds[task_id] = kind
+
+
+def _bg_task_persist(task_id, kind, task):
+    try:
+        conn = get_db()
+        conn.execute(
+            'INSERT INTO background_tasks (task_id, kind, status, step, progress, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) '
+            'ON CONFLICT(task_id) DO UPDATE SET status = excluded.status, step = excluded.step, '
+            'progress = excluded.progress, updated_at = CURRENT_TIMESTAMP',
+            (task_id, kind, task.get('status') or 'processing',
+             task.get('step'), int(task.get('progress') or 0))
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.debug(f'[Tasks] Falha ao persistir estado da task {task_id}: {e}')
 
 
 def _bg_task_set(task_id, updates):
@@ -12420,6 +8927,10 @@ def _bg_task_set(task_id, updates):
         task = _bg_tasks.get(task_id, {})
         task.update(updates)
         _bg_tasks[task_id] = task
+        snapshot = dict(task)
+    kind = _bg_persistent_kinds.get(task_id)
+    if kind:
+        _bg_task_persist(task_id, kind, snapshot)
 
 
 def _bg_task_get(task_id):
@@ -12539,300 +9050,6 @@ def _portfolio_fetch_offer(c, offer_id):
     return offer
 
 
-@app.route('/api/portfolio/offers', methods=['GET'])
-def list_portfolio_offers():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM portfolio_offers ORDER BY datetime(created_at) DESC, id DESC')
-        offers = [dict_from_row(row) for row in c.fetchall()]
-        for offer in offers:
-            c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer['id'],))
-            offer['items'] = [dict_from_row(item) for item in c.fetchall()]
-        conn.close()
-        return jsonify(offers)
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao listar ofertas: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/<int:offer_id>', methods=['GET'])
-def get_portfolio_offer(offer_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        offer = _portfolio_fetch_offer(c, offer_id)
-        conn.close()
-        if not offer:
-            return jsonify({'error': 'Oferta não encontrada.'}), 404
-        return jsonify(offer)
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao buscar oferta {offer_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers', methods=['POST'])
-def create_portfolio_offer():
-    try:
-        input_text = (request.form.get('raw_input') or '').strip()
-        file_obj = request.files.get('upload_file')
-
-        file_bytes, file_mime, filename = None, None, None
-        if file_obj and file_obj.filename:
-            file_bytes = file_obj.read()
-            file_mime = file_obj.mimetype or ''
-            filename = file_obj.filename
-
-        if not input_text and not file_bytes:
-            return jsonify({'error': 'Informe um texto ou envie um PDF/imagem para análise.'}), 400
-
-        task_id = uuid.uuid4().hex
-        _portfolio_task_set(task_id, {'status': 'processing', 'step': 'Iniciando análise...', 'progress': 10})
-        threading.Thread(
-            target=_portfolio_process_offer_async,
-            args=(task_id, input_text, file_bytes, file_mime, filename),
-            daemon=True
-        ).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao iniciar tarefa: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/tasks/<task_id>', methods=['GET'])
-def get_portfolio_task_status(task_id):
-    task = _portfolio_task_get(task_id)
-    if not task:
-        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
-    return jsonify(task)
-
-
-@app.route('/api/portfolio/offers/<int:offer_id>', methods=['PUT'])
-def update_portfolio_offer(offer_id):
-    try:
-        data = request.get_json() or {}
-        title = (data.get('title') or '').strip()
-        summary = (data.get('summary') or '').strip()
-        if not title:
-            return jsonify({'error': 'Título é obrigatório.'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Oferta não encontrada.'}), 404
-        c.execute(
-            'UPDATE portfolio_offers SET title = ?, summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            (title, summary, offer_id)
-        )
-        conn.commit()
-        offer = _portfolio_fetch_offer(c, offer_id)
-        conn.close()
-        return jsonify(offer)
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao atualizar oferta {offer_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/<int:offer_id>', methods=['DELETE'])
-def delete_portfolio_offer(offer_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
-        c.execute('DELETE FROM portfolio_offers WHERE id = ?', (offer_id,))
-        if c.rowcount == 0:
-            conn.close()
-            return jsonify({'error': 'Oferta não encontrada.'}), 404
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Oferta removida com sucesso.'})
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao remover oferta {offer_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/export-json', methods=['GET'])
-def export_portfolio_offers():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM portfolio_offers ORDER BY id')
-        offers = [dict_from_row(r) for r in c.fetchall()]
-        for offer in offers:
-            c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer['id'],))
-            offer['items'] = [dict_from_row(r) for r in c.fetchall()]
-            offer.pop('id', None)
-            for item in offer['items']:
-                item.pop('id', None)
-                item.pop('offer_id', None)
-        conn.close()
-
-        from flask import Response
-        payload = json.dumps({'solucoes_stf': offers}, ensure_ascii=False, indent=2)
-        return Response(
-            payload,
-            mimetype='application/json',
-            headers={'Content-Disposition': f'attachment; filename=solucoes-stf-{datetime.now().strftime("%Y%m%d-%H%M%S")}.json'}
-        )
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao exportar ofertas: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/import-json', methods=['POST'])
-def import_portfolio_offers():
-    try:
-        data = None
-        if 'file' in request.files:
-            file = request.files['file']
-            if not file.filename:
-                return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
-            try:
-                data = json.loads(file.read().decode('utf-8'))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                return jsonify({'error': 'Arquivo .json inválido ou corrompido.'}), 400
-        else:
-            data = request.get_json(silent=True)
-
-        if not data:
-            return jsonify({'error': 'Nenhum dado enviado para importação.'}), 400
-
-        offers = data.get('solucoes_stf') if isinstance(data, dict) else data
-        if not isinstance(offers, list):
-            return jsonify({'error': 'Formato inválido. Esperado um pacote exportado do módulo Soluções STF.'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        imported = 0
-        for offer in offers:
-            if not isinstance(offer, dict):
-                continue
-            title = (offer.get('title') or '').strip()
-            if not title:
-                continue
-            summary = offer.get('summary') or ''
-            raw_input = offer.get('raw_input') or ''
-            c.execute(
-                'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                (title, summary, raw_input)
-            )
-            offer_id = c.lastrowid
-            for idx, item in enumerate(offer.get('items') or []):
-                if not isinstance(item, dict):
-                    continue
-                c.execute(
-                    '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
-                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                    (offer_id, item.get('pain') or '', item.get('solution') or '', item.get('sort_order', idx))
-                )
-            imported += 1
-        conn.commit()
-        conn.close()
-        return jsonify({'imported': imported}), 201
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao importar ofertas: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/<int:offer_id>/items/<int:item_id>', methods=['PUT'])
-def update_portfolio_offer_item(offer_id, item_id):
-    try:
-        data = request.get_json() or {}
-        pain = (data.get('pain') or '').strip()
-        solution = (data.get('solution') or '').strip()
-        sort_order = data.get('sort_order')
-        if not pain and not solution:
-            return jsonify({'error': 'Informe dor e/ou solução.'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Item não encontrado.'}), 404
-
-        if sort_order is None:
-            c.execute(
-                '''UPDATE portfolio_offer_items
-                   SET pain = ?, solution = ?, updated_at = CURRENT_TIMESTAMP
-                   WHERE id = ? AND offer_id = ?''',
-                (pain, solution, item_id, offer_id)
-            )
-        else:
-            try:
-                sort_order_int = int(sort_order)
-            except Exception:
-                return jsonify({'error': 'sort_order inválido.'}), 400
-            c.execute(
-                '''UPDATE portfolio_offer_items
-                   SET pain = ?, solution = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
-                   WHERE id = ? AND offer_id = ?''',
-                (pain, solution, sort_order_int, item_id, offer_id)
-            )
-
-        conn.commit()
-        c.execute('SELECT * FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
-        item = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify(item)
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao atualizar item {item_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/<int:offer_id>/items', methods=['POST'])
-def create_portfolio_offer_item(offer_id):
-    try:
-        data = request.get_json() or {}
-        pain = (data.get('pain') or '').strip()
-        solution = (data.get('solution') or '').strip()
-        if not pain and not solution:
-            return jsonify({'error': 'Informe dor e/ou solução.'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Oferta não encontrada.'}), 404
-        c.execute('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
-        max_sort = (dict_from_row(c.fetchone()) or {}).get('max_sort', -1)
-        next_sort = int(max_sort) + 1
-        c.execute(
-            '''INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order, updated_at)
-               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-            (offer_id, pain, solution, next_sort)
-        )
-        item_id = c.lastrowid
-        conn.commit()
-        c.execute('SELECT * FROM portfolio_offer_items WHERE id = ?', (item_id,))
-        item = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify(item), 201
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao criar item para oferta {offer_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/offers/<int:offer_id>/items/<int:item_id>', methods=['DELETE'])
-def delete_portfolio_offer_item(offer_id, item_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
-        if c.rowcount == 0:
-            conn.close()
-            return jsonify({'error': 'Item não encontrado.'}), 404
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Item removido com sucesso.'})
-    except Exception as e:
-        logger.exception(f'[Portfolio] Erro ao remover item {item_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
 def _parse_vtt_text(file_bytes):
     try:
         text = file_bytes.decode('utf-8', errors='replace')
@@ -12935,8 +9152,8 @@ def _iata_parse_llm_ata(raw):
                     if isinstance(nested, dict) and 'title' in nested:
                         parsed = nested
                         break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'[_iata_parse_llm_ata] exceção ignorada: {e}')
     title = (parsed.get('title') or '').strip()
     if not title:
         return None
@@ -13260,71 +9477,6 @@ def _iata_record_to_dict(record):
     return r
 
 
-@app.route('/api/portfolio/iata', methods=['GET'])
-def list_iata_records():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM iata_records ORDER BY datetime(created_at) DESC, id DESC')
-        records = [_iata_record_to_dict(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(records)
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao listar registros: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/iata/<int:record_id>', methods=['GET'])
-def get_iata_record(record_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            return jsonify({'error': 'Registro não encontrado.'}), 404
-        return jsonify(_iata_record_to_dict(row))
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao buscar registro {record_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/iata', methods=['POST'])
-def create_iata_record():
-    try:
-        file_obj = request.files.get('meeting_file')
-        raw_text_input = (request.form.get('raw_text') or '').strip()
-
-        if not file_obj and not raw_text_input:
-            return jsonify({'error': 'Envie um arquivo de reunião ou cole o texto.'}), 400
-
-        file_bytes, filename = None, None
-        if file_obj and file_obj.filename:
-            file_bytes = file_obj.read()
-            filename = file_obj.filename
-
-        task_id = uuid.uuid4().hex
-        _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(
-            target=_iata_process_async,
-            args=(task_id, file_bytes, filename, raw_text_input),
-            daemon=True
-        ).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/iata/tasks/<task_id>', methods=['GET'])
-def get_iata_task_status(task_id):
-    task = _iata_task_get(task_id)
-    if not task:
-        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
-    return jsonify(task)
-
-
 @app.route('/api/tasks/<task_id>', methods=['GET'])
 def get_bg_task_status(task_id):
     """Generic task status poll for background tasks (autofill, linkedin, automapping, iToca)."""
@@ -13332,23 +9484,6 @@ def get_bg_task_status(task_id):
     if not task:
         return jsonify({'status': 'not_found'}), 404
     return jsonify(task)
-
-
-@app.route('/api/portfolio/iata/<int:record_id>', methods=['DELETE'])
-def delete_iata_record(record_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM iata_records WHERE id = ?', (record_id,))
-        if c.rowcount == 0:
-            conn.close()
-            return jsonify({'error': 'Registro não encontrado.'}), 404
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Registro removido com sucesso.'})
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao remover registro {record_id}: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 def _autofill_process_async(task_id, account_name):
@@ -13362,8 +9497,8 @@ def _autofill_process_async(task_id, account_name):
             try:
                 cents = int(round(float(raw_revenue) * 100))
                 average_revenue_formatted = format_currency_br(cents)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_autofill_process_async] exceção ignorada: {e}')
 
         _bg_task_set(task_id, {'step': 'Buscando logo da empresa...', 'progress': 70})
         logo_url = None
@@ -13387,23 +9522,6 @@ def _autofill_process_async(task_id, account_name):
         _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
     finally:
         _bg_task_cleanup(task_id)
-
-
-@app.route('/api/accounts/autofill', methods=['POST'])
-def account_autofill():
-    """Preenche automaticamente campos de uma conta com dados da empresa via SAI LLM e busca de imagem."""
-    try:
-        data = request.get_json() or {}
-        account_name = (data.get('account_name') or '').strip()
-        if not account_name:
-            return jsonify({'error': 'Nome da conta não informado.'}), 400
-        task_id = uuid.uuid4().hex
-        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(target=_autofill_process_async, args=(task_id, account_name), daemon=True).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[AccountAutoFill] Erro: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -13486,8 +9604,8 @@ def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extensi
                 if m:
                     try:
                         parsed = json.loads(m.group(0))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_client_linkedin_autofill_async] exceção ignorada: {e}')
 
         _bg_task_set(task_id, {'step': 'Buscando foto de perfil...', 'progress': 75})
 
@@ -13501,8 +9619,8 @@ def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extensi
                 candidates = _find_image_candidates_on_web(query, limit=3)
                 if candidates:
                     photo_url = candidates[0]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_client_linkedin_autofill_async] exceção ignorada: {e}')
 
         result = {
             'nome': parsed.get('nome') or '',
@@ -13519,29 +9637,6 @@ def _client_linkedin_autofill_async(task_id, linkedin_url, profile_text, extensi
         _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
     finally:
         _bg_task_cleanup(task_id)
-
-
-@app.route('/api/clientes/linkedin-autofill', methods=['POST'])
-def client_linkedin_autofill():
-    """Preenche automaticamente o cadastro de contato a partir de um perfil LinkedIn via IA."""
-    try:
-        data = request.get_json() or {}
-        linkedin_url = (data.get('linkedin_url') or '').strip()
-        profile_text = (data.get('profile_text') or '').strip()
-        extension_photo_url = (data.get('extension_photo_url') or '').strip()
-        if not linkedin_url and not profile_text:
-            return jsonify({'error': 'Cole o texto do perfil LinkedIn ou use a extensão para importar.'}), 400
-        task_id = uuid.uuid4().hex
-        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(
-            target=_client_linkedin_autofill_async,
-            args=(task_id, linkedin_url, profile_text, extension_photo_url),
-            daemon=True
-        ).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[ClientLinkedInAutoFill] Erro: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -13671,15 +9766,15 @@ def _linkedin_parse_summary(raw):
     # Tenta JSON direto
     try:
         return json.loads(raw)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'[_linkedin_parse_summary] exceção ignorada: {e}')
     # Tenta extrair JSON do texto
     m = re.search(r'\{[\s\S]*\}', raw)
     if m:
         try:
             return json.loads(m.group(0))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_linkedin_parse_summary] exceção ignorada: {e}')
     return None
 
 
@@ -13951,506 +10046,6 @@ def linkedin_summarize():
 
 # ---------------------------------------------------------------------------
 
-@app.route('/api/accounts', methods=['POST'])
-def create_account():
-    try:
-        name = request.form.get('name', '').strip()
-        sector = request.form.get('sector', '').strip() or None
-        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'True') else 0
-        average_revenue_cents = parse_currency_to_cents(request.form.get('average_revenue'))
-        professionals_count = request.form.get('professionals_count', '').strip()
-        professionals_count = int(professionals_count) if professionals_count.isdigit() else None
-        global_presence = request.form.get('global_presence', '').strip() or None
-        main_contact_ids = request.form.get('main_contact_ids', '').strip()
-        autofill_logo_url = (request.form.get('autofill_logo_url') or '').strip()
-        if not name:
-            return jsonify({'error': 'Nome da conta é obrigatório'}), 400
-        conn = get_db(); c = conn.cursor()
-        logo_url = autofill_logo_url or None
-        if 'logo' in request.files:
-            f = request.files['logo']
-            if f and f.filename:
-                filename = secure_filename(f"acc_{int(datetime.now().timestamp())}_{f.filename}")
-                f.save(str(ACCOUNT_UPLOAD_DIR / filename))
-                logo_url = f'/uploads/accounts/{filename}'
-        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                  (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence))
-        account_id = c.lastrowid
-        if sector:
-            c.execute('INSERT OR IGNORE INTO account_sectors (name) VALUES (?)', (sector,))
-        ids = [int(x) for x in main_contact_ids.split(',') if x.strip().isdigit()]
-        for cid in ids:
-            c.execute('INSERT OR IGNORE INTO account_main_contacts (account_id, client_id) VALUES (?, ?)', (account_id, cid))
-        conn.commit(); conn.close()
-        return jsonify({'id': account_id, 'message': 'Conta criada'}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/accounts: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>', methods=['PUT'])
-def update_account(account_id):
-    try:
-        name = request.form.get('name', '').strip()
-        sector = request.form.get('sector', '').strip() or None
-        is_target = 1 if request.form.get('is_target') in ('1', 'true', 'True') else 0
-        average_revenue_cents = parse_currency_to_cents(request.form.get('average_revenue'))
-        professionals_count = request.form.get('professionals_count', '').strip()
-        professionals_count = int(professionals_count) if professionals_count.isdigit() else None
-        global_presence = request.form.get('global_presence', '').strip() or None
-        main_contact_ids = request.form.get('main_contact_ids', '').strip()
-        remove_logo = request.form.get('remove_logo', '0') in ('1', 'true', 'True')
-        autofill_logo_url = (request.form.get('autofill_logo_url') or '').strip()
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
-        row = dict_from_row(c.fetchone())
-        if not row:
-            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        old_name = row['name']
-        new_name = name or old_name
-        # Renomear conta: propagar para os contatos (clients.company) e mesclar conta duplicada,
-        # evitando que sync_accounts_from_clients() recrie a conta com o nome antigo.
-        if new_name.strip().lower() != (old_name or '').strip().lower():
-            c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ?', (new_name, account_id))
-            conflict = c.fetchone()
-            if conflict:
-                conflict_id = conflict['id'] if isinstance(conflict, sqlite3.Row) else conflict[0]
-                # Move os dados da conta conflitante para esta conta e remove a duplicata
-                c.execute('UPDATE account_presences SET account_id=? WHERE account_id=?', (account_id, conflict_id))
-                c.execute('UPDATE account_renewal_events SET account_id=? WHERE account_id=?', (account_id, conflict_id))
-                c.execute('UPDATE account_activities SET account_id=? WHERE account_id=?', (account_id, conflict_id))
-                c.execute('UPDATE kanban_cards SET account_id=? WHERE account_id=?', (account_id, conflict_id))
-                c.execute('DELETE FROM account_main_contacts WHERE account_id=?', (conflict_id,))
-                c.execute('DELETE FROM accounts WHERE id=?', (conflict_id,))
-            # Atualiza a referência do nome em todos os contatos vinculados
-            c.execute('UPDATE clients SET company=?, updated_at=CURRENT_TIMESTAMP WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (new_name, old_name))
-        logo_url = None if remove_logo else (autofill_logo_url or row.get('logo_url'))
-        if 'logo' in request.files:
-            f = request.files['logo']
-            if f and f.filename:
-                filename = secure_filename(f"acc_{int(datetime.now().timestamp())}_{f.filename}")
-                f.save(str(ACCOUNT_UPLOAD_DIR / filename))
-                logo_url = f'/uploads/accounts/{filename}'
-        c.execute('''UPDATE accounts SET name=?, logo_url=?, is_target=?, sector=?, average_revenue_cents=?, professionals_count=?, global_presence=?, updated_at=CURRENT_TIMESTAMP WHERE id=?''',
-                  (name or row['name'], logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, account_id))
-        if sector:
-            c.execute('INSERT OR IGNORE INTO account_sectors (name) VALUES (?)', (sector,))
-        c.execute('DELETE FROM account_main_contacts WHERE account_id = ?', (account_id,))
-        ids = [int(x) for x in main_contact_ids.split(',') if x.strip().isdigit()]
-        for cid in ids:
-            c.execute('INSERT OR IGNORE INTO account_main_contacts (account_id, client_id) VALUES (?, ?)', (account_id, cid))
-        conn.commit(); conn.close()
-        return jsonify({'message': 'Conta atualizada'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/accounts/{account_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>', methods=['DELETE'])
-def delete_account(account_id):
-    """Arquiva (snapshot completo em JSON) e exclui a conta, seus contatos e todo o histórico."""
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
-        account = dict_from_row(c.fetchone())
-        if not account:
-            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        name = account['name']
-
-        # Contatos (clients) vinculados à conta pelo nome da empresa
-        c.execute('SELECT * FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (name,))
-        clients = [dict_from_row(r) for r in c.fetchall()]
-        client_ids = [cl['id'] for cl in clients]
-
-        def _fetch_for_clients(query):
-            if not client_ids:
-                return []
-            ph = ','.join('?' * len(client_ids))
-            c.execute(query.format(ph=ph), client_ids)
-            return [dict_from_row(r) for r in c.fetchall()]
-
-        client_activities = _fetch_for_clients('SELECT * FROM activities WHERE client_id IN ({ph})')
-        client_commitments = _fetch_for_clients('SELECT * FROM commitments WHERE client_id IN ({ph})')
-        client_env_responses = _fetch_for_clients('SELECT * FROM environment_responses WHERE client_id IN ({ph})')
-
-        c.execute('SELECT * FROM account_main_contacts WHERE account_id = ?', (account_id,))
-        main_contacts = [dict_from_row(r) for r in c.fetchall()]
-        c.execute('SELECT * FROM account_presences WHERE account_id = ?', (account_id,))
-        presences = [dict_from_row(r) for r in c.fetchall()]
-        c.execute('SELECT * FROM account_renewal_events WHERE account_id = ?', (account_id,))
-        renewal_events = [dict_from_row(r) for r in c.fetchall()]
-        c.execute('SELECT * FROM account_activities WHERE account_id = ?', (account_id,))
-        account_activities = [dict_from_row(r) for r in c.fetchall()]
-
-        snapshot = {
-            'version': 1,
-            'account': account,
-            'clients': clients,
-            'client_activities': client_activities,
-            'client_commitments': client_commitments,
-            'client_env_responses': client_env_responses,
-            'main_contacts': main_contacts,
-            'presences': presences,
-            'renewal_events': renewal_events,
-            'account_activities': account_activities,
-        }
-        c.execute('''INSERT INTO account_archives (account_name, snapshot_json, contacts_count, activities_count)
-                     VALUES (?, ?, ?, ?)''',
-                  (name, json.dumps(snapshot, default=str, ensure_ascii=False),
-                   len(clients), len(client_activities) + len(account_activities)))
-
-        # Remove dados específicos da conta
-        c.execute('DELETE FROM account_renewal_events WHERE account_id = ?', (account_id,))
-        c.execute('DELETE FROM account_presences WHERE account_id = ?', (account_id,))
-        c.execute('DELETE FROM account_activities WHERE account_id = ?', (account_id,))
-        c.execute('DELETE FROM account_main_contacts WHERE account_id = ?', (account_id,))
-
-        # Remove contatos e seus dados relacionados (FKs não são forçadas no SQLite)
-        if client_ids:
-            ph = ','.join('?' * len(client_ids))
-            c.execute(f'DELETE FROM activities WHERE client_id IN ({ph})', client_ids)
-            c.execute(f'DELETE FROM commitments WHERE client_id IN ({ph})', client_ids)
-            c.execute(f'DELETE FROM environment_responses WHERE client_id IN ({ph})', client_ids)
-            c.execute(f'DELETE FROM whatsapp_sync_log WHERE client_id IN ({ph})', client_ids)
-            c.execute(f'UPDATE kanban_cards SET contact_id = NULL WHERE contact_id IN ({ph})', client_ids)
-            c.execute(f'DELETE FROM clients WHERE id IN ({ph})', client_ids)
-
-        c.execute('UPDATE kanban_cards SET account_id = NULL WHERE account_id = ?', (account_id,))
-        c.execute('DELETE FROM accounts WHERE id = ?', (account_id,))
-        conn.commit(); conn.close()
-        return jsonify({'message': 'Conta arquivada e excluída', 'archived_contacts': len(clients)})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/{account_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/archives', methods=['GET'])
-def list_account_archives():
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('''SELECT id, account_name, contacts_count, activities_count, archived_at
-                     FROM account_archives ORDER BY archived_at DESC, id DESC''')
-        rows = [dict_from_row(r) for r in c.fetchall()]
-        conn.close(); return jsonify(rows)
-    except Exception as e:
-        print(f'[ERROR] GET /api/accounts/archives: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/archives/<int:archive_id>/restore', methods=['POST'])
-def restore_account_archive(archive_id):
-    """Recria a conta arquivada, seus contatos e todo o histórico a partir do snapshot."""
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT * FROM account_archives WHERE id = ?', (archive_id,))
-        arch = dict_from_row(c.fetchone())
-        if not arch:
-            conn.close(); return jsonify({'error': 'Arquivo não encontrado'}), 404
-        snap = json.loads(arch['snapshot_json'])
-        account = snap.get('account') or {}
-        name = account.get('name') or arch['account_name']
-
-        c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (name,))
-        if c.fetchone():
-            conn.close()
-            return jsonify({'error': f'Já existe uma conta com o nome "{name}". Renomeie ou exclua a conta atual antes de restaurar.'}), 409
-
-        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
-                  (name, account.get('logo_url'), account.get('is_target', 0), account.get('sector'),
-                   account.get('average_revenue_cents'), account.get('professionals_count'),
-                   account.get('global_presence'), account.get('created_at')))
-        new_account_id = c.lastrowid
-
-        # Recria os contatos (clients), mapeando id antigo -> novo
-        client_id_map = {}
-        for cl in snap.get('clients', []):
-            c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
-                      (cl.get('name'), name, cl.get('position'), cl.get('area_of_activity'), cl.get('email'),
-                       cl.get('phone'), cl.get('linkedin'), cl.get('photo_url'), cl.get('is_target', 0),
-                       cl.get('is_cold_contact', 0), cl.get('is_archived', 0), cl.get('created_at')))
-            client_id_map[cl.get('id')] = c.lastrowid
-
-        # Atividades dos contatos
-        activity_id_map = {}
-        for a in snap.get('client_activities', []):
-            new_cid = client_id_map.get(a.get('client_id'))
-            if not new_cid:
-                continue
-            c.execute('''INSERT INTO activities (client_id, contact_type, information, description, activity_date, created_at)
-                         VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))''',
-                      (new_cid, a.get('contact_type', 'Outro'), a.get('information'), a.get('description'),
-                       a.get('activity_date'), a.get('created_at')))
-            activity_id_map[a.get('id')] = c.lastrowid
-
-        # Compromissos (agenda)
-        for cm in snap.get('client_commitments', []):
-            new_cid = client_id_map.get(cm.get('client_id'))
-            if not new_cid:
-                continue
-            new_aid = activity_id_map.get(cm.get('activity_id')) if cm.get('activity_id') else None
-            c.execute('''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type, created_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))''',
-                      (new_cid, new_aid, cm.get('title'), cm.get('notes'), cm.get('due_date'),
-                       cm.get('due_time'), cm.get('source_type', 'activity'), cm.get('created_at')))
-
-        # Respostas de mapeamento de ambiente
-        for er in snap.get('client_env_responses', []):
-            new_cid = client_id_map.get(er.get('client_id'))
-            if not new_cid:
-                continue
-            c.execute('INSERT OR IGNORE INTO environment_responses (card_id, client_id, response, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                      (er.get('card_id'), new_cid, er.get('response')))
-
-        # Pontos focais principais
-        for mc in snap.get('main_contacts', []):
-            new_cid = client_id_map.get(mc.get('client_id'))
-            if not new_cid:
-                continue
-            c.execute('INSERT OR IGNORE INTO account_main_contacts (account_id, client_id) VALUES (?, ?)', (new_account_id, new_cid))
-
-        # Presenças (serviços Stefanini)
-        presence_id_map = {}
-        for p in snap.get('presences', []):
-            focal = client_id_map.get(p.get('focal_client_id')) if p.get('focal_client_id') else None
-            c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
-                      (new_account_id, p.get('delivery_name'), p.get('stf_owner'), p.get('delivery_cell'),
-                       p.get('service_id'), p.get('billing_type', 'Mensal'), p.get('validity_month'),
-                       p.get('contract_duration_months'), p.get('contract_end_date'), p.get('early_terminated', 0),
-                       p.get('current_revenue_cents'), focal, p.get('created_at')))
-            presence_id_map[p.get('id')] = c.lastrowid
-
-        # Eventos de renovação
-        for ev in snap.get('renewal_events', []):
-            new_pid = presence_id_map.get(ev.get('presence_id'))
-            if not new_pid:
-                continue
-            c.execute('INSERT OR IGNORE INTO account_renewal_events (account_id, presence_id, title, due_date, due_time, created_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))',
-                      (new_account_id, new_pid, ev.get('title'), ev.get('due_date'), ev.get('due_time', '09:00'), ev.get('created_at')))
-
-        # Atividades genéricas da conta
-        for aa in snap.get('account_activities', []):
-            c.execute('INSERT INTO account_activities (account_id, description, activity_date, created_at) VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))',
-                      (new_account_id, aa.get('description'), aa.get('activity_date'), aa.get('created_at')))
-
-        c.execute('DELETE FROM account_archives WHERE id = ?', (archive_id,))
-        conn.commit(); conn.close()
-        return jsonify({'message': 'Conta restaurada', 'account_id': new_account_id})
-    except Exception as e:
-        print(f'[ERROR] POST /api/accounts/archives/{archive_id}/restore: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/archives/<int:archive_id>', methods=['DELETE'])
-def delete_account_archive(archive_id):
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('DELETE FROM account_archives WHERE id = ?', (archive_id,))
-        conn.commit(); conn.close()
-        return jsonify({'message': 'Arquivo excluído'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/archives/{archive_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>/presences', methods=['POST'])
-def create_account_presence(account_id):
-    try:
-        data = request.get_json() or {}
-        delivery_name = (data.get('delivery_name') or '').strip()
-        if not delivery_name:
-            return jsonify({'error': 'Nome da Entrega é obrigatório'}), 400
-        stf_owner = (data.get('stf_owner') or '').strip() or None
-        delivery_cell = (data.get('delivery_cell') or '').strip() or None
-        service_id = (data.get('service_id') or '').strip() or None
-        billing_type = (data.get('billing_type') or 'Mensal').strip()
-        validity_month = (data.get('validity_month') or '').strip() or None  # agora = início do contrato
-        contract_duration_months_raw = data.get('contract_duration_months')
-        try:
-            contract_duration_months = int(contract_duration_months_raw) if contract_duration_months_raw not in (None, '') else None
-        except (ValueError, TypeError):
-            contract_duration_months = None
-        early_terminated = 1 if str(data.get('early_terminated', '0')) in ('1', 'true', 'sim', 'Sim') else 0
-        # Calcula data de encerramento automaticamente
-        contract_end_date = None
-        if validity_month and contract_duration_months:
-            try:
-                from dateutil.relativedelta import relativedelta
-                start_dt = datetime.strptime(validity_month + '-01', '%Y-%m-%d')
-                end_dt = start_dt + relativedelta(months=contract_duration_months)
-                contract_end_date = end_dt.strftime('%Y-%m')
-            except Exception:
-                try:
-                    import calendar
-                    y, m = int(validity_month[:4]), int(validity_month[5:7])
-                    total = (y * 12 + m - 1) + contract_duration_months
-                    contract_end_date = f"{total // 12:04d}-{total % 12 + 1:02d}"
-                except Exception:
-                    contract_end_date = None
-        current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
-        focal_client_id = data.get('focal_client_id')
-        focal_client_id = int(focal_client_id) if str(focal_client_id).isdigit() else None
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT name FROM accounts WHERE id = ?', (account_id,))
-        account = c.fetchone()
-        if not account:
-            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                  (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id))
-        presence_id = c.lastrowid
-        c.execute('SELECT * FROM account_presences WHERE id = ?', (presence_id,))
-        presence = dict_from_row(c.fetchone())
-        _create_or_update_presence_event(c, account['name'], account_id, presence)
-        conn.commit(); conn.close()
-        return jsonify(presence), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/accounts/{account_id}/presences: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>/presences/<int:presence_id>', methods=['PUT'])
-def update_account_presence(account_id, presence_id):
-    try:
-        data = request.get_json() or {}
-        delivery_name = (data.get('delivery_name') or '').strip()
-        if not delivery_name:
-            return jsonify({'error': 'Nome da Entrega é obrigatório'}), 400
-        stf_owner = (data.get('stf_owner') or '').strip() or None
-        delivery_cell = (data.get('delivery_cell') or '').strip() or None
-        service_id = (data.get('service_id') or '').strip() or None
-        billing_type = (data.get('billing_type') or 'Mensal').strip()
-        validity_month = (data.get('validity_month') or '').strip() or None
-        contract_duration_months_raw = data.get('contract_duration_months')
-        try:
-            contract_duration_months = int(contract_duration_months_raw) if contract_duration_months_raw not in (None, '') else None
-        except (ValueError, TypeError):
-            contract_duration_months = None
-        early_terminated = 1 if str(data.get('early_terminated', '0')) in ('1', 'true', 'sim', 'Sim') else 0
-        contract_end_date = None
-        if validity_month and contract_duration_months:
-            try:
-                from dateutil.relativedelta import relativedelta
-                start_dt = datetime.strptime(validity_month + '-01', '%Y-%m-%d')
-                end_dt = start_dt + relativedelta(months=contract_duration_months)
-                contract_end_date = end_dt.strftime('%Y-%m')
-            except Exception:
-                try:
-                    y, m = int(validity_month[:4]), int(validity_month[5:7])
-                    total = (y * 12 + m - 1) + contract_duration_months
-                    contract_end_date = f"{total // 12:04d}-{total % 12 + 1:02d}"
-                except Exception:
-                    contract_end_date = None
-        current_revenue_cents = parse_currency_to_cents(data.get('current_revenue'))
-        focal_client_id = data.get('focal_client_id')
-        focal_client_id = int(focal_client_id) if str(focal_client_id).isdigit() else None
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT name FROM accounts WHERE id = ?', (account_id,))
-        account = c.fetchone()
-        if not account:
-            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''UPDATE account_presences
-                     SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, billing_type=?, validity_month=?, contract_duration_months=?, contract_end_date=?, early_terminated=?, current_revenue_cents=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
-                     WHERE id=? AND account_id=?''',
-                  (delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, presence_id, account_id))
-        c.execute('SELECT * FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
-        presence = dict_from_row(c.fetchone())
-        if presence:
-            _create_or_update_presence_event(c, account['name'], account_id, presence)
-        conn.commit(); conn.close()
-        return jsonify(presence or {'message': 'Atualizada'})
-    except Exception as e:
-        print(f'[ERROR] PUT /api/accounts/{account_id}/presences/{presence_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>/presences/<int:presence_id>', methods=['DELETE'])
-def delete_account_presence(account_id, presence_id):
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('DELETE FROM account_renewal_events WHERE presence_id = ?', (presence_id,))
-        c.execute('DELETE FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
-        conn.commit(); conn.close()
-        return jsonify({'message': 'Presença removida'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/{account_id}/presences/{presence_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>/activities', methods=['GET'])
-def get_account_activities(account_id):
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
-        if not c.fetchone():
-            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''SELECT id, account_id, description, activity_date, created_at
-                     FROM account_activities
-                     WHERE account_id = ?
-                     ORDER BY activity_date DESC, created_at DESC
-                     LIMIT 100''', (account_id,))
-        rows = [dict_from_row(r) for r in c.fetchall()]
-        conn.close(); return jsonify(rows)
-    except Exception as e:
-        print(f'[ERROR] GET /api/accounts/{account_id}/activities: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>/activities', methods=['POST'])
-def create_account_activity(account_id):
-    try:
-        data = request.get_json() or {}
-        description = (data.get('description') or '').strip()
-        activity_date = (data.get('activity_date') or '').strip() or None
-        if not description:
-            return jsonify({'error': 'Descrição é obrigatória'}), 400
-        conn = get_db(); c = conn.cursor()
-        c.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
-        if not c.fetchone():
-            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        if activity_date:
-            c.execute('''INSERT INTO account_activities (account_id, description, activity_date)
-                         VALUES (?, ?, ?)''', (account_id, description, activity_date))
-        else:
-            c.execute('''INSERT INTO account_activities (account_id, description)
-                         VALUES (?, ?)''', (account_id, description))
-        conn.commit()
-        activity_id = c.lastrowid
-        conn.close()
-        return jsonify({'id': activity_id, 'message': 'Atividade registrada'}), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/accounts/{account_id}/activities: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/accounts/<int:account_id>/activities/<int:activity_id>', methods=['DELETE'])
-def delete_account_activity(account_id, activity_id):
-    try:
-        conn = get_db(); c = conn.cursor()
-        c.execute('DELETE FROM account_activities WHERE id = ? AND account_id = ?', (activity_id, account_id))
-        conn.commit(); conn.close()
-        return jsonify({'message': 'Atividade removida'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/accounts/{account_id}/activities/{activity_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/automapping/cancel', methods=['POST'])
-def cancel_automapping():
-    try:
-        data = request.get_json() or {}
-        request_id = (data.get('request_id') or '').strip()
-        if not request_id:
-            return jsonify({'error': 'request_id é obrigatório'}), 400
-        _mark_automapping_cancelled(request_id)
-        return jsonify({'message': 'Cancelamento registrado'})
-    except Exception as e:
-        print(f'[ERROR] POST /api/automapping/cancel: {e}')
-        return jsonify({'error': str(e)}), 500
-
 
 def _automapping_process_async(task_id, company, country, industry, force, request_id):
     try:
@@ -14546,235 +10141,9 @@ def _automapping_process_async(task_id, company, country, industry, force, reque
         _bg_task_cleanup(task_id)
 
 
-@app.route('/api/automapping', methods=['POST'])
-def run_automapping():
-    try:
-        data = request.get_json() or {}
-        company = (data.get('company') or '').strip()
-        country = (data.get('country') or '').strip()
-        industry = (data.get('industry') or '').strip()
-        force = bool(data.get('force'))
-        request_id = (data.get('request_id') or '').strip()
-
-        if not company or not country or not industry:
-            return jsonify({'error': 'company, country e industry são obrigatórios'}), 400
-
-        if _is_automapping_cancelled(request_id, consume=True):
-            return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
-
-        task_id = uuid.uuid4().hex
-        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(
-            target=_automapping_process_async,
-            args=(task_id, company, country, industry, force, request_id),
-            daemon=True
-        ).start()
-        return jsonify({'task_id': task_id}), 202
-
-    except Exception as e:
-        print(f'[ERROR] POST /api/automapping: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/automapping/runs/<int:run_id>', methods=['GET'])
-def get_automapping_run(run_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM automapping_runs WHERE id = ?', (run_id,))
-        run = c.fetchone()
-        conn.close()
-        if not run:
-            return jsonify({'error': 'Execução não encontrada'}), 404
-        payload = dict_from_row(run)
-        payload['result'] = json.loads(payload['result_json'])
-        return jsonify(payload)
-    except Exception as e:
-        print(f'[ERROR] GET /api/automapping/runs/{run_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/automapping/runs/<int:run_id>', methods=['DELETE'])
-def delete_automapping_run(run_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM automapping_runs WHERE id = ?', (run_id,))
-        deleted = c.rowcount
-        conn.commit()
-        conn.close()
-        if not deleted:
-            return jsonify({'error': 'Execução não encontrada'}), 404
-        return jsonify({'message': 'Log de AutoMapping removido com sucesso'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/automapping/runs/{run_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/automapping/runs', methods=['GET'])
-def list_automapping_runs():
-    try:
-        days = request.args.get('days', '20')
-        try:
-            days = max(1, min(60, int(days)))
-        except Exception:
-            days = 20
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''SELECT id, company, country, industry, result_json, created_at
-                     FROM automapping_runs
-                     WHERE datetime(created_at) >= datetime('now', ?)
-                     ORDER BY datetime(created_at) DESC''', (f'-{days} days',))
-        rows = c.fetchall()
-        conn.close()
-
-        runs = []
-        for row in rows:
-            parsed = dict_from_row(row)
-            result = json.loads(parsed.get('result_json') or '{}')
-            sections = result.get('sections') or {}
-            queries = {
-                section_key: section_val.get('query_used')
-                for section_key, section_val in sections.items()
-                if isinstance(section_val, dict) and section_val.get('query_used')
-            }
-            runs.append({
-                'id': parsed.get('id'),
-                'company': parsed.get('company'),
-                'country': parsed.get('country'),
-                'industry': parsed.get('industry'),
-                'created_at': parsed.get('created_at'),
-                'queries': queries,
-                'sections_count': len(queries)
-            })
-
-        return jsonify({'days': days, 'runs': runs})
-    except Exception as e:
-        print(f'[ERROR] GET /api/automapping/runs: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
 # ─────────────────────────────────────────────────────────────
 # WikiToca – Conhecimentos registrados
 # ─────────────────────────────────────────────────────────────
-
-@app.route('/api/wikitoca/entries', methods=['GET'])
-def list_wiki_entries():
-    print('[DEBUG] GET /api/wikitoca/entries chamado')
-    try:
-        q = (request.args.get('q') or '').strip()
-        conn = get_db()
-        c = conn.cursor()
-        if q:
-            like = f'%{q}%'
-            c.execute(
-                '''SELECT * FROM wiki_entries
-                   WHERE title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?
-                   ORDER BY updated_at DESC''',
-                (like, like, like, like)
-            )
-        else:
-            c.execute('SELECT * FROM wiki_entries ORDER BY updated_at DESC')
-        rows = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-        print(f'[DEBUG] GET /api/wikitoca/entries retornando {len(rows)} registros')
-        return jsonify(rows)
-    except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/entries: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_ENTRIES_LIST_ERROR', 'Erro ao listar conhecimentos.', details=str(e),
-                         hint='Verifique se o banco de dados está acessível.')
-
-
-@app.route('/api/wikitoca/entries', methods=['POST'])
-def create_wiki_entry():
-    print('[DEBUG] POST /api/wikitoca/entries chamado')
-    try:
-        data = request.get_json(force=True) or {}
-        print(f'[DEBUG] POST /api/wikitoca/entries payload: {data}')
-        title = (data.get('title') or '').strip()
-        content = (data.get('content') or '').strip()
-        category = (data.get('category') or '').strip() or None
-        tags = (data.get('tags') or '').strip() or None
-        if not title or not content:
-            print('[WARN] POST /api/wikitoca/entries: titulo ou conteudo ausente')
-            return api_error(400, 'WIKI_ENTRY_MISSING_FIELDS', 'Título e conteúdo são obrigatórios.')
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            '''INSERT INTO wiki_entries (title, category, content, tags, created_at, updated_at)
-               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-            (title, category, content, tags)
-        )
-        conn.commit()
-        entry_id = c.lastrowid
-        c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
-        entry = dict_from_row(c.fetchone())
-        conn.close()
-        print(f'[DEBUG] POST /api/wikitoca/entries criado id={entry_id}')
-        return jsonify(entry), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/entries: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_ENTRY_CREATE_ERROR', 'Erro ao criar conhecimento.', details=str(e))
-
-
-@app.route('/api/wikitoca/entries/<int:entry_id>', methods=['PUT'])
-def update_wiki_entry(entry_id):
-    print(f'[DEBUG] PUT /api/wikitoca/entries/{entry_id} chamado')
-    try:
-        data = request.get_json(force=True) or {}
-        title = (data.get('title') or '').strip()
-        content = (data.get('content') or '').strip()
-        category = (data.get('category') or '').strip() or None
-        tags = (data.get('tags') or '').strip() or None
-        if not title or not content:
-            return api_error(400, 'WIKI_ENTRY_MISSING_FIELDS', 'Título e conteúdo são obrigatórios.')
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM wiki_entries WHERE id = ?', (entry_id,))
-        if not c.fetchone():
-            conn.close()
-            print(f'[WARN] PUT /api/wikitoca/entries/{entry_id}: nao encontrado')
-            return api_error(404, 'WIKI_ENTRY_NOT_FOUND', 'Conhecimento não encontrado.')
-        c.execute(
-            '''UPDATE wiki_entries
-               SET title = ?, category = ?, content = ?, tags = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE id = ?''',
-            (title, category, content, tags, entry_id)
-        )
-        conn.commit()
-        c.execute('SELECT * FROM wiki_entries WHERE id = ?', (entry_id,))
-        entry = dict_from_row(c.fetchone())
-        conn.close()
-        print(f'[DEBUG] PUT /api/wikitoca/entries/{entry_id} atualizado')
-        return jsonify(entry)
-    except Exception as e:
-        print(f'[ERROR] PUT /api/wikitoca/entries/{entry_id}: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_ENTRY_UPDATE_ERROR', 'Erro ao atualizar conhecimento.', details=str(e))
-
-
-@app.route('/api/wikitoca/entries/<int:entry_id>', methods=['DELETE'])
-def delete_wiki_entry(entry_id):
-    print(f'[DEBUG] DELETE /api/wikitoca/entries/{entry_id} chamado')
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM wiki_entries WHERE id = ?', (entry_id,))
-        if not c.fetchone():
-            conn.close()
-            return api_error(404, 'WIKI_ENTRY_NOT_FOUND', 'Conhecimento não encontrado.')
-        c.execute('DELETE FROM wiki_entries WHERE id = ?', (entry_id,))
-        conn.commit()
-        conn.close()
-        print(f'[DEBUG] DELETE /api/wikitoca/entries/{entry_id} removido')
-        return jsonify({'message': 'Conhecimento excluído com sucesso.'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/wikitoca/entries/{entry_id}: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_ENTRY_DELETE_ERROR', 'Erro ao excluir conhecimento.', details=str(e))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -14784,523 +10153,7 @@ def delete_wiki_entry(entry_id):
 ALLOWED_WIKI_EXTENSIONS = {'.pdf', '.xls', '.xlsx', '.doc', '.docx'}
 
 
-@app.route('/api/wikitoca/documents', methods=['GET'])
-def list_wiki_documents():
-    print('[DEBUG] GET /api/wikitoca/documents chamado')
-    try:
-        q = (request.args.get('q') or '').strip()
-        conn = get_db()
-        c = conn.cursor()
-        if q:
-            like = f'%{q}%'
-            c.execute(
-                '''SELECT * FROM wiki_documents
-                   WHERE title LIKE ? OR original_name LIKE ?
-                   ORDER BY updated_at DESC''',
-                (like, like)
-            )
-        else:
-            c.execute('SELECT * FROM wiki_documents ORDER BY updated_at DESC')
-        rows = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-        print(f'[DEBUG] GET /api/wikitoca/documents retornando {len(rows)} documentos')
-        return jsonify(rows)
-    except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/documents: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_DOCS_LIST_ERROR', 'Erro ao listar documentos.', details=str(e))
-
-
-@app.route('/api/wikitoca/documents', methods=['POST'])
-def upload_wiki_documents():
-    print('[DEBUG] POST /api/wikitoca/documents chamado')
-    try:
-        files = request.files.getlist('files')
-        print(f'[DEBUG] POST /api/wikitoca/documents arquivos recebidos: {[f.filename for f in files]}')
-        if not files or all(not f.filename for f in files):
-            return api_error(400, 'WIKI_DOC_NO_FILE', 'Nenhum arquivo enviado.')
-        title = (request.form.get('title') or '').strip()
-        conn = get_db()
-        c = conn.cursor()
-        created = []
-        for f in files:
-            if not f.filename:
-                continue
-            ext = Path(f.filename).suffix.lower()
-            if ext not in ALLOWED_WIKI_EXTENSIONS:
-                print(f'[WARN] POST /api/wikitoca/documents: extensao rejeitada: {ext}')
-                continue
-            original_name = f.filename
-            safe_name = secure_filename(f'wiki_{int(datetime.now().timestamp())}_{original_name}')
-            save_path = WIKI_UPLOAD_DIR / safe_name
-            f.save(str(save_path))
-            file_size = save_path.stat().st_size
-            file_url = f'/uploads/wikitoca/{safe_name}'
-            doc_title = title or original_name
-            c.execute(
-                '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
-                                              created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                (doc_title, safe_name, original_name, file_url, ext, file_size)
-            )
-            conn.commit()
-            doc_id = c.lastrowid
-            c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
-            created.append(dict_from_row(c.fetchone()))
-            print(f'[DEBUG] POST /api/wikitoca/documents salvo id={doc_id} nome={original_name}')
-        conn.close()
-        if not created:
-            return api_error(400, 'WIKI_DOC_INVALID_TYPE',
-                             'Nenhum arquivo válido enviado. Tipos aceitos: PDF, XLS, XLSX, DOC, DOCX.')
-        return jsonify(created), 201
-    except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/documents: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_DOC_UPLOAD_ERROR', 'Erro ao enviar documento.', details=str(e))
-
-
-@app.route('/api/wikitoca/documents/<int:document_id>', methods=['DELETE'])
-def delete_wiki_document(document_id):
-    print(f'[DEBUG] DELETE /api/wikitoca/documents/{document_id} chamado')
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM wiki_documents WHERE id = ?', (document_id,))
-        row = dict_from_row(c.fetchone())
-        if not row:
-            conn.close()
-            return api_error(404, 'WIKI_DOC_NOT_FOUND', 'Documento não encontrado.')
-        file_path = WIKI_UPLOAD_DIR / row['file_name']
-        if file_path.exists():
-            file_path.unlink()
-        c.execute('DELETE FROM wiki_documents WHERE id = ?', (document_id,))
-        conn.commit()
-        conn.close()
-        print(f'[DEBUG] DELETE /api/wikitoca/documents/{document_id} removido')
-        return jsonify({'message': 'Documento removido com sucesso.'})
-    except Exception as e:
-        print(f'[ERROR] DELETE /api/wikitoca/documents/{document_id}: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_DOC_DELETE_ERROR', 'Erro ao remover documento.', details=str(e))
-
-
-@app.route('/api/wikitoca/documents/export-zip', methods=['GET'])
-def export_wiki_documents():
-    try:
-        from flask import send_file
-        import tempfile
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM wiki_documents ORDER BY id')
-        rows = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-
-        temp_dir = tempfile.mkdtemp()
-        temp_zip = Path(temp_dir) / 'wikitoca-documentos.zip'
-        manifest = []
-        with zipfile.ZipFile(str(temp_zip), mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
-            for row in rows:
-                file_path = WIKI_UPLOAD_DIR / row['file_name']
-                if file_path.exists():
-                    zf.write(str(file_path), arcname=f"files/{row['file_name']}")
-                manifest.append({
-                    'title': row.get('title'),
-                    'file_name': row.get('file_name'),
-                    'original_name': row.get('original_name'),
-                    'file_ext': row.get('file_ext'),
-                })
-            zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
-
-        return send_file(
-            str(temp_zip),
-            as_attachment=True,
-            download_name=f'wikitoca-documentos-{datetime.now().strftime("%Y%m%d-%H%M%S")}.zip',
-            mimetype='application/zip'
-        )
-    except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/documents/export-zip: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_DOC_EXPORT_ERROR', 'Erro ao exportar documentos.', details=str(e))
-
-
-@app.route('/api/wikitoca/documents/import-zip', methods=['POST'])
-def import_wiki_documents():
-    try:
-        if 'file' not in request.files:
-            return api_error(400, 'WIKI_DOC_IMPORT_NO_FILE', 'Nenhum arquivo enviado.')
-        file = request.files['file']
-        if not file.filename or not file.filename.lower().endswith('.zip'):
-            return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Envie um arquivo .zip exportado pelo Toca do Coelho.')
-
-        import tempfile
-        temp_dir = tempfile.mkdtemp()
-        temp_zip_path = Path(temp_dir) / 'import.zip'
-        file.save(str(temp_zip_path))
-
-        imported = []
-        with zipfile.ZipFile(str(temp_zip_path), mode='r') as zf:
-            names = zf.namelist()
-            if 'manifest.json' not in names:
-                return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Arquivo .zip inválido: manifest.json não encontrado.')
-            manifest = json.loads(zf.read('manifest.json').decode('utf-8'))
-
-            conn = get_db()
-            c = conn.cursor()
-            for entry in manifest:
-                original_name = entry.get('original_name') or entry.get('file_name') or 'documento'
-                ext = (entry.get('file_ext') or Path(original_name).suffix.lower())
-                if ext not in ALLOWED_WIKI_EXTENSIONS:
-                    continue
-                src_name = f"files/{entry.get('file_name')}"
-                if src_name not in names:
-                    continue
-                safe_name = secure_filename(f'wiki_{int(datetime.now().timestamp()*1000)}_{original_name}')
-                save_path = WIKI_UPLOAD_DIR / safe_name
-                with zf.open(src_name) as src, open(save_path, 'wb') as dst:
-                    dst.write(src.read())
-                file_size = save_path.stat().st_size
-                file_url = f'/uploads/wikitoca/{safe_name}'
-                doc_title = entry.get('title') or original_name
-                c.execute(
-                    '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
-                                                  created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                    (doc_title, safe_name, original_name, file_url, ext, file_size)
-                )
-                conn.commit()
-                doc_id = c.lastrowid
-                c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
-                imported.append(dict_from_row(c.fetchone()))
-            conn.close()
-
-        return jsonify({'imported': len(imported), 'documents': imported}), 201
-    except zipfile.BadZipFile:
-        return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Arquivo .zip inválido ou corrompido.')
-    except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/documents/import-zip: {e}')
-        traceback.print_exc()
-        return api_error(500, 'WIKI_DOC_IMPORT_ERROR', 'Erro ao importar documentos.', details=str(e))
-
-
 # WikiToca - Export/Import XLSX
-
-@app.route('/api/wikitoca/entries/export-xlsx', methods=['GET'])
-def export_wikitoca_xlsx():
-    try:
-        print('[DEBUG] GET /api/wikitoca/entries/export-xlsx chamado')
-        if not OPENPYXL_AVAILABLE:
-            return jsonify({'error': 'Exportação XLSX requer openpyxl instalado'}), 500
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT title, category, tags, content FROM wiki_entries ORDER BY updated_at DESC')
-        rows = c.fetchall()
-        conn.close()
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        from io import BytesIO
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = 'Conhecimentos'
-        headers = ['Título', 'Categoria', 'Tags', 'Descrição']
-        ws.append(headers)
-        header_fill = PatternFill(start_color='34D399', end_color='34D399', fill_type='solid')
-        for col_idx, _ in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.font = Font(bold=True, color='FFFFFF')
-            cell.fill = header_fill
-            cell.alignment = Alignment(horizontal='center')
-        ws.column_dimensions['A'].width = 40
-        ws.column_dimensions['B'].width = 20
-        ws.column_dimensions['C'].width = 30
-        ws.column_dimensions['D'].width = 60
-        for row in rows:
-            ws.append([
-                row['title'] or '',
-                row['category'] or '',
-                row['tags'] or '',
-                row['content'] or ''
-            ])
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        from flask import send_file
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name='wikitoca_conhecimentos.xlsx',
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/entries/export-xlsx: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/wikitoca/entries/template-xlsx', methods=['GET'])
-def wikitoca_template_xlsx():
-    try:
-        print('[DEBUG] GET /api/wikitoca/entries/template-xlsx chamado')
-        if not OPENPYXL_AVAILABLE:
-            return jsonify({'error': 'Template XLSX requer openpyxl instalado'}), 500
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        from io import BytesIO
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = 'Conhecimentos'
-        headers = ['Título', 'Categoria', 'Descrição']
-        ws.append(headers)
-        header_fill = PatternFill(start_color='34D399', end_color='34D399', fill_type='solid')
-        for col_idx, _ in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.font = Font(bold=True, color='FFFFFF')
-            cell.fill = header_fill
-            cell.alignment = Alignment(horizontal='center')
-        ws.column_dimensions['A'].width = 40
-        ws.column_dimensions['B'].width = 20
-        ws.column_dimensions['C'].width = 60
-        ws.append(['Exemplo de título', 'Comercial', 'Descreva aqui o conhecimento a ser registrado.'])
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        from flask import send_file
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name='wikitoca_template.xlsx',
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    except Exception as e:
-        print(f'[ERROR] GET /api/wikitoca/entries/template-xlsx: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/wikitoca/entries/import-xlsx', methods=['POST'])
-def import_wikitoca_xlsx():
-    try:
-        print('[DEBUG] POST /api/wikitoca/entries/import-xlsx chamado')
-        if 'file' not in request.files:
-            return jsonify({'error': 'Nenhum arquivo enviado'}), 400
-        file = request.files['file']
-        if not file.filename or not file.filename.lower().endswith('.xlsx'):
-            return jsonify({'error': 'Envie um arquivo .xlsx'}), 400
-        if not OPENPYXL_AVAILABLE:
-            return jsonify({'error': 'Importação XLSX requer openpyxl instalado'}), 500
-        import openpyxl
-        import tempfile, os as _os
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-            file.save(tmp.name)
-            tmp_path = tmp.name
-        try:
-            wb = openpyxl.load_workbook(tmp_path, data_only=True)
-            ws = wb.active
-            rows_data = list(ws.iter_rows(values_only=True))
-        finally:
-            _os.unlink(tmp_path)
-        if not rows_data:
-            return jsonify({'error': 'Arquivo vazio'}), 400
-        # Detectar colunas pelo cabeçalho
-        header = [str(c).strip().lower() if c else '' for c in rows_data[0]]
-        def find_col(names):
-            for name in names:
-                if name in header:
-                    return header.index(name)
-            return None
-        col_title = find_col(['título', 'titulo', 'title'])
-        col_cat = find_col(['categoria', 'category'])
-        col_desc = find_col(['descrição', 'descricao', 'description', 'conteúdo', 'conteudo', 'content'])
-        if col_title is None or col_desc is None:
-            return jsonify({'error': 'Colunas obrigatórias não encontradas. O arquivo deve ter colunas Título e Descrição.'}), 400
-        # Função de geração de tags (mesma lógica do frontend)
-        stopwords = {'a','o','os','as','de','da','do','das','dos','e','é','em','no','na','nos','nas','um','uma','uns','umas','para','por','com','sem','que','se','ao','aos','à','às','ou','como','mais','menos','ja','não','sim'}
-        def generate_tags(title, content):
-            import re
-            text = f'{title or ""} {content or ""}'.lower()
-            words = re.findall(r'[a-záàãâéêíóôõúüç0-9-]{3,}', text)
-            rank = {}
-            for w in words:
-                if w in stopwords or w.isdigit():
-                    continue
-                rank[w] = rank.get(w, 0) + 1
-            sorted_words = sorted(rank.items(), key=lambda x: (-x[1], x[0]))
-            return ', '.join(w for w, _ in sorted_words[:6])
-        conn = get_db()
-        c = conn.cursor()
-        ok = 0
-        fail = 0
-        errors = []
-        for idx, row in enumerate(rows_data[1:], start=2):
-            try:
-                title = str(row[col_title]).strip() if row[col_title] else ''
-                category = str(row[col_cat]).strip() if col_cat is not None and row[col_cat] else ''
-                content = str(row[col_desc]).strip() if row[col_desc] else ''
-                if not title or not content:
-                    fail += 1
-                    errors.append(f'Linha {idx}: título ou descrição vazia')
-                    continue
-                tags = generate_tags(title, content)
-                now = datetime.utcnow().isoformat() + 'Z'
-                c.execute(
-                    'INSERT INTO wiki_entries (title, category, tags, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-                    (title, category, tags, content, now, now)
-                )
-                ok += 1
-            except Exception as row_err:
-                fail += 1
-                errors.append(f'Linha {idx}: {str(row_err)}')
-        conn.commit()
-        conn.close()
-        print(f'[DEBUG] POST /api/wikitoca/entries/import-xlsx: {ok} importados, {fail} erros')
-        return jsonify({'imported': ok, 'failed': fail, 'errors': errors[:10]}), 200
-    except Exception as e:
-        print(f'[ERROR] POST /api/wikitoca/entries/import-xlsx: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-
-
-@app.route('/api/autotoca/accounts', methods=['GET'])
-def autotoca_accounts():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id, name FROM accounts ORDER BY name COLLATE NOCASE')
-        rows = c.fetchall()
-        conn.close()
-        accounts = [{'id': row['id'], 'name': row['name']} for row in rows]
-        return jsonify([{'id': 0, 'name': 'OUTRO'}] + accounts)
-    except Exception as e:
-        logger.exception(f'[AutoToca] GET /api/autotoca/accounts: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/upload', methods=['POST'])
-def autotoca_upload():
-    try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
-        file = request.files['file']
-        if not file.filename:
-            return jsonify({'error': 'Nome de arquivo inválido.'}), 400
-        
-        # Verificar se deve converter para PDF (parâmetro convert_to_pdf)
-        convert_to_pdf = request.form.get('convert_to_pdf', 'false').lower() == 'true'
-        original_filename = secure_filename(file.filename)
-        
-        # Se deve converter para PDF
-        if convert_to_pdf and not original_filename.lower().endswith('.pdf'):
-            try:
-                # Salvar arquivo temporário
-                temp_path = AUTOTOCA_UPLOAD_DIR / f"temp_{uuid.uuid4().hex}_{original_filename}"
-                file.save(str(temp_path))
-                
-                # Converter para PDF
-                pdf_filename = original_filename.rsplit('.', 1)[0] + '.pdf'
-                safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{pdf_filename}"
-                target = AUTOTOCA_UPLOAD_DIR / safe_name
-                
-                # Se é um arquivo de imagem, converter para PDF
-                file_ext = original_filename.rsplit('.', 1)[-1].lower() if '.' in original_filename else ''
-                if file_ext in {'jpg', 'jpeg', 'png', 'gif', 'bmp'}:
-                    try:
-                        from PIL import Image
-                        img = Image.open(str(temp_path))
-                        if img.mode == 'RGBA':
-                            img = img.convert('RGB')
-                        img.save(str(target), 'PDF')
-                        logger.info(f'[AutoToca] Imagem convertida para PDF: {original_filename} -> {pdf_filename}')
-                    except Exception as e:
-                        logger.warning(f'[AutoToca] Falha ao converter imagem para PDF: {e}. Usando arquivo original.')
-                        target = AUTOTOCA_UPLOAD_DIR / f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{original_filename}"
-                        file.seek(0)
-                        file.save(str(target))
-                        pdf_filename = original_filename
-                elif file_ext in {'docx', 'doc', 'txt', 'html', 'htm'}:
-                    try:
-                        # Para documentos Word, usar python-docx
-                        if file_ext in {'docx', 'doc'} and PYTHON_DOCX_AVAILABLE:
-                            from reportlab.lib.pagesizes import letter
-                            from reportlab.pdfgen import canvas
-                            doc = python_docx.Document(str(temp_path))
-                            c = canvas.Canvas(str(target), pagesize=letter)
-                            y = 750
-                            for para in doc.paragraphs:
-                                if para.text.strip():
-                                    text = para.text[:100]
-                                    c.drawString(50, y, text)
-                                    y -= 20
-                                    if y < 50:
-                                        c.showPage()
-                                        y = 750
-                            c.save()
-                            logger.info(f'[AutoToca] Documento convertido para PDF: {original_filename} -> {pdf_filename}')
-                        else:
-                            # Fallback: copiar arquivo original
-                            shutil.copy2(str(temp_path), str(target))
-                    except Exception as e:
-                        logger.warning(f'[AutoToca] Falha ao converter documento para PDF: {e}. Usando arquivo original.')
-                        shutil.copy2(str(temp_path), str(target))
-                else:
-                    # Para outros formatos, apenas copiar
-                    shutil.copy2(str(temp_path), str(target))
-                
-                # Remover arquivo temporário
-                try:
-                    temp_path.unlink()
-                except:
-                    pass
-                
-                return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': pdf_filename})
-            except Exception as e:
-                logger.exception(f'[AutoToca] Erro ao converter arquivo para PDF: {e}')
-                # Fallback: salvar arquivo original
-                safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{original_filename}"
-                target = AUTOTOCA_UPLOAD_DIR / safe_name
-                file.seek(0)
-                file.save(str(target))
-                return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': original_filename})
-        else:
-            # Sem conversão, salvar normalmente
-            safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}_{original_filename}"
-            target = AUTOTOCA_UPLOAD_DIR / safe_name
-            file.save(str(target))
-            return jsonify({'path': str(target), 'url': f'/uploads/autotoca/{safe_name}', 'name': file.filename})
-    except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/upload: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/account-info', methods=['POST'])
-def autotoca_account_info():
-    try:
-        data = request.get_json(force=True) or {}
-        account_name = (data.get('account_name') or '').strip()
-        if not account_name:
-            return jsonify({'error': 'Conta inválida para busca de dados.'}), 400
-
-        result = _autotoca_account_info_via_llm(account_name)
-        return jsonify(result)
-    except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/account-info: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/support-files', methods=['GET'])
-def autotoca_support_files():
-    try:
-        files = []
-        for path in sorted(AUTOTOCA_SUPPORT_FILES_DIR.glob('*')):
-            if not path.is_file():
-                continue
-            if path.suffix.lower() != '.pdf':
-                continue
-            files.append({
-                'name': path.name,
-                'url': f'/assets/autotoca/chamado-juridico/{urllib.parse.quote(path.name)}'
-            })
-        return jsonify(files)
-    except Exception as e:
-        logger.exception(f'[AutoToca] GET /api/autotoca/support-files: {e}')
-        return jsonify({'error': str(e)}), 500
 
 
 def _autotoca_parse_account_info_raw(raw):
@@ -15321,8 +10174,8 @@ def _autotoca_parse_account_info_raw(raw):
             obj = json.loads(text)
             if isinstance(obj, dict):
                 return obj
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'[_coerce] exceção ignorada: {e}')
         obj = _extract_json_object_from_text(text)
         return obj if isinstance(obj, dict) else None
 
@@ -15451,440 +10304,6 @@ def _autotoca_account_info_via_llm(account_name: str) -> dict:
     }
 
 
-
-# ─────────────────────────────────────────
-#  Chamado Jurídico — Robô de preenchimento do Microsoft Forms
-#  (Playwright visível: preenche, o usuário revisa/anexa e envia)
-# ─────────────────────────────────────────
-
-AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = (
-    'https://forms.office.com/Pages/ResponsePage.aspx'
-    '?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu'
-)
-
-_forms_robot_tasks = {}
-_forms_robot_tasks_lock = threading.Lock()
-
-
-def _forms_robot_task_set(task_id, updates):
-    with _forms_robot_tasks_lock:
-        task = _forms_robot_tasks.get(task_id, {})
-        task.update(updates)
-        _forms_robot_tasks[task_id] = task
-
-
-def _forms_robot_task_get(task_id):
-    with _forms_robot_tasks_lock:
-        return dict(_forms_robot_tasks.get(task_id) or {})
-
-
-def _forms_robot_task_cleanup(task_id, delay=300):
-    def _cleanup():
-        time.sleep(delay)
-        with _forms_robot_tasks_lock:
-            _forms_robot_tasks.pop(task_id, None)
-    threading.Thread(target=_cleanup, daemon=True).start()
-
-
-# Campos de upload do Chamado Jurídico — chave usada no FormData/no histórico,
-# se aceita múltiplos arquivos e se tem arquivo padrão de apoio como fallback
-# quando o usuário não anexa nada.
-CHAMADO_JURIDICO_FILE_FIELDS = {
-    'aditivos_anteriores':        {'multiple': True,  'fallback': False},
-    'contrato_anterior':          {'multiple': False, 'fallback': True},
-    'minuta_cliente':             {'multiple': False, 'fallback': True},
-    'aprovacao_reajuste':         {'multiple': False, 'fallback': True},
-    'proposta_comercial_tecnica': {'multiple': False, 'fallback': False},
-}
-
-# Sim/Não simples, replicados 1:1 no formulário — chave -> texto da mensagem de validação
-# (assinatura_plataforma não entra aqui: usa valores 'cliente'/'stefanini', validado à parte)
-CHAMADO_JURIDICO_YES_NO_LABELS = {
-    'havera_reajuste': 'se haverá reajuste',
-    'houve_reoneracao': 'se houve reoneração',
-    'inclui_novos_servicos': 'se inclui novos serviços',
-    'e_prorrogacao_vigencia': 'se é prorrogação de vigência',
-}
-
-
-def _chamado_juridico_default_support_file():
-    """Primeiro PDF da pasta 'Arquivos de Apoio' — usado como placeholder quando
-    o usuário não anexa um arquivo opcional (itens 10, 13 e 15 do formulário)."""
-    try:
-        pdfs = sorted(AUTOTOCA_SUPPORT_FILES_DIR.glob('*.pdf'))
-        return pdfs[0] if pdfs else None
-    except Exception:
-        return None
-
-
-def _chamado_juridico_save_uploaded_files(history_id, field_key, file_storages):
-    saved = []
-    field_dir = CHAMADO_JURIDICO_UPLOAD_DIR / str(history_id) / field_key
-    field_dir.mkdir(parents=True, exist_ok=True)
-    for f in file_storages:
-        if not f or not f.filename:
-            continue
-        safe_name = secure_filename(f.filename) or f'arquivo_{uuid.uuid4().hex}'
-        target = field_dir / safe_name
-        counter = 1
-        while target.exists():
-            target = field_dir / f'{target.stem}_{counter}{target.suffix}'
-            counter += 1
-        f.save(str(target))
-        saved.append({'stored_path': str(target), 'original_name': f.filename})
-    return saved
-
-
-def _chamado_juridico_copy_history_files(history_id, field_key, entries):
-    """Copia arquivos de um histórico anterior para dentro da pasta do novo
-    histórico, para que cada execução fique autocontida em disco."""
-    field_dir = CHAMADO_JURIDICO_UPLOAD_DIR / str(history_id) / field_key
-    field_dir.mkdir(parents=True, exist_ok=True)
-    copied = []
-    for entry in entries:
-        src = Path(entry.get('stored_path') or '')
-        if not src.exists():
-            continue
-        target = field_dir / src.name
-        counter = 1
-        while target.exists():
-            target = field_dir / f'{target.stem}_{counter}{target.suffix}'
-            counter += 1
-        shutil.copyfile(str(src), str(target))
-        copied.append({'stored_path': str(target), 'original_name': entry.get('original_name') or src.name})
-    return copied
-
-
-def _forms_robot_build_fields(payload, files_by_field):
-    """Monta os campos na ordem de matching (termos mais específicos primeiro).
-    `files_by_field` é {field_key: [{'stored_path','original_name'}, ...]}.
-    O item 21 do formulário nunca é respondido — nenhum campo o alveja de propósito."""
-
-    def paths(key):
-        return [e['stored_path'] for e in (files_by_field.get(key) or []) if e.get('stored_path')]
-
-    def yes_no(key):
-        return 'Sim' if (payload.get(key) or '').strip().lower() == 'sim' else 'Não'
-
-    minuta_tipo = (payload.get('minuta_tipo') or '').strip().lower()
-    # option_terms é comparado por SUBSTRING LITERAL (via get_by_role do
-    # Playwright, que delega ao navegador o nome acessível de cada opção) —
-    # ao contrário de 'terms' (usado só para achar a pergunta), aqui não se
-    # pode normalizar acento/pontuação, tem que ser um trecho real do texto
-    # visível na opção. O formulário real tem 3 opções nessa pergunta —
-    # "Minuta padrão Stefanini - sem ajustes" / "- com ajustes do cliente" /
-    # "Minuta enviada pelo cliente" — o termo precisa ser específico o
-    # bastante para não bater nas duas primeiras ao mesmo tempo.
-    minuta_option_terms = (
-        ['enviada pelo cliente']
-        if minuta_tipo == 'cliente'
-        else ['com ajustes do cliente']
-    )
-
-    # 'q' é a posição 1-based da pergunta no formulário — usada como fallback
-    # quando o texto da pergunta não bate com nenhum termo (ex.: item 15, que
-    # replica o arquivo do item 13 mas cuja redação exata não é conhecida).
-    # O item 21 nunca aparece aqui de propósito: não deve ser respondido.
-    fields = [
-        {'key': 'origem', 'label': 'Origem da Solicitação', 'type': 'radio', 'q': 1,
-         'terms': ['origem da solicitacao', 'origem'],
-         'option_terms': ['Pedroso']},
-        {'key': 'empresa_grupo', 'label': 'Empresa do Grupo Stefanini', 'type': 'radio', 'q': 2,
-         'terms': ['empresa do grupo stefanini', 'grupo stefanini', 'empresa stefanini'],
-         'option_terms': ['STEFANINI CONSULTORIA']},
-        {'key': 'conta', 'label': 'Conta', 'type': 'text', 'q': 3,
-         'terms': ['nome da conta', 'nome do cliente', 'conta', 'cliente'],
-         'value': (payload.get('conta') or '').strip()},
-        {'key': 'endereco', 'label': 'Endereço', 'type': 'text', 'q': 4,
-         'terms': ['endereco'],
-         'value': (payload.get('endereco') or '').strip()},
-        {'key': 'minuta_tipo', 'label': 'Minuta/Contrato', 'type': 'radio', 'q': 5,
-         'terms': ['minuta', 'contrato original enviado', 'origem da minuta'],
-         'option_terms': minuta_option_terms},
-        {'key': 'opp_salesforce', 'label': 'Opp Sales Force', 'type': 'text', 'q': 6,
-         'terms': ['opp sales force', 'salesforce', 'numero da oportunidade'],
-         'value': (payload.get('opp_salesforce') or '').strip() or '00000'},
-        {'key': 'data_assinatura', 'label': 'Data de Assinatura do Contrato Original', 'type': 'date', 'q': 7,
-         'terms': ['data de assinatura', 'data assinatura', 'assinatura do contrato original'],
-         'value': (payload.get('data_assinatura') or '').strip() or date.today().isoformat()},
-        {'key': 'aditivos_anteriores', 'label': 'Aditivos anteriores', 'type': 'file', 'q': 8,
-         'terms': ['aditivos anteriores'],
-         'file_paths': paths('aditivos_anteriores')},
-        {'key': 'contrato_anterior', 'label': 'Contrato Anterior', 'type': 'file', 'q': 9,
-         'terms': ['contrato anterior'],
-         'file_paths': paths('contrato_anterior')},
-        {'key': 'minuta_cliente', 'label': 'Há minuta do cliente?', 'type': 'file', 'q': 10,
-         'terms': ['ha minuta do cliente', 'minuta do cliente'],
-         'file_paths': paths('minuta_cliente')},
-        {'key': 'havera_reajuste', 'label': 'Haverá Reajuste?', 'type': 'radio_yes_no', 'q': 11,
-         'terms': ['havera reajuste'],
-         'value': yes_no('havera_reajuste')},
-        {'key': 'valores_reajuste', 'label': 'Descreva os valores de reajuste', 'type': 'text', 'q': 12,
-         'terms': ['descreva os valores de reajuste', 'valores de reajuste'],
-         'value': (payload.get('valores_reajuste') or '').strip()},
-        {'key': 'aprovacao_reajuste', 'label': 'Aprovação de Reajuste Diferente do Contrato', 'type': 'file', 'q': 13,
-         'terms': ['aprovacao de reajuste diferente do contrato', 'aprovacao de reajuste'],
-         'file_paths': paths('aprovacao_reajuste')},
-        {'key': 'houve_reoneracao', 'label': 'Houve reoneração?', 'type': 'radio_yes_no', 'q': 14,
-         'terms': ['houve reoneracao', 'reoneracao'],
-         'value': yes_no('houve_reoneracao')},
-        {'key': 'aprovacao_reajuste_15', 'label': 'Aprovação de Reajuste (item 15)', 'type': 'file', 'q': 15,
-         'terms': [],
-         'file_paths': paths('aprovacao_reajuste')},
-        {'key': 'inclui_novos_servicos', 'label': 'Inclui novos serviços?', 'type': 'radio_yes_no', 'q': 16,
-         'terms': ['inclui novos servicos', 'novos servicos'],
-         'value': yes_no('inclui_novos_servicos')},
-        {'key': 'proposta_comercial_tecnica', 'label': 'Proposta comercial e técnica', 'type': 'file', 'q': 17,
-         'terms': ['proposta comercial e tecnica', 'proposta comercial'],
-         'file_paths': paths('proposta_comercial_tecnica')},
-        {'key': 'e_prorrogacao_vigencia', 'label': 'É prorrogação de vigência?', 'type': 'radio_yes_no', 'q': 18,
-         'terms': ['prorrogacao de vigencia', 'prorrogacao'],
-         'value': yes_no('e_prorrogacao_vigencia')},
-        {'key': 'vigencia_datas', 'label': 'Data inicial e final da vigência', 'type': 'text', 'q': 19,
-         'terms': ['data inicial e final da vigencia', 'inicial e final da vigencia'],
-         'value': (payload.get('vigencia_datas') or '').strip()},
-        {'key': 'assinatura_plataforma', 'label': 'Assinatura pela plataforma Stefanini ou do cliente?',
-         'type': 'radio_yes_no', 'q': 20,
-         'terms': ['assinatura pela plataforma', 'plataforma stefanini ou do cliente'],
-         # No Toca o usuário escolhe "Stefanini" ou "Cliente"; no formulário isso vira
-         # Sim (Stefanini) / Não (Cliente) — mapeamento pedido explicitamente.
-         'value': 'Sim' if (payload.get('assinatura_plataforma') or '').strip().lower() == 'stefanini' else 'Não'},
-        {'key': 'descricao_pedido', 'label': 'Descrição do pedido', 'type': 'text', 'q': 22,
-         'terms': ['conte brevemente sobre o que se trata esse pedido', 'brevemente sobre o que se trata'],
-         'value': (payload.get('descricao_pedido') or '').strip()},
-    ]
-
-    # Item 12 e 19 só existem quando a pergunta condicionante foi "Sim" — não
-    # envia nada quando "Não" para não deixar rastro de resposta indevida.
-    if yes_no('havera_reajuste') != 'Sim':
-        fields = [f for f in fields if f['key'] != 'valores_reajuste']
-    if yes_no('e_prorrogacao_vigencia') != 'Sim':
-        fields = [f for f in fields if f['key'] != 'vigencia_datas']
-
-    return fields
-
-
-def _forms_robot_process_async(task_id, history_id, payload, files_by_field):
-    from integrations.forms_robot import run_chamado_juridico_robot, FormsRobotError
-
-    def on_progress(pct, step):
-        _forms_robot_task_set(task_id, {'progress': pct, 'step': step})
-
-    try:
-        result = run_chamado_juridico_robot(
-            AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL,
-            _forms_robot_build_fields(payload, files_by_field),
-            on_progress,
-        )
-        if result.get('submitted'):
-            final_step = 'Chamado Jurídico enviado com sucesso!'
-        else:
-            final_step = 'Preenchimento concluído — conclua a revisão e o envio na janela do robô.'
-        # Log estruturado do resultado — sem isso, o log de debug exportado pelo
-        # usuário só mostra os acessos HTTP, sem nenhum detalhe de qual campo
-        # falhou e por quê.
-        logger.info(
-            '[AutoToca][FormsRobot] resultado: submitted=%s filled=%s positional=%s unmatched=%s errors=%s',
-            result.get('submitted'), result.get('filled'), result.get('positional'),
-            result.get('unmatched'), result.get('errors'),
-        )
-        _forms_robot_task_set(task_id, {
-            'status': 'done', 'progress': 100, 'step': final_step,
-            'result': dict(result, history_id=history_id),
-        })
-    except FormsRobotError as e:
-        logger.warning(f'[AutoToca][FormsRobot] {e}')
-        _forms_robot_task_set(task_id, {'status': 'error', 'error': str(e)})
-    except Exception as e:
-        logger.exception('[AutoToca][FormsRobot] Falha inesperada')
-        _forms_robot_task_set(task_id, {'status': 'error', 'error': f'Falha inesperada no robô: {e}'})
-    finally:
-        _forms_robot_task_cleanup(task_id)
-
-
-@app.route('/api/autotoca/chamado-juridico/robot', methods=['POST'])
-def autotoca_chamado_juridico_robot():
-    try:
-        form = request.form
-        payload = {
-            'conta': (form.get('conta') or '').strip(),
-            'razao_social': (form.get('razao_social') or '').strip(),
-            'cnpj': (form.get('cnpj') or '').strip(),
-            'endereco': (form.get('endereco') or '').strip(),
-            'minuta_tipo': (form.get('minuta_tipo') or '').strip(),
-            'opp_salesforce': (form.get('opp_salesforce') or '').strip(),
-            'data_assinatura': (form.get('data_assinatura') or '').strip(),
-            'havera_reajuste': (form.get('havera_reajuste') or '').strip(),
-            'valores_reajuste': (form.get('valores_reajuste') or '').strip(),
-            'houve_reoneracao': (form.get('houve_reoneracao') or '').strip(),
-            'inclui_novos_servicos': (form.get('inclui_novos_servicos') or '').strip(),
-            'e_prorrogacao_vigencia': (form.get('e_prorrogacao_vigencia') or '').strip(),
-            'vigencia_datas': (form.get('vigencia_datas') or '').strip(),
-            'assinatura_plataforma': (form.get('assinatura_plataforma') or '').strip(),
-            'descricao_pedido': (form.get('descricao_pedido') or '').strip(),
-        }
-
-        errors = []
-        if not payload['conta']:
-            errors.append('Conta é obrigatória.')
-        if not payload['endereco']:
-            errors.append('Endereço é obrigatório.')
-        if payload['minuta_tipo'] not in ('cliente', 'stefanini'):
-            errors.append('Informe se a Minuta/Contrato é do cliente ou da Stefanini.')
-        if payload['assinatura_plataforma'] not in ('cliente', 'stefanini'):
-            errors.append('Informe se a assinatura é pela plataforma Stefanini ou do cliente.')
-        if not payload['descricao_pedido']:
-            errors.append('Descreva brevemente o pedido.')
-        for key, label in CHAMADO_JURIDICO_YES_NO_LABELS.items():
-            if payload[key].lower() not in ('sim', 'nao', 'não'):
-                errors.append(f'Responda {label}.')
-        if payload['havera_reajuste'].lower() == 'sim' and not payload['valores_reajuste']:
-            errors.append('Descreva os valores de reajuste.')
-        if payload['e_prorrogacao_vigencia'].lower() == 'sim' and not payload['vigencia_datas']:
-            errors.append('Informe a data inicial e final da vigência.')
-
-        reuse_history_id = (form.get('reuse_history_id') or '').strip()
-        reuse_row = None
-        if reuse_history_id:
-            conn = get_db()
-            c = conn.cursor()
-            c.execute('SELECT * FROM chamado_juridico_history WHERE id = ?', (reuse_history_id,))
-            row = c.fetchone()
-            conn.close()
-            if row:
-                reuse_row = dict_from_row(row)
-
-        reuse_files = json.loads(reuse_row['files_json']) if reuse_row else {}
-        # Reaproveitar um arquivo do histórico é opt-in por campo — o usuário
-        # precisa clicar explicitamente no anexo antigo para "anexá-lo" de
-        # novo. Sem isso, um campo com histórico E um upload novo acabava
-        # enviando os dois arquivos ao mesmo tempo para o Forms.
-        try:
-            reuse_field_keys = set(json.loads(form.get('reuse_fields') or '[]'))
-        except Exception:
-            reuse_field_keys = set()
-
-        if errors:
-            return jsonify({'error': ' '.join(errors)}), 400
-
-        with _forms_robot_tasks_lock:
-            busy = any(t.get('status') == 'processing' for t in _forms_robot_tasks.values())
-        if busy:
-            return jsonify({'error': 'O robô já está em execução. Aguarde ele terminar.'}), 409
-
-        # Cria a linha do histórico já para ter um id — os arquivos ficam
-        # organizados em uploads/autotoca/chamado-juridico/<history_id>/<campo>/
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            'INSERT INTO chamado_juridico_history (conta, payload_json, files_json) VALUES (?, ?, ?)',
-            (payload['conta'], json.dumps(payload, ensure_ascii=False), '{}')
-        )
-        conn.commit()
-        history_id = c.lastrowid
-
-        files_by_field = {}
-        for field_key, opts in CHAMADO_JURIDICO_FILE_FIELDS.items():
-            uploads = [f for f in request.files.getlist(field_key) if f and f.filename]
-            if uploads:
-                files_by_field[field_key] = _chamado_juridico_save_uploaded_files(history_id, field_key, uploads)
-            elif field_key in reuse_field_keys and reuse_files.get(field_key):
-                files_by_field[field_key] = _chamado_juridico_copy_history_files(
-                    history_id, field_key, reuse_files[field_key]
-                )
-            elif opts['fallback']:
-                default_file = _chamado_juridico_default_support_file()
-                if default_file:
-                    files_by_field[field_key] = [{
-                        'stored_path': str(default_file), 'original_name': default_file.name,
-                    }]
-
-        proposta_files = files_by_field.get('proposta_comercial_tecnica') or []
-        proposta_original_name = proposta_files[0]['original_name'] if proposta_files else None
-
-        c.execute(
-            'UPDATE chamado_juridico_history SET files_json = ?, proposta_original_name = ? WHERE id = ?',
-            (json.dumps(files_by_field, ensure_ascii=False), proposta_original_name, history_id)
-        )
-        conn.commit()
-        conn.close()
-
-        task_id = uuid.uuid4().hex
-        _forms_robot_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
-        threading.Thread(
-            target=_forms_robot_process_async, args=(task_id, history_id, payload, files_by_field), daemon=True
-        ).start()
-        return jsonify({'task_id': task_id, 'history_id': history_id}), 202
-    except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/chamado-juridico/robot: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/autotoca/chamado-juridico/robot/tasks/<task_id>', methods=['GET'])
-def autotoca_chamado_juridico_robot_task(task_id):
-    task = _forms_robot_task_get(task_id)
-    if not task:
-        return jsonify({'error': 'Tarefa não encontrada.'}), 404
-    return jsonify(task)
-
-
-def _chamado_juridico_upload_url(stored_path):
-    try:
-        rel = Path(stored_path).resolve().relative_to(AUTOTOCA_UPLOAD_DIR.resolve())
-        return f'/uploads/autotoca/{urllib.parse.quote(str(rel).replace(os.sep, "/"))}'
-    except Exception:
-        return None
-
-
-@app.route('/api/autotoca/chamado-juridico/history', methods=['GET'])
-def autotoca_chamado_juridico_history_list():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute(
-        'SELECT id, conta, proposta_original_name, created_at FROM chamado_juridico_history '
-        'ORDER BY created_at DESC LIMIT 50'
-    )
-    rows = [dict_from_row(r) for r in c.fetchall()]
-    conn.close()
-    return jsonify(rows)
-
-
-@app.route('/api/autotoca/chamado-juridico/history/<int:history_id>', methods=['GET'])
-def autotoca_chamado_juridico_history_get(history_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('SELECT * FROM chamado_juridico_history WHERE id = ?', (history_id,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return jsonify({'error': 'Histórico não encontrado.'}), 404
-    entry = dict_from_row(row)
-    files = json.loads(entry.get('files_json') or '{}')
-    files_view = {
-        key: [{'original_name': e.get('original_name'), 'url': _chamado_juridico_upload_url(e.get('stored_path'))}
-              for e in entries]
-        for key, entries in files.items()
-    }
-    return jsonify({
-        'id': entry['id'],
-        'payload': json.loads(entry.get('payload_json') or '{}'),
-        'files': files_view,
-    })
-
-
-@app.route('/api/autotoca/linkedin/teste', methods=['POST'])
-def autotoca_teste_linkedin():
-    try:
-        data = request.get_json(force=True) or {}
-        name = (data.get('name') or '').strip()
-        company = (data.get('company') or '').strip()
-        if not name or not company:
-            return jsonify({'ok': False, 'error': 'Informe nome e empresa.'}), 400
-        return jsonify({'ok': True, 'items': _linkedin_mock_candidates(name, company), 'mode': 'safe_fallback'})
-    except Exception as e:
-        logger.exception(f'[AutoToca] POST /api/autotoca/linkedin/teste: {e}')
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
 # ─────────────────────────────────────────
 #  WhatsApp Update — WAHA (WhatsApp HTTP API)
 # ─────────────────────────────────────────
@@ -15915,6 +10334,210 @@ def _waha_headers(api_key):
     if api_key:
         h['X-Api-Key'] = api_key
     return h
+
+
+# ---------------------------------------------------------------------------
+# Caixa de respostas pendentes (Bloco 6) — inbound WhatsApp e Outlook.
+# Registra a última mensagem recebida de cada cliente sem resposta sua.
+# ---------------------------------------------------------------------------
+
+def _inbound_upsert(c, client_id, channel, received_at, preview, source_msg_id):
+    """Registra mensagem recebida pendente (dedup por source_msg_id)."""
+    c.execute(
+        '''INSERT INTO inbound_messages (client_id, channel, received_at, preview, source_msg_id)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(source_msg_id) DO NOTHING''',
+        (client_id, channel, received_at, (preview or '')[:280], source_msg_id)
+    )
+
+
+def _inbound_mark_responded(c, client_id, channel, responded_at=None):
+    responded_at = responded_at or datetime.now().isoformat(timespec='seconds')
+    c.execute(
+        '''UPDATE inbound_messages SET responded_at = ?
+           WHERE client_id = ? AND channel = ? AND responded_at IS NULL''',
+        (responded_at, client_id, channel)
+    )
+
+
+def _inbound_scan_whatsapp():
+    """Fase A (polling): consulta o WAHA pelas conversas dos clientes cadastrados
+    e registra a última mensagem com fromMe=false posterior à última fromMe=true.
+    Comportamento passivo (equivalente a abrir o WhatsApp Web)."""
+    api_url, api_key, session = _waha_settings()
+    headers = _waha_headers(api_key)
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""SELECT id, name, phone FROM clients
+                 WHERE phone IS NOT NULL AND phone != '' AND COALESCE(is_archived, 0) = 0""")
+    clients = c.fetchall()
+    since_ts = int((datetime.now() - timedelta(days=14)).timestamp())
+    scanned = pending = 0
+    for row in clients:
+        chat_id = _phone_to_waha_chatid(row['phone'])
+        if not chat_id:
+            continue
+        try:
+            resp = requests.get(
+                f'{api_url}/api/{session}/chats/{chat_id}/messages',
+                headers=headers,
+                params={'limit': 50, 'downloadMedia': 'false', 'filter.timestamp.gte': since_ts},
+                timeout=20
+            )
+            if resp.status_code != 200:
+                continue
+            raw = resp.json()
+            messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
+        except Exception as e:
+            logger.debug(f'[Inbound] WAHA indisponível para {row["name"]}: {e}')
+            continue
+        scanned += 1
+        last_in, last_out, last_in_msg = 0, 0, None
+        for msg in messages:
+            try:
+                ts = int(msg.get('timestamp') or 0)
+            except (TypeError, ValueError):
+                continue
+            if msg.get('fromMe'):
+                last_out = max(last_out, ts)
+            elif ts > last_in:
+                last_in = ts
+                last_in_msg = msg
+        if last_in and last_in > last_out:
+            text, _sender = _waha_extract_text(last_in_msg, row['name'])
+            msg_id = last_in_msg.get('id')
+            if isinstance(msg_id, dict):
+                msg_id = msg_id.get('_serialized') or msg_id.get('id')
+            source_id = f'wa:{msg_id or (str(row["id"]) + ":" + str(last_in))}'
+            _inbound_upsert(c, row['id'], 'whatsapp',
+                            datetime.fromtimestamp(last_in).isoformat(timespec='seconds'),
+                            text or '(mensagem sem texto)', source_id)
+            pending += 1
+        elif last_out:
+            _inbound_mark_responded(c, row['id'], 'whatsapp',
+                                    datetime.fromtimestamp(last_out).isoformat(timespec='seconds'))
+    conn.commit()
+    conn.close()
+    logger.info(f'[Inbound] Scan WhatsApp: {scanned} conversas verificadas, {pending} pendências registradas')
+    return {'scanned': scanned, 'pending': pending}
+
+
+def _inbound_feed_from_outlook(c, emails_data, clients_map):
+    """Alimenta o painel de pendências a partir dos e-mails importados do Outlook:
+    cliente cujo último e-mail recebido é posterior ao último enviado = pendente."""
+    per_client = {}
+    for em in emails_data or []:
+        direction = em.get('direction', 'received')
+        when = (em.get('date') or '').strip()
+        if not when:
+            continue
+        if direction == 'received':
+            addr = ((em.get('sender') or {}).get('email') or '').lower()
+            entry = clients_map.get(addr)
+            if not entry:
+                continue
+            slot = per_client.setdefault(entry['id'], {'in': None, 'out': ''})
+            if slot['in'] is None or when > slot['in']['date']:
+                slot['in'] = {'date': when, 'preview': em.get('body_preview') or em.get('subject') or '',
+                              'msg_id': em.get('message_id') or ''}
+        else:
+            for rec in em.get('recipients') or []:
+                entry = clients_map.get((rec.get('email') or '').lower())
+                if entry:
+                    slot = per_client.setdefault(entry['id'], {'in': None, 'out': ''})
+                    slot['out'] = max(slot['out'], when)
+    for client_id, slot in per_client.items():
+        if slot['in'] and slot['in']['date'] > slot['out']:
+            source_id = f'em:{slot["in"]["msg_id"] or (str(client_id) + ":" + slot["in"]["date"])}'
+            _inbound_upsert(c, client_id, 'email', slot['in']['date'][:19].replace('T', ' '),
+                            slot['in']['preview'], source_id)
+        elif slot['out']:
+            _inbound_mark_responded(c, client_id, 'email', slot['out'][:19].replace('T', ' '))
+
+
+# ---------------------------------------------------------------------------
+# Jobs agendados leves (Blocos 9/13/14): cada job registra sua última execução
+# em app_settings e roda quando o intervalo vence. Registrados pelos módulos
+# de rotas via _register_scheduled_job().
+# ---------------------------------------------------------------------------
+_SCHEDULED_JOBS = []
+_scheduled_jobs_started = False
+
+
+def _register_scheduled_job(settings_key, interval_days, fn, only_after_hour=None):
+    """only_after_hour: se definido, o job só roda a partir dessa hora local."""
+    _SCHEDULED_JOBS.append((settings_key, interval_days, fn, only_after_hour))
+
+
+def _save_app_setting(key, value):
+    conn = get_db()
+    conn.execute(
+        'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP',
+        (key, str(value))
+    )
+    conn.commit()
+    conn.close()
+
+
+def _start_scheduled_jobs():
+    global _scheduled_jobs_started
+    if _scheduled_jobs_started or os.environ.get('TOCA_DISABLE_BG_JOBS') == '1':
+        return
+    _scheduled_jobs_started = True
+
+    def _loop():
+        while True:
+            time.sleep(30 * 60)  # verifica a cada 30 min o que está vencido
+            now = datetime.now()
+            for key, interval_days, fn, only_after_hour in list(_SCHEDULED_JOBS):
+                try:
+                    if only_after_hour is not None and now.hour < only_after_hour:
+                        continue
+                    last_raw = _resolve_setting(key, '')
+                    if last_raw:
+                        try:
+                            last = datetime.fromisoformat(last_raw)
+                            if (now - last) < timedelta(days=interval_days):
+                                continue
+                        except ValueError:
+                            pass
+                    logger.info(f'[Jobs] Executando job agendado: {key}')
+                    result = fn()
+                    if result == 'skip':
+                        continue  # fora da janela do job — tenta de novo mais tarde
+                    _save_app_setting(key, now.isoformat(timespec='seconds'))
+                except Exception as e:
+                    logger.warning(f'[Jobs] Job {key} falhou: {e}')
+
+    threading.Thread(target=_loop, daemon=True).start()
+    logger.info(f'[Jobs] Agendador iniciado ({len(_SCHEDULED_JOBS)} jobs registrados)')
+
+
+_inbound_poller_started = False
+
+
+def _start_inbound_poller():
+    """Job em background (Fase A) com intervalo configurável (default 15 min)."""
+    global _inbound_poller_started
+    if _inbound_poller_started or os.environ.get('TOCA_DISABLE_BG_JOBS') == '1':
+        return
+    _inbound_poller_started = True
+
+    def _loop():
+        while True:
+            try:
+                minutes = int(_resolve_setting('inbound_poll_minutes', 'INBOUND_POLL_MINUTES') or 15)
+            except Exception:
+                minutes = 15
+            time.sleep(max(minutes, 1) * 60)
+            try:
+                _inbound_scan_whatsapp()
+            except Exception as e:
+                logger.debug(f'[Inbound] Poller: scan falhou (WAHA offline?): {e}')
+
+    threading.Thread(target=_loop, daemon=True).start()
+    logger.info('[Inbound] Poller de respostas pendentes iniciado')
 
 
 _waha_last_restart = 0.0
@@ -15998,8 +10621,8 @@ def _kill_process_on_port(port):
                     try:
                         os.kill(int(pid), _sig.SIGTERM)
                         killed.append(pid)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_kill_process_on_port] exceção ignorada: {e}')
     except Exception as exc:
         logger.debug(f'[WhatsApp] _kill_process_on_port({port}): {exc}')
     if killed:
@@ -16094,7 +10717,10 @@ def _whatsapp_sync_async(task_id, period_days):
             _bg_task_cleanup(task_id)
             return
 
-        now_dt = datetime.utcnow()
+        # Horário local em todo o app; a conversão para epoch UTC (que a API do
+        # WAHA espera) acontece via .timestamp(), que interpreta o datetime
+        # naive como horário local — elimina o deslocamento de 3h no corte.
+        now_dt = datetime.now()
         since_dt = now_dt - timedelta(days=period_days)
         since_ts = int(since_dt.timestamp())
         now_ts = int(now_dt.timestamp())
@@ -16221,8 +10847,8 @@ def _whatsapp_sync_async(task_id, period_days):
                             timeout=30
                         )
                         raw_llm = (or_resp.json().get('choices') or [{}])[0].get('message', {}).get('content', '').strip()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'[_msg_ts] exceção ignorada: {e}')
 
             # Parse da resposta: JSON {resumo, followup} ou texto puro (fallback retrocompatível)
             summary = ''
@@ -16284,270 +10910,13 @@ def _whatsapp_sync_async(task_id, period_days):
         _bg_task_cleanup(task_id)
 
 
-@app.route('/api/whatsapp/config', methods=['GET'])
-def whatsapp_get_config():
-    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
-    has_key = bool((s.get('waha_api_key') or '').strip())
-    return jsonify({
-        'waha_api_url': s.get('waha_api_url') or 'http://localhost:3001',
-        'waha_api_key': '••••••••' if has_key else '',
-        'waha_session_name': s.get('waha_session_name') or 'default',
-        'configured': bool((s.get('waha_api_url') or '').strip()),
-    })
-
-
-@app.route('/api/whatsapp/config', methods=['PUT'])
-def whatsapp_save_config():
-    data = request.get_json(force=True) or {}
-    waha_url = (data.get('waha_api_url') or '').strip()
-    if waha_url:
-        app_port = str(os.environ.get('PORT', '3000'))
-        for forbidden in (f'localhost:{app_port}', f'127.0.0.1:{app_port}'):
-            if forbidden in waha_url:
-                return jsonify({'ok': False,
-                                'error': f'A URL do WAHA não pode apontar para a porta do próprio app (:{app_port}). Use a porta 3001.'}), 400
-    db = get_db()
-    c = db.cursor()
-    for key in ['waha_api_url', 'waha_api_key', 'waha_session_name']:
-        val = (data.get(key) or '').strip()
-        if val and val != '••••••••':
-            c.execute(
-                "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
-                (key, val)
-            )
-    db.commit()
-    return jsonify({'ok': True})
-
-
-@app.route('/api/whatsapp/status', methods=['GET'])
-def whatsapp_status():
-    api_url, api_key, session = _waha_settings()
-    if not api_url:
-        return jsonify({'configured': False, 'connected': False, 'state': 'not_configured'})
-    try:
-        resp = requests.get(f'{api_url}/api/sessions/{session}', headers=_waha_headers(api_key), timeout=5)
-        if resp.status_code == 404:
-            return jsonify({'configured': True, 'connected': False, 'state': 'no_session'})
-        if resp.status_code == 401:
-            return jsonify({'configured': True, 'connected': False, 'state': 'unauthorized',
-                            'error': 'API Key inválida.'})
-        body = resp.json() or {}
-        raw = (body.get('status') or 'STOPPED').upper()
-        waha_err = body.get('error')
-        # Normaliza os estados crus do WAHA-lite (MAIÚSCULOS) para os estados que o front
-        # entende (minúsculos). Sem isso, 'STARTING' não casava com nenhum branch do front,
-        # que pulava direto para o QR e estourava o timeout de 40s durante o cold start do
-        # Chrome — mesmo quando a sessão já estava prestes a ficar WORKING (sessão salva).
-        if raw == 'WORKING':
-            return jsonify({'configured': True, 'connected': True, 'state': 'connected'})
-        if raw == 'SCAN_QR_CODE':
-            return jsonify({'configured': True, 'connected': False, 'state': 'scan_qr'})
-        if raw == 'STARTING':
-            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
-                            'error': 'WhatsApp conectando (abrindo o Chrome e restaurando a sessão)... aguarde.'})
-        # STOPPED / FAILED: se o WAHA-lite reportou um erro (ex.: navegador não encontrado),
-        # mostra a causa real; senão, deixa o front seguir para (re)conectar.
-        return jsonify({'configured': True, 'connected': False,
-                        'state': 'offline' if waha_err else 'stopped',
-                        'error': waha_err or 'Sessão do WhatsApp parada. Clique para reconectar.'})
-    except requests.exceptions.ConnectionError:
-        # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
-        if _waha_deps_missing():
-            return jsonify({'configured': True, 'connected': False, 'state': 'offline',
-                            'error': 'WAHA-lite não pôde iniciar: dependências (node_modules) ausentes. '
-                                     'Reinstale o Toca do Coelho (ou rode "npm install" na pasta waha-lite).'})
-        started_at = float(os.environ.get('WAHA_STARTED_AT', '0'))
-        seconds_up = time.time() - started_at
-        if seconds_up < 90:
-            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
-                            'error': 'WAHA-lite está inicializando. Aguarde alguns instantes...'})
-        restarted = _restart_waha_lite()
-        if restarted:
-            return jsonify({'configured': True, 'connected': False, 'state': 'starting',
-                            'error': 'WAHA-lite foi reiniciado. Aguarde alguns instantes...'})
-        return jsonify({'configured': True, 'connected': False, 'state': 'offline',
-                        'error': 'Serviço do WhatsApp (WAHA-lite) offline. Reinicie o Toca do Coelho para iniciá-lo automaticamente.'})
-    except Exception as e:
-        return jsonify({'configured': True, 'connected': False, 'state': 'error', 'error': str(e)})
-
-
-@app.route('/api/whatsapp/connect', methods=['POST'])
-def whatsapp_connect():
-    api_url, api_key, session = _waha_settings()
-    if not api_url:
-        return jsonify({'ok': False, 'error': 'WAHA não configurado.'}), 400
-    headers = _waha_headers(api_key)
-
-    # 1. Garante que a sessão existe e está iniciada
-    try:
-        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
-        if st.status_code == 200:
-            status = (st.json() or {}).get('status')
-            if status == 'WORKING':
-                return jsonify({'ok': True, 'connected': True})
-            if status in ('STOPPED', 'FAILED'):
-                requests.post(f'{api_url}/api/sessions/{session}/start', headers=headers, timeout=15)
-        elif st.status_code == 404:
-            # Cria e inicia a sessão
-            requests.post(f'{api_url}/api/sessions/', headers=headers,
-                          json={'name': session, 'start': True}, timeout=20)
-        elif st.status_code == 401:
-            return jsonify({'ok': False, 'error': 'API Key inválida.'}), 401
-    except requests.exceptions.ConnectionError:
-        return jsonify({'ok': False, 'error': 'WAHA não está acessível.'}), 503
-    except Exception as exc:
-        logger.warning(f'[WhatsApp] WAHA session check error: {exc}')
-
-    # 2. Aguarda o status SCAN_QR_CODE e busca o QR (imagem PNG → base64).
-    # 90s: o primeiro start (cold) abre o Chrome e carrega o WhatsApp Web — pode passar de 1 min.
-    qr = None
-    for _ in range(45):
-        time.sleep(2)
-        try:
-            st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
-            status = (st.json() or {}).get('status') if st.ok else None
-            if status == 'WORKING':
-                return jsonify({'ok': True, 'connected': True})
-            if status == 'SCAN_QR_CODE':
-                qr_resp = requests.get(f'{api_url}/api/{session}/auth/qr',
-                                       headers=headers, params={'format': 'image'}, timeout=10)
-                if qr_resp.status_code == 200 and qr_resp.content:
-                    ctype = qr_resp.headers.get('Content-Type', 'image/png')
-                    b64 = base64.b64encode(qr_resp.content).decode('ascii')
-                    qr = f'data:{ctype};base64,{b64}'
-                    break
-        except Exception:
-            pass
-
-    if qr:
-        return jsonify({'ok': True, 'connected': False, 'qr': qr})
-
-    # Reconfere uma última vez: a sessão pode ter ficado WORKING (sessão salva reconectou)
-    # justamente no fim da espera — nesse caso não há QR a exibir e está tudo certo.
-    try:
-        st = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
-        body = st.json() if st.ok else {}
-        if (body or {}).get('status') == 'WORKING':
-            return jsonify({'ok': True, 'connected': True})
-        # Ainda inicializando (Chrome abrindo): pede para o front aguardar e repetir, em vez
-        # de mostrar erro definitivo.
-        if (body or {}).get('status') == 'STARTING':
-            return jsonify({'ok': False, 'state': 'starting',
-                            'error': 'WhatsApp ainda conectando (abrindo o Chrome)... aguarde alguns instantes e tente de novo.'}), 503
-    except Exception:
-        pass
-
-    return jsonify({'ok': False, 'error': 'O QR code não apareceu a tempo. O Chrome pode estar demorando para abrir na primeira conexão — aguarde alguns instantes e clique em Tentar novamente.'}), 500
-
-
-@app.route('/api/whatsapp/sync', methods=['POST'])
-def whatsapp_sync_start():
-    data = request.get_json(force=True) or {}
-    period_days = int(data.get('period_days', 7))
-    if period_days not in [1, 3, 7, 15, 30]:
-        period_days = 7
-    task_id = uuid.uuid4().hex
-    _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando sincronização...', 'progress': 5})
-    threading.Thread(target=_whatsapp_sync_async, args=(task_id, period_days), daemon=True).start()
-    return jsonify({'task_id': task_id}), 202
-
-
-@app.route('/api/whatsapp/tasks/<task_id>', methods=['GET'])
-def whatsapp_task_poll(task_id):
-    task = _bg_task_get(task_id)
-    if not task:
-        return jsonify({'status': 'not_found'}), 404
-    return jsonify(task)
-
-
-@app.route('/api/whatsapp/approve', methods=['POST'])
-def whatsapp_approve():
-    data = request.get_json(force=True) or {}
-    items = data.get('items', [])
-    if not isinstance(items, list):
-        return jsonify({'ok': False, 'error': 'items deve ser uma lista'}), 400
-
-    db = get_db()
-    c = db.cursor()
-    inserted = 0
-    commitments_created = 0
-    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-
-    for item in items:
-        client_id = item.get('client_id')
-        summary = (item.get('summary') or '').strip()
-        activity_date = (item.get('activity_date') or now_str).strip()
-        content_hash = (item.get('content_hash') or '').strip()
-        phone = (item.get('phone') or '').strip()
-        period_days = int(item.get('period_days') or 7)
-        message_count = int(item.get('message_count') or 0)
-        last_message_ts = int(item.get('last_message_ts') or 0)
-        followup_date = (item.get('followup_date') or '').strip()
-        followup_title = (item.get('followup_title') or '').strip()
-        # Permite que o usuário desmarque o FUP no modal de revisão
-        followup_enabled = item.get('followup_enabled', True)
-
-        if not client_id or not summary or not content_hash:
-            continue
-
-        c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
-                  (client_id, content_hash))
-        if c.fetchone():
-            continue
-
-        c.execute(
-            "INSERT INTO activities (client_id, contact_type, information, activity_date) VALUES (?, 'WhatsApp', ?, ?)",
-            (client_id, summary, activity_date)
-        )
-        activity_id = c.lastrowid
-        c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
-        c.execute(
-            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id)
-        )
-        inserted += 1
-
-        # Compromisso de follow-up (FUP) → calendário do sistema
-        if followup_enabled and re.match(r'^\d{4}-\d{2}-\d{2}$', followup_date):
-            title = followup_title or 'Retorno combinado (WhatsApp)'
-            if len(title) > 120:
-                title = title[:117] + '...'
-            c.execute(
-                '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (client_id, activity_id, title, summary, followup_date, None, 'whatsapp')
-            )
-            commitments_created += 1
-
-    db.commit()
-    db.close()
-    return jsonify({'ok': True, 'inserted': inserted, 'commitments': commitments_created})
-
-
 # Servir arquivos estaticos
 
-@app.route('/uploads/accounts/<filename>')
-def serve_account_upload(filename):
-    return send_from_directory(str(ACCOUNT_UPLOAD_DIR), filename)
-
-@app.route('/uploads/wikitoca/<filename>')
-def serve_wikitoca_upload(filename):
-    return send_from_directory(str(WIKI_UPLOAD_DIR), filename)
-
-@app.route('/uploads/autotoca/<path:filename>')
-def serve_autotoca_upload(filename):
-    return send_from_directory(str(AUTOTOCA_UPLOAD_DIR), filename)
 
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(str(UPLOAD_DIR), filename)
 
-@app.route('/api/system/config', methods=['GET'])
-def get_system_config():
-    return jsonify({
-        'env': os.environ.get('TOCA_ENV', 'production'),
-        'version': APP_VERSION
-    })
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CAMPANHA OFENSIVA — planejamento e plano de ação comercial assistido por IA
@@ -17002,8 +11371,8 @@ def _campaign_generate_core(payload, progress_cb=None):
         if progress_cb:
             try:
                 progress_cb(pct, step)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_emit] exceção ignorada: {e}')
 
     conn = get_db()
     c = conn.cursor()
@@ -17108,8 +11477,8 @@ def _campaign_regenerate_core(cid, progress_cb=None):
         if progress_cb:
             try:
                 progress_cb(pct, step)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'[_emit] exceção ignorada: {e}')
 
     conn = get_db()
     c = conn.cursor()
@@ -17315,357 +11684,6 @@ def _campaign_serialize(c, campaign_id):
     return camp
 
 
-@app.route('/api/campaigns/selectable-accounts', methods=['GET'])
-def campaign_selectable_accounts():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            """SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
-                      (SELECT COUNT(*) FROM clients cl
-                        WHERE lower(trim(cl.company)) = lower(trim(a.name)) AND COALESCE(cl.is_archived,0)=0) AS contact_count
-               FROM accounts a ORDER BY a.is_target DESC, a.name"""
-        )
-        rows = [dict_from_row(r) for r in c.fetchall()]
-        conn.close()
-        return jsonify(rows)
-    except Exception as e:
-        logger.exception(f'[Campaign] selectable-accounts: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/analyze', methods=['POST'])
-def campaign_analyze():
-    data = request.get_json() or {}
-    challenge = (data.get('challenge_text') or '').strip()
-    if not challenge:
-        return jsonify({'error': 'Descreva o desafio comercial.'}), 400
-    task_id = uuid.uuid4().hex
-    _bg_task_set(task_id, {'status': 'processing', 'step': 'Entendendo o desafio...', 'progress': 10})
-
-    def _run():
-        try:
-            _bg_task_set(task_id, {'step': 'Cruzando com portfólio e contatos...', 'progress': 45})
-            result = _campaign_analyze_core(challenge)
-            _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': result})
-        except Exception as e:
-            logger.exception(f'[Campaign][analyze] {e}')
-            _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
-        finally:
-            _bg_task_cleanup(task_id)
-
-    threading.Thread(target=_run, daemon=True).start()
-    return jsonify({'task_id': task_id}), 202
-
-
-@app.route('/api/campaigns/generate', methods=['POST'])
-def campaign_generate():
-    try:
-        data = request.get_json() or {}
-        challenge = (data.get('challenge_text') or '').strip()
-        if not challenge:
-            return jsonify({'error': 'Desafio é obrigatório.'}), 400
-        title = (data.get('title') or '').strip() or 'Campanha Ofensiva'
-        start_date = (data.get('start_date') or '').strip() or datetime.now().strftime('%Y-%m-%d')
-        try:
-            capacity = max(1, min(50, int(data.get('weekly_capacity') or 5)))
-        except Exception:
-            capacity = 5
-        mode = (data.get('account_mode') or 'targets').strip()
-        raw_account_ids = data.get('account_ids') or []
-
-        conn = get_db()
-        c = conn.cursor()
-        if mode == 'manual' and raw_account_ids:
-            ids = [int(i) for i in raw_account_ids if str(i).isdigit()]
-        else:
-            c.execute('SELECT id FROM accounts WHERE is_target = 1')
-            ids = [r['id'] for r in c.fetchall()]
-        conn.close()
-        if not ids:
-            return jsonify({'error': 'Nenhuma conta selecionada. Marque contas como target ou selecione manualmente.'}), 400
-
-        payload = {
-            'title': title,
-            'challenge_text': challenge,
-            'areas': data.get('areas') or [],
-            'decisores': data.get('decisores') or [],
-            'offer_ids': [int(i) for i in (data.get('offer_ids') or []) if str(i).isdigit()],
-            'start_date': start_date,
-            'weekly_capacity': capacity,
-            'account_ids': ids,
-            'llm_source': data.get('llm_source', ''),
-            'summary': data.get('summary', '') or data.get('entendimento', ''),
-            'portfolio_note': data.get('portfolio_note', ''),
-        }
-        task_id = uuid.uuid4().hex
-        _bg_task_set(task_id, {'status': 'processing', 'step': 'Montando plano de ação...', 'progress': 15})
-
-        def _run():
-            try:
-                _bg_task_set(task_id, {'step': 'Classificando contas (A/B/C/D)...', 'progress': 40})
-
-                def _progress(pct, step):
-                    _bg_task_set(task_id, {'progress': max(40, min(95, int(pct))), 'step': step})
-
-                cid = _campaign_generate_core(payload, progress_cb=_progress)
-                _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': {'campaign_id': cid}})
-            except Exception as e:
-                logger.exception(f'[Campaign][generate] {e}')
-                _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
-            finally:
-                _bg_task_cleanup(task_id)
-
-        threading.Thread(target=_run, daemon=True).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[Campaign] generate start: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns', methods=['GET'])
-def campaign_list():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM campaigns ORDER BY datetime(created_at) DESC, id DESC')
-        camps = [dict_from_row(r) for r in c.fetchall()]
-        for camp in camps:
-            c.execute('SELECT COUNT(*) FROM campaign_accounts WHERE campaign_id = ?', (camp['id'],))
-            camp['accounts_count'] = c.fetchone()[0] or 0
-            c.execute(
-                """SELECT COUNT(*) total, SUM(CASE WHEN ca.status='done' THEN 1 ELSE 0 END) done
-                   FROM campaign_actions ca
-                   JOIN campaign_accounts cc ON cc.id = ca.campaign_account_id
-                   WHERE cc.campaign_id = ?""",
-                (camp['id'],)
-            )
-            row = c.fetchone()
-            total = row['total'] or 0
-            done = row['done'] or 0
-            camp['progress'] = round(100 * done / total) if total else 0
-            camp['areas'] = json.loads(camp.get('areas_json') or '[]')
-        conn.close()
-        return jsonify(camps)
-    except Exception as e:
-        logger.exception(f'[Campaign] list: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/<int:cid>', methods=['GET'])
-def campaign_detail(cid):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        data = _campaign_serialize(c, cid)
-        conn.close()
-        if not data:
-            return jsonify({'error': 'Campanha não encontrada.'}), 404
-        return jsonify(data)
-    except Exception as e:
-        logger.exception(f'[Campaign] detail {cid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/<int:cid>', methods=['PUT'])
-def campaign_update(cid):
-    try:
-        data = request.get_json() or {}
-        fields, vals = [], []
-        if 'title' in data:
-            fields.append('title=?')
-            vals.append((data.get('title') or '').strip() or 'Campanha Ofensiva')
-        if 'status' in data:
-            fields.append('status=?')
-            vals.append((data.get('status') or 'Ativo').strip())
-        if 'objective_text' in data:
-            fields.append('objective_text=?')
-            vals.append((data.get('objective_text') or '').strip())
-        if not fields:
-            return jsonify({'error': 'Nada para atualizar.'}), 400
-        fields.append('updated_at=CURRENT_TIMESTAMP')
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM campaigns WHERE id = ?', (cid,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Campanha não encontrada.'}), 404
-        c.execute(f"UPDATE campaigns SET {', '.join(fields)} WHERE id = ?", (*vals, cid))
-        conn.commit()
-        data = _campaign_serialize(c, cid)
-        conn.close()
-        return jsonify(data)
-    except Exception as e:
-        logger.exception(f'[Campaign] update {cid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/<int:cid>', methods=['DELETE'])
-def campaign_delete(cid):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM campaign_accounts WHERE campaign_id = ?', (cid,))
-        ca_ids = [r['id'] for r in c.fetchall()]
-        if ca_ids:
-            qs = ','.join('?' * len(ca_ids))
-            c.execute(f'SELECT id FROM campaign_actions WHERE campaign_account_id IN ({qs})', ca_ids)
-            act_ids = [r['id'] for r in c.fetchall()]
-            if act_ids:
-                qs2 = ','.join('?' * len(act_ids))
-                c.execute(f'DELETE FROM campaign_action_logs WHERE action_id IN ({qs2})', act_ids)
-                c.execute(f'DELETE FROM campaign_actions WHERE id IN ({qs2})', act_ids)
-            c.execute(f'DELETE FROM campaign_accounts WHERE id IN ({qs})', ca_ids)
-        c.execute('DELETE FROM campaigns WHERE id = ?', (cid,))
-        deleted = c.rowcount
-        conn.commit()
-        conn.close()
-        if not deleted:
-            return jsonify({'error': 'Campanha não encontrada.'}), 404
-        return jsonify({'success': True})
-    except Exception as e:
-        logger.exception(f'[Campaign] delete {cid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/<int:cid>/regenerate', methods=['POST'])
-def campaign_regenerate(cid):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM campaigns WHERE id = ?', (cid,))
-        exists = c.fetchone()
-        conn.close()
-        if not exists:
-            return jsonify({'error': 'Campanha não encontrada.'}), 404
-        task_id = uuid.uuid4().hex
-        _bg_task_set(task_id, {'status': 'processing', 'step': 'Reanalisando portfólio e mapeamento...', 'progress': 25})
-
-        def _run():
-            try:
-                _bg_task_set(task_id, {'step': 'Reclassificando contas...', 'progress': 40})
-
-                def _progress(pct, step):
-                    _bg_task_set(task_id, {'progress': max(40, min(95, int(pct))), 'step': step})
-
-                _campaign_regenerate_core(cid, progress_cb=_progress)
-                _bg_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': {'campaign_id': cid}})
-            except Exception as e:
-                logger.exception(f'[Campaign][regenerate] {e}')
-                _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
-            finally:
-                _bg_task_cleanup(task_id)
-
-        threading.Thread(target=_run, daemon=True).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[Campaign] regenerate start {cid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/actions/<int:aid>', methods=['PATCH'])
-def campaign_action_update(aid):
-    try:
-        data = request.get_json() or {}
-        status = (data.get('status') or '').strip()
-        if status not in ('pending', 'in_progress', 'done'):
-            return jsonify({'error': 'Status inválido.'}), 400
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM campaign_actions WHERE id = ?', (aid,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Ação não encontrada.'}), 404
-        if status == 'done':
-            c.execute('UPDATE campaign_actions SET status=?, completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?', (status, aid))
-        else:
-            c.execute('UPDATE campaign_actions SET status=?, completed_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?', (status, aid))
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True, 'status': status})
-    except Exception as e:
-        logger.exception(f'[Campaign] action update {aid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/actions/<int:aid>/logs', methods=['POST'])
-def campaign_action_log(aid):
-    try:
-        data = request.get_json() or {}
-        text = (data.get('log_text') or '').strip()
-        if not text:
-            return jsonify({'error': 'Escreva um update.'}), 400
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id FROM campaign_actions WHERE id = ?', (aid,))
-        if not c.fetchone():
-            conn.close()
-            return jsonify({'error': 'Ação não encontrada.'}), 404
-        c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'user')", (aid, text))
-        log_id = c.lastrowid
-        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (aid,))
-        conn.commit()
-        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (log_id,))
-        log = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify(log)
-    except Exception as e:
-        logger.exception(f'[Campaign] action log {aid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/logs/<int:lid>', methods=['PATCH'])
-def campaign_log_update(lid):
-    try:
-        data = request.get_json() or {}
-        text = (data.get('log_text') or '').strip()
-        if not text:
-            return jsonify({'error': 'Escreva um update.'}), 400
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
-        log = dict_from_row(c.fetchone())
-        if not log:
-            conn.close()
-            return jsonify({'error': 'Update não encontrado.'}), 404
-        if (log.get('log_type') or 'user') != 'user':
-            conn.close()
-            return jsonify({'error': 'Apenas updates manuais podem ser editados.'}), 400
-        c.execute('UPDATE campaign_action_logs SET log_text=? WHERE id=?', (text, lid))
-        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (log['action_id'],))
-        conn.commit()
-        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
-        updated = dict_from_row(c.fetchone())
-        conn.close()
-        return jsonify(updated)
-    except Exception as e:
-        logger.exception(f'[Campaign] log update {lid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/campaigns/logs/<int:lid>', methods=['DELETE'])
-def campaign_log_delete(lid):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
-        log = dict_from_row(c.fetchone())
-        if not log:
-            conn.close()
-            return jsonify({'error': 'Update não encontrado.'}), 404
-        if (log.get('log_type') or 'user') != 'user':
-            conn.close()
-            return jsonify({'error': 'Apenas updates manuais podem ser excluídos.'}), 400
-        c.execute('DELETE FROM campaign_action_logs WHERE id=?', (lid,))
-        c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (log['action_id'],))
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True})
-    except Exception as e:
-        logger.exception(f'[Campaign] log delete {lid}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/')
 def index():
     return send_from_directory(app.static_folder, 'index.html')
@@ -17675,616 +11693,6 @@ def serve_static(path):
     if path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     return send_from_directory(app.static_folder, path)
-
-
-@app.route('/api/home/cobertura-detail', methods=['GET'])
-def home_cobertura_detail():
-    """Detalhamento conta-a-conta da Cobertura de Relacionamento (últimos 30 dias).
-    Considera 3 fontes de atividade por conta:
-      1. account_activities diretamente ligadas à conta
-      2. activities de clientes vinculados via account_main_contacts
-      3. activities de qualquer contato cujo clients.company bate com accounts.name (fallback)
-    Atividades duplicadas nas fontes 2 e 3 são deduplicadas por ID.
-    """
-    try:
-        conn = get_db()
-        c = conn.cursor()
-
-        # Subconsultas correlacionadas garantem deduplicação correta entre os 3 caminhos
-        c.execute("""
-            SELECT
-                acc.id,
-                acc.name,
-                COALESCE(acc.is_target, 0) AS is_target,
-                -- Atividades diretas na conta (account_activities)
-                (
-                    SELECT COUNT(DISTINCT aa.id) FROM account_activities aa
-                    WHERE aa.account_id = acc.id
-                    AND aa.activity_date >= date('now', '-30 days')
-                ) AS aa_count,
-                -- Atividades de contatos ligados à conta (via account_main_contacts OU nome da empresa)
-                -- UNION garante que a mesma activity.id não seja contada duas vezes
-                (
-                    SELECT COUNT(*) FROM (
-                        SELECT DISTINCT a.id FROM activities a
-                        WHERE a.activity_date >= date('now', '-30 days')
-                        AND (
-                            a.client_id IN (
-                                SELECT amc.client_id FROM account_main_contacts amc
-                                WHERE amc.account_id = acc.id
-                            )
-                            OR
-                            a.client_id IN (
-                                SELECT cl.id FROM clients cl
-                                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(acc.name))
-                                AND cl.company IS NOT NULL AND TRIM(cl.company) != ''
-                            )
-                        )
-                    )
-                ) AS cl_count,
-                -- Data da atividade mais recente (qualquer fonte)
-                (
-                    SELECT MAX(last_dt) FROM (
-                        SELECT activity_date AS last_dt FROM account_activities
-                        WHERE account_id = acc.id
-                        AND activity_date >= date('now', '-30 days')
-                        UNION ALL
-                        SELECT a2.activity_date AS last_dt FROM activities a2
-                        WHERE a2.activity_date >= date('now', '-30 days')
-                        AND (
-                            a2.client_id IN (
-                                SELECT amc2.client_id FROM account_main_contacts amc2
-                                WHERE amc2.account_id = acc.id
-                            )
-                            OR
-                            a2.client_id IN (
-                                SELECT cl2.id FROM clients cl2
-                                WHERE LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc.name))
-                                AND cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
-                            )
-                        )
-                    )
-                ) AS last_activity
-            FROM accounts acc
-            ORDER BY acc.name ASC
-        """)
-
-        all_rows = []
-        for r in c.fetchall():
-            rd = dict_from_row(r)
-            rd['activity_count'] = (rd.pop('aa_count') or 0) + (rd.pop('cl_count') or 0)
-            all_rows.append(rd)
-
-        conn.close()
-
-        covered   = sorted([r for r in all_rows if r['activity_count'] > 0],
-                           key=lambda x: -x['activity_count'])
-        uncovered = sorted([r for r in all_rows if r['activity_count'] == 0],
-                           key=lambda x: (-(x.get('is_target') or 0), (x.get('name') or '').lower()))
-
-        total = len(all_rows)
-        return jsonify({
-            'period_label':  'Últimos 30 dias',
-            'total':         total,
-            'covered_count': len(covered),
-            'cobertura_pct': round(len(covered) / total * 100) if total > 0 else 0,
-            'covered':   covered,
-            'uncovered': uncovered,
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] GET /api/home/cobertura-detail: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/home/overview', methods=['GET'])
-def home_overview():
-    """Agregados do módulo Home (dashboard executivo).
-    Query params:
-      period: 'all' (default) | 'months'
-      months: lista de YYYY-MM separados por vírgula (se period=months)
-    """
-    try:
-        period = (request.args.get('period') or 'all').strip().lower()
-        months_arg = (request.args.get('months') or '').strip()
-        months_filter = []
-        if period == 'months' and months_arg:
-            months_filter = [m.strip() for m in months_arg.split(',') if re.match(r'^\d{4}-\d{2}$', m.strip())]
-
-        include_archived = request.args.get('include_archived') == '1'
-        include_cold = request.args.get('include_cold') == '1'
-
-        def client_filter(alias='c'):
-            """Retorna fragmento AND para filtrar clientes arquivados/frios conforme flags."""
-            clauses = []
-            if not include_archived:
-                clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
-            if not include_cold:
-                clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
-            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
-
-        conn = get_db()
-        c = conn.cursor()
-
-        # Thresholds de status — universal + regras por cargo
-        c.execute("SELECT key, value FROM app_settings WHERE key IN ('status_green_days', 'status_yellow_days')")
-        s_map = {row['key']: row['value'] for row in c.fetchall()}
-        try:
-            green_days = int(s_map.get('status_green_days') or 7)
-        except Exception:
-            green_days = 7
-        try:
-            yellow_days = int(s_map.get('status_yellow_days') or 14)
-        except Exception:
-            yellow_days = 14
-
-        # Regras por cargo (espelha exatamente o que o frontend usa)
-        c.execute('SELECT position, green_days, yellow_days FROM status_rules')
-        _rules_map = {
-            (row['position'] or '').strip().lower(): (int(row['green_days']), int(row['yellow_days']))
-            for row in c.fetchall()
-            if row['position']
-        }
-
-        def _get_thresholds(position):
-            """Retorna (green_days, yellow_days) para o cargo dado, igual à lógica do frontend."""
-            key = (position or '').strip().lower()
-            return _rules_map.get(key, (green_days, yellow_days))
-
-        def month_clause(col):
-            if not months_filter:
-                return '', []
-            ph = ','.join(['?'] * len(months_filter))
-            return f" AND strftime('%Y-%m', {col}) IN ({ph})", list(months_filter)
-
-        # --- KPIs base ---
-        c.execute("SELECT COUNT(*) AS n FROM accounts")
-        total_accounts = c.fetchone()['n']
-
-        c.execute(f"SELECT COUNT(*) AS n FROM clients c WHERE 1=1{client_filter()}")
-        total_contacts = c.fetchone()['n']
-
-        # Status snapshot — usa clients.last_activity_date (igual ao frontend)
-        # e aplica regras por cargo (igual ao getStatus() do frontend)
-        c.execute(f"""
-            SELECT c.id, c.position, c.last_activity_date AS last_date
-            FROM clients c
-            WHERE 1=1{client_filter()}
-        """)
-        em_dia = atencao = atrasado = 0
-        now_dt = datetime.now()
-        for row in c.fetchall():
-            g, y = _get_thresholds(row['position'])
-            last = row['last_date']
-            if not last:
-                atrasado += 1
-                continue
-            try:
-                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
-                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
-                days = (now_dt - d).days
-            except Exception:
-                atrasado += 1
-                continue
-            if days < g:
-                em_dia += 1
-            elif days < y:
-                atencao += 1
-            else:
-                atrasado += 1
-
-        # Cobertura de relacionamento — janela FIXA de 30 dias (independente do filtro de período)
-        # 3 caminhos: atividade direta na conta | account_main_contacts → activities | fallback por nome
-        mf_a, mfp_a = month_clause('a.activity_date')
-        mf_aa, mfp_aa = month_clause('aa.activity_date')
-        c.execute("""
-            SELECT COUNT(DISTINCT acc_id) AS n FROM (
-                SELECT aa.account_id AS acc_id
-                FROM account_activities aa
-                WHERE aa.activity_date >= date('now', '-30 days')
-                UNION
-                SELECT amc.account_id AS acc_id
-                FROM account_main_contacts amc
-                JOIN activities a ON a.client_id = amc.client_id
-                WHERE a.activity_date >= date('now', '-30 days')
-                UNION
-                SELECT acc2.id AS acc_id
-                FROM accounts acc2
-                JOIN clients cl2 ON LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc2.name))
-                JOIN activities a2 ON a2.client_id = cl2.id
-                WHERE cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
-                AND a2.activity_date >= date('now', '-30 days')
-            )
-        """)
-        covered_accounts = c.fetchone()['n'] or 0
-        cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
-
-        # --- Top 10 contas por faturamento (soma das presenças STF) ---
-        # Exclui serviços encerrados antecipadamente (early_terminated=1)
-        # Se houver filtro de período, também exclui serviços cujo contrato já encerrou antes do início do período
-        fat_params = []
-        fat_contract_clause = "AND COALESCE(p.early_terminated, 0) = 0"
-        if months_filter:
-            min_month = min(months_filter)
-            fat_contract_clause += " AND (p.contract_end_date IS NULL OR p.contract_end_date >= ?)"
-            fat_params.append(min_month)
-        c.execute(f"""
-            SELECT a.name, COALESCE(SUM(p.current_revenue_cents), 0) AS receita
-            FROM accounts a
-            LEFT JOIN account_presences p ON p.account_id = a.id
-                AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
-                {fat_contract_clause}
-            GROUP BY a.id, a.name
-            HAVING receita > 0
-            ORDER BY receita DESC
-            LIMIT 10
-        """, fat_params)
-        top_faturamento = [{'name': r['name'], 'revenue_cents': r['receita']} for r in c.fetchall()]
-
-        c.execute(f"""
-            SELECT a.name, COALESCE(SUM(p.current_revenue_cents), 0) AS receita
-            FROM accounts a
-            LEFT JOIN account_presences p ON p.account_id = a.id
-                AND p.billing_type = 'Unico'
-                {fat_contract_clause}
-            GROUP BY a.id, a.name
-            HAVING receita > 0
-            ORDER BY receita DESC
-            LIMIT 10
-        """, fat_params)
-        top_faturamento_unico = [{'name': r['name'], 'revenue_cents': r['receita']} for r in c.fetchall()]
-
-        # --- Top 10 contas com mais interações no período ---
-        c.execute(f"""
-            WITH client_acts AS (
-                SELECT cl.company AS acc, COUNT(*) AS n
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE cl.company IS NOT NULL AND TRIM(cl.company) != '' {mf_a}{client_filter('cl')}
-                GROUP BY cl.company
-            ),
-            acc_acts AS (
-                SELECT acc.name AS acc, COUNT(*) AS n
-                FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
-                WHERE 1=1 {mf_aa}
-                GROUP BY acc.name
-            )
-            SELECT acc AS name, SUM(n) AS total FROM (
-                SELECT * FROM client_acts UNION ALL SELECT * FROM acc_acts
-            )
-            GROUP BY acc
-            ORDER BY total DESC
-            LIMIT 10
-        """, mfp_a + mfp_aa)
-        top_interacoes = [{'name': r['name'], 'count': r['total']} for r in c.fetchall()]
-
-        # --- Top 5 contas TARGET com menor interação no período ---
-        # (inclui target com 0 interações)
-        c.execute(f"""
-            SELECT a.name,
-                   COALESCE((
-                       SELECT COUNT(*) FROM activities ac
-                       JOIN clients cl ON cl.id = ac.client_id
-                       WHERE cl.company = a.name
-                       {mf_a.replace('a.activity_date', 'ac.activity_date')}
-                   ), 0)
-                   +
-                   COALESCE((
-                       SELECT COUNT(*) FROM account_activities aa2
-                       WHERE aa2.account_id = a.id
-                       {mf_aa.replace('aa.activity_date', 'aa2.activity_date')}
-                   ), 0) AS total
-            FROM accounts a
-            WHERE COALESCE(a.is_target, 0) = 1
-            ORDER BY total ASC, a.name ASC
-            LIMIT 5
-        """, mfp_a + mfp_aa)
-        target_menor_interacao = [{'name': r['name'], 'count': r['total']} for r in c.fetchall()]
-
-        # --- Interações por cargo (donut) ---
-        c.execute(f"""
-            SELECT cl.position AS cargo, COUNT(*) AS n
-            FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE cl.position IS NOT NULL AND TRIM(cl.position) != '' {mf_a}{client_filter('cl')}
-            GROUP BY cl.position
-            ORDER BY n DESC
-            LIMIT 8
-        """, mfp_a)
-        interacoes_cargo = [{'name': r['cargo'], 'count': r['n']} for r in c.fetchall()]
-
-        # --- Evolução mensal de interações (últimos 12 meses, ignora filtro de período) ---
-        c.execute("""
-            WITH all_acts AS (
-                SELECT strftime('%Y-%m', activity_date) AS ym FROM activities
-                UNION ALL
-                SELECT strftime('%Y-%m', activity_date) AS ym FROM account_activities
-            )
-            SELECT ym, COUNT(*) AS n
-            FROM all_acts
-            WHERE ym IS NOT NULL
-            GROUP BY ym
-            ORDER BY ym ASC
-        """)
-        evolucao_raw = {r['ym']: r['n'] for r in c.fetchall()}
-        # Gera últimos 12 meses com base na data atual
-        evolucao_mensal = []
-        cur = now_dt.replace(day=1)
-        ms = []
-        for _ in range(12):
-            ms.append(cur.strftime('%Y-%m'))
-            # voltar 1 mês
-            if cur.month == 1:
-                cur = cur.replace(year=cur.year - 1, month=12)
-            else:
-                cur = cur.replace(month=cur.month - 1)
-        for ym in reversed(ms):
-            evolucao_mensal.append({'ym': ym, 'count': evolucao_raw.get(ym, 0)})
-
-        # --- Canal de Relacionamento (contact_type) ---
-        c.execute(f"""
-            SELECT COALESCE(NULLIF(TRIM(a.contact_type), ''), 'Outro') AS canal, COUNT(*) AS n
-            FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE 1=1 {mf_a}{client_filter('cl')}
-            GROUP BY canal
-            ORDER BY n DESC
-        """, mfp_a)
-        canais = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
-
-        # --- Heatmap dia da semana × período do dia (a partir de activities.activity_date) ---
-        # SQLite: strftime('%w') -> 0=Dom .. 6=Sáb; strftime('%H') -> hora
-        # Períodos: manhã (06-12), tarde (12-18), noite (18-06)
-        c.execute(f"""
-            SELECT strftime('%w', a.activity_date) AS dow,
-                   CAST(strftime('%H', a.activity_date) AS INTEGER) AS hr,
-                   COUNT(*) AS n
-            FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE a.activity_date IS NOT NULL {mf_a}{client_filter('cl')}
-            GROUP BY dow, hr
-        """, mfp_a)
-        heatmap = {}
-        for r in c.fetchall():
-            dow = int(r['dow']) if r['dow'] is not None else 0
-            hr = int(r['hr'] or 0)
-            if 6 <= hr < 12:
-                periodo = 'Manhã'
-            elif 12 <= hr < 18:
-                periodo = 'Tarde'
-            else:
-                periodo = 'Noite'
-            key = (dow, periodo)
-            heatmap[key] = heatmap.get(key, 0) + r['n']
-        heatmap_list = [{'dow': k[0], 'periodo': k[1], 'count': v} for k, v in heatmap.items()]
-
-        # --- Funil de Engajamento ---
-        ativas = total_contacts  # já respeita os filtros de arquivado/frio
-        c.execute(f"""
-            SELECT COUNT(DISTINCT a.client_id) AS n
-            FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE a.activity_date >= date('now', '-30 day'){client_filter('cl')}
-        """)
-        com_contato_mes = c.fetchone()['n'] or 0
-        c.execute(f"""
-            SELECT COUNT(DISTINCT a.client_id) AS n
-            FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE 1=1{client_filter('cl')}
-        """)
-        com_interacao = c.fetchone()['n'] or 0
-        c.execute(f"""
-            SELECT a.client_id, COUNT(*) AS n
-            FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE 1=1{client_filter('cl')}
-            GROUP BY a.client_id
-            HAVING n >= 3
-        """)
-        engajadas = len(c.fetchall())
-        alta_proximidade = em_dia
-
-        funil = [
-            {'label': 'Contas Ativas', 'count': ativas},
-            {'label': 'Com Contato no Mês', 'count': com_contato_mes},
-            {'label': 'Com Interação', 'count': com_interacao},
-            {'label': 'Engajadas', 'count': engajadas},
-            {'label': 'Alta Proximidade', 'count': alta_proximidade},
-        ]
-
-        # --- Tempo médio sem contato (buckets) ---
-        # Usa clients.last_activity_date para consistência com o frontend
-        c.execute(f"""
-            SELECT c.last_activity_date AS last_date
-            FROM clients c
-            WHERE 1=1{client_filter()}
-        """)
-        buckets = {'0-7': 0, '8-14': 0, '15-30': 0, '+30': 0}
-        for row in c.fetchall():
-            last = row['last_date']
-            if not last:
-                buckets['+30'] += 1
-                continue
-            try:
-                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
-                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
-                days = (now_dt - d).days
-            except Exception:
-                buckets['+30'] += 1
-                continue
-            if days <= 7:
-                buckets['0-7'] += 1
-            elif days <= 14:
-                buckets['8-14'] += 1
-            elif days <= 30:
-                buckets['15-30'] += 1
-            else:
-                buckets['+30'] += 1
-        tempo_sem_contato = [{'bucket': k, 'count': v} for k, v in buckets.items()]
-
-        # --- Novos contatos por mês (últimos 12 meses) ---
-        c.execute(f"""
-            SELECT strftime('%Y-%m', created_at) AS ym, COUNT(*) AS n
-            FROM clients c
-            WHERE 1=1{client_filter()}
-            GROUP BY ym
-            ORDER BY ym ASC
-        """)
-        novos_raw = {r['ym']: r['n'] for r in c.fetchall()}
-        novos_contatos = []
-        for ym in reversed(ms):
-            novos_contatos.append({'ym': ym, 'count': novos_raw.get(ym, 0)})
-
-        # --- Insights & Alertas ---
-        # Contas estratégicas (target) sem contato há >20 dias
-        c.execute("""
-            SELECT a.name,
-                   MAX(COALESCE(
-                       (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE cl2.company=a.name),
-                       (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id)
-                   )) AS last_act
-            FROM accounts a
-            WHERE COALESCE(a.is_target,0)=1
-            GROUP BY a.id, a.name
-        """)
-        target_sem_contato = 0
-        for r in c.fetchall():
-            last = r['last_act']
-            if not last:
-                target_sem_contato += 1
-                continue
-            try:
-                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
-                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
-                if (now_dt - d).days > 20:
-                    target_sem_contato += 1
-            except Exception:
-                target_sem_contato += 1
-
-        # Crescimento m/m de interações por conta (ranking completo + top 3)
-        crescimento_top = []
-        crescimento_ranking = []
-        crescimento_ym_atual = ''
-        crescimento_ym_anterior = ''
-        if len(evolucao_mensal) >= 2:
-            ym_atual = evolucao_mensal[-1]['ym']
-            ym_anterior = evolucao_mensal[-2]['ym']
-            crescimento_ym_atual = ym_atual
-            crescimento_ym_anterior = ym_anterior
-            c.execute("""
-                WITH acts AS (
-                    SELECT cl.company AS acc, strftime('%Y-%m', a.activity_date) AS ym
-                    FROM activities a JOIN clients cl ON cl.id = a.client_id
-                    WHERE cl.company IS NOT NULL AND TRIM(cl.company) != ''
-                    UNION ALL
-                    SELECT acc.name AS acc, strftime('%Y-%m', aa.activity_date) AS ym
-                    FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
-                )
-                SELECT acc,
-                       SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS atual,
-                       SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS anterior
-                FROM acts
-                GROUP BY acc
-                HAVING atual > 0 OR anterior > 0
-            """, (ym_atual, ym_anterior))
-            for r in c.fetchall():
-                atual = int(r['atual'] or 0)
-                anterior = int(r['anterior'] or 0)
-                if anterior > 0:
-                    growth_pct = round(((atual - anterior) / anterior) * 100)
-                    is_new = False
-                else:
-                    growth_pct = None  # crescimento "infinito" — conta nova nesse mês
-                    is_new = True
-                crescimento_ranking.append({
-                    'name': r['acc'],
-                    'atual': atual,
-                    'anterior': anterior,
-                    'growth_pct': growth_pct,
-                    'is_new': is_new,
-                })
-            # Ordena: novas (atual>0, anterior=0) primeiro com maior atual, depois pct desc
-            def _rank_key(item):
-                if item['is_new']:
-                    return (-2, -item['atual'])
-                if item['growth_pct'] is None:
-                    return (0, 0)
-                return (-1 if item['growth_pct'] > 0 else (0 if item['growth_pct'] == 0 else 1), -item['growth_pct'])
-            crescimento_ranking.sort(key=_rank_key)
-            # Top 3 só com crescimento positivo (≥1%)
-            crescimento_top = [
-                {'name': it['name'], 'growth_pct': it['growth_pct']}
-                for it in crescimento_ranking
-                if not it['is_new'] and it['growth_pct'] is not None and it['growth_pct'] > 0
-            ][:3]
-
-        target_risco_atencao = 0
-        c.execute("""
-            SELECT a.name,
-                   (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE cl2.company=a.name) AS la_cli,
-                   (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id) AS la_acc
-            FROM accounts a
-            WHERE COALESCE(a.is_target,0)=1
-        """)
-        for r in c.fetchall():
-            last = r['la_cli'] or r['la_acc']
-            if not last:
-                target_risco_atencao += 1
-                continue
-            try:
-                base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
-                d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
-                if green_days <= (now_dt - d).days < yellow_days:
-                    target_risco_atencao += 1
-            except Exception:
-                pass
-
-        # --- Meses disponíveis (para o filtro) ---
-        c.execute("""
-            SELECT DISTINCT ym FROM (
-                SELECT strftime('%Y-%m', activity_date) AS ym FROM activities WHERE activity_date IS NOT NULL
-                UNION
-                SELECT strftime('%Y-%m', activity_date) AS ym FROM account_activities WHERE activity_date IS NOT NULL
-                UNION
-                SELECT strftime('%Y-%m', created_at) AS ym FROM clients WHERE created_at IS NOT NULL
-            )
-            WHERE ym IS NOT NULL
-            ORDER BY ym DESC
-        """)
-        meses_disponiveis = [r['ym'] for r in c.fetchall()]
-
-        conn.close()
-
-        return jsonify({
-            'period': period,
-            'months_filter': months_filter,
-            'meses_disponiveis': meses_disponiveis,
-            'kpis': {
-                'total_accounts': total_accounts,
-                'total_contacts': total_contacts,
-                'em_dia': em_dia,
-                'atencao': atencao,
-                'atrasado': atrasado,
-                'cobertura_pct': cobertura_pct,
-            },
-            'top_faturamento': top_faturamento,
-            'top_faturamento_unico': top_faturamento_unico,
-            'top_interacoes': top_interacoes,
-            'target_menor_interacao': target_menor_interacao,
-            'interacoes_cargo': interacoes_cargo,
-            'evolucao_mensal': evolucao_mensal,
-            'canais': canais,
-            'heatmap': heatmap_list,
-            'funil': funil,
-            'tempo_sem_contato': tempo_sem_contato,
-            'novos_contatos': novos_contatos,
-            'insights': {
-                'target_sem_contato_20d': target_sem_contato,
-                'crescimento_top': crescimento_top,
-                'crescimento_ranking': crescimento_ranking,
-                'crescimento_ym_atual': crescimento_ym_atual,
-                'crescimento_ym_anterior': crescimento_ym_anterior,
-                'target_em_risco': target_risco_atencao,
-                'meta_cobertura_pct': 80,
-            },
-        })
-    except Exception as e:
-        print(f'[ERROR] GET /api/home/overview: {e}')
-        import traceback; traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
 
 
 def _home_status_thresholds(c):
@@ -18332,350 +11740,39 @@ def _home_status_for(last_date, green, yellow, now_dt):
     return ('atrasado', days)
 
 
-@app.route('/api/home/drilldown', methods=['GET'])
-def home_drilldown():
-    """Drill-down detalhado para os elementos do Dashboard Executivo.
-    Query params:
-      type: accounts | contacts | status | account | cargo | canal | evolucao
-      status: em_dia | atencao | atrasado    (quando type=status)
-      account_id / account_name              (quando type=account)
-      cargo / canal / ym                      (filtros específicos)
-      include_archived, include_cold: '1'
-    """
-    try:
-        dtype = (request.args.get('type') or '').strip().lower()
-        include_archived = request.args.get('include_archived') == '1'
-        include_cold = request.args.get('include_cold') == '1'
-
-        conn = get_db()
-        c = conn.cursor()
-        now_dt = datetime.now()
-        get_thresholds = _home_status_thresholds(c)
-
-        def client_filter(alias='c'):
-            clauses = []
-            if not include_archived:
-                clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
-            if not include_cold:
-                clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
-            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
-
-        # -------- TYPE: accounts (Total de Contas) --------
-        if dtype == 'accounts':
-            c.execute(f"""
-                SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
-                       (SELECT COUNT(*) FROM clients cl
-                        WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(a.name)){client_filter('cl')}) AS contacts,
-                       COALESCE((SELECT SUM(p.current_revenue_cents) FROM account_presences p
-                                 WHERE p.account_id = a.id
-                                   AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
-                                   AND COALESCE(p.early_terminated, 0) = 0), 0) AS revenue_cents,
-                       (SELECT MAX(aa.activity_date) FROM account_activities aa WHERE aa.account_id = a.id) AS last_activity
-                FROM accounts a
-                ORDER BY revenue_cents DESC, a.name ASC
-            """)
-            items = [{
-                'id': r['id'], 'name': r['name'], 'logo_url': r['logo_url'],
-                'is_target': bool(r['is_target']), 'sector': r['sector'],
-                'contacts': r['contacts'], 'revenue_cents': r['revenue_cents'],
-                'last_activity': r['last_activity'],
-            } for r in c.fetchall()]
-            return jsonify({'type': dtype, 'title': 'Todas as Contas', 'count': len(items), 'items': items})
-
-        # -------- TYPE: contacts (Total de Contatos) --------
-        if dtype == 'contacts':
-            c.execute(f"""
-                SELECT c.id, c.name, c.company, c.position, c.photo_url, c.is_target,
-                       c.last_activity_date AS last_activity
-                FROM clients c
-                WHERE 1=1{client_filter()}
-                ORDER BY c.name COLLATE NOCASE ASC
-            """)
-            items = []
-            for r in c.fetchall():
-                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
-                items.append({
-                    'id': r['id'], 'name': r['name'], 'company': r['company'],
-                    'position': r['position'], 'photo_url': r['photo_url'],
-                    'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
-                    'status': st, 'days': days,
-                })
-            items.sort(key=lambda x: _home_sort_key(x['name']))
-            return jsonify({'type': dtype, 'title': 'Todos os Contatos', 'count': len(items), 'items': items})
-
-        # -------- TYPE: status (Em Dia / Atenção / Atrasado) --------
-        if dtype == 'status':
-            wanted = (request.args.get('status') or '').strip().lower()
-            labels = {'em_dia': 'Em Dia', 'atencao': 'Atenção', 'atrasado': 'Atrasado'}
-            if wanted not in labels:
-                return jsonify({'error': 'status inválido'}), 400
-            c.execute(f"""
-                SELECT c.id, c.name, c.company, c.position, c.photo_url, c.is_target,
-                       c.last_activity_date AS last_activity
-                FROM clients c
-                WHERE 1=1{client_filter()}
-                ORDER BY c.name COLLATE NOCASE ASC
-            """)
-            items = []
-            for r in c.fetchall():
-                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
-                if st != wanted:
-                    continue
-                items.append({
-                    'id': r['id'], 'name': r['name'], 'company': r['company'],
-                    'position': r['position'], 'photo_url': r['photo_url'],
-                    'is_target': bool(r['is_target']), 'last_activity': r['last_activity'],
-                    'status': st, 'days': days,
-                })
-            items.sort(key=lambda x: _home_sort_key(x['name']))
-            return jsonify({'type': dtype, 'status': wanted, 'title': f'Contatos — {labels[wanted]}',
-                            'count': len(items), 'items': items})
-
-        # -------- TYPE: account (clique numa conta: faturamento/interações/target) --------
-        if dtype == 'account':
-            acc_id = request.args.get('account_id')
-            acc_name = (request.args.get('account_name') or '').strip()
-            if acc_id:
-                c.execute("SELECT * FROM accounts WHERE id = ?", (acc_id,))
-            elif acc_name:
-                c.execute("SELECT * FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))", (acc_name,))
-            else:
-                return jsonify({'error': 'account_id ou account_name obrigatório'}), 400
-            acc = c.fetchone()
-            if not acc:
-                return jsonify({'error': 'conta não encontrada'}), 404
-            acc = dict(acc)
-
-            # Serviços Stefanini (presences)
-            c.execute("""
-                SELECT p.delivery_name, p.stf_owner, p.delivery_cell, p.service_id,
-                       p.current_revenue_cents, p.billing_type, p.validity_month,
-                       p.contract_end_date, COALESCE(p.early_terminated, 0) AS early_terminated
-                FROM account_presences p
-                WHERE p.account_id = ?
-                ORDER BY COALESCE(p.early_terminated,0) ASC, p.current_revenue_cents DESC
-            """, (acc['id'],))
-            services = [{
-                'name': r['delivery_name'], 'owner': r['stf_owner'], 'cell': r['delivery_cell'],
-                'service_id': r['service_id'], 'revenue_cents': r['current_revenue_cents'],
-                'billing_type': r['billing_type'], 'validity_month': r['validity_month'],
-                'contract_end_date': r['contract_end_date'], 'early_terminated': bool(r['early_terminated']),
-            } for r in c.fetchall()]
-            total_active = sum((s['revenue_cents'] or 0) for s in services
-                               if not s['early_terminated'] and (s['billing_type'] in (None, 'Mensal')))
-
-            # Contatos vinculados — por nome da empresa (igual à página da conta),
-            # incluindo arquivados/frios conforme flags, ordem alfabética
-            c.execute(f"""
-                SELECT cl.id, cl.name, cl.position, cl.photo_url, cl.email,
-                       cl.last_activity_date AS last_activity
-                FROM clients cl
-                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?)){client_filter('cl')}
-                ORDER BY cl.name COLLATE NOCASE ASC
-            """, (acc['name'],))
-            contacts = []
-            for r in c.fetchall():
-                st, days = _home_status_for(r['last_activity'], *get_thresholds(r['position']), now_dt)
-                contacts.append({
-                    'id': r['id'], 'name': r['name'], 'position': r['position'],
-                    'photo_url': r['photo_url'], 'email': r['email'], 'last_activity': r['last_activity'],
-                    'status': st, 'days': days,
-                })
-            contacts.sort(key=lambda x: _home_sort_key(x['name']))
-
-            # Últimas interações (account_activities + activities dos contatos da conta)
-            c.execute("""
-                SELECT * FROM (
-                    SELECT aa.description AS info, 'Conta' AS canal, aa.activity_date AS dt, NULL AS contato
-                    FROM account_activities aa WHERE aa.account_id = ?
-                    UNION ALL
-                    SELECT COALESCE(a.information, a.description) AS info,
-                           COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal,
-                           a.activity_date AS dt, cl.name AS contato
-                    FROM activities a JOIN clients cl ON cl.id = a.client_id
-                    WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
-                )
-                ORDER BY dt DESC LIMIT 12
-            """, (acc['id'], acc['name']))
-            timeline = [{
-                'info': r['info'], 'canal': r['canal'], 'dt': r['dt'], 'contato': r['contato'],
-            } for r in c.fetchall()]
-
-            # Canal breakdown da conta
-            c.execute("""
-                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
-                GROUP BY canal ORDER BY n DESC
-            """, (acc['name'],))
-            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
-
-            return jsonify({
-                'type': dtype,
-                'account': {
-                    'id': acc['id'], 'name': acc['name'], 'logo_url': acc.get('logo_url'),
-                    'is_target': bool(acc.get('is_target')), 'sector': acc.get('sector'),
-                },
-                'revenue_active_cents': total_active,
-                'services': services,
-                'contacts': contacts,
-                'timeline': timeline,
-                'canal_breakdown': canal_breakdown,
-            })
-
-        # -------- TYPE: cargo (fatia da pizza "Interações por Cargo") --------
-        if dtype == 'cargo':
-            cargo = (request.args.get('cargo') or '').strip()
-            if not cargo:
-                return jsonify({'error': 'cargo obrigatório'}), 400
-            c.execute(f"""
-                SELECT cl.id, cl.name, cl.company, cl.photo_url, cl.last_activity_date AS last_activity,
-                       COUNT(a.id) AS n
-                FROM clients cl LEFT JOIN activities a ON a.client_id = cl.id
-                WHERE LOWER(TRIM(cl.position)) = LOWER(TRIM(?)){client_filter('cl')}
-                GROUP BY cl.id ORDER BY n DESC, cl.name ASC
-            """, (cargo,))
-            contacts = []
-            total = 0
-            for r in c.fetchall():
-                total += r['n']
-                contacts.append({
-                    'id': r['id'], 'name': r['name'], 'company': r['company'],
-                    'photo_url': r['photo_url'], 'count': r['n'], 'last_activity': r['last_activity'],
-                })
-            c.execute(f"""
-                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE LOWER(TRIM(cl.position)) = LOWER(TRIM(?)){client_filter('cl')}
-                GROUP BY canal ORDER BY n DESC
-            """, (cargo,))
-            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
-            return jsonify({'type': dtype, 'cargo': cargo, 'title': f'Cargo — {cargo}',
-                            'total_interacoes': total, 'contacts': contacts, 'canal_breakdown': canal_breakdown})
-
-        # -------- TYPE: canal (fatia da pizza "Canal de Relacionamento") --------
-        if dtype == 'canal':
-            canal = (request.args.get('canal') or '').strip()
-            if not canal:
-                return jsonify({'error': 'canal obrigatório'}), 400
-            c.execute(f"""
-                SELECT cl.company AS acc, COUNT(*) AS n
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') = ?
-                  AND cl.company IS NOT NULL AND TRIM(cl.company) != ''{client_filter('cl')}
-                GROUP BY cl.company ORDER BY n DESC LIMIT 15
-            """, (canal,))
-            accounts = [{'name': r['acc'], 'count': r['n']} for r in c.fetchall()]
-            c.execute(f"""
-                SELECT cl.name, cl.company, cl.position, cl.photo_url, COUNT(*) AS n,
-                       MAX(a.activity_date) AS last_activity
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') = ?{client_filter('cl')}
-                GROUP BY cl.id ORDER BY n DESC LIMIT 30
-            """, (canal,))
-            contacts = [{
-                'name': r['name'], 'company': r['company'], 'position': r['position'],
-                'photo_url': r['photo_url'], 'count': r['n'], 'last_activity': r['last_activity'],
-            } for r in c.fetchall()]
-            total = sum(x['count'] for x in accounts)
-            return jsonify({'type': dtype, 'canal': canal, 'title': f'Canal — {canal}',
-                            'total': total, 'accounts': accounts, 'contacts': contacts})
-
-        # -------- TYPE: evolucao (clique num mês da Evolução Mensal) --------
-        if dtype == 'evolucao':
-            ym = (request.args.get('ym') or '').strip()
-            if not re.match(r'^\d{4}-\d{2}$', ym):
-                return jsonify({'error': 'ym inválido (YYYY-MM)'}), 400
-            # contas contatadas no mês
-            c.execute(f"""
-                SELECT cl.company AS acc, COUNT(*) AS n
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE strftime('%Y-%m', a.activity_date) = ?
-                  AND cl.company IS NOT NULL AND TRIM(cl.company) != ''{client_filter('cl')}
-                GROUP BY cl.company ORDER BY n DESC
-            """, (ym,))
-            accounts = [{'name': r['acc'], 'count': r['n']} for r in c.fetchall()]
-            # canal breakdown do mês
-            c.execute(f"""
-                SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
-                FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE strftime('%Y-%m', a.activity_date) = ?{client_filter('cl')}
-                GROUP BY canal ORDER BY n DESC
-            """, (ym,))
-            canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
-            # total do mês (client + account activities)
-            c.execute("""
-                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
-                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
-            """, (ym, ym))
-            total = c.fetchone()['n'] or 0
-            # mês anterior para delta
-            y, m = [int(x) for x in ym.split('-')]
-            pm = (y - 1, 12) if m == 1 else (y, m - 1)
-            prev_ym = f'{pm[0]:04d}-{pm[1]:02d}'
-            c.execute("""
-                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
-                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
-            """, (prev_ym, prev_ym))
-            prev_total = c.fetchone()['n'] or 0
-            return jsonify({'type': dtype, 'ym': ym, 'title': f'Interações — {ym}',
-                            'total': total, 'prev_total': prev_total, 'delta': total - prev_total,
-                            'accounts': accounts, 'canal_breakdown': canal_breakdown})
-
-        # -------- TYPE: target_risk (insight "Risco de perda de proximidade") --------
-        if dtype == 'target_risk':
-            # Espelha exatamente a lógica de target_risco_atencao do overview:
-            # contas target sem contato OU na janela de atenção (green <= dias < yellow)
-            g_uni, y_uni = get_thresholds(None)
-            c.execute("""
-                SELECT a.id, a.name, a.logo_url, a.sector,
-                       (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE LOWER(TRIM(cl2.company))=LOWER(TRIM(a.name))) AS la_cli,
-                       (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id) AS la_acc
-                FROM accounts a
-                WHERE COALESCE(a.is_target,0)=1
-            """)
-            items = []
-            for r in c.fetchall():
-                last = r['la_cli'] or r['la_acc']
-                em_risco = False
-                days = None
-                if not last:
-                    em_risco = True
-                else:
-                    try:
-                        base = str(last).replace('T', ' ').split('.')[0].split('+')[0].strip()
-                        d = datetime.strptime(base[:19], '%Y-%m-%d %H:%M:%S') if len(base) >= 19 else datetime.strptime(base[:10], '%Y-%m-%d')
-                        days = (now_dt - d).days
-                        if g_uni <= days < y_uni:
-                            em_risco = True
-                    except Exception:
-                        em_risco = True
-                if not em_risco:
-                    continue
-                # contagem de contatos por nome da empresa
-                c.execute(f"SELECT COUNT(*) AS n FROM clients cl WHERE LOWER(TRIM(cl.company))=LOWER(TRIM(?)){client_filter('cl')}", (r['name'],))
-                ncont = c.fetchone()['n']
-                items.append({
-                    'id': r['id'], 'name': r['name'], 'logo_url': r['logo_url'], 'sector': r['sector'],
-                    'last_activity': last, 'days': days, 'contacts': ncont,
-                })
-            items.sort(key=lambda x: (x['days'] is None, -(x['days'] or 0), x['name'].lower()))
-            return jsonify({'type': dtype, 'title': 'Contas Target em Risco de Proximidade',
-                            'count': len(items), 'items': items})
-
-        return jsonify({'error': f'type desconhecido: {dtype}'}), 400
-    except Exception as e:
-        print(f'[ERROR] GET /api/home/drilldown: {e}')
-        import traceback; traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
 @app.errorhandler(Exception)
 def handle_unexpected_exception(error):
     if isinstance(error, HTTPException):
         return error
     logger.exception(f'[Unhandled] Erro inesperado: {error}')
     return jsonify({'error': 'Erro interno inesperado. Consulte os logs para suporte.'}), 500
+
+
+# ---------------------------------------------------------------------------
+# Modularização das rotas (Bloco 3): cada arquivo em routes/ contém as rotas
+# de um domínio e é executado no namespace deste módulo — comportamento
+# idêntico ao arquivo único original (mesmos globals e helpers, mesmas URLs),
+# apenas organizado por assunto. Novas rotas devem ir no arquivo do domínio.
+# No build PyInstaller, incluir --add-data "routes;routes".
+# ---------------------------------------------------------------------------
+ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
+                 'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
+                 'portfolio', 'config', 'home']
+
+
+def _load_route_modules():
+    base = Path(__file__).resolve().parent / 'routes'
+    for _name in ROUTE_MODULES:
+        _path = base / (_name + '.py')
+        _code = compile(_path.read_text(encoding='utf-8'), str(_path), 'exec')
+        exec(_code, globals())
+    logger.info(f'[Rotas] {len(ROUTE_MODULES)} módulos de rotas carregados')
+
+
+_load_route_modules()
+_start_inbound_poller()
+_start_scheduled_jobs()
+
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))
@@ -18685,7 +11782,7 @@ if __name__ == '__main__':
     print('=' * 50)
     print('  TOCA DO COELHO - Gestao de Clientes')
     print('=' * 50)
-    print(f'[Database] Banco de dados inicializado')
+    logger.info(f'[Database] Banco de dados inicializado')
     print(f'[Server] Iniciando em http://localhost:{port}')
     print(f'[Debug] Modo debug fixo no terminal: {"ATIVO" if fixed_debug_mode else "INATIVO"}')
     print(f'[Server] Pressione CTRL+C para parar')

@@ -60,6 +60,7 @@ wine py -3.11 -m PyInstaller \
   --name TocaDoCoelho \
   --icon coelho_icon_transparent.ico \
   --add-data "app.py;." \
+  --add-data "routes;routes" \
   --add-data "public;public" \
   --collect-binaries imageio_ffmpeg \
   --collect-all faster_whisper \

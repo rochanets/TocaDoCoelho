@@ -11,20 +11,24 @@
 
 ## LLM / IA — Como usar em novas features
 
-### Ordem de chamada LLM — OpenRouter primeiro, SAI como fallback
+### Ordem de chamada LLM — REGRA DE DESENVOLVIMENTO: SAI primeiro, OpenRouter como fallback
 
-Para qualquer feature que use LLM (geração de texto, análise, classificação, etc.), **a ordem padrão é: OpenRouter primeiro, SAI como fallback**. Só use SAI como primário se a feature exigir explicitamente.
+Para qualquer automação com IA (geração de texto, análise, classificação, extração, etc.),
+**a ordem obrigatória é: SAI primeiro, OpenRouter como fallback**.
+
+**Única exceção:** perguntas que exigem busca ativa na internet (notícias, dados atuais de
+mercado) — aí o OpenRouter (com plugin de web) vem primeiro, pois nenhum template SAI tem
+acesso à web em tempo real.
+
+**Use sempre o helper pronto `_llm_prompt()` em `app.py`** — ele já implementa a regra:
 
 ```python
-or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-if or_key:
-    # tenta OpenRouter primeiro
-    ...
-# fallback: SAI
-raw = _sai_simple_prompt(prompt)
+raw = _llm_prompt("Pergunta livre aqui...", log_tag='MinhaFeature')          # SAI → OpenRouter
+raw = _llm_prompt("Notícias recentes sobre...", log_tag='X', web=True)      # OpenRouter/web → SAI
 ```
 
-Veja `_iata_call_llm()` em `app.py` como exemplo completo desse padrão.
+Não escreva chamadas diretas ao OpenRouter/SAI em features novas — adicione parâmetros ao
+`_llm_prompt` se precisar de algo que ele não cobre.
 
 ---
 
@@ -58,15 +62,22 @@ def poll(task_id):
     return jsonify(_task_get(task_id))
 ```
 
-**Padrão frontend — barra verde com coelhinho 🐇:**
+**Padrão frontend — barra verde com o coelho verde correndo:**
 ```javascript
 // Modal deve ter #formArea e #progressArea separados
 // _setProgress(pct, step) atualiza a barra
 // Polling a cada 800ms até status === 'done' ou 'error'
-// Coelhinho animado na ponta da barra (ver openIAtaModal() como exemplo)
+// Coelho verde correndo na ponta da barra (ver openIAtaModal() como exemplo)
 ```
 
-A animação do coelhinho usa CSS keyframes injetados em `<head>` via `document.createElement('style')` (id único para não duplicar). Exemplo em `openIAtaModal()` em `index.html`.
+**A animação padrão do coelho é o WebP transparente `/images/coelho-correndo.webp` com a classe global `.coelho-run`** (definida no `<style>` principal do `index.html`). NUNCA usar o emoji 🐇 (coelho branco genérico) nem keyframes de "pulinho":
+
+```html
+<!-- dentro do div da barra de progresso (track com position:relative e overflow:visible) -->
+<img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+```
+
+O asset foi gerado a partir de `public/videos/Loading_Bunny.mp4` removendo o fundo preto e a marca d'água (script em `scripts/gerar_assets_coelho.py`). O mesmo coelho em pose estática está no `coelho_icon_transparent.ico` (ícone multi-tamanho 16–256px usado pelo exe, atalhos e bandeja).
 
 ---
 
