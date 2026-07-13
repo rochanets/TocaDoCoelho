@@ -11,9 +11,7 @@
             const style = document.createElement('style');
             style.id = 'iata-bunny-style';
             style.textContent = `
-                @keyframes iata-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
                 @keyframes iata-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
-                .iata-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
                 .iata-paw { display:inline-block; font-size:10px; animation:iata-paw-fade 1s ease-in-out infinite; }
                 .iata-paw:nth-child(2){animation-delay:.2s} .iata-paw:nth-child(3){animation-delay:.4s}
             `;

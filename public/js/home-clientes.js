@@ -1199,7 +1199,7 @@
             if (!container) return;
 
             if (!clients || clients.length === 0) {
-                container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                container.innerHTML = '<div class="empty-state"><img src="/images/missing-contact/coelho-triste.png" class="empty-bunny-img" alt=""><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 return;
             }
 
@@ -2068,17 +2068,6 @@
         let _clImportedPhotoUrl = '';
         let _clImportedProfileUrl = '';
 
-        function _clEnsureBunnyStyle() {
-            if (document.getElementById('cl-bunny-style')) return;
-            const s = document.createElement('style');
-            s.id = 'cl-bunny-style';
-            s.textContent = `
-                @keyframes cl-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
-                #clModalBunny { animation: cl-bunny-hop .5s ease-in-out infinite; }
-            `;
-            document.head.appendChild(s);
-        }
-
         function _clModalSetProgress(pct, step) {
             const bar = document.getElementById('clModalProgressBar');
             const stepEl = document.getElementById('clModalProgressStep');
@@ -2112,7 +2101,6 @@
 
             // Mostra modal
             document.getElementById('clientLinkedinModal').classList.add('active');
-            _clEnsureBunnyStyle();
 
             // Checa extensão
             await clModalCheckExtension();
@@ -3650,9 +3638,7 @@
                 const style = document.createElement('style');
                 style.id = 'env-autofill-bunny-style';
                 style.textContent = `
-                    @keyframes eaf-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
                     @keyframes eaf-paw { 0%,100%{opacity:.25} 50%{opacity:.7} }
-                    .eaf-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:eaf-hop .5s ease-in-out infinite; pointer-events:none; }
                     .eaf-paw { display:inline-block; font-size:10px; animation:eaf-paw 1s ease-in-out infinite; }
                     .eaf-paw:nth-child(2){animation-delay:.2s} .eaf-paw:nth-child(3){animation-delay:.4s}
                 `;
@@ -3680,7 +3666,7 @@
                             <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="eafProgressStep">Iniciando...</div>
                             <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
                                 <div id="eafProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                                    <span class="eaf-bunny">🐇</span>
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
                             <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">

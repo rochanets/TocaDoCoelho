@@ -71,7 +71,7 @@
                         <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="linkedinProgressStep">Iniciando...</div>
                         <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
                             <div id="linkedinProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                                <span style="position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none;">🐇</span>
+                                <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                             </div>
                         </div>
                         <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">

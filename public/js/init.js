@@ -4,7 +4,6 @@
         const s = document.createElement('style');
         s.id = styleId;
         s.textContent = `
-          @keyframes waBunnyHop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-65%) scaleY(.88)} }
           @keyframes waPawFade  { 0%,100%{opacity:.25} 50%{opacity:.75} }
           .wa-paw { display:inline-block; animation:waPawFade 1s ease-in-out infinite; }
           .wa-switch { position:relative; display:inline-block; width:42px; height:24px; flex-shrink:0; vertical-align:middle; }

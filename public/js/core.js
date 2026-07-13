@@ -35,9 +35,7 @@
                         ind.innerHTML = `
                             <div class="bgi-label">${label}</div>
                             <div class="bgi-video-wrap" title="Processando em background...">
-                                <video autoplay loop muted playsinline>
-                                    <source src="/videos/Loading_Bunny.mp4" type="video/mp4">
-                                </video>
+                                <img src="/images/coelho-correndo.webp" alt="">
                             </div>`;
                         _renderedState = 'active';
                     } else {
@@ -2330,7 +2328,7 @@
                             <div style="font-size:13px; color:#6b7280; margin-bottom:8px; text-align:center;" id="mailingWahaProgressStep">Iniciando...</div>
                             <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px;">
                                 <div id="mailingWahaProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                                    <span class="iata-bunny">🐇</span>
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
                         </div>
@@ -3159,7 +3157,7 @@
             overlay.innerHTML = `
                 <div style="background:#fff;border-radius:14px;padding:28px 28px 22px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.25);font-family:inherit;">
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-                        <span style="font-size:28px;">🐇</span>
+                        <img src="/images/coelho-correndo.webp" alt="" style="height:38px;width:auto;flex-shrink:0;">
                         <div>
                             <div style="font-size:16px;font-weight:700;color:#111827;">Nova versão disponível!</div>
                             <div style="font-size:13px;color:#6b7280;margin-top:2px;">
@@ -3275,17 +3273,6 @@
             }
         }
 
-        function _ensureUpdateBunnyStyle() {
-            if (document.getElementById('update-bunny-style')) return;
-            const style = document.createElement('style');
-            style.id = 'update-bunny-style';
-            style.textContent = `
-                @keyframes upd-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
-                .upd-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:16px; line-height:1; animation:upd-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
-            `;
-            document.head.appendChild(style);
-        }
-
         function _updSetProgress(pct, step) {
             const bar = document.getElementById('updProgressBar');
             const stepEl = document.getElementById('updProgressStep');
@@ -3305,13 +3292,12 @@
             const btn = document.getElementById('autoUpdateBtn');
             if (btn) btn.disabled = true;
             const container = document.getElementById('updateCheckResult');
-            _ensureUpdateBunnyStyle();
             if (container) {
                 container.innerHTML = `
                     <div id="updProgressStep" style="font-size:13px;color:#6b7280;margin-bottom:8px;">Iniciando download...</div>
                     <div style="position:relative;background:#d1fae5;border-radius:99px;height:12px;overflow:visible;margin:0 18px 6px 0;">
                         <div id="updProgressBar" style="position:relative;height:100%;width:5%;background:linear-gradient(90deg,#059669,#10b981,#34d399);border-radius:99px;transition:width .5s ease;">
-                            <span class="upd-bunny">🐇</span>
+                            <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                         </div>
                     </div>
                     <div id="updProgressPct" style="font-size:11px;color:#6b7280;text-align:right;">5%</div>

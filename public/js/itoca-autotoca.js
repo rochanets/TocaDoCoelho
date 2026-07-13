@@ -1534,12 +1534,19 @@
             document.querySelectorAll('.theme-option-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.theme === (theme || 'verde-classico'));
             });
-            // Troca de logo para temas pearl
+            // Troca de logo por tema (pearl e blue-space têm logos próprios)
             const isPearl = theme === 'baby-pink' || theme === 'white-pearl';
+            const isBlueSpace = theme === 'blue-space';
             const logoExpanded  = document.querySelector('.sidebar-logo-expanded');
             const logoCollapsed = document.querySelector('.sidebar-logo-collapsed');
-            if (logoExpanded)  logoExpanded.src  = isPearl ? '/logo-coelho-pearl.png'        : '/logo-coelho.png';
-            if (logoCollapsed) logoCollapsed.src = isPearl ? '/images/favicon-toca-pearl.png' : '/images/favicon-toca.png';
+            if (logoExpanded) {
+                logoExpanded.src = isBlueSpace ? '/logo-toca-blue-space.png'
+                    : isPearl ? '/logo-coelho-pearl.png' : '/logo-coelho.png';
+            }
+            if (logoCollapsed) {
+                logoCollapsed.src = isBlueSpace ? '/images/favicon-toca-blue-space.png'
+                    : isPearl ? '/images/favicon-toca-pearl.png' : '/images/favicon-toca.png';
+            }
         }
 
         async function loadThemeConfig() {
@@ -2097,7 +2104,7 @@
                     <div style="font-size:11px; color:#6b7280; margin-bottom:4px; text-align:center;" id="autoFillProgressStep">Iniciando...</div>
                     <div style="position:relative; background:#d1fae5; border-radius:99px; height:8px; overflow:visible; margin:0 2px;">
                         <div id="autoFillProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                            <span style="position:absolute; right:-10px; top:50%; transform:translateY(-50%); font-size:13px; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none;">🐇</span>
+                            <img src="/images/coelho-correndo.webp" class="coelho-run" alt="" style="height:18px;right:-14px;">
                         </div>
                     </div>`;
                 btn?.parentNode?.insertAdjacentElement('afterend', progressWrap);
@@ -2399,10 +2406,8 @@
             const style = document.createElement('style');
             style.id = 'campaign-styles';
             style.textContent = `
-                @keyframes camp-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-72%) scaleY(.85)} }
                 @keyframes camp-glow-pulse { 0%,100%{opacity:.55;transform:scale(1)} 50%{opacity:.9;transform:scale(1.06)} }
                 @keyframes camp-fade-up { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
-                .camp-bunny { position:absolute; right:-13px; top:50%; transform:translateY(-50%); font-size:17px; line-height:1; animation:camp-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
 
                 /* ── Hero ── */
                 .camp-hero { position:relative; overflow:hidden; border-radius:20px; padding:34px 36px;
@@ -2699,7 +2704,7 @@
                             <div style="font-size:13px;color:#6b7280;margin-bottom:12px;text-align:center;" id="cwProgressStep">Iniciando...</div>
                             <div style="position:relative;background:#ede9fe;border-radius:99px;height:12px;overflow:visible;margin:0 16px 6px;">
                                 <div id="cwProgressBar" style="position:relative;height:100%;width:5%;background:linear-gradient(90deg,#6366f1,#8b5cf6,#38bdf8);border-radius:99px;transition:width .6s ease;">
-                                    <span class="camp-bunny">🐇</span>
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
                             <div style="text-align:right;padding:0 16px;font-size:11px;color:#8b5cf6;" id="cwProgressPct">5%</div>
@@ -3433,7 +3438,7 @@
             overlay.id = 'campRegenOverlay';
             overlay.style.cssText = 'position:fixed;inset:0;background:rgba(18,16,31,.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
             overlay.innerHTML = `<div style="background:#fff;border-radius:14px;padding:26px 30px;text-align:center;min-width:320px;">
-                <div style="font-size:30px;">🐇</div>
+                <img src="/images/coelho-correndo.webp" alt="" style="height:40px;width:auto;">
                 <div id="campRegenStep" style="font-size:13px;color:#6b7280;margin:10px 0;">Reanalisando...</div>
                 <div style="position:relative;background:#ede9fe;border-radius:99px;height:10px;margin:0 8px;"><div id="campRegenBar" style="height:100%;width:10%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:99px;transition:width .5s;"></div></div>
             </div>`;
@@ -4301,9 +4306,7 @@
                 const style = document.createElement('style');
                 style.id = 'iata-bunny-style';
                 style.textContent = `
-                    @keyframes iata-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
                     @keyframes iata-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
-                    .iata-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
                     .iata-paw { display:inline-block; font-size:10px; animation:iata-paw-fade 1s ease-in-out infinite; }
                     .iata-paw:nth-child(2){animation-delay:.2s} .iata-paw:nth-child(3){animation-delay:.4s}
                 `;
@@ -4334,7 +4337,7 @@
                             <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="iataProgressStep">Iniciando...</div>
                             <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
                                 <div id="iataProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                                    <span class="iata-bunny">🐇</span>
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
                             <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
