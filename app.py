@@ -26,7 +26,7 @@ import base64
 import mimetypes
 import uuid
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
@@ -189,6 +189,8 @@ AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / 'chamado-juridico'
 AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+CHAMADO_JURIDICO_UPLOAD_DIR = AUTOTOCA_UPLOAD_DIR / 'chamado-juridico'
+CHAMADO_JURIDICO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -815,6 +817,18 @@ def init_db():
 
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_query_key ON automapping_runs(query_key)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_created_at ON automapping_runs(created_at)')
+
+    # Histórico de preenchimentos do robô do Chamado Jurídico (permite reaproveitar
+    # texto e arquivos de uma execução anterior num novo chamado)
+    c.execute('''CREATE TABLE IF NOT EXISTS chamado_juridico_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conta TEXT NOT NULL,
+        proposta_original_name TEXT,
+        payload_json TEXT NOT NULL,
+        files_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_chamado_juridico_history_created_at ON chamado_juridico_history(created_at)')
 
     # Tokens de integrações OAuth por usuário (Outlook Graph e futuros conectores)
     outlook_graph_ensure_schema(conn)
@@ -15472,25 +15486,175 @@ def _forms_robot_task_cleanup(task_id, delay=300):
     threading.Thread(target=_cleanup, daemon=True).start()
 
 
-def _forms_robot_build_fields(data):
-    """Monta os campos na ordem de matching (termos mais específicos primeiro)."""
-    return [
-        {'key': 'cnpj', 'label': 'CNPJ', 'terms': ['cnpj'],
-         'value': (data.get('cnpj') or '').strip()},
-        {'key': 'empresa_grupo', 'label': 'Empresa do Grupo Stefanini',
+# Campos de upload do Chamado Jurídico — chave usada no FormData/no histórico,
+# se aceita múltiplos arquivos e se tem arquivo padrão de apoio como fallback
+# quando o usuário não anexa nada.
+CHAMADO_JURIDICO_FILE_FIELDS = {
+    'aditivos_anteriores':        {'multiple': True,  'fallback': False},
+    'contrato_anterior':          {'multiple': False, 'fallback': False},
+    'minuta_cliente':             {'multiple': False, 'fallback': True},
+    'aprovacao_reajuste':         {'multiple': False, 'fallback': True},
+    'proposta_comercial_tecnica': {'multiple': False, 'fallback': False},
+}
+
+# Sim/Não simples, replicados 1:1 no formulário — chave -> texto da mensagem de validação
+CHAMADO_JURIDICO_YES_NO_LABELS = {
+    'havera_reajuste': 'se haverá reajuste',
+    'houve_reoneracao': 'se houve reoneração',
+    'inclui_novos_servicos': 'se inclui novos serviços',
+    'e_prorrogacao_vigencia': 'se é prorrogação de vigência',
+    'assinatura_plataforma': 'sobre a assinatura pela plataforma',
+}
+
+
+def _chamado_juridico_default_support_file():
+    """Primeiro PDF da pasta 'Arquivos de Apoio' — usado como placeholder quando
+    o usuário não anexa um arquivo opcional (itens 10, 13 e 15 do formulário)."""
+    try:
+        pdfs = sorted(AUTOTOCA_SUPPORT_FILES_DIR.glob('*.pdf'))
+        return pdfs[0] if pdfs else None
+    except Exception:
+        return None
+
+
+def _chamado_juridico_save_uploaded_files(history_id, field_key, file_storages):
+    saved = []
+    field_dir = CHAMADO_JURIDICO_UPLOAD_DIR / str(history_id) / field_key
+    field_dir.mkdir(parents=True, exist_ok=True)
+    for f in file_storages:
+        if not f or not f.filename:
+            continue
+        safe_name = secure_filename(f.filename) or f'arquivo_{uuid.uuid4().hex}'
+        target = field_dir / safe_name
+        counter = 1
+        while target.exists():
+            target = field_dir / f'{target.stem}_{counter}{target.suffix}'
+            counter += 1
+        f.save(str(target))
+        saved.append({'stored_path': str(target), 'original_name': f.filename})
+    return saved
+
+
+def _chamado_juridico_copy_history_files(history_id, field_key, entries):
+    """Copia arquivos de um histórico anterior para dentro da pasta do novo
+    histórico, para que cada execução fique autocontida em disco."""
+    field_dir = CHAMADO_JURIDICO_UPLOAD_DIR / str(history_id) / field_key
+    field_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for entry in entries:
+        src = Path(entry.get('stored_path') or '')
+        if not src.exists():
+            continue
+        target = field_dir / src.name
+        counter = 1
+        while target.exists():
+            target = field_dir / f'{target.stem}_{counter}{target.suffix}'
+            counter += 1
+        shutil.copyfile(str(src), str(target))
+        copied.append({'stored_path': str(target), 'original_name': entry.get('original_name') or src.name})
+    return copied
+
+
+def _forms_robot_build_fields(payload, files_by_field):
+    """Monta os campos na ordem de matching (termos mais específicos primeiro).
+    `files_by_field` é {field_key: [{'stored_path','original_name'}, ...]}.
+    O item 21 do formulário nunca é respondido — nenhum campo o alveja de propósito."""
+
+    def paths(key):
+        return [e['stored_path'] for e in (files_by_field.get(key) or []) if e.get('stored_path')]
+
+    def yes_no(key):
+        return 'Sim' if (payload.get(key) or '').strip().lower() == 'sim' else 'Não'
+
+    minuta_tipo = (payload.get('minuta_tipo') or '').strip().lower()
+    minuta_option_terms = (
+        ['minuta enviada pelo cliente']
+        if minuta_tipo == 'cliente'
+        else ['minuta padrao stefanini', 'ajustes do cliente']
+    )
+
+    # 'q' é a posição 1-based da pergunta no formulário — usada como fallback
+    # quando o texto da pergunta não bate com nenhum termo (ex.: item 15, que
+    # replica o arquivo do item 13 mas cuja redação exata não é conhecida).
+    # O item 21 nunca aparece aqui de propósito: não deve ser respondido.
+    fields = [
+        {'key': 'origem', 'label': 'Origem da Solicitação', 'type': 'radio', 'q': 1,
+         'terms': ['origem da solicitacao', 'origem'],
+         'option_terms': ['comercial pedroso']},
+        {'key': 'empresa_grupo', 'label': 'Empresa do Grupo Stefanini', 'type': 'radio', 'q': 2,
          'terms': ['empresa do grupo stefanini', 'grupo stefanini', 'empresa stefanini'],
-         'value': (data.get('empresa_grupo') or '').strip()},
-        {'key': 'razao_social', 'label': 'Razão Social', 'terms': ['razao social'],
-         'value': (data.get('razao_social') or '').strip()},
-        {'key': 'endereco', 'label': 'Endereço', 'terms': ['endereco'],
-         'value': (data.get('endereco') or '').strip()},
-        {'key': 'conta', 'label': 'Conta',
+         'option_terms': ['stefanini consultoria e assessoria em informatica']},
+        {'key': 'conta', 'label': 'Conta', 'type': 'text', 'q': 3,
          'terms': ['nome da conta', 'nome do cliente', 'conta', 'cliente'],
-         'value': (data.get('conta') or '').strip()},
+         'value': (payload.get('conta') or '').strip()},
+        {'key': 'endereco', 'label': 'Endereço', 'type': 'text', 'q': 4,
+         'terms': ['endereco'],
+         'value': (payload.get('endereco') or '').strip()},
+        {'key': 'minuta_tipo', 'label': 'Minuta/Contrato', 'type': 'radio', 'q': 5,
+         'terms': ['minuta', 'contrato original enviado', 'origem da minuta'],
+         'option_terms': minuta_option_terms},
+        {'key': 'opp_salesforce', 'label': 'Opp Sales Force', 'type': 'text', 'q': 6,
+         'terms': ['opp sales force', 'salesforce', 'numero da oportunidade'],
+         'value': (payload.get('opp_salesforce') or '').strip() or '00000'},
+        {'key': 'data_assinatura', 'label': 'Data de Assinatura do Contrato Original', 'type': 'date', 'q': 7,
+         'terms': ['data de assinatura', 'data assinatura', 'assinatura do contrato original'],
+         'value': (payload.get('data_assinatura') or '').strip() or date.today().isoformat()},
+        {'key': 'aditivos_anteriores', 'label': 'Aditivos anteriores', 'type': 'file', 'q': 8,
+         'terms': ['aditivos anteriores'],
+         'file_paths': paths('aditivos_anteriores')},
+        {'key': 'contrato_anterior', 'label': 'Contrato Anterior', 'type': 'file', 'q': 9,
+         'terms': ['contrato anterior'],
+         'file_paths': paths('contrato_anterior')},
+        {'key': 'minuta_cliente', 'label': 'Há minuta do cliente?', 'type': 'file', 'q': 10,
+         'terms': ['ha minuta do cliente', 'minuta do cliente'],
+         'file_paths': paths('minuta_cliente')},
+        {'key': 'havera_reajuste', 'label': 'Haverá Reajuste?', 'type': 'radio_yes_no', 'q': 11,
+         'terms': ['havera reajuste'],
+         'value': yes_no('havera_reajuste')},
+        {'key': 'valores_reajuste', 'label': 'Descreva os valores de reajuste', 'type': 'text', 'q': 12,
+         'terms': ['descreva os valores de reajuste', 'valores de reajuste'],
+         'value': (payload.get('valores_reajuste') or '').strip()},
+        {'key': 'aprovacao_reajuste', 'label': 'Aprovação de Reajuste Diferente do Contrato', 'type': 'file', 'q': 13,
+         'terms': ['aprovacao de reajuste diferente do contrato', 'aprovacao de reajuste'],
+         'file_paths': paths('aprovacao_reajuste')},
+        {'key': 'houve_reoneracao', 'label': 'Houve reoneração?', 'type': 'radio_yes_no', 'q': 14,
+         'terms': ['houve reoneracao', 'reoneracao'],
+         'value': yes_no('houve_reoneracao')},
+        {'key': 'aprovacao_reajuste_15', 'label': 'Aprovação de Reajuste (item 15)', 'type': 'file', 'q': 15,
+         'terms': [],
+         'file_paths': paths('aprovacao_reajuste')},
+        {'key': 'inclui_novos_servicos', 'label': 'Inclui novos serviços?', 'type': 'radio_yes_no', 'q': 16,
+         'terms': ['inclui novos servicos', 'novos servicos'],
+         'value': yes_no('inclui_novos_servicos')},
+        {'key': 'proposta_comercial_tecnica', 'label': 'Proposta comercial e técnica', 'type': 'file', 'q': 17,
+         'terms': ['proposta comercial e tecnica', 'proposta comercial'],
+         'file_paths': paths('proposta_comercial_tecnica')},
+        {'key': 'e_prorrogacao_vigencia', 'label': 'É prorrogação de vigência?', 'type': 'radio_yes_no', 'q': 18,
+         'terms': ['prorrogacao de vigencia', 'prorrogacao'],
+         'value': yes_no('e_prorrogacao_vigencia')},
+        {'key': 'vigencia_datas', 'label': 'Data inicial e final da vigência', 'type': 'text', 'q': 19,
+         'terms': ['data inicial e final da vigencia', 'inicial e final da vigencia'],
+         'value': (payload.get('vigencia_datas') or '').strip()},
+        {'key': 'assinatura_plataforma', 'label': 'Assinatura pela plataforma Stefanini ou do cliente?',
+         'type': 'radio_yes_no', 'q': 20,
+         'terms': ['assinatura pela plataforma', 'plataforma stefanini ou do cliente'],
+         'value': yes_no('assinatura_plataforma')},
+        {'key': 'descricao_pedido', 'label': 'Descrição do pedido', 'type': 'text', 'q': 22,
+         'terms': ['conte brevemente sobre o que se trata esse pedido', 'brevemente sobre o que se trata'],
+         'value': (payload.get('descricao_pedido') or '').strip()},
     ]
 
+    # Item 12 e 19 só existem quando a pergunta condicionante foi "Sim" — não
+    # envia nada quando "Não" para não deixar rastro de resposta indevida.
+    if yes_no('havera_reajuste') != 'Sim':
+        fields = [f for f in fields if f['key'] != 'valores_reajuste']
+    if yes_no('e_prorrogacao_vigencia') != 'Sim':
+        fields = [f for f in fields if f['key'] != 'vigencia_datas']
 
-def _forms_robot_process_async(task_id, data):
+    return fields
+
+
+def _forms_robot_process_async(task_id, history_id, payload, files_by_field):
     from integrations.forms_robot import run_chamado_juridico_robot, FormsRobotError
 
     def on_progress(pct, step):
@@ -15499,7 +15663,7 @@ def _forms_robot_process_async(task_id, data):
     try:
         result = run_chamado_juridico_robot(
             AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL,
-            _forms_robot_build_fields(data),
+            _forms_robot_build_fields(payload, files_by_field),
             on_progress,
         )
         if result.get('submitted'):
@@ -15507,7 +15671,8 @@ def _forms_robot_process_async(task_id, data):
         else:
             final_step = 'Preenchimento concluído — conclua a revisão e o envio na janela do robô.'
         _forms_robot_task_set(task_id, {
-            'status': 'done', 'progress': 100, 'step': final_step, 'result': result,
+            'status': 'done', 'progress': 100, 'step': final_step,
+            'result': dict(result, history_id=history_id),
         })
     except FormsRobotError as e:
         logger.warning(f'[AutoToca][FormsRobot] {e}')
@@ -15522,21 +15687,109 @@ def _forms_robot_process_async(task_id, data):
 @app.route('/api/autotoca/chamado-juridico/robot', methods=['POST'])
 def autotoca_chamado_juridico_robot():
     try:
-        data = request.get_json(force=True) or {}
-        if not (data.get('conta') or '').strip():
-            return jsonify({'error': 'Conta é obrigatória.'}), 400
-        if not (data.get('endereco') or '').strip():
-            return jsonify({'error': 'Endereço é obrigatório.'}), 400
+        form = request.form
+        payload = {
+            'conta': (form.get('conta') or '').strip(),
+            'endereco': (form.get('endereco') or '').strip(),
+            'minuta_tipo': (form.get('minuta_tipo') or '').strip(),
+            'opp_salesforce': (form.get('opp_salesforce') or '').strip(),
+            'data_assinatura': (form.get('data_assinatura') or '').strip(),
+            'havera_reajuste': (form.get('havera_reajuste') or '').strip(),
+            'valores_reajuste': (form.get('valores_reajuste') or '').strip(),
+            'houve_reoneracao': (form.get('houve_reoneracao') or '').strip(),
+            'inclui_novos_servicos': (form.get('inclui_novos_servicos') or '').strip(),
+            'e_prorrogacao_vigencia': (form.get('e_prorrogacao_vigencia') or '').strip(),
+            'vigencia_datas': (form.get('vigencia_datas') or '').strip(),
+            'assinatura_plataforma': (form.get('assinatura_plataforma') or '').strip(),
+            'descricao_pedido': (form.get('descricao_pedido') or '').strip(),
+        }
+
+        errors = []
+        if not payload['conta']:
+            errors.append('Conta é obrigatória.')
+        if not payload['endereco']:
+            errors.append('Endereço é obrigatório.')
+        if payload['minuta_tipo'] not in ('cliente', 'stefanini'):
+            errors.append('Informe se a Minuta/Contrato é do cliente ou da Stefanini.')
+        if not payload['descricao_pedido']:
+            errors.append('Descreva brevemente o pedido.')
+        for key, label in CHAMADO_JURIDICO_YES_NO_LABELS.items():
+            if payload[key].lower() not in ('sim', 'nao', 'não'):
+                errors.append(f'Responda {label}.')
+        if payload['havera_reajuste'].lower() == 'sim' and not payload['valores_reajuste']:
+            errors.append('Descreva os valores de reajuste.')
+        if payload['e_prorrogacao_vigencia'].lower() == 'sim' and not payload['vigencia_datas']:
+            errors.append('Informe a data inicial e final da vigência.')
+
+        reuse_history_id = (form.get('reuse_history_id') or '').strip()
+        reuse_row = None
+        if reuse_history_id:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute('SELECT * FROM chamado_juridico_history WHERE id = ?', (reuse_history_id,))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                reuse_row = dict_from_row(row)
+
+        reuse_files = json.loads(reuse_row['files_json']) if reuse_row else {}
+
+        has_contrato_anterior = bool(request.files.getlist('contrato_anterior')) and \
+            request.files.getlist('contrato_anterior')[0].filename
+        if not has_contrato_anterior and not reuse_files.get('contrato_anterior'):
+            errors.append('Anexe o Contrato Anterior (ou selecione um histórico com esse arquivo).')
+
+        if errors:
+            return jsonify({'error': ' '.join(errors)}), 400
 
         with _forms_robot_tasks_lock:
             busy = any(t.get('status') == 'processing' for t in _forms_robot_tasks.values())
         if busy:
             return jsonify({'error': 'O robô já está em execução. Aguarde ele terminar.'}), 409
 
+        # Cria a linha do histórico já para ter um id — os arquivos ficam
+        # organizados em uploads/autotoca/chamado-juridico/<history_id>/<campo>/
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO chamado_juridico_history (conta, payload_json, files_json) VALUES (?, ?, ?)',
+            (payload['conta'], json.dumps(payload, ensure_ascii=False), '{}')
+        )
+        conn.commit()
+        history_id = c.lastrowid
+
+        files_by_field = {}
+        for field_key, opts in CHAMADO_JURIDICO_FILE_FIELDS.items():
+            uploads = [f for f in request.files.getlist(field_key) if f and f.filename]
+            if uploads:
+                files_by_field[field_key] = _chamado_juridico_save_uploaded_files(history_id, field_key, uploads)
+            elif reuse_files.get(field_key):
+                files_by_field[field_key] = _chamado_juridico_copy_history_files(
+                    history_id, field_key, reuse_files[field_key]
+                )
+            elif opts['fallback']:
+                default_file = _chamado_juridico_default_support_file()
+                if default_file:
+                    files_by_field[field_key] = [{
+                        'stored_path': str(default_file), 'original_name': default_file.name,
+                    }]
+
+        proposta_files = files_by_field.get('proposta_comercial_tecnica') or []
+        proposta_original_name = proposta_files[0]['original_name'] if proposta_files else None
+
+        c.execute(
+            'UPDATE chamado_juridico_history SET files_json = ?, proposta_original_name = ? WHERE id = ?',
+            (json.dumps(files_by_field, ensure_ascii=False), proposta_original_name, history_id)
+        )
+        conn.commit()
+        conn.close()
+
         task_id = uuid.uuid4().hex
         _forms_robot_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
-        threading.Thread(target=_forms_robot_process_async, args=(task_id, data), daemon=True).start()
-        return jsonify({'task_id': task_id}), 202
+        threading.Thread(
+            target=_forms_robot_process_async, args=(task_id, history_id, payload, files_by_field), daemon=True
+        ).start()
+        return jsonify({'task_id': task_id, 'history_id': history_id}), 202
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/chamado-juridico/robot: {e}')
         return jsonify({'error': str(e)}), 500
@@ -15548,6 +15801,51 @@ def autotoca_chamado_juridico_robot_task(task_id):
     if not task:
         return jsonify({'error': 'Tarefa não encontrada.'}), 404
     return jsonify(task)
+
+
+def _chamado_juridico_upload_url(stored_path):
+    try:
+        rel = Path(stored_path).resolve().relative_to(AUTOTOCA_UPLOAD_DIR.resolve())
+        return f'/uploads/autotoca/{urllib.parse.quote(str(rel).replace(os.sep, "/"))}'
+    except Exception:
+        return None
+
+
+@app.route('/api/autotoca/chamado-juridico/history', methods=['GET'])
+def autotoca_chamado_juridico_history_list():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        'SELECT id, conta, proposta_original_name, created_at FROM chamado_juridico_history '
+        'ORDER BY created_at DESC LIMIT 50'
+    )
+    rows = [dict_from_row(r) for r in c.fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route('/api/autotoca/chamado-juridico/history/<int:history_id>', methods=['GET'])
+def autotoca_chamado_juridico_history_get(history_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT * FROM chamado_juridico_history WHERE id = ?', (history_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Histórico não encontrado.'}), 404
+    entry = dict_from_row(row)
+    files = json.loads(entry.get('files_json') or '{}')
+    files_view = {
+        key: [{'original_name': e.get('original_name'), 'url': _chamado_juridico_upload_url(e.get('stored_path'))}
+              for e in entries]
+        for key, entries in files.items()
+    }
+    return jsonify({
+        'id': entry['id'],
+        'payload': json.loads(entry.get('payload_json') or '{}'),
+        'files': files_view,
+    })
+
 
 @app.route('/api/autotoca/linkedin/teste', methods=['POST'])
 def autotoca_teste_linkedin():
@@ -16211,7 +16509,7 @@ def serve_account_upload(filename):
 def serve_wikitoca_upload(filename):
     return send_from_directory(str(WIKI_UPLOAD_DIR), filename)
 
-@app.route('/uploads/autotoca/<filename>')
+@app.route('/uploads/autotoca/<path:filename>')
 def serve_autotoca_upload(filename):
     return send_from_directory(str(AUTOTOCA_UPLOAD_DIR), filename)
 

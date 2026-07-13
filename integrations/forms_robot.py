@@ -2,20 +2,32 @@
 """Robô visual do Chamado Jurídico.
 
 Abre o Microsoft Forms num navegador controlado (Playwright) visível na
-máquina do usuário, preenche os campos de texto com um cursor animado
-(coelhinho 🐇) e para no botão Enviar para o usuário revisar, anexar
-arquivos e concluir o envio manualmente. A submissão é uma resposta
-genuína do Forms, feita na sessão Microsoft do próprio usuário.
+máquina do usuário, preenche as 22 perguntas do formulário (texto, escolha
+única, data e upload de arquivo) com um cursor animado (coelhinho 🐇) e para
+no botão Enviar para o usuário revisar e concluir. A submissão é uma
+resposta genuína do Forms, feita na sessão Microsoft do próprio usuário —
+nenhuma pergunta é respondida além das mapeadas (o item 21, por decisão de
+negócio, nunca recebe um campo e portanto nunca é tocado).
 
 O login Microsoft é feito uma única vez: o perfil do navegador é
 persistido em disco e reutilizado nas execuções seguintes.
+
+Cada campo é localizado prioritariamente pelo texto normalizado da
+pergunta (resiliente a reordenação do formulário); quando nenhum termo
+bate com nada na página, cai para a posição numérica (`q`) informada pelo
+chamador — esse caso é reportado separadamente para o usuário conferir
+visualmente, já que uma resposta jurídica na pergunta errada é pior do que
+uma pergunta deixada em branco.
 """
 
 import os
+import re
 import sys
 import time
 import threading
+import unicodedata
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 # Uma execução por vez: o perfil persistente do navegador não pode ser
@@ -30,18 +42,50 @@ _leftover_lock = threading.Lock()
 LOGIN_TIMEOUT_SECONDS = 300       # espera máxima pelo login Microsoft
 REVIEW_TIMEOUT_SECONDS = 900      # espera máxima pela revisão + envio manual
 TYPE_DELAY_MS = 30                # digitação caractere a caractere
+CALENDAR_MAX_MONTH_CLICKS = 36    # até 3 anos de navegação no calendário
 
 QUESTION_SELECTOR = '[data-automation-id="questionItem"], div[role="listitem"]'
-INPUT_SELECTOR = (
+TEXT_INPUT_SELECTOR = (
     'input[data-automation-id="textInput"], textarea[data-automation-id="textInput"], '
     'input[type="text"], textarea, input:not([type])'
 )
+RADIO_OPTION_SELECTOR = '[role="radio"], input[type="radio"]'
+FILE_INPUT_SELECTOR = 'input[type="file"]'
+CALENDAR_BUTTON_SELECTOR = (
+    'button[aria-label*="alend" i], button[data-icon-name="Calendar"], '
+    'button[aria-label*="data" i]'
+)
+DATEPICKER_HEADER_SELECTOR = '.ms-DatePicker-monthAndYear, [class*="monthAndYear"]'
+DATEPICKER_NEXT_SELECTOR = (
+    'button[aria-label*="róxim" i], button[aria-label*="next" i], '
+    '[data-automation-id="DatePickerNextMonthNavButton"]'
+)
+DATEPICKER_PREV_SELECTOR = (
+    'button[aria-label*="nterior" i], button[aria-label*="prev" i], '
+    '[data-automation-id="DatePickerPrevMonthNavButton"]'
+)
+DATEPICKER_DAY_SELECTOR = '.ms-DatePicker-day:not(.ms-DatePicker-day--outfocus)'
 SUBMIT_SELECTOR = 'button[data-automation-id="submitButton"]'
 THANK_YOU_SELECTOR = '[data-automation-id="thankYouPageMessage"]'
+
+_PT_MONTHS = [
+    'janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho',
+    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+]
+_EN_MONTHS = [
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december',
+]
 
 
 class FormsRobotError(Exception):
     pass
+
+
+def _normalize(value):
+    text = unicodedata.normalize('NFD', str(value or ''))
+    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+    return re.sub(r'[^a-z0-9]+', ' ', text.lower()).strip()
 
 
 def _profile_dir():
@@ -60,8 +104,7 @@ def _close_leftover():
         ctx, pw = _leftover.get('context'), _leftover.get('playwright')
         _leftover['context'] = None
         _leftover['playwright'] = None
-    for closer in ((ctx, 'close'), (pw, 'stop')):
-        obj, method = closer
+    for obj, method in ((ctx, 'close'), (pw, 'stop')):
         if obj is not None:
             try:
                 getattr(obj, method)()
@@ -170,11 +213,11 @@ _MATCH_JS = """
     const used = new Set();
     const mapping = {};
     for (const field of fields) {
-        const terms = field.terms.map(normalize);
+        const terms = (field.terms || []).map(normalize);
         const idx = texts.findIndex((t, i) => !used.has(i) && terms.some(term => term && t.includes(term)));
         if (idx >= 0) { used.add(idx); mapping[field.key] = idx; }
     }
-    return { mapping, total: questions.length, texts };
+    return { mapping, total: questions.length };
 }
 """
 
@@ -193,6 +236,112 @@ def _set_badge(page, text):
         pass
 
 
+def _highlight_and_point(page, question, target=None):
+    try:
+        box = (target or question).bounding_box()
+        if box:
+            _move_cursor_to(page, box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+            time.sleep(0.6)
+    except Exception:
+        pass
+    try:
+        question.evaluate(_HIGHLIGHT_JS)
+    except Exception:
+        pass
+
+
+def _fill_text(page, question, value):
+    target = question.locator(TEXT_INPUT_SELECTOR).first
+    target.scroll_into_view_if_needed(timeout=8000)
+    _highlight_and_point(page, question, target)
+    target.click(timeout=8000)
+    target.fill('')
+    target.type(str(value), delay=TYPE_DELAY_MS)
+
+
+def _select_radio_option(page, question, option_terms):
+    options = question.locator(RADIO_OPTION_SELECTOR)
+    count = options.count()
+    normalized_terms = [_normalize(t) for t in option_terms]
+    for i in range(count):
+        option = options.nth(i)
+        try:
+            label_text = option.evaluate("""
+                (el) => {
+                    const aria = el.getAttribute('aria-label') || '';
+                    const labelledBy = el.getAttribute('aria-labelledby');
+                    const byId = labelledBy
+                        ? labelledBy.split(' ').map(id => document.getElementById(id)?.innerText || '').join(' ')
+                        : '';
+                    const closestLabel = el.closest('label')?.innerText || '';
+                    const parentText = el.parentElement?.innerText || '';
+                    return [aria, byId, closestLabel, parentText].join(' | ');
+                }
+            """)
+        except Exception:
+            continue
+        norm = _normalize(label_text)
+        if any(term and term in norm for term in normalized_terms):
+            _highlight_and_point(page, question, option)
+            option.click(timeout=8000, force=True)
+            return True
+    return False
+
+
+def _parse_calendar_header(text):
+    norm = _normalize(text)
+    year_match = re.search(r'(20\d{2})', norm)
+    year = int(year_match.group(1)) if year_match else None
+    month = None
+    for months in (_PT_MONTHS, _EN_MONTHS):
+        for i, name in enumerate(months):
+            if name in norm:
+                month = i + 1
+                break
+        if month:
+            break
+    return month, year
+
+
+def _fill_date(page, question, iso_value):
+    target_date = datetime.strptime(iso_value, '%Y-%m-%d').date()
+    calendar_btn = question.locator(CALENDAR_BUTTON_SELECTOR).first
+    calendar_btn.scroll_into_view_if_needed(timeout=8000)
+    _highlight_and_point(page, question, calendar_btn)
+    calendar_btn.click(timeout=8000)
+    page.wait_for_timeout(400)
+
+    header = page.locator(DATEPICKER_HEADER_SELECTOR).first
+    for _ in range(CALENDAR_MAX_MONTH_CLICKS):
+        header_text = header.inner_text(timeout=4000)
+        month, year = _parse_calendar_header(header_text)
+        if month == target_date.month and year == target_date.year:
+            break
+        if month is None or year is None:
+            raise FormsRobotError('não foi possível ler o mês/ano exibido no calendário do Forms')
+        target_ord = target_date.year * 12 + target_date.month
+        current_ord = year * 12 + month
+        nav_selector = DATEPICKER_NEXT_SELECTOR if target_ord > current_ord else DATEPICKER_PREV_SELECTOR
+        page.locator(nav_selector).first.click(timeout=4000)
+        page.wait_for_timeout(250)
+    else:
+        raise FormsRobotError('não cheguei ao mês/ano esperado no calendário do Forms')
+
+    day_str = str(target_date.day)
+    days = page.locator(DATEPICKER_DAY_SELECTOR)
+    for i in range(days.count()):
+        day_el = days.nth(i)
+        if (day_el.inner_text(timeout=2000) or '').strip() == day_str:
+            day_el.click(timeout=4000)
+            return
+    raise FormsRobotError(f'não localizei o dia {day_str} no calendário do Forms')
+
+
+def _fill_file(question, file_paths):
+    target = question.locator(FILE_INPUT_SELECTOR).first
+    target.set_input_files(file_paths, timeout=20000)
+
+
 def _is_form_ready(page, forms_host):
     """Pronto quando a página voltou ao host do Forms (pós-login) e as
     perguntas estão renderizadas."""
@@ -205,11 +354,15 @@ def _is_form_ready(page, forms_host):
 
 
 def run_chamado_juridico_robot(forms_url, fields, on_progress):
-    """Executa o robô. `fields` é uma lista ordenada de dicts
-    {'key','label','terms','value'} (termos mais específicos primeiro).
+    """Executa o robô. `fields` é uma lista ordenada de dicts:
+      {'key', 'label', 'terms', 'q' (posição 1-based no formulário),
+       'type': 'text'|'radio'|'radio_yes_no'|'date'|'file',
+       'value': str (text/date/radio_yes_no),
+       'option_terms': [str] (radio),
+       'file_paths': [str] (file)}
     `on_progress(pct, step)` alimenta a barra de progresso.
 
-    Retorna {'submitted', 'filled', 'unmatched', 'questions_found'}.
+    Retorna {'submitted', 'filled', 'unmatched', 'errors', 'positional', 'questions_found'}.
     """
     if not _ROBOT_LOCK.acquire(blocking=False):
         raise FormsRobotError('Já existe um robô em execução. Aguarde ele terminar.')
@@ -217,6 +370,17 @@ def run_chamado_juridico_robot(forms_url, fields, on_progress):
         return _run_locked(forms_url, fields, on_progress)
     finally:
         _ROBOT_LOCK.release()
+
+
+def _is_fillable(field):
+    ftype = field.get('type')
+    if ftype in ('text', 'date'):
+        return bool((field.get('value') or '').strip())
+    if ftype == 'file':
+        return bool(field.get('file_paths'))
+    if ftype in ('radio', 'radio_yes_no'):
+        return True
+    return False
 
 
 def _run_locked(forms_url, fields, on_progress):
@@ -261,12 +425,13 @@ def _run_locked(forms_url, fields, on_progress):
 
         match = page.evaluate(_MATCH_JS, {
             'questionSelector': QUESTION_SELECTOR,
-            'fields': [{'key': f['key'], 'terms': f['terms']} for f in fields],
+            'fields': [{'key': f['key'], 'terms': f.get('terms') or []} for f in fields],
         })
         mapping = match.get('mapping') or {}
+        total_questions = int(match.get('total') or 0)
 
-        filled, unmatched, errors = [], [], []
-        fillable = [f for f in fields if (f.get('value') or '').strip()]
+        filled, unmatched, errors, positional = [], [], [], []
+        fillable = [f for f in fields if _is_fillable(f)]
         step_span = 50.0 / max(len(fillable), 1)
         progress = 35.0
 
@@ -274,23 +439,41 @@ def _run_locked(forms_url, fields, on_progress):
             progress += step_span
             label = field.get('label') or field['key']
             idx = mapping.get(field['key'])
+            used_position = False
+            if idx is None and field.get('q'):
+                fallback_idx = int(field['q']) - 1
+                if 0 <= fallback_idx < total_questions:
+                    idx = fallback_idx
+                    used_position = True
             if idx is None:
                 unmatched.append(label)
                 continue
+
             on_progress(int(progress), f'Preenchendo "{label}"...')
             try:
                 question = page.locator(QUESTION_SELECTOR).nth(idx)
-                target = question.locator(INPUT_SELECTOR).first
-                target.scroll_into_view_if_needed(timeout=8000)
-                box = target.bounding_box()
-                if box:
-                    _move_cursor_to(page, box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
-                    time.sleep(0.75)
-                question.evaluate(_HIGHLIGHT_JS)
-                target.click(timeout=8000)
-                target.fill('')
-                target.type(str(field['value']), delay=TYPE_DELAY_MS)
+                ftype = field['type']
+                if ftype == 'text':
+                    _fill_text(page, question, field['value'])
+                elif ftype == 'date':
+                    question.scroll_into_view_if_needed(timeout=8000)
+                    _fill_date(page, question, field['value'])
+                elif ftype == 'file':
+                    question.scroll_into_view_if_needed(timeout=8000)
+                    _highlight_and_point(page, question)
+                    _fill_file(question, field['file_paths'])
+                elif ftype == 'radio':
+                    question.scroll_into_view_if_needed(timeout=8000)
+                    if not _select_radio_option(page, question, field['option_terms']):
+                        raise FormsRobotError('opção não encontrada entre as escolhas do formulário')
+                elif ftype == 'radio_yes_no':
+                    question.scroll_into_view_if_needed(timeout=8000)
+                    terms = ['sim'] if field['value'] == 'Sim' else ['nao']
+                    if not _select_radio_option(page, question, terms):
+                        raise FormsRobotError('opção Sim/Não não encontrada no formulário')
                 filled.append(label)
+                if used_position:
+                    positional.append(label)
             except Exception as e:
                 unmatched.append(label)
                 errors.append(f'{label}: {e}')
@@ -343,7 +526,8 @@ def _run_locked(forms_url, fields, on_progress):
             'filled': filled,
             'unmatched': unmatched,
             'errors': errors,
-            'questions_found': int(match.get('total') or 0),
+            'positional': positional,
+            'questions_found': total_questions,
         }
     except FormsRobotError:
         _cleanup(pw, context)
