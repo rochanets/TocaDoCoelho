@@ -142,7 +142,7 @@
                 if (!items.length) { panel.style.display = 'none'; return; }
                 panel.style.display = '';
                 content.innerHTML = items.map(it => `
-                    <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid rgba(239,68,68,.25); border-radius:10px;">
+                    <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid rgba(239,68,68,.25); border-radius:10px; cursor:pointer;" onclick="inboundOpenConversation(${it.client_id}, '${it.channel}')" title="Abrir conversa com ${escapeHtml(it.name)}">
                         <span style="font-size:16px;">${it.channel === 'email' ? '📧' : '📱'}</span>
                         <div style="flex:1; min-width:160px;">
                             <div style="font-weight:600; font-size:13.5px;">${escapeHtml(it.name)}${it.company ? ' · ' + escapeHtml(it.company) : ''}
@@ -150,7 +150,7 @@
                             </div>
                             <div style="font-size:12px; color:#9ca3af;">${escapeHtml(it.preview || '')}</div>
                         </div>
-                        <button class="btn btn-primary btn-small" onclick="inboundRespond(${it.id})" title="Marcar como respondido"><i class="fas fa-check"></i> Respondi</button>
+                        <button class="btn btn-primary btn-small" onclick="event.stopPropagation(); inboundRespond(${it.id})" title="Marcar como respondido"><i class="fas fa-check"></i> Respondi</button>
                     </div>`).join('');
                 // Métrica de tempo de resposta (mediana 30 dias)
                 fetch(`${API_BASE}/inbound/metrics`).then(r => r.json()).then(m => {
@@ -161,6 +161,27 @@
                 }).catch(() => {});
             } catch (e) {
                 panel.style.display = 'none';
+            }
+        }
+
+        async function inboundOpenConversation(clientId, channel) {
+            if (!clientId) return;
+            if (typeof clients === 'undefined' || !clients.length) await loadClients();
+            if (channel === 'email') {
+                if (typeof openEmailDraftModal === 'function') openEmailDraftModal(clientId);
+                else if (typeof openProfileModal === 'function') openProfileModal(clientId);
+                return;
+            }
+            const client = clients.find(c => c.id === clientId);
+            const phone = client && client.phone ? normalizePhoneForWhatsapp(client.phone) : '';
+            if (!phone) {
+                if (typeof openMissingContactModal === 'function') openMissingContactModal();
+                return;
+            }
+            if (getWhatsAppPreference() === 'desktop') {
+                openWhatsAppDesktopWithFallback(phone, '');
+            } else {
+                whatsappWindowRef = openWhatsAppTab(`https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}`);
             }
         }
 
