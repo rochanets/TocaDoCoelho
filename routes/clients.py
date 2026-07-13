@@ -308,7 +308,7 @@ def create_client():
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
-                filename = secure_filename(file.filename)
+                filename = secure_filename(f'{int(time.time() * 1000)}_{file.filename}')
                 filepath = UPLOAD_DIR / filename
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
@@ -376,11 +376,11 @@ def update_client(client_id):
         if 'photo' in request.files:
             file = request.files['photo']
             if file and file.filename:
-                filename = secure_filename(file.filename)
+                filename = secure_filename(f'{int(time.time() * 1000)}_{file.filename}')
                 filepath = UPLOAD_DIR / filename
                 file.save(str(filepath))
                 photo_url = f'/uploads/{filename}'
-        
+
         c.execute('''UPDATE clients SET name = ?, company = ?, position = ?, area_of_activity = ?, email = ?, phone = ?, linkedin = ?, photo_url = ?, is_target = ?, is_cold_contact = ?, is_archived = CASE WHEN TRIM(?) != '' THEN 0 ELSE is_archived END, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
                   (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, company, client_id))

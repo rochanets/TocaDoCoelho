@@ -284,6 +284,8 @@ def whatsapp_webhook():
         when = datetime.fromtimestamp(ts).isoformat(timespec='seconds') if ts else datetime.now().isoformat(timespec='seconds')
         if payload.get('fromMe'):
             _inbound_mark_responded(c, client_id, 'whatsapp', when)
+        elif not _waha_is_content_message(payload):
+            pass  # aviso de sistema do WhatsApp (ex.: criptografia) — não é mensagem do contato
         else:
             msg_id = payload.get('id')
             if isinstance(msg_id, dict):

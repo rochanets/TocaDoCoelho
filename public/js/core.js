@@ -3326,9 +3326,9 @@
             });
 
             if (hasInstaller) {
-                document.getElementById('startupUpdateYesBtn').addEventListener('click', async () => {
+                document.getElementById('startupUpdateYesBtn').addEventListener('click', () => {
                     overlay.remove();
-                    await navigateTo('settings');
+                    switchTab(null, 'configuracoes');
                     // skipConfirm=true: o popup de startup já é a confirmação do usuário,
                     // não faz sentido pedir confirmação novamente 400ms depois.
                     setTimeout(() => downloadAndInstallUpdate({ skipConfirm: true }), 800);

@@ -1266,6 +1266,12 @@ SCHEMA_MIGRATIONS = [
     (12, 'scheduled_sends_activity_link', [
         'ALTER TABLE scheduled_sends ADD COLUMN activity_id INTEGER',
     ]),
+    (13, 'inbound_purge_system_notifications', [
+        # Avisos de sistema do WhatsApp (ex.: criptografia ponta-a-ponta) eram
+        # registrados como pendência de resposta por engano — só geram esse
+        # preview quando não há corpo de texto nem mídia (ver _waha_is_content_message).
+        "DELETE FROM inbound_messages WHERE preview = '(mensagem sem texto)' AND responded_at IS NULL",
+    ]),
 ]
 
 
@@ -10400,7 +10406,7 @@ def _inbound_scan_whatsapp():
                 continue
             if msg.get('fromMe'):
                 last_out = max(last_out, ts)
-            elif ts > last_in:
+            elif ts > last_in and _waha_is_content_message(msg):
                 last_in = ts
                 last_in_msg = msg
         if last_in and last_in > last_out:
@@ -10413,10 +10419,11 @@ def _inbound_scan_whatsapp():
                             datetime.fromtimestamp(last_in).isoformat(timespec='seconds'),
                             text or '(mensagem sem texto)', source_id)
             pending += 1
+            conn.commit()
         elif last_out:
             _inbound_mark_responded(c, row['id'], 'whatsapp',
                                     datetime.fromtimestamp(last_out).isoformat(timespec='seconds'))
-    conn.commit()
+            conn.commit()
     conn.close()
     logger.info(f'[Inbound] Scan WhatsApp: {scanned} conversas verificadas, {pending} pendências registradas')
     return {'scanned': scanned, 'pending': pending}
@@ -10675,6 +10682,20 @@ def _restart_waha_lite():
     except Exception as exc:
         logger.warning(f'[WhatsApp] Falha ao reiniciar WAHA-lite: {exc}')
         return False
+
+
+def _waha_is_content_message(msg):
+    """True se a mensagem tem conteúdo real (texto ou mídia) enviado por alguém.
+    Filtra avisos de sistema do próprio WhatsApp (ex.: "As mensagens e ligações
+    são protegidas com criptografia de ponta a ponta..."), que chegam com
+    fromMe=false mas não são mensagens do contato — sem isso, esses avisos
+    eram registrados como pendência de resposta com "(mensagem sem texto)"."""
+    if (msg.get('body') or '').strip():
+        return True
+    mtype = (msg.get('type') or '').lower()
+    if mtype in ('e2e_notification', 'notification_template', 'notification', 'gp2', 'call_log', 'revoked', 'status'):
+        return False
+    return bool(msg.get('hasMedia')) or mtype in ('image', 'video', 'ptt', 'audio', 'document', 'sticker', 'location')
 
 
 def _waha_extract_text(msg, client_name):
