@@ -20,6 +20,7 @@ visualmente, já que uma resposta jurídica na pergunta errada é pior do que
 uma pergunta deixada em branco.
 """
 
+import base64
 import os
 import re
 import sys
@@ -49,7 +50,6 @@ TEXT_INPUT_SELECTOR = (
     'input[data-automation-id="textInput"], textarea[data-automation-id="textInput"], '
     'input[type="text"], textarea, input:not([type])'
 )
-RADIO_OPTION_SELECTOR = '[role="radio"], input[type="radio"]'
 FILE_INPUT_SELECTOR = 'input[type="file"]'
 # O ícone de calendário nem sempre é uma tag <button> — em algumas versões do
 # Fluent UI é um <span>/<i> com role="button" ou só um ícone de fonte clicável,
@@ -80,8 +80,28 @@ DATEPICKER_DAY_SELECTOR = (
     '[role="gridcell"] button:not([aria-disabled="true"]), '
     '[role="grid"] button:not([aria-disabled="true"])'
 )
-SUBMIT_SELECTOR = 'button[data-automation-id="submitButton"]'
+SUBMIT_SELECTOR = (
+    'button[data-automation-id="submitButton"], button[type="submit"]'
+)
 THANK_YOU_SELECTOR = '[data-automation-id="thankYouPageMessage"]'
+
+_CURSOR_ASSET_PATH = Path(__file__).resolve().parent.parent / 'public' / 'assets' / 'autotoca' / 'robot-cursor.apng'
+_cursor_data_uri_cache = None
+
+
+def _get_cursor_data_uri():
+    """Carrega o vídeo do coelhinho (APNG com transparência, sem áudio) como
+    data URI, para injetar no overlay do robô sem depender de servir o
+    arquivo por HTTP dentro da página de terceiros (Microsoft Forms)."""
+    global _cursor_data_uri_cache
+    if _cursor_data_uri_cache is None:
+        try:
+            data = _CURSOR_ASSET_PATH.read_bytes()
+            _cursor_data_uri_cache = 'data:image/apng;base64,' + base64.b64encode(data).decode('ascii')
+        except Exception:
+            _cursor_data_uri_cache = ''
+    return _cursor_data_uri_cache
+
 
 # Tempo de espera após o formulário ficar "pronto" (perguntas no DOM) antes de
 # começar a preencher — a SPA do Forms segue anexando handlers de evento por um
@@ -162,13 +182,22 @@ def _detect_default_browser_channel():
 def _launch_context(pw, headless):
     """Abre o navegador com perfil persistente, preferindo o navegador padrão
     do usuário (detectado via registro no Windows); cai para Chrome e depois
-    Edge se já instalados, e por fim o Chromium do Playwright."""
+    Edge se já instalados, e por fim o Chromium do Playwright.
+
+    Com navegador visível, a janela abre MAXIMIZADA e sem viewport fixo — um
+    viewport pequeno (ex.: 1280x920) cortava o fim da página do Forms em
+    telas menores, deixando o botão Enviar fora da área visível sem o
+    usuário perceber que dava para rolar. Em modo headless (usado só pelos
+    testes automatizados, sem tela real) o viewport fixo continua necessário.
+    """
     profile = _profile_dir()
-    kwargs = dict(
-        headless=headless,
-        viewport={'width': 1280, 'height': 920},
-        args=['--disable-blink-features=AutomationControlled'],
-    )
+    args = ['--disable-blink-features=AutomationControlled']
+    kwargs = dict(headless=headless, args=args)
+    if headless:
+        kwargs['viewport'] = {'width': 1280, 'height': 920}
+    else:
+        kwargs['viewport'] = None
+        args.append('--start-maximized')
     last_error = None
     custom_path = (os.environ.get('TOCA_ROBOT_BROWSER_PATH') or '').strip()
     if custom_path:
@@ -199,17 +228,32 @@ def _launch_context(pw, headless):
 
 
 _CURSOR_JS = """
-() => {
+(cursorSrc) => {
     if (document.getElementById('__tocaRobotCursor')) return;
-    const cursor = document.createElement('div');
+    let cursor, halfW, halfH;
+    if (cursorSrc) {
+        cursor = document.createElement('img');
+        cursor.src = cursorSrc;
+        cursor.alt = '';
+        halfW = 35; halfH = 20;
+        cursor.style.cssText = [
+            'position:fixed', 'left:40px', 'top:40px', 'width:70px', 'height:auto',
+            'z-index:2147483647', 'pointer-events:none',
+            'filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))',
+            'transition:left .65s cubic-bezier(.45,.05,.35,1), top .65s cubic-bezier(.45,.05,.35,1)',
+        ].join(';');
+    } else {
+        cursor = document.createElement('div');
+        cursor.textContent = '🐇';
+        halfW = 8; halfH = 26;
+        cursor.style.cssText = [
+            'position:fixed', 'left:40px', 'top:40px', 'z-index:2147483647',
+            'font-size:30px', 'pointer-events:none',
+            'filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))',
+            'transition:left .65s cubic-bezier(.45,.05,.35,1), top .65s cubic-bezier(.45,.05,.35,1)',
+        ].join(';');
+    }
     cursor.id = '__tocaRobotCursor';
-    cursor.textContent = '🐇';
-    cursor.style.cssText = [
-        'position:fixed', 'left:40px', 'top:40px', 'z-index:2147483647',
-        'font-size:30px', 'pointer-events:none',
-        'filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))',
-        'transition:left .65s cubic-bezier(.45,.05,.35,1), top .65s cubic-bezier(.45,.05,.35,1)',
-    ].join(';');
     document.body.appendChild(cursor);
     const badge = document.createElement('div');
     badge.id = '__tocaRobotBadge';
@@ -223,8 +267,8 @@ _CURSOR_JS = """
     ].join(';');
     document.body.appendChild(badge);
     window.__tocaRobotMove = (x, y) => {
-        cursor.style.left = (x - 8) + 'px';
-        cursor.style.top = (y - 26) + 'px';
+        cursor.style.left = (x - halfW) + 'px';
+        cursor.style.top = (y - halfH) + 'px';
     };
     window.__tocaRobotBadge = (text) => { badge.textContent = text; };
 }
@@ -323,53 +367,53 @@ def _fill_text(page, question, value):
 
 
 def _select_radio_option(page, question, option_terms):
-    options = question.locator(RADIO_OPTION_SELECTOR)
-    count = options.count()
-    normalized_terms = [_normalize(t) for t in option_terms]
-    seen_labels = []
-    for i in range(count):
-        option = options.nth(i)
+    """Marca a opção de rádio cujo NOME ACESSÍVEL bate com um dos termos.
+
+    Usa `get_by_role('radio', name=...)`, que delega ao próprio motor do
+    navegador o cálculo do nome acessível de cada opção (algoritmo padrão de
+    acessibilidade — cobre aria-label, aria-labelledby, <label> associado de
+    qualquer forma, texto adjacente etc.) em vez de tentar adivinhar a
+    estrutura do DOM na mão. Isso evita bugs de extração de texto errada
+    quando as opções são elementos-irmãos (caso real encontrado no item
+    "Minuta própria Stefanini?", que tem duas opções com o mesmo prefixo)."""
+    target = None
+    matched_term = None
+    for term in option_terms:
         try:
-            label_text = option.evaluate("""
-                (el) => {
-                    const aria = el.getAttribute('aria-label') || '';
-                    const labelledBy = el.getAttribute('aria-labelledby');
-                    const byId = labelledBy
-                        ? labelledBy.split(' ').map(id => document.getElementById(id)?.innerText || '').join(' ')
-                        : '';
-                    const closestLabel = el.closest('label')?.innerText || '';
-                    // Padrão nativo <input id=x><label for=x> — o label é IRMÃO do
-                    // input, não ancestral, então closest('label') não o encontra.
-                    const forLabel = el.id ? (document.querySelector(`label[for="${el.id}"]`)?.innerText || '') : '';
-                    // Cuidado: NUNCA usar el.parentElement.innerText nem
-                    // el.nextElementSibling.innerText aqui — quando as opções de um
-                    // grupo de rádio são irmãs (o padrão mais comum), qualquer uma
-                    // dessas duas fontes acaba devolvendo o texto de OUTRA opção,
-                    // fazendo o termo bater sempre na primeira opção da lista.
-                    const ownText = el.innerText || el.textContent || '';
-                    return [aria, byId, closestLabel, forLabel, ownText].join(' | ');
-                }
-            """)
+            candidate = question.get_by_role('radio', name=term)
+            if candidate.count() >= 1:
+                target = candidate.first
+                matched_term = term
+                break
         except Exception:
             continue
-        seen_labels.append(label_text.strip()[:60])
-        norm = _normalize(label_text)
-        if any(term and term in norm for term in normalized_terms):
-            _highlight_and_point(page, question, option)
-            for attempt in range(1 + FILL_VERIFY_RETRIES):
-                option.click(timeout=8000, force=True)
-                page.wait_for_timeout(150)
-                checked = option.evaluate(
-                    "(el) => el.getAttribute('aria-checked') === 'true' || el.checked === true"
-                )
-                if checked:
-                    return True
-                if attempt < FILL_VERIFY_RETRIES:
-                    page.wait_for_timeout(400)
-            raise FormsRobotError('opção encontrada e clicada, mas não ficou marcada como selecionada')
-    raise FormsRobotError(
-        f'nenhuma opção bateu com {option_terms!r} — opções vistas: {seen_labels!r}'
-    )
+
+    if target is None:
+        seen_labels = []
+        try:
+            all_radios = question.get_by_role('radio')
+            for i in range(all_radios.count()):
+                node = all_radios.nth(i)
+                text = (node.get_attribute('aria-label') or node.inner_text() or '').strip()
+                seen_labels.append(text[:60])
+        except Exception:
+            pass
+        raise FormsRobotError(
+            f'nenhuma opção bateu com {option_terms!r} — opções vistas: {seen_labels!r}'
+        )
+
+    _highlight_and_point(page, question, target)
+    for attempt in range(1 + FILL_VERIFY_RETRIES):
+        target.click(timeout=8000, force=True)
+        page.wait_for_timeout(150)
+        checked = target.evaluate(
+            "(el) => el.getAttribute('aria-checked') === 'true' || el.checked === true"
+        )
+        if checked:
+            return True
+        if attempt < FILL_VERIFY_RETRIES:
+            page.wait_for_timeout(400)
+    raise FormsRobotError(f'opção "{matched_term}" encontrada e clicada, mas não ficou marcada como selecionada')
 
 
 def _parse_calendar_header(text):
@@ -388,10 +432,24 @@ def _parse_calendar_header(text):
 
 
 def _fill_date(page, question, iso_value):
+    """Preenche a pergunta de data. Digitar direto no campo (dd/MM/yyyy)
+    funciona no Forms real — tenta isso primeiro; se a verificação de valor
+    falhar por algum motivo, cai para a navegação por clique no calendário
+    como plano B."""
     target_date = datetime.strptime(iso_value, '%Y-%m-%d').date()
+    formatted = target_date.strftime('%d/%m/%Y')
+    try:
+        _fill_text(page, question, formatted)
+        return
+    except Exception:
+        pass
+    _fill_date_via_calendar(page, question, target_date)
+
+
+def _fill_date_via_calendar(page, question, target_date):
     calendar_btn = question.locator(CALENDAR_BUTTON_SELECTOR).first
     if calendar_btn.count() == 0:
-        raise FormsRobotError('não encontrei o botão de calendário nesta pergunta')
+        raise FormsRobotError('não encontrei o botão de calendário nesta pergunta (e digitar direto também falhou)')
     calendar_btn.scroll_into_view_if_needed(timeout=8000)
     _highlight_and_point(page, question, calendar_btn)
     calendar_btn.click(timeout=8000)
@@ -515,7 +573,7 @@ def _run_locked(forms_url, fields, on_progress):
             time.sleep(1.0)
 
         on_progress(30, 'Formulário carregado. Aguardando estabilizar...')
-        page.evaluate(_CURSOR_JS)
+        page.evaluate(_CURSOR_JS, _get_cursor_data_uri())
         # A SPA do Forms pinta as primeiras perguntas antes de terminar de anexar
         # os handlers de evento; sem essa pausa, os primeiros campos às vezes não
         # respondem a clique/digitação mesmo já visíveis no DOM.
@@ -566,7 +624,10 @@ def _run_locked(forms_url, fields, on_progress):
                     _select_radio_option(page, question, field['option_terms'])
                 elif ftype == 'radio_yes_no':
                     question.scroll_into_view_if_needed(timeout=8000)
-                    terms = ['sim'] if field['value'] == 'Sim' else ['nao']
+                    # Fragmento literal (não normalizado) — get_by_role(name=...)
+                    # faz correspondência por substring exata (case-insensitive,
+                    # mas SEM remover acentos), então "Não" precisa do til.
+                    terms = ['Sim'] if field['value'] == 'Sim' else ['Não']
                     _select_radio_option(page, question, terms)
                 filled.append(label)
                 if used_position:
@@ -578,15 +639,28 @@ def _run_locked(forms_url, fields, on_progress):
         # Leva o coelhinho até o botão Enviar e deixa a decisão com o usuário.
         submitted = False
         on_progress(88, 'Campos preenchidos. Revise, anexe arquivos e clique em Enviar na janela do robô.')
+        submit_found = False
         try:
             submit = page.locator(SUBMIT_SELECTOR).first
-            submit.scroll_into_view_if_needed(timeout=8000)
-            box = submit.bounding_box()
-            if box:
-                _move_cursor_to(page, box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
-            submit.evaluate(_PULSE_SUBMIT_JS)
+            if submit.count() == 0:
+                submit = page.get_by_role('button', name=re.compile('enviar|submit', re.IGNORECASE)).first
+            if submit.count() > 0:
+                submit.scroll_into_view_if_needed(timeout=8000)
+                submit_found = True
+                box = submit.bounding_box()
+                if box:
+                    _move_cursor_to(page, box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                submit.evaluate(_PULSE_SUBMIT_JS)
         except Exception:
             pass
+        if not submit_found:
+            # Não achamos um botão de enviar específico — pelo menos garante que
+            # o usuário veja o FIM da página, em vez de ficar parado onde o
+            # último campo preenchido deixou a rolagem.
+            try:
+                page.evaluate('() => window.scrollTo(0, document.body.scrollHeight)')
+            except Exception:
+                pass
         _set_badge(page, 'Revise os campos, anexe os arquivos e clique em Enviar')
 
         review_deadline = time.time() + REVIEW_TIMEOUT_SECONDS

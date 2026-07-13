@@ -7915,7 +7915,8 @@
                     <label>${escapeHtml(f.label)}</label>
                     <input type="file" id="${_cjFileInputId(f.key)}" ${f.multiple ? 'multiple' : ''} onchange="_cjOnFileChange('${f.key}')">
                     <div id="${_cjFileInputId(f.key)}List" style="margin-top:4px;"></div>
-                    <div id="${_cjFileInputId(f.key)}Reuse" style="font-size:11px; color:#059669; margin-top:4px; display:none;"></div>
+                    <button type="button" id="${_cjFileInputId(f.key)}Reuse" onclick="_cjToggleReuseFile('${f.key}')"
+                        style="display:none; margin-top:6px; font-size:11px; padding:4px 10px; border-radius:12px; border:1px solid #059669; background:#fff; color:#059669; cursor:pointer;"></button>
                 </div>
             `).join('');
         }
@@ -7943,10 +7944,50 @@
         }
 
         function _cjOnFileChange(key) {
-            // Selecionar um arquivo novo substitui o reaproveitamento do histórico para esse campo.
-            const reuseEl = document.getElementById(`${_cjFileInputId(key)}Reuse`);
-            if (reuseEl) reuseEl.style.display = 'none';
+            // Selecionar um arquivo novo cancela o reaproveitamento do histórico
+            // para esse campo — nunca os dois juntos (era assim que o robô acabava
+            // enviando o anexo antigo E o novo ao mesmo tempo para o Forms).
+            _cjReuseSelectedFields.delete(key);
+            _cjRenderReuseChipState(key);
             _cjRenderFileList(key);
+        }
+
+        // Nomes dos arquivos do histórico disponíveis para reaproveitar, por campo —
+        // preenchido em onChamadoHistorySelect(). Usado só para exibir o texto do chip.
+        let _cjReuseFileNames = {};
+
+        function _cjSetReuseChip(key, fileNames) {
+            const btn = document.getElementById(`${_cjFileInputId(key)}Reuse`);
+            if (!btn) return;
+            _cjReuseFileNames[key] = fileNames || [];
+            if (!fileNames || !fileNames.length) {
+                btn.style.display = 'none';
+                return;
+            }
+            btn.style.display = 'inline-block';
+            _cjRenderReuseChipState(key);
+        }
+
+        function _cjRenderReuseChipState(key) {
+            const btn = document.getElementById(`${_cjFileInputId(key)}Reuse`);
+            if (!btn) return;
+            const names = (_cjReuseFileNames[key] || []).join(', ');
+            const selected = _cjReuseSelectedFields.has(key);
+            btn.style.background = selected ? '#059669' : '#fff';
+            btn.style.color = selected ? '#fff' : '#059669';
+            btn.textContent = (selected ? '✓ Anexado: ' : '📎 Usar do histórico: ') + names;
+        }
+
+        function _cjToggleReuseFile(key) {
+            if (_cjReuseSelectedFields.has(key)) {
+                _cjReuseSelectedFields.delete(key);
+            } else {
+                _cjReuseSelectedFields.add(key);
+                // Mutuamente exclusivo com um upload novo no mesmo campo.
+                const input = document.getElementById(_cjFileInputId(key));
+                if (input) { input.value = ''; _cjRenderFileList(key); }
+            }
+            _cjRenderReuseChipState(key);
         }
 
         function _cjToggleConditional(triggerId, wrapId) {
@@ -7964,6 +8005,7 @@
         }
 
         let _cjReuseHistoryId = '';
+        let _cjReuseSelectedFields = new Set();
 
         // Limpa todos os campos do Chamado Jurídico — chamado ao sair do módulo/aba,
         // para que o usuário sempre encontre o formulário em branco na próxima visita.
@@ -7984,12 +8026,12 @@
             _cjToggleConditional('cjHaveraReajuste', 'cjValoresReajusteWrap');
             _cjToggleConditional('cjProrrogacaoVigencia', 'cjVigenciaDatasWrap');
 
+            _cjReuseSelectedFields.clear();
             CJ_FILE_FIELDS.forEach(f => {
                 const input = document.getElementById(_cjFileInputId(f.key));
                 if (input) input.value = '';
-                const reuseEl = document.getElementById(`${_cjFileInputId(f.key)}Reuse`);
-                if (reuseEl) reuseEl.style.display = 'none';
                 _cjRenderFileList(f.key);
+                _cjSetReuseChip(f.key, []);
             });
 
             _cjReuseHistoryId = '';
@@ -8051,23 +8093,16 @@
                     }
                 }
 
+                _cjReuseSelectedFields.clear();
                 CJ_FILE_FIELDS.forEach(f => {
                     const input = document.getElementById(_cjFileInputId(f.key));
-                    const reuseEl = document.getElementById(`${_cjFileInputId(f.key)}Reuse`);
                     if (input) input.value = '';
                     _cjRenderFileList(f.key);
                     const files = (entry.files || {})[f.key] || [];
-                    if (reuseEl) {
-                        if (files.length) {
-                            reuseEl.style.display = 'block';
-                            reuseEl.textContent = `Reaproveitando: ${files.map(x => x.original_name).join(', ')} (envie um novo arquivo para substituir)`;
-                        } else {
-                            reuseEl.style.display = 'none';
-                        }
-                    }
+                    _cjSetReuseChip(f.key, files.map(x => x.original_name));
                 });
 
-                showInfo('Histórico carregado. Confira os campos antes de acionar o robô.');
+                showInfo('Histórico carregado. Clique nos anexos que quiser reaproveitar e confira os campos antes de acionar o robô.');
             } catch (error) {
                 showError(error.message || 'Erro ao carregar histórico.');
             }
@@ -8125,7 +8160,10 @@
             fd.append('vigencia_datas', document.getElementById('cjVigenciaDatas').value.trim());
             fd.append('assinatura_plataforma', document.getElementById('cjAssinaturaPlataforma').value);
             fd.append('descricao_pedido', document.getElementById('cjDescricaoPedido').value.trim());
-            if (_cjReuseHistoryId) fd.append('reuse_history_id', _cjReuseHistoryId);
+            if (_cjReuseHistoryId) {
+                fd.append('reuse_history_id', _cjReuseHistoryId);
+                fd.append('reuse_fields', JSON.stringify(Array.from(_cjReuseSelectedFields)));
+            }
 
             CJ_FILE_FIELDS.forEach(f => {
                 const input = document.getElementById(_cjFileInputId(f.key));

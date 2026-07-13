@@ -15567,14 +15567,18 @@ def _forms_robot_build_fields(payload, files_by_field):
         return 'Sim' if (payload.get(key) or '').strip().lower() == 'sim' else 'Não'
 
     minuta_tipo = (payload.get('minuta_tipo') or '').strip().lower()
-    # O formulário real tem 3 opções nessa pergunta — "Minuta padrão Stefanini -
-    # sem ajustes" / "- com ajustes do cliente" / "Minuta enviada pelo cliente".
-    # O termo precisa ser específico o bastante para não bater nas duas primeiras
-    # ao mesmo tempo (ambas contêm "minuta padrao stefanini").
+    # option_terms é comparado por SUBSTRING LITERAL (via get_by_role do
+    # Playwright, que delega ao navegador o nome acessível de cada opção) —
+    # ao contrário de 'terms' (usado só para achar a pergunta), aqui não se
+    # pode normalizar acento/pontuação, tem que ser um trecho real do texto
+    # visível na opção. O formulário real tem 3 opções nessa pergunta —
+    # "Minuta padrão Stefanini - sem ajustes" / "- com ajustes do cliente" /
+    # "Minuta enviada pelo cliente" — o termo precisa ser específico o
+    # bastante para não bater nas duas primeiras ao mesmo tempo.
     minuta_option_terms = (
-        ['minuta enviada pelo cliente']
+        ['enviada pelo cliente']
         if minuta_tipo == 'cliente'
-        else ['stefanini com ajustes do cliente', 'com ajustes do cliente']
+        else ['com ajustes do cliente']
     )
 
     # 'q' é a posição 1-based da pergunta no formulário — usada como fallback
@@ -15584,10 +15588,10 @@ def _forms_robot_build_fields(payload, files_by_field):
     fields = [
         {'key': 'origem', 'label': 'Origem da Solicitação', 'type': 'radio', 'q': 1,
          'terms': ['origem da solicitacao', 'origem'],
-         'option_terms': ['comercial pedroso']},
+         'option_terms': ['Pedroso']},
         {'key': 'empresa_grupo', 'label': 'Empresa do Grupo Stefanini', 'type': 'radio', 'q': 2,
          'terms': ['empresa do grupo stefanini', 'grupo stefanini', 'empresa stefanini'],
-         'option_terms': ['stefanini consultoria e assessoria em informatica']},
+         'option_terms': ['STEFANINI CONSULTORIA']},
         {'key': 'conta', 'label': 'Conta', 'type': 'text', 'q': 3,
          'terms': ['nome da conta', 'nome do cliente', 'conta', 'cliente'],
          'value': (payload.get('conta') or '').strip()},
@@ -15749,6 +15753,14 @@ def autotoca_chamado_juridico_robot():
                 reuse_row = dict_from_row(row)
 
         reuse_files = json.loads(reuse_row['files_json']) if reuse_row else {}
+        # Reaproveitar um arquivo do histórico é opt-in por campo — o usuário
+        # precisa clicar explicitamente no anexo antigo para "anexá-lo" de
+        # novo. Sem isso, um campo com histórico E um upload novo acabava
+        # enviando os dois arquivos ao mesmo tempo para o Forms.
+        try:
+            reuse_field_keys = set(json.loads(form.get('reuse_fields') or '[]'))
+        except Exception:
+            reuse_field_keys = set()
 
         if errors:
             return jsonify({'error': ' '.join(errors)}), 400
@@ -15774,7 +15786,7 @@ def autotoca_chamado_juridico_robot():
             uploads = [f for f in request.files.getlist(field_key) if f and f.filename]
             if uploads:
                 files_by_field[field_key] = _chamado_juridico_save_uploaded_files(history_id, field_key, uploads)
-            elif reuse_files.get(field_key):
+            elif field_key in reuse_field_keys and reuse_files.get(field_key):
                 files_by_field[field_key] = _chamado_juridico_copy_history_files(
                     history_id, field_key, reuse_files[field_key]
                 )
