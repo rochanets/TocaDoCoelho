@@ -35,7 +35,7 @@
         }
 
         async function loadRadarDoDia() {
-            const el = document.getElementById('radarContent');
+            const el = document.getElementById('radarItemsList');
             if (!el) return;
             try {
                 const resp = await fetch(`${API_BASE}/suggestions/today`);
