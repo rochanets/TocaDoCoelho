@@ -97,9 +97,14 @@ jobs:
             --noconsole ^
             --icon coelho_icon_transparent.ico ^
             --add-data "app.py;." ^
+            --add-data "routes;routes" ^
             --add-data "public;public" ^
+            --add-data "integrations;integrations" ^
+            --add-data "graph_credentials.py;." ^
             --add-data "README.md;." ^
             --add-data "coelho_icon_transparent.ico;." ^
+            --hidden-import app ^
+            --hidden-import graph_credentials ^
             --hidden-import win32timezone ^
             --hidden-import win32api ^
             --hidden-import win32con ^
