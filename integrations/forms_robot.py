@@ -51,8 +51,13 @@ TEXT_INPUT_SELECTOR = (
 )
 RADIO_OPTION_SELECTOR = '[role="radio"], input[type="radio"]'
 FILE_INPUT_SELECTOR = 'input[type="file"]'
+# O ícone de calendário nem sempre é uma tag <button> — em algumas versões do
+# Fluent UI é um <span>/<i> com role="button" ou só um ícone de fonte clicável,
+# por isso os seletores abaixo não exigem uma tag específica.
 CALENDAR_BUTTON_SELECTOR = (
-    'button[aria-label*="alend" i], button[data-icon-name="Calendar"], '
+    '[aria-label*="alend" i], [data-icon-name="Calendar" i], '
+    '[aria-label*="selecionar data" i], [aria-label*="abrir calend" i], '
+    '[class*="icon--calendar" i], [class*="icon-calendar" i], '
     'button[aria-label*="data" i]'
 )
 # Fluent UI trocou de versão (v8 "ms-DatePicker-*" -> v9 classes com hash) mais de
@@ -135,9 +140,29 @@ def _store_leftover(pw, ctx):
         _leftover['context'] = ctx
 
 
+def _detect_default_browser_channel():
+    """No Windows, lê o registro para descobrir o navegador padrão do usuário
+    (para abrir o mesmo navegador do dia a dia, em vez de sempre o Edge)."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import winreg
+        key_path = r'Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            prog_id = (winreg.QueryValueEx(key, 'ProgId')[0] or '').lower()
+        if 'chrome' in prog_id:
+            return 'chrome'
+        if 'edge' in prog_id:
+            return 'msedge'
+    except Exception:
+        pass
+    return None
+
+
 def _launch_context(pw, headless):
-    """Abre o navegador com perfil persistente. Prefere Edge/Chrome já
-    instalados na máquina (não exige `playwright install`)."""
+    """Abre o navegador com perfil persistente, preferindo o navegador padrão
+    do usuário (detectado via registro no Windows); cai para Chrome e depois
+    Edge se já instalados, e por fim o Chromium do Playwright."""
     profile = _profile_dir()
     kwargs = dict(
         headless=headless,
@@ -151,7 +176,17 @@ def _launch_context(pw, headless):
             return pw.chromium.launch_persistent_context(profile, executable_path=custom_path, **kwargs)
         except Exception as e:
             last_error = e
-    for channel in ['msedge', 'chrome', None]:
+
+    channels = []
+    detected = _detect_default_browser_channel()
+    if detected:
+        channels.append(detected)
+    for channel in ('chrome', 'msedge'):
+        if channel not in channels:
+            channels.append(channel)
+    channels.append(None)  # fallback final: Chromium embutido do Playwright
+
+    for channel in channels:
         try:
             if channel:
                 return pw.chromium.launch_persistent_context(profile, channel=channel, **kwargs)
@@ -159,7 +194,7 @@ def _launch_context(pw, headless):
         except Exception as e:
             last_error = e
     raise FormsRobotError(
-        f'Não foi possível abrir um navegador (Edge/Chrome). Detalhe: {last_error}'
+        f'Não foi possível abrir um navegador (Chrome/Edge). Detalhe: {last_error}'
     )
 
 
@@ -306,8 +341,13 @@ def _select_radio_option(page, question, option_terms):
                     // Padrão nativo <input id=x><label for=x> — o label é IRMÃO do
                     // input, não ancestral, então closest('label') não o encontra.
                     const forLabel = el.id ? (document.querySelector(`label[for="${el.id}"]`)?.innerText || '') : '';
-                    const parentText = el.parentElement?.innerText || '';
-                    return [aria, byId, closestLabel, forLabel, parentText].join(' | ');
+                    // Cuidado: NUNCA usar el.parentElement.innerText nem
+                    // el.nextElementSibling.innerText aqui — quando as opções de um
+                    // grupo de rádio são irmãs (o padrão mais comum), qualquer uma
+                    // dessas duas fontes acaba devolvendo o texto de OUTRA opção,
+                    // fazendo o termo bater sempre na primeira opção da lista.
+                    const ownText = el.innerText || el.textContent || '';
+                    return [aria, byId, closestLabel, forLabel, ownText].join(' | ');
                 }
             """)
         except Exception:

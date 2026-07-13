@@ -15567,10 +15567,14 @@ def _forms_robot_build_fields(payload, files_by_field):
         return 'Sim' if (payload.get(key) or '').strip().lower() == 'sim' else 'Não'
 
     minuta_tipo = (payload.get('minuta_tipo') or '').strip().lower()
+    # O formulário real tem 3 opções nessa pergunta — "Minuta padrão Stefanini -
+    # sem ajustes" / "- com ajustes do cliente" / "Minuta enviada pelo cliente".
+    # O termo precisa ser específico o bastante para não bater nas duas primeiras
+    # ao mesmo tempo (ambas contêm "minuta padrao stefanini").
     minuta_option_terms = (
         ['minuta enviada pelo cliente']
         if minuta_tipo == 'cliente'
-        else ['minuta padrao stefanini', 'ajustes do cliente']
+        else ['stefanini com ajustes do cliente', 'com ajustes do cliente']
     )
 
     # 'q' é a posição 1-based da pergunta no formulário — usada como fallback
@@ -15672,6 +15676,14 @@ def _forms_robot_process_async(task_id, history_id, payload, files_by_field):
             final_step = 'Chamado Jurídico enviado com sucesso!'
         else:
             final_step = 'Preenchimento concluído — conclua a revisão e o envio na janela do robô.'
+        # Log estruturado do resultado — sem isso, o log de debug exportado pelo
+        # usuário só mostra os acessos HTTP, sem nenhum detalhe de qual campo
+        # falhou e por quê.
+        logger.info(
+            '[AutoToca][FormsRobot] resultado: submitted=%s filled=%s positional=%s unmatched=%s errors=%s',
+            result.get('submitted'), result.get('filled'), result.get('positional'),
+            result.get('unmatched'), result.get('errors'),
+        )
         _forms_robot_task_set(task_id, {
             'status': 'done', 'progress': 100, 'step': final_step,
             'result': dict(result, history_id=history_id),
