@@ -11,20 +11,24 @@
 
 ## LLM / IA — Como usar em novas features
 
-### Ordem de chamada LLM — OpenRouter primeiro, SAI como fallback
+### Ordem de chamada LLM — REGRA DE DESENVOLVIMENTO: SAI primeiro, OpenRouter como fallback
 
-Para qualquer feature que use LLM (geração de texto, análise, classificação, etc.), **a ordem padrão é: OpenRouter primeiro, SAI como fallback**. Só use SAI como primário se a feature exigir explicitamente.
+Para qualquer automação com IA (geração de texto, análise, classificação, extração, etc.),
+**a ordem obrigatória é: SAI primeiro, OpenRouter como fallback**.
+
+**Única exceção:** perguntas que exigem busca ativa na internet (notícias, dados atuais de
+mercado) — aí o OpenRouter (com plugin de web) vem primeiro, pois nenhum template SAI tem
+acesso à web em tempo real.
+
+**Use sempre o helper pronto `_llm_prompt()` em `app.py`** — ele já implementa a regra:
 
 ```python
-or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-if or_key:
-    # tenta OpenRouter primeiro
-    ...
-# fallback: SAI
-raw = _sai_simple_prompt(prompt)
+raw = _llm_prompt("Pergunta livre aqui...", log_tag='MinhaFeature')          # SAI → OpenRouter
+raw = _llm_prompt("Notícias recentes sobre...", log_tag='X', web=True)      # OpenRouter/web → SAI
 ```
 
-Veja `_iata_call_llm()` em `app.py` como exemplo completo desse padrão.
+Não escreva chamadas diretas ao OpenRouter/SAI em features novas — adicione parâmetros ao
+`_llm_prompt` se precisar de algo que ele não cobre.
 
 ---
 
