@@ -32,6 +32,25 @@ DATA_DIR = (
 )
 DB_PATH = DATA_DIR / 'toca-do-coelho.db'
 
+
+def fatal_error_dialog(message):
+    """Mostra um erro fatal ao usuário antes de encerrar. O build usa
+    --noconsole, então input() sempre falha com 'lost sys.stdin' (não há
+    console nem stdin anexado) — usar um MessageBox nativo do Windows em vez
+    disso, que não depende de terminal."""
+    print(message)
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, message, "Toca do Coelho - Erro", 0x10)  # MB_ICONERROR
+            return
+        except Exception:
+            pass
+    try:
+        time.sleep(5)
+    except Exception:
+        pass
+
 def resolve_app_version():
     default_version = '1.0.0'
     env_version = (os.environ.get('TOCA_APP_VERSION') or '').strip()
@@ -405,7 +424,7 @@ APP_PY = APP_DIR / "app.py"
 if not APP_PY.exists():
     print(f"[erro] app.py não encontrado em: {APP_PY}")
     print("[erro] Verifique se o build foi feito com --add-data \"app.py;.\"")
-    input("Pressione ENTER para fechar...")
+    fatal_error_dialog(f"app.py não encontrado em:\n{APP_PY}\n\nVerifique se o build foi feito com --add-data \"app.py;.\"")
     sys.exit(1)
 
 # Iniciar WAHA-lite (gateway do WhatsApp Update via Node.js, sem Docker)
@@ -444,7 +463,7 @@ while attempt < max_attempts:
     if server_process.poll() is not None:
         print(f"[ERRO] Servidor encerrou antes de responder! Código: {server_process.returncode}")
         print(f"[INFO] Verifique o log em: {LOG_PATH}")
-        input("Pressione ENTER para fechar...")
+        fatal_error_dialog(f"O servidor encerrou antes de responder (código {server_process.returncode}).\n\nVerifique o log em:\n{LOG_PATH}")
         sys.exit(1)
 
     try:
@@ -462,7 +481,7 @@ if attempt >= max_attempts:
     print(f"[ERRO] Servidor não respondeu a tempo! (timeout: {startup_timeout_seconds}s)")
     print(f"[INFO] Verifique o log em: {LOG_PATH}")
     server_process.terminate()
-    input("Pressione ENTER para fechar...")
+    fatal_error_dialog(f"O servidor não respondeu a tempo (timeout: {startup_timeout_seconds}s).\n\nVerifique o log em:\n{LOG_PATH}")
     sys.exit(1)
 
 print()
