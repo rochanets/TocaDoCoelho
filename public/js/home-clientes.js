@@ -4151,18 +4151,6 @@
 
         let whatsappWindowRef = null;
         let emailWindowRef = null;
-        let chamadoJuridicoWindowRef = null;
-
-        function openOrReuseExternalTab(windowRef, url) {
-            if (windowRef && !windowRef.closed) {
-                windowRef.location.href = url;
-                windowRef.focus();
-                return windowRef;
-            }
-            const newWindow = window.open(url, '_blank');
-            if (newWindow) newWindow.focus();
-            return newWindow;
-        }
 
         // Abre o WhatsApp Web sempre na mesma aba, identificada pelo nome fixo 'toca_whatsapp_web'.
         // Se a aba já estiver aberta (mesmo após recarregar a página), o browser a reutiliza

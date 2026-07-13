@@ -867,71 +867,151 @@
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
-                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Selecione a conta, busque o endereço e preencha o formulário abaixo.</p>
-                <form id="autotocaChamadoForm" onsubmit="runChamadoJuridico(event)">
-                    <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px; margin-bottom:12px;">
-                        <div class="form-group">
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Preencha os campos abaixo e deixe o robô 🐇 responder o formulário para você revisar e enviar.</p>
+
+                <div class="form-group" style="max-width:480px; margin-bottom:18px;">
+                    <label>Histórico de preenchimento</label>
+                    <select id="cjHistorySelect" onchange="onChamadoHistorySelect()">
+                        <option value="">Novo chamado (em branco)</option>
+                    </select>
+                </div>
+
+                <form id="autotocaChamadoForm" onsubmit="return false;">
+                    <div style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:14px; margin-bottom:16px;">
+                        <div class="form-group" style="grid-column: span 2;">
                             <label>Conta <span style="color:#dc2626;">*</span></label>
                             <select id="autotocaConta" required></select>
                             <div id="autotocaContaOutroWrap" style="display:none; margin-top:8px;">
                                 <input id="autotocaContaOutro" type="text" placeholder="Digite a razão social" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px;">
                             </div>
-                            <div style="margin-top:10px;">
-                                <button type="button" class="btn btn-auto-mapping btn-small" id="autotocaAutoFillBtn" onclick="autotocaAutoFill(event)" style="padding:6px 12px; font-size:12px; margin:0;">
-                                    <span class="ai-star-icon">✦</span> AutoFill
-                                </button>
-                            </div>
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
-                                <div>
-                                    <label>Razão Social</label>
-                                    <input id="autotocaRazaoSocial" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:text; user-select:text;">
-                                </div>
-                                <div>
-                                    <label>CNPJ</label>
-                                    <input id="autotocaCnpj" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280; cursor:text; user-select:text;">
-                                </div>
-                            </div>
+                            <button type="button" class="btn btn-auto-mapping btn-small" id="autotocaAutoFillBtn" onclick="autotocaAutoFill(event)" style="padding:6px 12px; font-size:12px; margin-top:8px;">
+                                <span class="ai-star-icon">✦</span> AutoFill
+                            </button>
+                        </div>
+                        <div class="form-group">
+                            <label>Empresa do Grupo Stefanini</label>
+                            <input type="text" readonly value="STEFANINI CONSULTORIA E ASSESSORIA EM INFORMATICA S A" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f9fafb; color:#374151; font-size:12px;">
                         </div>
 
-                        <div class="form-group" style="margin-bottom:0;">
+                        <div class="form-group" style="grid-column: span 3;">
                             <label>Endereço <span style="color:#dc2626;">*</span></label>
                             <textarea id="autotocaEnderecoFinal" rows="2" required placeholder="Endereço completo do cliente no Brasil"></textarea>
                         </div>
+
+                        <div class="form-group">
+                            <label>Razão Social</label>
+                            <input id="autotocaRazaoSocial" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280;">
+                        </div>
+                        <div class="form-group">
+                            <label>CNPJ</label>
+                            <input id="autotocaCnpj" type="text" readonly placeholder="Preenchido pelo AutoFill" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; background:#f3f4f6; color:#6b7280;">
+                        </div>
+                        <div class="form-group">
+                            <label>Minuta/Contrato é do cliente ou da Stefanini? <span style="color:#dc2626;">*</span></label>
+                            <select id="cjMinutaTipo" required>
+                                <option value="">Selecione</option>
+                                <option value="cliente">Cliente</option>
+                                <option value="stefanini">Stefanini</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Opp Sales Force</label>
+                            <input id="cjOppSalesforce" type="text" placeholder="Vazio = 00000">
+                        </div>
+                        <div class="form-group">
+                            <label>Data de Assinatura do Contrato Original</label>
+                            <input id="cjDataAssinatura" type="date">
+                            <small style="color:#9ca3af; font-size:11px;">Vazio = data de hoje</small>
+                        </div>
+                        <div class="form-group" id="cjValoresReajusteWrap" style="display:none;">
+                            <label>Descreva os valores de reajuste <span style="color:#dc2626;">*</span></label>
+                            <input id="cjValoresReajuste" type="text" placeholder="Ex: 5% pelo IGPM" disabled>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Haverá Reajuste? <span style="color:#dc2626;">*</span></label>
+                            <select id="cjHaveraReajuste" required onchange="_cjToggleConditional('cjHaveraReajuste','cjValoresReajusteWrap')">
+                                <option value="">Selecione</option>
+                                <option value="Sim">Sim</option>
+                                <option value="Não">Não</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Houve reoneração? <span style="color:#dc2626;">*</span></label>
+                            <select id="cjHouveReoneracao" required>
+                                <option value="">Selecione</option>
+                                <option value="Sim">Sim</option>
+                                <option value="Não">Não</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Inclui novos serviços? <span style="color:#dc2626;">*</span></label>
+                            <select id="cjInclutNovosServicos" required>
+                                <option value="">Selecione</option>
+                                <option value="Sim">Sim</option>
+                                <option value="Não">Não</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>É prorrogação de vigência? <span style="color:#dc2626;">*</span></label>
+                            <select id="cjProrrogacaoVigencia" required onchange="_cjToggleConditional('cjProrrogacaoVigencia','cjVigenciaDatasWrap')">
+                                <option value="">Selecione</option>
+                                <option value="Sim">Sim</option>
+                                <option value="Não">Não</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="cjVigenciaDatasWrap" style="display:none;">
+                            <label>Data inicial e final da vigência <span style="color:#dc2626;">*</span></label>
+                            <input id="cjVigenciaDatas" type="text" placeholder="Ex: 01/01/2027 a 31/12/2027" disabled>
+                        </div>
+                        <div class="form-group">
+                            <label>Assinatura pela plataforma Stefanini ou do cliente? <span style="color:#dc2626;">*</span></label>
+                            <select id="cjAssinaturaPlataforma" required>
+                                <option value="">Selecione</option>
+                                <option value="stefanini">Stefanini</option>
+                                <option value="cliente">Cliente</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="grid-column: span 3;">
+                            <label>Conte brevemente sobre o que se trata esse pedido <span style="color:#dc2626;">*</span></label>
+                            <textarea id="cjDescricaoPedido" rows="2" required placeholder="Descreva o pedido para o jurídico"></textarea>
+                        </div>
                     </div>
 
-                    <div style="display:grid; grid-template-columns:repeat(2,minmax(220px,1fr)); gap:12px; margin-bottom:12px;">
-                        <div class="form-group">
-                            <label>Empresa do Grupo Stefanini</label>
-                            <textarea id="autotocaEmpresaGrupoStefanini" rows="2" readonly style="background:#f9fafb; color:#374151;">STEFANINI CONSULTORIA E ASSESSORIA EM INFORMATICA S A</textarea>
-                        </div>
+                    <h4 style="margin:6px 0 12px; color:#065f46; font-size:14px;">Arquivos</h4>
+                    <div style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:14px; margin-bottom:16px;" id="cjFileFieldsGrid"></div>
 
-                        <div class="form-group">
-                            <label>Arquivos de Apoio (se necessário)</label>
-                            <div id="autotocaSupportFilesList" style="display:flex; flex-direction:column; gap:8px; min-height:84px;"></div>
-                        </div>
+                    <div class="form-group" style="max-width:360px; margin-bottom:16px;">
+                        <label>Arquivos de Apoio (se necessário)</label>
+                        <div id="autotocaSupportFilesList" style="display:flex; flex-direction:column; gap:8px; min-height:60px;"></div>
+                        <small style="color:#9ca3af; font-size:11px;">Usado automaticamente como anexo padrão nos itens 9, 10, 13 e 15 quando o usuário não sobe um arquivo próprio.</small>
                     </div>
 
                     <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start;">
-                        <button class="btn btn-auto-mapping" type="submit" id="autotocaSubmitBtn" style="padding:10px 16px;">
-                            <span class="ai-star-icon">✦</span> Abrir Formulário
+                        <button class="btn btn-auto-mapping" type="button" id="autotocaRobotBtn" onclick="runChamadoJuridicoRobot(event)" style="padding:10px 16px;">
+                            <span class="ai-star-icon">✦</span> Preencher com Robô 🐇
                         </button>
+                        <a class="btn btn-secondary btn-small" href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" rel="noopener noreferrer" style="align-self:center;">Abrir formulário manualmente</a>
+                    </div>
+                    <div id="autotocaRobotProgress" style="display:none; padding:20px 4px 12px;">
+                        <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="autotocaRobotStep">Iniciando o robô...</div>
+                        <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                            <div id="autotocaRobotBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                <span class="chamado-robot-bunny">🐇</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
+                            <div style="font-size:12px; color:#10b981;">
+                                <span class="chamado-robot-paw">🐾</span><span class="chamado-robot-paw">🐾</span><span class="chamado-robot-paw">🐾</span>
+                            </div>
+                            <div style="font-size:11px; color:#6b7280;" id="autotocaRobotPct">5%</div>
+                        </div>
                     </div>
                     <div id="autotocaLogs" style="margin-top:12px; font-size:12px; color:#374151;"></div>
                 </form>
-                <div id="autotocaFormsContainer" style="display:none; margin-top:16px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff; overflow:hidden;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px; color:#1e3a8a; font-size:13px; border-bottom:1px solid #bfdbfe; flex-wrap:wrap;">
-                        <span>O formulário abaixo usa o modo incorporado do Microsoft Forms. Se o navegador ou o tenant bloquear a incorporação, use o atalho ao lado.</span>
-                        <a class="btn btn-secondary btn-small" href="https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu" target="_blank" rel="noopener noreferrer">Abrir em nova aba</a>
-                    </div>
-                    <iframe
-                        id="autotocaFormsIframe"
-                        title="Formulário Chamado Jurídico"
-                        src=""
-                        style="width:100%; min-height:760px; border:0; background:#ffffff;"
-                        loading="lazy"
-                        referrerpolicy="strict-origin-when-cross-origin">
-                    </iframe>
-                </div>
             </div>
             <div id="autoTocaMalaDireta" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Mala Direta</h3>

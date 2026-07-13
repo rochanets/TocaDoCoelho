@@ -191,3 +191,132 @@ value = _resolve_setting('chave_no_db', 'NOME_ENV_VAR')
 cents = parse_currency_to_cents("R$ 1.500,00")  # → 150000
 texto = format_currency_br(150000)              # → "R$ 1.500,00"
 ```
+
+---
+
+## Robô de preenchimento de formulário externo (Playwright) — estratégia validada
+
+Padrão usado no robô do Chamado Jurídico (`integrations/forms_robot.py`, acionado
+por `POST /api/autotoca/chamado-juridico/robot`) para preencher um Microsoft
+Forms de produção sem nenhuma integração/API do lado do formulário. **Use este
+padrão como ponto de partida para qualquer nova automação de formulário externo**
+(outro Forms, Google Forms, SharePoint list, portal de terceiro sem API etc.).
+
+### Princípio central: navegador visível, submissão genuína, humano no controle
+
+O robô não tenta contornar o formulário via API/scraping — ele abre um Chromium
+real controlado por Playwright, com a **mesma sessão de login do usuário**, e
+interage com a página exatamente como uma pessoa faria. A resposta enviada é
+uma submissão legítima. O robô **nunca clica em Enviar sozinho** — ele preenche
+tudo, pulsa visualmente o botão final e devolve o controle para o usuário
+revisar e concluir.
+
+```python
+context = pw.chromium.launch_persistent_context(profile_dir, channel='chrome', viewport=None, args=['--start-maximized'])
+```
+
+- **Perfil persistente** em disco (`launch_persistent_context`, não `launch()` +
+  `new_context()`): o login (Microsoft, Google, SSO...) só acontece uma vez; nas
+  execuções seguintes a sessão já está lá.
+- **Detecta o navegador padrão do usuário** antes de abrir (no Windows, lê o
+  registro `HKCU\...\UrlAssociations\https\UserChoice\ProgId`) e cai para Chrome
+  → Edge → Chromium embutido do Playwright, nessa ordem. Nunca hardcode um
+  navegador só porque "geralmente funciona" — o usuário espera ver o navegador
+  que ele já usa no dia a dia.
+- **Janela maximizada, sem viewport fixo** (`viewport=None` + `--start-maximized`)
+  quando visível. Um viewport pequeno corta o fim de páginas longas sem o
+  usuário perceber que dava pra rolar — especificamente, o botão Enviar pode
+  ficar fora da área visível.
+
+### Localização de campo: texto normalizado primeiro, posição numérica como fallback
+
+Cada campo é localizado pelo texto da pergunta **normalizado** (sem acento,
+minúsculo, pontuação virando espaço) contido no bloco da pergunta inteira —
+resiliente a reordenação do formulário. Quando nenhum termo bate com nada na
+página (a redação real não é conhecida, ou o campo replica outro), cai para a
+posição numérica (`q`, 1-based) informada por quem chama, e isso é **reportado
+separadamente** (`positional`) para o usuário conferir visualmente — uma
+resposta na pergunta errada é pior do que uma pergunta deixada em branco.
+
+### Seleção de opção (radio/checkbox): delegue ao navegador, não adivinhe o DOM
+
+**Lição mais importante desta implementação.** A primeira tentativa extraía o
+texto de cada opção "na mão" (`aria-label`, `closest('label')`,
+`el.parentElement.innerText` etc.) — e quebrou de verdade: quando as opções de
+um grupo de rádio são elementos-irmãos no DOM (o padrão mais comum), pegar
+`parentElement.innerText` devolve o texto de **todas** as opções juntas, então
+qualquer termo bate sempre na primeira opção da lista, não na correta.
+
+A correção definitiva foi trocar para o mecanismo de acessibilidade nativo do
+Playwright, que delega ao próprio motor do navegador (o mesmo algoritmo que a
+árvore de acessibilidade do Chromium usa) o cálculo do nome de cada opção:
+
+```python
+target = question.get_by_role('radio', name=term).first  # substring literal, case-insensitive
+```
+
+**Atenção:** esse matcher compara por **substring literal**, sem normalizar
+acento/pontuação — diferente do matching de pergunta acima. `'nao'` nunca bate
+com `"Não"`; use `'Não'`. `'comercial pedroso'` nunca bate com `"Comercial -
+Pedroso"` (o traço quebra o substring); use um fragmento sem pontuação, tipo
+`'Pedroso'`.
+
+### Todo campo escrito precisa de verificação + nova tentativa
+
+Nunca assuma que `.click()` + `.fill()` + `.type()` funcionou só porque não
+lançou exceção. Depois de escrever, **leia de volta** e compare:
+
+```python
+target.fill(''); target.type(valor, delay=30)
+if target.input_value().strip() != valor.strip():
+    # tenta mais uma vez após uma pequena espera; se persistir, levanta erro
+    # específico (não silencioso) para aparecer no relatório final
+```
+
+O mesmo vale para rádio: depois do clique, confira `aria-checked === 'true'`
+(ou `.checked` para `<input>` nativo) antes de considerar concluído.
+
+### Data: tente digitar antes de simular clique em calendário
+
+Campos de data no Fluent UI/Forms costumam *parecer* somente-calendário (o
+input tem `readonly` implícito ou o placeholder sugere isso), mas digitar
+`dd/MM/yyyy` direto no campo pode funcionar mesmo assim. **Tente digitação
+primeiro, caia para navegação por clique no calendário só se a verificação do
+valor digitado falhar** — a navegação por calendário (abrir popup, ler
+mês/ano exibido, clicar próximo/anterior até bater, clicar no dia) é bem mais
+frágil e deve ser o plano B, não o A.
+
+### Diagnóstico: erros específicos, sem precisar reproduzir às cegas
+
+Cada falha de campo guarda o suficiente para diagnosticar **sem acesso ao
+navegador ao vivo**: `errors` traz mensagem específica por campo (opções
+vistas na tela, texto do cabeçalho do calendário, valor que realmente ficou
+no input), e o resultado completo (`filled`/`positional`/`unmatched`/`errors`)
+vai para o `app.log` via `logger.info(...)` — não só os acessos HTTP do
+Flask. Sem isso, um bug relatado pelo usuário fica impossível de investigar
+remotamente.
+
+### Overlay visual: mostre o que o robô está fazendo
+
+Um cursor animado (injetado via `page.evaluate()`, `position:fixed` com
+`z-index` máximo e `pointer-events:none`) se move até cada campo antes de
+preenchê-lo, e um badge fixo no rodapé narra o passo atual. Isso não é
+cosmético: é o que dá ao usuário confiança de que pode acompanhar e
+interromper a qualquer momento, em vez de um processo às escuras. Para um
+cursor customizado com transparência real (não um emoji), use **APNG**, não
+WebM/VP9 — o encoder `libvpx-vp9` do ffmpeg estático (`imageio-ffmpeg`) não
+preserva o canal alfa neste ambiente mesmo com `-pix_fmt yuva420p`; APNG
+preserva alpha de forma confiável e o Chromium (o motor por trás do
+Playwright) tem suporte nativo sólido.
+
+### Teste contra uma réplica local, não só contra produção
+
+Este ambiente de execução não tem acesso de rede de saída para abrir a
+página de produção (só ferramentas de linha de comando como `curl`
+conseguem — Chromium/Playwright não). A validação real veio de reproduzir a
+estrutura DOM da página-alvo (perguntas, rádios, data, upload) num HTML
+estático servido localmente e rodar o mesmo código do robô contra ele,
+headless, antes de cada correção subir para o usuário testar de verdade.
+Isso pegou bugs reais (a colisão de texto do rádio, a corrida de tempo do
+"envio automático" no próprio fixture de teste) sem precisar de uma rodada
+completa de feedback do usuário a cada iteração.

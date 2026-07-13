@@ -26,7 +26,7 @@ import base64
 import mimetypes
 import uuid
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
@@ -190,6 +190,8 @@ AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / 'chamado-juridico'
 AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+CHAMADO_JURIDICO_UPLOAD_DIR = AUTOTOCA_UPLOAD_DIR / 'chamado-juridico'
+CHAMADO_JURIDICO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -816,6 +818,18 @@ def init_db():
 
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_query_key ON automapping_runs(query_key)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_automapping_created_at ON automapping_runs(created_at)')
+
+    # Histórico de preenchimentos do robô do Chamado Jurídico (permite reaproveitar
+    # texto e arquivos de uma execução anterior num novo chamado)
+    c.execute('''CREATE TABLE IF NOT EXISTS chamado_juridico_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conta TEXT NOT NULL,
+        proposta_original_name TEXT,
+        payload_json TEXT NOT NULL,
+        files_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_chamado_juridico_history_created_at ON chamado_juridico_history(created_at)')
 
     # Tokens de integrações OAuth por usuário (Outlook Graph e futuros conectores)
     outlook_graph_ensure_schema(conn)

@@ -473,6 +473,7 @@
 
             if (previousTab === 'autotoca' && tabName !== 'autotoca') {
                 _addinStopPolling();
+                if (typeof _cjResetForm === 'function') _cjResetForm();
             }
 
             if (tabName === 'home') loadHome();
@@ -1505,6 +1506,8 @@
             if (extensionStatus) extensionStatus.style.display = 'none';
             await loadAutoTocaSupportFiles();
             await loadAutoTocaMailingData();
+            _cjRenderFileFields();
+            await loadChamadoJuridicoHistory();
         }
 
         // Todos os botões de módulo do AutoToca (inclui o WhatsApp Update, que abre modal em vez de painel inline)
@@ -1549,6 +1552,7 @@
             if (!targetId) return;
             const target = document.getElementById(targetId);
             if (!target) return;
+            const chamadoWasVisible = document.getElementById('autoTocaChamadoJuridico')?.style.display === 'block';
             // Fecha também os painéis de Reports
             ['reportsPanel_preparar-reuniao', 'reportsPanel_relationship-report'].forEach(id => {
                 const el = document.getElementById(id);
@@ -1564,6 +1568,10 @@
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });
+            // Sair do Chamado Jurídico (fechar ou trocar de módulo) limpa o formulário
+            if (chamadoWasVisible && !(isOpening && key === 'chamado-juridico') && typeof _cjResetForm === 'function') {
+                _cjResetForm();
+            }
             resetAutoTocaModuleButtons();
             // Abre o selecionado (toggle)
             if (isOpening) {
@@ -1586,10 +1594,12 @@
             const target = document.getElementById(targetId);
             if (!target) return;
             // Fecha também os painéis de automação do AutoToca
+            const chamadoWasVisible = document.getElementById('autoTocaChamadoJuridico')?.style.display === 'block';
             ['autoTocaChamadoJuridico', 'autoTocaMalaDireta', 'autoTocaSyncOutlook'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });
+            if (chamadoWasVisible && typeof _cjResetForm === 'function') _cjResetForm();
             resetAutoTocaModuleButtons();
             const isOpening = target.style.display === 'none';
             // Fecha todos os painéis
@@ -2716,9 +2726,6 @@
             }
         }
 
-        const AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL = 'https://forms.office.com/Pages/ResponsePage.aspx?id=Wua92O09RkOVGGcCBObhhMJ3y60yeQRBuK7vjuaEdIBUQVhXUFFBS01ZVTVDQTlOUktOTTZVVjdVViQlQCN0PWcu';
-        const AUTOTOCA_CHAMADO_JURIDICO_FORMS_EMBED_URL = `${AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL}&embed=true`;
-
         function _autoTocaGetLogsEl() {
             return document.getElementById('autotocaLogs');
         }
@@ -2744,245 +2751,368 @@
             el.insertAdjacentHTML('beforeend', `<div style="margin-bottom:6px; color:${color};">[${stamp}] ${escapeHtml(message)}</div>`);
         }
 
-        function _autoTocaGetChamadoPayloadStorage() {
-            return 'autotoca.chamado_juridico.payload.v1';
+        function _chamadoRobotEnsureStyles() {
+            if (document.getElementById('chamado-robot-bunny-style')) return;
+            const style = document.createElement('style');
+            style.id = 'chamado-robot-bunny-style';
+            style.textContent = `
+                @keyframes chamado-robot-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
+                @keyframes chamado-robot-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
+                .chamado-robot-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:chamado-robot-hop .5s ease-in-out infinite; pointer-events:none; }
+                .chamado-robot-paw { display:inline-block; font-size:10px; animation:chamado-robot-paw-fade 1s ease-in-out infinite; }
+                .chamado-robot-paw:nth-child(2){animation-delay:.2s} .chamado-robot-paw:nth-child(3){animation-delay:.4s}
+            `;
+            document.head.appendChild(style);
         }
 
-        function _autoTocaPersistChamadoPayload(payload) {
-            const normalized = {
-                savedAt: new Date().toISOString(),
-                formsUrl: AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL,
-                payload,
-            };
-            localStorage.setItem(_autoTocaGetChamadoPayloadStorage(), JSON.stringify(normalized));
-            return normalized;
+        function _chamadoRobotSetProgress(pct, step) {
+            const bar = document.getElementById('autotocaRobotBar');
+            const stepEl = document.getElementById('autotocaRobotStep');
+            const pctEl = document.getElementById('autotocaRobotPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         }
 
-        function _autoTocaBuildFormsFieldHints(payload) {
-            const dataAssinatura = (payload.dataAssinaturaContratoOriginal || '').trim() || new Date().toLocaleDateString('pt-BR');
-            const reajusteResumo = payload.haveraReajusteValores === 'Sim'
-                ? `Sim. ${payload.indiceReajuste || 'Índice/valor não informado.'}`
-                : 'Não';
-            return {
-                conta: payload.contaSelecionada || '',
-                tipoMinuta: payload.tipoMinuta || '',
-                numeroContratoSalesforce: payload.numeroContratoSalesforce || '',
-                dataAssinaturaContratoOriginal: dataAssinatura,
-                endereco: payload.enderecoFinalConfirmado || payload.enderecoSedeEncontrado || '',
-                clienteEncaminhouMinuta: payload.clienteEncaminhouMinuta || 'Não',
-                contratoOriginal: payload.contratoOriginalModo === 'nao_se_aplica' ? 'Não se aplica' : 'Arquivo enviado pelo usuário',
-                reajuste: reajusteResumo,
-                aditivosAnterioresQuantidade: String((payload.arquivosAditivosAnteriores || []).length),
-                observacoesArquivos: [
-                    payload.arquivosContratoOriginal?.length ? `Contrato original: ${payload.arquivosContratoOriginal.length} arquivo(s)` : 'Contrato original: sem arquivo',
-                    payload.arquivosAditivosAnteriores?.length ? `Aditivos anteriores: ${payload.arquivosAditivosAnteriores.length} arquivo(s)` : 'Aditivos anteriores: sem arquivo',
-                    payload.arquivosMinutaCliente?.length ? `Minuta do cliente: ${payload.arquivosMinutaCliente.length} arquivo(s)` : 'Minuta do cliente: sem arquivo',
-                    payload.arquivosAprovacaoCEO?.length ? `Aprovação CEO: ${payload.arquivosAprovacaoCEO.length} arquivo(s)` : 'Aprovação CEO: sem arquivo',
-                ].join(' | '),
-            };
+        function _chamadoRobotToggleRunning(running) {
+            const robotBtn = document.getElementById('autotocaRobotBtn');
+            const progressArea = document.getElementById('autotocaRobotProgress');
+            if (robotBtn) robotBtn.disabled = running;
+            if (progressArea) progressArea.style.display = running ? 'block' : 'none';
         }
 
-        function _autoTocaBuildFormsAutomationScript(payloadEnvelope) {
-            const hints = _autoTocaBuildFormsFieldHints(payloadEnvelope.payload || {});
-            const jsonHints = JSON.stringify(hints);
-            const jsonEnvelope = JSON.stringify(payloadEnvelope);
-            return `(() => {
-                const hints = ${jsonHints};
-                const envelope = ${jsonEnvelope};
-                const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-                const labelMap = {
-                    conta: ['conta', 'cliente', 'razao social'],
-                    tipoMinuta: ['tipo de minuta', 'minuta'],
-                    numeroContratoSalesforce: ['numero contrato sf', 'numero do contrato sf', 'salesforce', 'contrato sf'],
-                    dataAssinaturaContratoOriginal: ['data assinatura', 'assinatura', 'data do contrato'],
-                    endereco: ['endereco'],
-                    clienteEncaminhouMinuta: ['minuta do cliente', 'cliente encaminhou minuta'],
-                    contratoOriginal: ['contrato original'],
-                    reajuste: ['reajuste', 'indice utilizado', 'valor pos reajuste'],
-                    aditivosAnterioresQuantidade: ['aditivos anteriores'],
-                    observacoesArquivos: ['observacoes', 'anexos', 'arquivos'],
-                };
-                const candidates = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
-                const getQuestionText = (el) => {
-                    const direct = el.closest('[role="listitem"], [data-automation-id], .office-form-question, .question-content, .question-body');
-                    const texts = [];
-                    if (direct) texts.push(direct.innerText || '');
-                    if (el.labels) texts.push(...Array.from(el.labels).map(label => label.innerText || ''));
-                    const aria = el.getAttribute('aria-label') || '';
-                    const placeholder = el.getAttribute('placeholder') || '';
-                    texts.push(aria, placeholder);
-                    return normalize(texts.join(' | '));
-                };
-                const setValue = (el, value) => {
-                    if (!el || value == null) return false;
-                    const stringValue = String(value);
-                    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-                        el.focus();
-                        el.value = stringValue;
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                        el.dispatchEvent(new Event('blur', { bubbles: true }));
-                        return true;
-                    }
-                    if (el.getAttribute('contenteditable') === 'true') {
-                        el.focus();
-                        el.innerText = stringValue;
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('blur', { bubbles: true }));
-                        return true;
-                    }
-                    return false;
-                };
-                const matchesKey = (text, key) => (labelMap[key] || []).some(term => text.includes(normalize(term)));
-                const results = [];
-                Object.entries(hints).forEach(([key, value]) => {
-                    if (!value) return;
-                    const target = candidates.find(el => matchesKey(getQuestionText(el), key));
-                    const applied = setValue(target, value);
-                    results.push({ key, value, applied, matchedText: target ? getQuestionText(target) : '' });
-                });
-                const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map((el, index) => ({
-                    index,
-                    multiple: !!el.multiple,
-                    disabled: !!el.disabled,
-                    questionText: getQuestionText(el),
-                }));
-                return {
-                    ok: true,
-                    savedAt: envelope.savedAt,
-                    results,
-                    fileInputs,
-                    message: 'Preenchimento automático de texto executado.',
-                };
-            })();`;
+        // Campos de upload do Chamado Jurídico — mesmas chaves aceitas pelo backend
+        // (ver CHAMADO_JURIDICO_FILE_FIELDS em app.py).
+        const CJ_FILE_FIELDS = [
+            { key: 'aditivos_anteriores', label: 'Aditivos anteriores', multiple: true },
+            { key: 'contrato_anterior', label: 'Contrato Anterior', multiple: false },
+            { key: 'minuta_cliente', label: 'Há minuta do cliente?', multiple: false },
+            { key: 'aprovacao_reajuste', label: 'Aprovação de Reajuste Diferente do Contrato', multiple: false },
+            { key: 'proposta_comercial_tecnica', label: 'Proposta comercial e técnica', multiple: false },
+        ];
+
+        function _cjFileInputId(key) { return `cjFile_${key}`; }
+
+        function _cjRenderFileFields() {
+            const grid = document.getElementById('cjFileFieldsGrid');
+            if (!grid || grid.dataset.rendered) return;
+            grid.dataset.rendered = '1';
+            grid.innerHTML = CJ_FILE_FIELDS.map(f => `
+                <div class="form-group">
+                    <label>${escapeHtml(f.label)}</label>
+                    <input type="file" id="${_cjFileInputId(f.key)}" ${f.multiple ? 'multiple' : ''} onchange="_cjOnFileChange('${f.key}')">
+                    <div id="${_cjFileInputId(f.key)}List" style="margin-top:4px;"></div>
+                    <button type="button" id="${_cjFileInputId(f.key)}Reuse" onclick="_cjToggleReuseFile('${f.key}')"
+                        style="display:none; margin-top:6px; font-size:11px; padding:4px 10px; border-radius:12px; border:1px solid #059669; background:#fff; color:#059669; cursor:pointer;"></button>
+                </div>
+            `).join('');
         }
 
-        function _autoTocaOpenChamadoJuridicoForms() {
-            chamadoJuridicoWindowRef = openOrReuseExternalTab(chamadoJuridicoWindowRef, AUTOTOCA_CHAMADO_JURIDICO_FORMS_URL);
-            return chamadoJuridicoWindowRef;
+        function _cjRenderFileList(key) {
+            const input = document.getElementById(_cjFileInputId(key));
+            const listEl = document.getElementById(`${_cjFileInputId(key)}List`);
+            if (!input || !listEl) return;
+            const files = Array.from(input.files || []);
+            listEl.innerHTML = files.map((f, idx) => `
+                <span style="display:inline-flex; align-items:center; gap:4px; background:#f3f4f6; border-radius:12px; padding:2px 8px; margin:2px 4px 2px 0; font-size:11px;">
+                    ${escapeHtml(f.name)}
+                    <button type="button" onclick="_cjRemoveFile('${key}', ${idx})" title="Remover arquivo" style="border:0; background:transparent; color:#dc2626; cursor:pointer; font-weight:700; padding:0 2px; line-height:1;">×</button>
+                </span>
+            `).join('');
         }
 
-        function _autoTocaSendExtensionCommand(command, envelope = null, meta = {}) {
-            window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_COMMAND_EVENT, {
-                detail: {
-                    command,
-                    envelope,
-                    meta,
-                    source: 'autotoca-web',
-                    timestamp: Date.now(),
-                }
-            }));
+        function _cjRemoveFile(key, index) {
+            const input = document.getElementById(_cjFileInputId(key));
+            if (!input) return;
+            const dt = new DataTransfer();
+            Array.from(input.files || []).forEach((f, i) => { if (i !== index) dt.items.add(f); });
+            input.files = dt.files;
+            _cjRenderFileList(key);
         }
 
-        function _autoTocaGetStoredChamadoPayload() {
+        function _cjOnFileChange(key) {
+            // Selecionar um arquivo novo cancela o reaproveitamento do histórico
+            // para esse campo — nunca os dois juntos (era assim que o robô acabava
+            // enviando o anexo antigo E o novo ao mesmo tempo para o Forms).
+            _cjReuseSelectedFields.delete(key);
+            _cjRenderReuseChipState(key);
+            _cjRenderFileList(key);
+        }
+
+        // Nomes dos arquivos do histórico disponíveis para reaproveitar, por campo —
+        // preenchido em onChamadoHistorySelect(). Usado só para exibir o texto do chip.
+        let _cjReuseFileNames = {};
+
+        function _cjSetReuseChip(key, fileNames) {
+            const btn = document.getElementById(`${_cjFileInputId(key)}Reuse`);
+            if (!btn) return;
+            _cjReuseFileNames[key] = fileNames || [];
+            if (!fileNames || !fileNames.length) {
+                btn.style.display = 'none';
+                return;
+            }
+            btn.style.display = 'inline-block';
+            _cjRenderReuseChipState(key);
+        }
+
+        function _cjRenderReuseChipState(key) {
+            const btn = document.getElementById(`${_cjFileInputId(key)}Reuse`);
+            if (!btn) return;
+            const names = (_cjReuseFileNames[key] || []).join(', ');
+            const selected = _cjReuseSelectedFields.has(key);
+            btn.style.background = selected ? '#059669' : '#fff';
+            btn.style.color = selected ? '#fff' : '#059669';
+            btn.textContent = (selected ? '✓ Anexado: ' : '📎 Usar do histórico: ') + names;
+        }
+
+        function _cjToggleReuseFile(key) {
+            if (_cjReuseSelectedFields.has(key)) {
+                _cjReuseSelectedFields.delete(key);
+            } else {
+                _cjReuseSelectedFields.add(key);
+                // Mutuamente exclusivo com um upload novo no mesmo campo.
+                const input = document.getElementById(_cjFileInputId(key));
+                if (input) { input.value = ''; _cjRenderFileList(key); }
+            }
+            _cjRenderReuseChipState(key);
+        }
+
+        function _cjToggleConditional(triggerId, wrapId) {
+            const trigger = document.getElementById(triggerId);
+            const wrap = document.getElementById(wrapId);
+            if (!trigger || !wrap) return;
+            const show = trigger.value === 'Sim';
+            wrap.style.display = show ? '' : 'none';
+            const input = wrap.querySelector('input, textarea');
+            if (input) {
+                input.disabled = !show;
+                input.required = show;
+                if (!show) input.value = '';
+            }
+        }
+
+        let _cjReuseHistoryId = '';
+        let _cjReuseSelectedFields = new Set();
+
+        // Limpa todos os campos do Chamado Jurídico — chamado ao sair do módulo/aba,
+        // para que o usuário sempre encontre o formulário em branco na próxima visita.
+        function _cjResetForm() {
+            const textIds = [
+                'autotocaContaOutro', 'autotocaRazaoSocial', 'autotocaCnpj', 'autotocaEnderecoFinal',
+                'cjMinutaTipo', 'cjOppSalesforce', 'cjDataAssinatura', 'cjHaveraReajuste', 'cjValoresReajuste',
+                'cjHouveReoneracao', 'cjInclutNovosServicos', 'cjProrrogacaoVigencia', 'cjVigenciaDatas',
+                'cjAssinaturaPlataforma', 'cjDescricaoPedido',
+            ];
+            textIds.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+
+            const contaSelect = document.getElementById('autotocaConta');
+            if (contaSelect) contaSelect.selectedIndex = 0;
+            const contaOutroWrap = document.getElementById('autotocaContaOutroWrap');
+            if (contaOutroWrap) contaOutroWrap.style.display = 'none';
+
+            _cjToggleConditional('cjHaveraReajuste', 'cjValoresReajusteWrap');
+            _cjToggleConditional('cjProrrogacaoVigencia', 'cjVigenciaDatasWrap');
+
+            _cjReuseSelectedFields.clear();
+            CJ_FILE_FIELDS.forEach(f => {
+                const input = document.getElementById(_cjFileInputId(f.key));
+                if (input) input.value = '';
+                _cjRenderFileList(f.key);
+                _cjSetReuseChip(f.key, []);
+            });
+
+            _cjReuseHistoryId = '';
+            const historySelect = document.getElementById('cjHistorySelect');
+            if (historySelect) historySelect.value = '';
+        }
+
+        async function loadChamadoJuridicoHistory() {
+            const select = document.getElementById('cjHistorySelect');
+            if (!select) return;
             try {
-                return JSON.parse(localStorage.getItem(_autoTocaGetChamadoPayloadStorage()) || 'null');
-            } catch (_) {
-                return null;
-            }
+                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/history`);
+                const items = response.ok ? await response.json() : [];
+                const current = select.value;
+                select.innerHTML = '<option value="">Novo chamado (em branco)</option>' + items.map(item => {
+                    const when = item.created_at ? new Date(item.created_at.replace(' ', 'T')).toLocaleDateString('pt-BR') : '';
+                    const label = `${item.conta}${item.proposta_original_name ? ' — ' + item.proposta_original_name : ''} (${when})`;
+                    return `<option value="${item.id}">${escapeHtml(label)}</option>`;
+                }).join('');
+                select.value = current;
+            } catch (_) { /* histórico é conveniência, falha silenciosa */ }
         }
 
-        function _autoTocaWait(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
+        async function onChamadoHistorySelect() {
+            const select = document.getElementById('cjHistorySelect');
+            const historyId = select?.value || '';
+            _cjReuseHistoryId = historyId;
+            if (!historyId) return;
 
-        async function _autoTocaTryAutoFillForms(win, payloadEnvelope, options = {}) {
-            const attempts = Number(options.attempts || 12);
-            const delayMs = Number(options.delayMs || 1200);
-            const formsScript = _autoTocaBuildFormsAutomationScript(payloadEnvelope);
-            let lastError = null;
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/history/${historyId}`);
+                if (!response.ok) throw new Error('Não foi possível carregar esse histórico.');
+                const entry = await response.json();
+                const p = entry.payload || {};
 
-            for (let attempt = 1; attempt <= attempts; attempt++) {
-                if (!win || win.closed) {
-                    return { ok: false, reason: 'window_closed', attempt, message: 'A aba do Microsoft Forms foi fechada antes do preenchimento.' };
-                }
-                try {
-                    const href = win.location.href || '';
-                    const readyState = win.document?.readyState || 'loading';
-                    if (!href || href === 'about:blank' || readyState !== 'complete') {
-                        await _autoTocaWait(delayMs);
-                        continue;
+                const setVal = (id, value) => { const el = document.getElementById(id); if (el) el.value = value || ''; };
+                setVal('autotocaRazaoSocial', p.razao_social);
+                setVal('autotocaCnpj', p.cnpj);
+                setVal('autotocaEnderecoFinal', p.endereco);
+                setVal('cjMinutaTipo', p.minuta_tipo);
+                setVal('cjOppSalesforce', p.opp_salesforce);
+                setVal('cjDataAssinatura', p.data_assinatura);
+                setVal('cjHaveraReajuste', p.havera_reajuste);
+                setVal('cjValoresReajuste', p.valores_reajuste);
+                setVal('cjHouveReoneracao', p.houve_reoneracao);
+                setVal('cjInclutNovosServicos', p.inclui_novos_servicos);
+                setVal('cjProrrogacaoVigencia', p.e_prorrogacao_vigencia);
+                setVal('cjVigenciaDatas', p.vigencia_datas);
+                setVal('cjAssinaturaPlataforma', p.assinatura_plataforma);
+                setVal('cjDescricaoPedido', p.descricao_pedido);
+                _cjToggleConditional('cjHaveraReajuste', 'cjValoresReajusteWrap');
+                _cjToggleConditional('cjProrrogacaoVigencia', 'cjVigenciaDatasWrap');
+
+                const contaSelect = document.getElementById('autotocaConta');
+                if (contaSelect && p.conta) {
+                    const hasOption = Array.from(contaSelect.options).some(o => o.value === p.conta);
+                    contaSelect.value = hasOption ? p.conta : 'OUTRO';
+                    if (!hasOption) {
+                        document.getElementById('autotocaContaOutroWrap').style.display = 'block';
+                        document.getElementById('autotocaContaOutro').value = p.conta;
                     }
-                    const result = win.eval(formsScript);
-                    return { ok: true, attempt, href, result };
-                } catch (error) {
-                    lastError = error;
-                    const msg = String(error?.message || error || 'erro desconhecido');
-                    const crossOrigin = msg.includes('cross-origin') || msg.includes('Permission denied') || msg.includes('Blocked a frame with origin');
-                    if (crossOrigin) {
-                        return { ok: false, reason: 'cross_origin', attempt, message: 'O navegador isolou a aba do Microsoft Forms e bloqueou o preenchimento automático direto entre abas.' };
-                    }
-                    await _autoTocaWait(delayMs);
                 }
-            }
 
-            return {
-                ok: false,
-                reason: 'timeout',
-                message: 'Não foi possível identificar a página do Forms pronta para preenchimento automático.',
-                error: String(lastError?.message || lastError || ''),
-            };
+                _cjReuseSelectedFields.clear();
+                CJ_FILE_FIELDS.forEach(f => {
+                    const input = document.getElementById(_cjFileInputId(f.key));
+                    if (input) input.value = '';
+                    _cjRenderFileList(f.key);
+                    const files = (entry.files || {})[f.key] || [];
+                    _cjSetReuseChip(f.key, files.map(x => x.original_name));
+                });
+
+                showInfo('Histórico carregado. Clique nos anexos que quiser reaproveitar e confira os campos antes de acionar o robô.');
+            } catch (error) {
+                showError(error.message || 'Erro ao carregar histórico.');
+            }
         }
 
-        function _autoTocaBuildOperatorInstructions(payloadEnvelope, fillStatus) {
-            const payload = payloadEnvelope.payload || {};
-            const fileSummary = [
-                payload.arquivosContratoOriginal?.length ? `Contrato original: ${payload.arquivosContratoOriginal.join(', ')}` : 'Contrato original: nenhum arquivo salvo',
-                payload.arquivosAditivosAnteriores?.length ? `Aditivos anteriores: ${payload.arquivosAditivosAnteriores.join(', ')}` : 'Aditivos anteriores: nenhum arquivo salvo',
-                payload.arquivosMinutaCliente?.length ? `Minuta do cliente: ${payload.arquivosMinutaCliente.join(', ')}` : 'Minuta do cliente: nenhum arquivo salvo',
-                payload.arquivosAprovacaoCEO?.length ? `Aprovação do CEO: ${payload.arquivosAprovacaoCEO.join(', ')}` : 'Aprovação do CEO: nenhum arquivo salvo',
-            ].join('\n');
-
-            if (fillStatus?.ok) {
-                return [
-                    'O Microsoft Forms foi aberto e o preenchimento automático dos campos de texto foi executado.',
-                    'Revise visualmente os campos preenchidos antes de enviar.',
-                    'Se houver campos de upload, anexe os arquivos e conclua o envio manualmente.',
-                    '',
-                    'Arquivos disponíveis nesta execução:',
-                    fileSummary,
-                ].join('\n');
+        function _cjValidate(conta, endereco) {
+            const required = [
+                ['cjMinutaTipo', 'Minuta/Contrato é do cliente ou da Stefanini'],
+                ['cjHaveraReajuste', 'Haverá Reajuste'],
+                ['cjHouveReoneracao', 'Houve reoneração'],
+                ['cjInclutNovosServicos', 'Inclui novos serviços'],
+                ['cjProrrogacaoVigencia', 'É prorrogação de vigência'],
+                ['cjAssinaturaPlataforma', 'Assinatura pela plataforma'],
+                ['cjDescricaoPedido', 'Descrição do pedido'],
+            ];
+            if (!conta) return 'Preencha a Conta.';
+            if (!endereco) return 'Preencha o Endereço.';
+            for (const [id, label] of required) {
+                if (!(document.getElementById(id)?.value || '').trim()) return `Preencha "${label}".`;
             }
-
-            return [
-                'O Microsoft Forms foi aberto, mas o navegador não permitiu preenchimento automático completo entre abas nesta tentativa.',
-                'Se o Forms pediu autenticação Microsoft, conclua o login e execute novamente a automação.',
-                'Se os uploads forem necessários, eles ainda dependem de mapeamento específico ou seleção manual, conforme as restrições do próprio navegador.',
-                '',
-                `Motivo técnico detectado: ${fillStatus?.message || 'não identificado'}`,
-                '',
-                'Arquivos disponíveis nesta execução:',
-                fileSummary,
-            ].join('\n');
+            if (document.getElementById('cjHaveraReajuste').value === 'Sim' && !document.getElementById('cjValoresReajuste').value.trim()) {
+                return 'Descreva os valores de reajuste.';
+            }
+            if (document.getElementById('cjProrrogacaoVigencia').value === 'Sim' && !document.getElementById('cjVigenciaDatas').value.trim()) {
+                return 'Informe a data inicial e final da vigência.';
+            }
+            return null;
         }
 
-        async function runChamadoJuridico(event) {
-            event.preventDefault();
+        async function runChamadoJuridicoRobot(event) {
+            event?.preventDefault?.();
 
             const conta = document.getElementById('autotocaConta').value === 'OUTRO'
                 ? document.getElementById('autotocaContaOutro').value.trim()
                 : document.getElementById('autotocaConta').value;
             const endereco = document.getElementById('autotocaEnderecoFinal').value.trim();
 
-            if (!conta || !endereco) {
-                showError('Preencha Conta e Endereço antes de abrir o formulário.');
+            const validationError = _cjValidate(conta, endereco);
+            if (validationError) {
+                showError(validationError);
                 return;
             }
 
-            const container = document.getElementById('autotocaFormsContainer');
-            const iframe = document.getElementById('autotocaFormsIframe');
-            if (!container || !iframe) {
-                showError('Não foi possível carregar o formulário nesta tela.');
-                return;
+            const fd = new FormData();
+            fd.append('conta', conta);
+            fd.append('razao_social', document.getElementById('autotocaRazaoSocial').value.trim());
+            fd.append('cnpj', document.getElementById('autotocaCnpj').value.trim());
+            fd.append('endereco', endereco);
+            fd.append('minuta_tipo', document.getElementById('cjMinutaTipo').value);
+            fd.append('opp_salesforce', document.getElementById('cjOppSalesforce').value.trim());
+            fd.append('data_assinatura', document.getElementById('cjDataAssinatura').value);
+            fd.append('havera_reajuste', document.getElementById('cjHaveraReajuste').value);
+            fd.append('valores_reajuste', document.getElementById('cjValoresReajuste').value.trim());
+            fd.append('houve_reoneracao', document.getElementById('cjHouveReoneracao').value);
+            fd.append('inclui_novos_servicos', document.getElementById('cjInclutNovosServicos').value);
+            fd.append('e_prorrogacao_vigencia', document.getElementById('cjProrrogacaoVigencia').value);
+            fd.append('vigencia_datas', document.getElementById('cjVigenciaDatas').value.trim());
+            fd.append('assinatura_plataforma', document.getElementById('cjAssinaturaPlataforma').value);
+            fd.append('descricao_pedido', document.getElementById('cjDescricaoPedido').value.trim());
+            if (_cjReuseHistoryId) {
+                fd.append('reuse_history_id', _cjReuseHistoryId);
+                fd.append('reuse_fields', JSON.stringify(Array.from(_cjReuseSelectedFields)));
             }
 
-            container.style.display = 'block';
-            iframe.src = AUTOTOCA_CHAMADO_JURIDICO_FORMS_EMBED_URL;
+            CJ_FILE_FIELDS.forEach(f => {
+                const input = document.getElementById(_cjFileInputId(f.key));
+                Array.from(input?.files || []).forEach(file => fd.append(f.key, file));
+            });
 
-            showInfo('Formulário carregado no container. Se o Microsoft Forms bloquear a incorporação, use “Abrir em nova aba”.');
+            _chamadoRobotEnsureStyles();
+            _chamadoRobotToggleRunning(true);
+            _chamadoRobotSetProgress(5, 'Iniciando o robô...');
+            _autoTocaAppendLog('Robô do Chamado Jurídico iniciado. Uma janela do navegador será aberta.', 'info');
+
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/robot`, { method: 'POST', body: fd });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                const taskId = data.task_id;
+                if (!taskId) throw new Error('Resposta inesperada do servidor.');
+
+                const progressEl = document.getElementById('autotocaRobotProgress');
+                _attachBgTaskControls(
+                    progressEl, taskId,
+                    () => _chamadoRobotToggleRunning(false),
+                    () => { _chamadoRobotToggleRunning(false); showError('Acompanhamento do robô cancelado — a janela dele pode continuar aberta.'); }
+                );
+
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/autotoca/chamado-juridico/robot/tasks/${taskId}`,
+                    'Robô do Chamado Jurídico',
+                    sourceTab,
+                    (result) => {
+                        _chamadoRobotToggleRunning(false);
+                        const filled = result?.filled?.length ? `Campos preenchidos: ${result.filled.join(', ')}.` : '';
+                        const positional = result?.positional?.length ? ` Localizados por posição (confira visualmente): ${result.positional.join(', ')}.` : '';
+                        const unmatched = result?.unmatched?.length ? ` Não localizei no formulário: ${result.unmatched.join(', ')}.` : '';
+                        if (result?.submitted) {
+                            showSuccess('Chamado Jurídico enviado com sucesso pelo Microsoft Forms!');
+                            _autoTocaAppendLog(`Envio confirmado pelo Forms. ${filled}${positional}${unmatched}`, 'success');
+                        } else {
+                            showInfo('Preenchimento concluído. Revise, anexe os arquivos e clique em Enviar na janela do robô.');
+                            _autoTocaAppendLog(`Preenchimento concluído — envio pendente de revisão. ${filled}${positional}${unmatched}`, 'warning');
+                        }
+                        loadChamadoJuridicoHistory();
+                    },
+                    (errMsg) => {
+                        _chamadoRobotToggleRunning(false);
+                        showError(errMsg || 'Erro no robô do Chamado Jurídico.');
+                        _autoTocaAppendLog(`Robô falhou: ${errMsg || 'erro desconhecido'}`, 'error');
+                    },
+                    (pct, step) => _chamadoRobotSetProgress(pct, step)
+                );
+            } catch (error) {
+                _chamadoRobotToggleRunning(false);
+                showError(error.message || 'Erro ao iniciar o robô.');
+                _autoTocaAppendLog(`Robô não iniciou: ${error.message || 'erro desconhecido'}`, 'error');
+            }
         }
-
-
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
