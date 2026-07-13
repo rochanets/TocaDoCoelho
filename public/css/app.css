@@ -3407,9 +3407,20 @@
            (Account Planning, Whitespace, Radar, Briefing, Pendentes).
            Temas claros usam os cinzas padrão; escuros recebem tons legíveis.
            ================================================================== */
-        .toca-text-strong { color: #1f2937; }
-        .toca-text        { color: #4b5563; }
-        .toca-text-muted  { color: #6b7280; }
+        /* Superfícies do TEMA (páginas/painéis translúcidos):
+           o fundo muda por tema, então a cor do texto acompanha.
+           - Verde clássico (default, sem data-theme): fundo escuro => texto CLARO
+           - Baby Pink / White Pearl: fundo claro => texto ESCURO
+           - Blue Space / Black Cat: fundo escuro => texto CLARO */
+        .toca-text-strong { color: #f3f1e9; }
+        .toca-text        { color: #ddd9cc; }
+        .toca-text-muted  { color: #bdb9ab; }
+        html[data-theme="baby-pink"] .toca-text-strong,
+        html[data-theme="white-pearl"] .toca-text-strong { color: #1f2937 !important; }
+        html[data-theme="baby-pink"] .toca-text,
+        html[data-theme="white-pearl"] .toca-text { color: #374151 !important; }
+        html[data-theme="baby-pink"] .toca-text-muted,
+        html[data-theme="white-pearl"] .toca-text-muted { color: #52606f !important; }
         html[data-theme="blue-space"] .toca-text-strong,
         html[data-theme="black-cat"] .toca-text-strong { color: #e2e8f5 !important; }
         html[data-theme="blue-space"] .toca-text,
@@ -3417,8 +3428,19 @@
         html[data-theme="blue-space"] .toca-text-muted,
         html[data-theme="black-cat"] .toca-text-muted { color: #93a8bc !important; }
 
-        /* Briefing (Agenda): tipografia e alinhamento do markdown */
-        .briefing-content h2 { font-size: 15px; margin: 12px 0 4px; color: inherit; }
+        /* Dentro de MODAIS (fundo branco em todos os temas) e de .history-item
+           (fundo branco 85%): texto sempre escuro, independente do tema. */
+        html .modal-content .toca-text-strong,
+        html .history-item .toca-text-strong { color: #111827 !important; }
+        html .modal-content .toca-text,
+        html .history-item .toca-text { color: #374151 !important; }
+        html .modal-content .toca-text-muted,
+        html .history-item .toca-text-muted { color: #6b7280 !important; }
+
+        /* Briefing (Agenda): fundo claro fixo + texto escuro em todos os temas */
+        .briefing-box { background: #ffffff; color: #1f2937; }
+        .briefing-content { color: #1f2937 !important; }
+        .briefing-content h2 { font-size: 15px; margin: 12px 0 4px; color: #065f46; }
         .briefing-content h3, .briefing-content h4 { font-size: 14px; margin: 10px 0 4px; }
         .briefing-content ul { margin: 2px 0 8px; padding-left: 22px; list-style-position: outside; }
         .briefing-content li { margin: 2px 0; line-height: 1.45; }

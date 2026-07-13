@@ -185,23 +185,23 @@
                         <div style="display:flex; align-items:center; gap:8px;">
                             <img src="${escapeHtml(cl.photo_url || '/logo-coelho.png')}" style="width:42px; height:42px; border-radius:50%; object-fit:cover; border:2px solid rgba(16,185,129,.35);" onerror="this.src='/logo-coelho.png'">
                             <div>
-                                <div class="toca-text-strong" style="font-weight:700;">${escapeHtml(cl.name)}</div>
-                                <div class="toca-text-muted" style="font-size:12px;">${escapeHtml(cl.position || '')}</div>
+                                <div style="font-weight:700; color:#111827;">${escapeHtml(cl.name)}</div>
+                                <div style="font-size:12px; color:#6b7280;">${escapeHtml(cl.position || '')}</div>
                             </div>
                         </div>` : ''}
                     ${acc.name ? `
                         <div style="display:flex; align-items:center; gap:8px;">
                             <img src="${escapeHtml(acc.logo_url || '/logo-coelho.png')}" style="width:42px; height:42px; border-radius:10px; object-fit:contain; background:#fff; border:1px solid rgba(16,185,129,.25);" onerror="this.src='/logo-coelho.png'">
-                            <div class="toca-text-strong" style="font-weight:700;">${escapeHtml(acc.name)}</div>
-                        </div>` : (cl.company ? `<div class="toca-text" style="font-weight:600;">${escapeHtml(cl.company)}</div>` : '')}
+                            <div style="font-weight:700; color:#111827;">${escapeHtml(acc.name)}</div>
+                        </div>` : (cl.company ? `<div style="font-weight:600; color:#374151;">${escapeHtml(cl.company)}</div>` : '')}
                 </div>` : '';
             area.innerHTML = `
-                <div style="border:1px solid rgba(16,185,129,.3); border-radius:10px; padding:12px 16px; margin-top:8px; font-size:13px;">
+                <div class="briefing-box" style="border:1px solid rgba(16,185,129,.3); border-radius:10px; padding:12px 16px; margin-top:8px; font-size:13px;">
                     ${header}
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
-                        <small class="toca-text-muted">Gerado em ${escapeHtml((data.generated_at || '').slice(0, 16).replace('T', ' '))}</small>
+                        <small style="color:#6b7280;">Gerado em ${escapeHtml((data.generated_at || '').slice(0, 16).replace('T', ' '))}</small>
                         <button class="btn btn-secondary btn-small" onclick="_generateBriefing(document.getElementById('briefingArea_${commitmentId}'), ${commitmentId}, true)" title="Regerar o briefing"><i class="fas fa-rotate-right"></i> Atualizar</button>
                     </div>
-                    <div class="briefing-content toca-text">${htmlContent}</div>
+                    <div class="briefing-content">${htmlContent}</div>
                 </div>`;
         }
