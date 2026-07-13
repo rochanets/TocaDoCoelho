@@ -2070,12 +2070,23 @@
             overflow: hidden;
             flex-shrink: 0;
         }
-        .bgi-video-wrap video {
-            width: 52px;
-            height: 52px;
-            object-fit: cover;
-            border-radius: 50%;
+        .bgi-video-wrap img {
+            width: 44px;
+            height: auto;
             display: block;
+        }
+
+        /* Coelho verde correndo — animação padrão nas barras de progresso.
+           Usar sempre este <img> (nunca o emoji 🐇):
+           <img src="/images/coelho-correndo.webp" class="coelho-run" alt=""> */
+        .coelho-run {
+            position: absolute;
+            right: -20px;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 26px;
+            width: auto;
+            pointer-events: none;
         }
         .bgi-label {
             background: rgba(255,255,255,0.95);
@@ -5077,9 +5088,7 @@
                         ind.innerHTML = `
                             <div class="bgi-label">${label}</div>
                             <div class="bgi-video-wrap" title="Processando em background...">
-                                <video autoplay loop muted playsinline>
-                                    <source src="/videos/Loading_Bunny.mp4" type="video/mp4">
-                                </video>
+                                <img src="/images/coelho-correndo.webp" alt="">
                             </div>`;
                         _renderedState = 'active';
                     } else {
@@ -8190,7 +8199,7 @@
             overlay.innerHTML = `
                 <div style="background:#fff;border-radius:14px;padding:28px 28px 22px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.25);font-family:inherit;">
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-                        <span style="font-size:28px;">🐇</span>
+                        <img src="/images/coelho-correndo.webp" alt="" style="height:38px;width:auto;flex-shrink:0;">
                         <div>
                             <div style="font-size:16px;font-weight:700;color:#111827;">Nova versão disponível!</div>
                             <div style="font-size:13px;color:#6b7280;margin-top:2px;">
@@ -8306,17 +8315,6 @@
             }
         }
 
-        function _ensureUpdateBunnyStyle() {
-            if (document.getElementById('update-bunny-style')) return;
-            const style = document.createElement('style');
-            style.id = 'update-bunny-style';
-            style.textContent = `
-                @keyframes upd-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
-                .upd-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:16px; line-height:1; animation:upd-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
-            `;
-            document.head.appendChild(style);
-        }
-
         function _updSetProgress(pct, step) {
             const bar = document.getElementById('updProgressBar');
             const stepEl = document.getElementById('updProgressStep');
@@ -8336,13 +8334,12 @@
             const btn = document.getElementById('autoUpdateBtn');
             if (btn) btn.disabled = true;
             const container = document.getElementById('updateCheckResult');
-            _ensureUpdateBunnyStyle();
             if (container) {
                 container.innerHTML = `
                     <div id="updProgressStep" style="font-size:13px;color:#6b7280;margin-bottom:8px;">Iniciando download...</div>
                     <div style="position:relative;background:#d1fae5;border-radius:99px;height:12px;overflow:visible;margin:0 18px 6px 0;">
                         <div id="updProgressBar" style="position:relative;height:100%;width:5%;background:linear-gradient(90deg,#059669,#10b981,#34d399);border-radius:99px;transition:width .5s ease;">
-                            <span class="upd-bunny">🐇</span>
+                            <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                         </div>
                     </div>
                     <div id="updProgressPct" style="font-size:11px;color:#6b7280;text-align:right;">5%</div>
@@ -9863,7 +9860,7 @@
             if (!container) return;
 
             if (!clients || clients.length === 0) {
-                container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🐰</div><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
+                container.innerHTML = '<div class="empty-state"><img src="/images/missing-contact/coelho-triste.png" class="empty-bunny-img" alt=""><h3>Nenhum cliente cadastrado</h3><p>Comece cadastrando seus clientes para acompanhar o relacionamento com eles.</p><button class="btn btn-primary" onclick="switchTab(null, \'clientes\')"><i class="fas fa-plus"></i> Cadastrar Cliente</button></div>';
                 return;
             }
 
@@ -10732,17 +10729,6 @@
         let _clImportedPhotoUrl = '';
         let _clImportedProfileUrl = '';
 
-        function _clEnsureBunnyStyle() {
-            if (document.getElementById('cl-bunny-style')) return;
-            const s = document.createElement('style');
-            s.id = 'cl-bunny-style';
-            s.textContent = `
-                @keyframes cl-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
-                #clModalBunny { animation: cl-bunny-hop .5s ease-in-out infinite; }
-            `;
-            document.head.appendChild(s);
-        }
-
         function _clModalSetProgress(pct, step) {
             const bar = document.getElementById('clModalProgressBar');
             const stepEl = document.getElementById('clModalProgressStep');
@@ -10776,7 +10762,6 @@
 
             // Mostra modal
             document.getElementById('clientLinkedinModal').classList.add('active');
-            _clEnsureBunnyStyle();
 
             // Checa extensão
             await clModalCheckExtension();
@@ -12314,9 +12299,7 @@
                 const style = document.createElement('style');
                 style.id = 'env-autofill-bunny-style';
                 style.textContent = `
-                    @keyframes eaf-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
                     @keyframes eaf-paw { 0%,100%{opacity:.25} 50%{opacity:.7} }
-                    .eaf-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:eaf-hop .5s ease-in-out infinite; pointer-events:none; }
                     .eaf-paw { display:inline-block; font-size:10px; animation:eaf-paw 1s ease-in-out infinite; }
                     .eaf-paw:nth-child(2){animation-delay:.2s} .eaf-paw:nth-child(3){animation-delay:.4s}
                 `;
@@ -12344,7 +12327,7 @@
                             <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="eafProgressStep">Iniciando...</div>
                             <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
                                 <div id="eafProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                                    <span class="eaf-bunny">🐇</span>
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
                             <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
@@ -15669,12 +15652,19 @@
             document.querySelectorAll('.theme-option-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.theme === (theme || 'verde-classico'));
             });
-            // Troca de logo para temas pearl
+            // Troca de logo por tema (pearl e blue-space têm logos próprios)
             const isPearl = theme === 'baby-pink' || theme === 'white-pearl';
+            const isBlueSpace = theme === 'blue-space';
             const logoExpanded  = document.querySelector('.sidebar-logo-expanded');
             const logoCollapsed = document.querySelector('.sidebar-logo-collapsed');
-            if (logoExpanded)  logoExpanded.src  = isPearl ? '/logo-coelho-pearl.png'        : '/logo-coelho.png';
-            if (logoCollapsed) logoCollapsed.src = isPearl ? '/images/favicon-toca-pearl.png' : '/images/favicon-toca.png';
+            if (logoExpanded) {
+                logoExpanded.src = isBlueSpace ? '/logo-toca-blue-space.png'
+                    : isPearl ? '/logo-coelho-pearl.png' : '/logo-coelho.png';
+            }
+            if (logoCollapsed) {
+                logoCollapsed.src = isBlueSpace ? '/images/favicon-toca-blue-space.png'
+                    : isPearl ? '/images/favicon-toca-pearl.png' : '/images/favicon-toca.png';
+            }
         }
 
         async function loadThemeConfig() {
@@ -16217,7 +16207,7 @@
                     <div style="font-size:11px; color:#6b7280; margin-bottom:4px; text-align:center;" id="autoFillProgressStep">Iniciando...</div>
                     <div style="position:relative; background:#d1fae5; border-radius:99px; height:8px; overflow:visible; margin:0 2px;">
                         <div id="autoFillProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                            <span style="position:absolute; right:-10px; top:50%; transform:translateY(-50%); font-size:13px; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none;">🐇</span>
+                            <img src="/images/coelho-correndo.webp" class="coelho-run" alt="" style="height:18px;right:-14px;">
                         </div>
                     </div>`;
                 btn?.parentNode?.insertAdjacentElement('afterend', progressWrap);
@@ -16519,10 +16509,8 @@
             const style = document.createElement('style');
             style.id = 'campaign-styles';
             style.textContent = `
-                @keyframes camp-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-72%) scaleY(.85)} }
                 @keyframes camp-glow-pulse { 0%,100%{opacity:.55;transform:scale(1)} 50%{opacity:.9;transform:scale(1.06)} }
                 @keyframes camp-fade-up { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
-                .camp-bunny { position:absolute; right:-13px; top:50%; transform:translateY(-50%); font-size:17px; line-height:1; animation:camp-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
 
                 /* ── Hero ── */
                 .camp-hero { position:relative; overflow:hidden; border-radius:20px; padding:34px 36px;
@@ -16819,7 +16807,7 @@
                             <div style="font-size:13px;color:#6b7280;margin-bottom:12px;text-align:center;" id="cwProgressStep">Iniciando...</div>
                             <div style="position:relative;background:#ede9fe;border-radius:99px;height:12px;overflow:visible;margin:0 16px 6px;">
                                 <div id="cwProgressBar" style="position:relative;height:100%;width:5%;background:linear-gradient(90deg,#6366f1,#8b5cf6,#38bdf8);border-radius:99px;transition:width .6s ease;">
-                                    <span class="camp-bunny">🐇</span>
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
                             <div style="text-align:right;padding:0 16px;font-size:11px;color:#8b5cf6;" id="cwProgressPct">5%</div>
@@ -17553,7 +17541,7 @@
             overlay.id = 'campRegenOverlay';
             overlay.style.cssText = 'position:fixed;inset:0;background:rgba(18,16,31,.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
             overlay.innerHTML = `<div style="background:#fff;border-radius:14px;padding:26px 30px;text-align:center;min-width:320px;">
-                <div style="font-size:30px;">🐇</div>
+                <img src="/images/coelho-correndo.webp" alt="" style="height:40px;width:auto;">
                 <div id="campRegenStep" style="font-size:13px;color:#6b7280;margin:10px 0;">Reanalisando...</div>
                 <div style="position:relative;background:#ede9fe;border-radius:99px;height:10px;margin:0 8px;"><div id="campRegenBar" style="height:100%;width:10%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:99px;transition:width .5s;"></div></div>
             </div>`;
@@ -18393,9 +18381,7 @@
                 const style = document.createElement('style');
                 style.id = 'iata-bunny-style';
                 style.textContent = `
-                    @keyframes iata-bunny-hop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-70%) scaleY(.85)} }
                     @keyframes iata-paw-fade { 0%,100%{opacity:.25} 50%{opacity:.7} }
-                    .iata-bunny { position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; line-height:1; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none; }
                     .iata-paw { display:inline-block; font-size:10px; animation:iata-paw-fade 1s ease-in-out infinite; }
                     .iata-paw:nth-child(2){animation-delay:.2s} .iata-paw:nth-child(3){animation-delay:.4s}
                 `;
@@ -18426,7 +18412,7 @@
                             <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="iataProgressStep">Iniciando...</div>
                             <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
                                 <div id="iataProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                                    <span class="iata-bunny">🐇</span>
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
                             <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
@@ -19078,7 +19064,7 @@
                         <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="linkedinProgressStep">Iniciando...</div>
                         <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
                             <div id="linkedinProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
-                                <span style="position:absolute; right:-14px; top:50%; transform:translateY(-50%); font-size:18px; animation:iata-bunny-hop .5s ease-in-out infinite; pointer-events:none;">🐇</span>
+                                <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                             </div>
                         </div>
                         <div style="display:flex; justify-content:space-between; align-items:center; padding:0 16px;">
@@ -19709,9 +19695,9 @@
             <!-- Área de progresso (substitui o formulário durante o processamento) -->
             <div id="clModalProgressArea" style="display:none; padding:20px 4px 12px;">
                 <div style="font-size:13px; color:#065f46; margin-bottom:10px; text-align:center;" id="clModalProgressStep">Iniciando...</div>
-                <div style="background:#d1fae5; border-radius:99px; height:10px; overflow:hidden; position:relative;">
+                <div style="background:#d1fae5; border-radius:99px; height:10px; overflow:visible; position:relative;">
                     <div id="clModalProgressBar" style="height:100%; width:5%; background:linear-gradient(90deg,#10b981,#34d399); border-radius:99px; transition:width 0.5s ease; position:relative;">
-                        <span id="clModalBunny" style="position:absolute; right:-14px; top:50%; font-size:16px; line-height:1; pointer-events:none;">🐇</span>
+                        <img id="clModalBunny" src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                     </div>
                 </div>
                 <div style="font-size:11px; color:#059669; text-align:right; margin-top:5px;" id="clModalProgressPct">5%</div>
@@ -19998,9 +19984,9 @@
           <!-- Área: Progresso -->
           <div id="waSyncProgressArea" style="display:none;">
             <div id="waSyncProgressStep" style="font-size:13px; color:#374151; margin-bottom:12px; font-weight:500;">Iniciando...</div>
-            <div style="background:#d1fae5; border-radius:99px; height:22px; overflow:hidden; position:relative; margin-bottom:8px;">
+            <div style="background:#d1fae5; border-radius:99px; height:22px; overflow:visible; position:relative; margin-bottom:8px;">
               <div id="waSyncProgressBar" style="height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width 0.4s ease; display:flex; align-items:center; justify-content:flex-end; position:relative;">
-                <span id="waSyncBunny" style="position:absolute; right:-4px; top:50%; transform:translateY(-50%); font-size:16px; animation:waBunnyHop 0.5s ease-in-out infinite;">🐇</span>
+                <img id="waSyncBunny" src="/images/coelho-correndo.webp" class="coelho-run" alt="">
               </div>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -20053,7 +20039,6 @@
         const s = document.createElement('style');
         s.id = styleId;
         s.textContent = `
-          @keyframes waBunnyHop { 0%,100%{transform:translateY(-50%) scaleY(1)} 50%{transform:translateY(-65%) scaleY(.88)} }
           @keyframes waPawFade  { 0%,100%{opacity:.25} 50%{opacity:.75} }
           .wa-paw { display:inline-block; animation:waPawFade 1s ease-in-out infinite; }
           .wa-switch { position:relative; display:inline-block; width:42px; height:24px; flex-shrink:0; vertical-align:middle; }
