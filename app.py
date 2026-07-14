@@ -1329,11 +1329,11 @@ run_automatic_db_backup(interval_days=3)
 
 # Funcoes auxiliares
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
+    conn = sqlite3.connect(str(DB_PATH), timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('PRAGMA busy_timeout=15000')
         conn.execute('PRAGMA foreign_keys=ON')
     except Exception as e:
         logger.debug(f'[Database] Falha ao aplicar PRAGMAs de conexão: {e}')
@@ -10377,6 +10377,7 @@ def _inbound_scan_whatsapp():
     c.execute("""SELECT id, name, phone FROM clients
                  WHERE phone IS NOT NULL AND phone != '' AND COALESCE(is_archived, 0) = 0""")
     clients = c.fetchall()
+    conn.close()
     since_ts = int((datetime.now() - timedelta(days=14)).timestamp())
     scanned = pending = 0
     for row in clients:
@@ -10415,16 +10416,24 @@ def _inbound_scan_whatsapp():
             if isinstance(msg_id, dict):
                 msg_id = msg_id.get('_serialized') or msg_id.get('id')
             source_id = f'wa:{msg_id or (str(row["id"]) + ":" + str(last_in))}'
-            _inbound_upsert(c, row['id'], 'whatsapp',
+            # Conexão aberta só pelo tempo da escrita — nunca durante as chamadas
+            # HTTP ao WAHA acima, que podem levar até 20s cada por cliente e não
+            # devem manter o lock de escrita do SQLite reservado por tanto tempo.
+            w_conn = get_db()
+            w_c = w_conn.cursor()
+            _inbound_upsert(w_c, row['id'], 'whatsapp',
                             datetime.fromtimestamp(last_in).isoformat(timespec='seconds'),
                             text or '(mensagem sem texto)', source_id)
+            w_conn.commit()
+            w_conn.close()
             pending += 1
-            conn.commit()
         elif last_out:
-            _inbound_mark_responded(c, row['id'], 'whatsapp',
+            w_conn = get_db()
+            w_c = w_conn.cursor()
+            _inbound_mark_responded(w_c, row['id'], 'whatsapp',
                                     datetime.fromtimestamp(last_out).isoformat(timespec='seconds'))
-            conn.commit()
-    conn.close()
+            w_conn.commit()
+            w_conn.close()
     logger.info(f'[Inbound] Scan WhatsApp: {scanned} conversas verificadas, {pending} pendências registradas')
     return {'scanned': scanned, 'pending': pending}
 
