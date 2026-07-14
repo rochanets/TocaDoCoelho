@@ -1015,22 +1015,12 @@
             </div>
             <div id="autoTocaMalaDireta" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Mala Direta</h3>
-                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Filtre os contatos, selecione quem receberá e abra os rascunhos de e-mail personalizados em lote.</p>
-                <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
-                    <div class="form-group" style="margin:0; min-width:220px;">
-                        <label>Modo de filtro</label>
-                        <select id="atMailingMode" onchange="onAutoTocaMailingModeChange()">
-                            <option value="position">Por Cargo</option>
-                            <option value="area">Por Área de Atuação</option>
-                            <option value="company">Por Conta</option>
-                            <option value="status">Por Status</option>
-                            <option value="manual">Manual</option>
-                        </select>
-                    </div>
-                    <div class="form-group" style="margin:0; min-width:260px; flex:1;" id="atMailingFilterWrap">
-                        <label id="atMailingFilterLabel">Cargo</label>
-                        <select id="atMailingFilterValue"></select>
-                    </div>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Filtre os contatos por até 3 grupos, selecione quem receberá e abra os rascunhos de e-mail personalizados em lote.</p>
+                <div id="atMailingGroupsContainer"></div>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px;">
+                    <button class="btn btn-secondary btn-small" type="button" id="atMailingAddGroupBtn" onclick="addAutoTocaMailingGroup()">
+                        <i class="fas fa-plus"></i> Adicionar grupo
+                    </button>
                     <button class="btn btn-auto-mapping" type="button" onclick="openAutoTocaMailingPreview()">
                         <span class="ai-star-icon">✦</span> Selecionar Contatos
                     </button>

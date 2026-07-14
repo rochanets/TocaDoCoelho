@@ -1623,6 +1623,9 @@
             }
         }
 
+        const AT_MAILING_MAX_GROUPS = 3;
+        let atMailingGroupCount = 1;
+
         async function loadAutoTocaMailingData() {
             try {
                 const [clientsResp, positionsResp, areasResp] = await Promise.all([
@@ -1634,7 +1637,8 @@
                 autoTocaMailingClients = clientsResp.ok ? await clientsResp.json() : [];
                 autoTocaMailingPositions = positionsResp.ok ? await positionsResp.json() : [];
                 autoTocaMailingAreas = areasResp.ok ? await areasResp.json() : [];
-                onAutoTocaMailingModeChange();
+                atMailingGroupCount = 1;
+                _renderAutoTocaMailingGroups();
             } catch (error) {
                 autoTocaMailingClients = [];
                 autoTocaMailingPositions = [];
@@ -1642,16 +1646,63 @@
             }
         }
 
-        function onAutoTocaMailingModeChange() {
-            const modeEl = document.getElementById('atMailingMode');
-            const wrap = document.getElementById('atMailingFilterWrap');
+        function _renderAutoTocaMailingGroups() {
+            const container = document.getElementById('atMailingGroupsContainer');
+            if (!container) return;
+
+            let html = '';
+            for (let i = 0; i < atMailingGroupCount; i++) {
+                const isLast = i === atMailingGroupCount - 1;
+                html += `
+                    <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:10px; padding:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px;">
+                        <div class="form-group" style="margin:0; min-width:220px;">
+                            <label>Grupo ${i + 1} — Modo de filtro</label>
+                            <select id="atMailingMode_${i}" onchange="onAutoTocaMailingModeChange(${i})">
+                                <option value="position">Por Cargo</option>
+                                <option value="area">Por Área de Atuação</option>
+                                <option value="company">Por Conta</option>
+                                <option value="status">Por Status</option>
+                                <option value="manual">Manual</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; min-width:260px; flex:1;" id="atMailingFilterWrap_${i}">
+                            <label id="atMailingFilterLabel_${i}">Cargo</label>
+                            <select id="atMailingFilterValue_${i}"></select>
+                        </div>
+                        ${isLast && atMailingGroupCount > 1 ? `<button class="btn btn-secondary btn-small" type="button" onclick="removeAutoTocaMailingGroup()" title="Remover grupo"><i class="fas fa-times"></i></button>` : ''}
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+
+            const addBtn = document.getElementById('atMailingAddGroupBtn');
+            if (addBtn) addBtn.style.display = atMailingGroupCount >= AT_MAILING_MAX_GROUPS ? 'none' : '';
+
+            for (let i = 0; i < atMailingGroupCount; i++) onAutoTocaMailingModeChange(i);
+        }
+
+        function addAutoTocaMailingGroup() {
+            if (atMailingGroupCount >= AT_MAILING_MAX_GROUPS) return;
+            atMailingGroupCount++;
+            _renderAutoTocaMailingGroups();
+        }
+
+        function removeAutoTocaMailingGroup() {
+            if (atMailingGroupCount <= 1) return;
+            atMailingGroupCount--;
+            _renderAutoTocaMailingGroups();
+        }
+
+        function onAutoTocaMailingModeChange(i) {
+            const modeEl = document.getElementById(`atMailingMode_${i}`);
+            const wrap = document.getElementById(`atMailingFilterWrap_${i}`);
             if (!modeEl || !wrap) return;
 
             const mode = modeEl.value;
             if (mode === 'manual') {
                 wrap.innerHTML = `
-                    <label id="atMailingFilterLabel">Buscar contato</label>
-                    <input id="atMailingManualSearch" type="text" placeholder="Digite nomes separados por vírgula">
+                    <label id="atMailingFilterLabel_${i}">Buscar contato</label>
+                    <input id="atMailingManualSearch_${i}" type="text" placeholder="Digite nomes separados por vírgula">
                 `;
                 return;
             }
@@ -1661,7 +1712,7 @@
                     <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; width:100%;">
                         <div class="form-group" style="margin:0; min-width:180px;">
                             <label>Status</label>
-                            <select id="atMailingFilterValue" onchange="onAutoTocaMailingStatusSubModeChange()">
+                            <select id="atMailingFilterValue_${i}" onchange="onAutoTocaMailingStatusSubModeChange(${i})">
                                 <option value="red">Atrasado</option>
                                 <option value="yellow">Atenção</option>
                                 <option value="green">Em dia</option>
@@ -1669,16 +1720,16 @@
                         </div>
                         <div class="form-group" style="margin:0; min-width:200px;">
                             <label>Subfiltro (opcional)</label>
-                            <select id="atMailingStatusSubMode" onchange="onAutoTocaMailingStatusSubModeChange()">
+                            <select id="atMailingStatusSubMode_${i}" onchange="onAutoTocaMailingStatusSubModeChange(${i})">
                                 <option value="">Nenhum</option>
                                 <option value="position">Cargo</option>
                                 <option value="area">Área de Atuação</option>
                                 <option value="company">Conta</option>
                             </select>
                         </div>
-                        <div class="form-group" style="margin:0; min-width:220px; flex:1; display:none;" id="atMailingStatusSubValueWrap">
-                            <label id="atMailingStatusSubValueLabel">Cargo</label>
-                            <select id="atMailingStatusSubValue"></select>
+                        <div class="form-group" style="margin:0; min-width:220px; flex:1; display:none;" id="atMailingStatusSubValueWrap_${i}">
+                            <label id="atMailingStatusSubValueLabel_${i}">Cargo</label>
+                            <select id="atMailingStatusSubValue_${i}"></select>
                         </div>
                     </div>
                 `;
@@ -1686,11 +1737,11 @@
             }
 
             wrap.innerHTML = `
-                <label id="atMailingFilterLabel"></label>
-                <select id="atMailingFilterValue"></select>
+                <label id="atMailingFilterLabel_${i}"></label>
+                <select id="atMailingFilterValue_${i}"></select>
             `;
-            const label = document.getElementById('atMailingFilterLabel');
-            const filterEl = document.getElementById('atMailingFilterValue');
+            const label = document.getElementById(`atMailingFilterLabel_${i}`);
+            const filterEl = document.getElementById(`atMailingFilterValue_${i}`);
 
             const options = mode === 'position'
                 ? autoTocaMailingPositions
@@ -1702,11 +1753,11 @@
             filterEl.innerHTML = options.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
         }
 
-        function onAutoTocaMailingStatusSubModeChange() {
-            const subModeEl = document.getElementById('atMailingStatusSubMode');
-            const wrap = document.getElementById('atMailingStatusSubValueWrap');
-            const label = document.getElementById('atMailingStatusSubValueLabel');
-            const valueEl = document.getElementById('atMailingStatusSubValue');
+        function onAutoTocaMailingStatusSubModeChange(i) {
+            const subModeEl = document.getElementById(`atMailingStatusSubMode_${i}`);
+            const wrap = document.getElementById(`atMailingStatusSubValueWrap_${i}`);
+            const label = document.getElementById(`atMailingStatusSubValueLabel_${i}`);
+            const valueEl = document.getElementById(`atMailingStatusSubValue_${i}`);
             if (!subModeEl || !wrap || !label || !valueEl) return;
 
             const subMode = subModeEl.value;
@@ -1716,7 +1767,7 @@
                 return;
             }
 
-            const status = (document.getElementById('atMailingFilterValue')?.value || 'red').trim();
+            const status = (document.getElementById(`atMailingFilterValue_${i}`)?.value || 'red').trim();
             const pool = (autoTocaMailingClients || []).filter(c =>
                 getStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact) === status
             );
@@ -1739,23 +1790,23 @@
                 : '<option value="">Nenhum contato neste status</option>';
         }
 
-        function _getAutoTocaFilteredMailingClients() {
-            const mode = document.getElementById('atMailingMode')?.value || 'position';
+        function _getAutoTocaFilteredMailingClientsForGroup(i) {
+            const mode = document.getElementById(`atMailingMode_${i}`)?.value || 'position';
             if (mode === 'manual') {
-                const q = (document.getElementById('atMailingManualSearch')?.value || '').trim().toLowerCase();
+                const q = (document.getElementById(`atMailingManualSearch_${i}`)?.value || '').trim().toLowerCase();
                 const terms = q.split(',').map(s => s.trim()).filter(Boolean);
                 if (!terms.length) return [];
                 return autoTocaMailingClients.filter(c => terms.some(term => String(c.name || '').toLowerCase().includes(term)));
             }
 
             if (mode === 'status') {
-                const status = (document.getElementById('atMailingFilterValue')?.value || '').trim();
+                const status = (document.getElementById(`atMailingFilterValue_${i}`)?.value || '').trim();
                 if (!status) return [];
                 let pool = (autoTocaMailingClients || []).filter(c =>
                     getStatus(c.last_activity_date, c.position, c.is_target, c.is_cold_contact) === status
                 );
-                const subMode = (document.getElementById('atMailingStatusSubMode')?.value || '').trim();
-                const subValue = (document.getElementById('atMailingStatusSubValue')?.value || '').trim();
+                const subMode = (document.getElementById(`atMailingStatusSubMode_${i}`)?.value || '').trim();
+                const subValue = (document.getElementById(`atMailingStatusSubValue_${i}`)?.value || '').trim();
                 if (subMode && subValue) {
                     if (subMode === 'position') pool = pool.filter(c => (c.position || '') === subValue);
                     else if (subMode === 'area') pool = pool.filter(c => (c.area_of_activity || '') === subValue);
@@ -1764,11 +1815,25 @@
                 return pool;
             }
 
-            const selected = (document.getElementById('atMailingFilterValue')?.value || '').trim();
+            const selected = (document.getElementById(`atMailingFilterValue_${i}`)?.value || '').trim();
             if (!selected) return [];
             if (mode === 'position') return autoTocaMailingClients.filter(c => (c.position || '') === selected);
             if (mode === 'area') return autoTocaMailingClients.filter(c => (c.area_of_activity || '') === selected);
             return autoTocaMailingClients.filter(c => (c.company || '') === selected);
+        }
+
+        function _getAutoTocaFilteredMailingClients() {
+            const seen = new Set();
+            const result = [];
+            for (let i = 0; i < atMailingGroupCount; i++) {
+                for (const c of _getAutoTocaFilteredMailingClientsForGroup(i)) {
+                    if (!seen.has(c.id)) {
+                        seen.add(c.id);
+                        result.push(c);
+                    }
+                }
+            }
+            return result;
         }
 
         function getAutoTocaMailingStatus(lastActivityDate, position, isTarget = 0, isColdContact = 0) {
