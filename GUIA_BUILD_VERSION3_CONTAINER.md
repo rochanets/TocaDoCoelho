@@ -65,6 +65,7 @@ wine py -3.11 -m PyInstaller \
   --collect-binaries imageio_ffmpeg \
   --collect-all faster_whisper \
   --collect-all ctranslate2 \
+  --collect-all playwright \
   --hidden-import app \
   launcher.py
 ```
