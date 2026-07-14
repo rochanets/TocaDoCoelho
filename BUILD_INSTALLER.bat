@@ -64,6 +64,31 @@ if not exist "waha-lite\node_modules\express" (
 
 echo.
 
+:: ---------------------------------------------------------------------------
+:: OCR: Tesseract portavel instalado junto ao app
+:: ---------------------------------------------------------------------------
+echo [INFO] Verificando instalador do Tesseract OCR...
+
+if not exist "tools" mkdir "tools"
+
+if not exist "tools\tesseract-ocr-w64-setup.exe" (
+    echo [INFO] Baixando Tesseract OCR para Windows x64...
+    powershell -Command "Invoke-WebRequest -Uri 'https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe' -OutFile 'tools\tesseract-ocr-w64-setup.exe'" 2>nul
+    if not exist "tools\tesseract-ocr-w64-setup.exe" (
+        curl -L "https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe" -o "tools\tesseract-ocr-w64-setup.exe" 2>nul
+    )
+    if not exist "tools\tesseract-ocr-w64-setup.exe" (
+        echo [ERRO] Falha ao baixar o Tesseract OCR. Verifique a conexao e tente novamente.
+        pause
+        exit /b 1
+    )
+    echo [OK] Tesseract OCR baixado.
+) else (
+    echo [OK] Instalador do Tesseract OCR ja presente.
+)
+
+echo.
+
 set NSIS_EXE=C:\Program Files (x86)\NSIS\makensis.exe
 
 if not exist "%NSIS_EXE%" (

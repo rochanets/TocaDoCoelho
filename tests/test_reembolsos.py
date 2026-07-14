@@ -73,6 +73,7 @@ def test_aggregate_receipts_lista_vazia():
 def test_extract_receipt_parseia_resposta_openrouter(monkeypatch):
     monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: 'fake-or-key' if key == 'openrouter_api_key' else None)
     monkeypatch.setattr(toca, '_load_app_settings_map', lambda keys: {})
+    monkeypatch.setattr(toca, '_reembolso_extract_text_from_bytes', lambda b, m, f='': '')
 
     fake_response = MagicMock()
     fake_response.read.return_value = _json.dumps({
@@ -86,8 +87,39 @@ def test_extract_receipt_parseia_resposta_openrouter(monkeypatch):
     assert result == {'data': '2026-06-10', 'valor_cents': 4590}
 
 
+def test_extract_receipt_usa_ocr_local_sem_openrouter(monkeypatch):
+    monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: None)
+    monkeypatch.setattr(
+        toca,
+        '_reembolso_extract_text_from_bytes',
+        lambda b, m, f='': 'DATA DA EMISSAO 10/06/2026\nVALOR TOTAL R$ 45,90'
+    )
+
+    result = toca._reembolso_extract_receipt(b'fake-image-bytes', 'image/jpeg')
+
+    assert result == {'data': '2026-06-10', 'valor_cents': 4590}
+
+
+def test_extract_receipt_parseia_valor_string_openrouter(monkeypatch):
+    monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: 'fake-or-key' if key == 'openrouter_api_key' else None)
+    monkeypatch.setattr(toca, '_load_app_settings_map', lambda keys: {})
+    monkeypatch.setattr(toca, '_reembolso_extract_text_from_bytes', lambda b, m, f='': '')
+
+    fake_response = MagicMock()
+    fake_response.read.return_value = _json.dumps({
+        'choices': [{'message': {'content': '{"data": "10/06/2026", "valor": "R$ 45,90"}'}}]
+    }).encode('utf-8')
+
+    with patch('urllib.request.urlopen') as mock_urlopen:
+        mock_urlopen.return_value.__enter__.return_value = fake_response
+        result = toca._reembolso_extract_receipt(b'fake-image-bytes', 'image/jpeg')
+
+    assert result == {'data': '2026-06-10', 'valor_cents': 4590}
+
+
 def test_extract_receipt_sem_openrouter_retorna_none(monkeypatch):
     monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: None)
+    monkeypatch.setattr(toca, '_reembolso_extract_text_from_bytes', lambda b, m, f='': '')
     result = toca._reembolso_extract_receipt(b'fake-image-bytes', 'image/jpeg')
     assert result == {'data': None, 'valor_cents': None}
 
@@ -95,6 +127,7 @@ def test_extract_receipt_sem_openrouter_retorna_none(monkeypatch):
 def test_extract_receipt_resposta_invalida_retorna_none(monkeypatch):
     monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: 'fake-or-key' if key == 'openrouter_api_key' else None)
     monkeypatch.setattr(toca, '_load_app_settings_map', lambda keys: {})
+    monkeypatch.setattr(toca, '_reembolso_extract_text_from_bytes', lambda b, m, f='': '')
 
     fake_response = MagicMock()
     fake_response.read.return_value = _json.dumps({
@@ -174,7 +207,7 @@ def test_extract_endpoint_sem_arquivo(client):
 
 
 def test_extract_endpoint_com_arquivo(client, monkeypatch):
-    monkeypatch.setattr(toca, '_reembolso_extract_receipt', lambda b, m: {'data': '2026-06-10', 'valor_cents': 4590})
+    monkeypatch.setattr(toca, '_reembolso_extract_receipt', lambda b, m, f='': {'data': '2026-06-10', 'valor_cents': 4590})
     from io import BytesIO
     resp = client.post(
         '/api/autotoca/reembolsos/extract',

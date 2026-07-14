@@ -64,7 +64,7 @@ def reembolsos_extract():
         file = request.files['file']
         file_bytes = file.read()
         mime = (file.mimetype or 'image/jpeg').split(';')[0].strip() or 'image/jpeg'
-        result = _reembolso_extract_receipt(file_bytes, mime)
+        result = _reembolso_extract_receipt(file_bytes, mime, file.filename or '')
         return jsonify(result)
     except Exception as e:
         logger.exception(f'[Reembolsos] POST /extract: {e}')

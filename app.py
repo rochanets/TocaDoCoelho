@@ -1818,21 +1818,169 @@ def _reembolso_aggregate_receipts(extracted):
     }
 
 
-def _reembolso_extract_receipt(file_bytes, mime):
-    """Lê um comprovante (imagem) via IA de visão e extrai {data, valor_cents}.
-    Usa OpenRouter com image_url em base64 — o template SAI de prompt simples só
-    aceita texto, então não há fallback de visão para SAI (mesma exceção documentada
-    em _portfolio_generate_offer_from_llm)."""
+def _reembolso_normalize_date_value(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    candidates = [
+        (r'(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})', ('ymd', 1, 2, 3)),
+        (r'(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})', ('dmy', 1, 2, 3)),
+    ]
+    for pattern, meta in candidates:
+        m = re.search(pattern, text)
+        if not m:
+            continue
+        kind, a, b, c = meta
+        try:
+            if kind == 'ymd':
+                year, month, day = int(m.group(a)), int(m.group(b)), int(m.group(c))
+            else:
+                day, month, year = int(m.group(a)), int(m.group(b)), int(m.group(c))
+                if year < 100:
+                    year += 2000 if year < 70 else 1900
+            if year < 2000 or year > 2100:
+                continue
+            return datetime(year, month, day).strftime('%Y-%m-%d')
+        except Exception:
+            continue
+    return None
+
+
+def _reembolso_parse_value_to_cents(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(round(float(value) * 100))
+        except Exception:
+            return None
+    return parse_currency_to_cents(value)
+
+
+def _reembolso_parse_receipt_text(text):
+    """Extrai data e valor de texto de comprovante, sem depender da IA."""
+    text = (text or '').strip()
+    if not text:
+        return {'data': None, 'valor_cents': None}
+
+    data = _reembolso_normalize_date_value(text)
+    currency_pattern = re.compile(r'(?:R\$\s*)?\d{1,3}(?:\.\d{3})*,\d{2}|(?:R\$\s*)?\d+,\d{2}|R\$\s*\d+\.\d{2}', re.IGNORECASE)
+    positive_labels = (
+        'valor total', 'total pago', 'valor pago', 'total a pagar', 'vl total',
+        'valor da venda', 'valor cobrado', 'valor recebido', 'total r$', 'total'
+    )
+    negative_labels = ('subtotal', 'sub total', 'desconto', 'troco', 'saldo', 'cnpj', 'cpf')
+
+    labeled_candidates = []
+    all_candidates = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        values = [parse_currency_to_cents(m.group(0)) for m in currency_pattern.finditer(line)]
+        values = [v for v in values if v is not None]
+        if not values:
+            continue
+        all_candidates.extend(values)
+        if any(label in lower for label in positive_labels) and not any(label in lower for label in negative_labels):
+            labeled_candidates.extend(values)
+
+    source = labeled_candidates or all_candidates
+    valor_cents = max(source) if source else None
+    return {'data': data, 'valor_cents': valor_cents}
+
+
+def _reembolso_is_pdf(mime, filename=''):
+    return (mime or '').lower().split(';')[0].strip() == 'application/pdf' or (filename or '').lower().endswith('.pdf')
+
+
+def _reembolso_is_image(mime, filename=''):
+    mime = (mime or '').lower().split(';')[0].strip()
+    suffix = Path(filename or '').suffix.lower()
+    return mime.startswith('image/') or suffix in ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff')
+
+
+def _reembolso_extract_text_from_bytes(file_bytes, mime, filename=''):
+    """Extrai texto localmente de imagens/PDFs de comprovantes.
+
+    PDFs reaproveitam o pipeline do iToca, que ja tenta texto digital,
+    pdftotext e OCR. Imagens usam Tesseract diretamente quando disponivel.
+    """
+    if not file_bytes:
+        return ''
+    if _reembolso_is_pdf(mime, filename):
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+            return _itoca_extract_text_from_file(tmp_path)
+        finally:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    if _reembolso_is_image(mime, filename) and PIL_AVAILABLE and PYTESSERACT_AVAILABLE:
+        tess_cmd = _itoca_find_tesseract_cmd()
+        if not tess_cmd:
+            logger.info('[Reembolsos] Tesseract não encontrado; OCR local de imagem indisponível.')
+            return ''
+        try:
+            pytesseract.pytesseract.tesseract_cmd = tess_cmd
+            img = PILImage.open(BytesIO(file_bytes))
+            try:
+                img = ImageOps.exif_transpose(img)
+            except Exception:
+                pass
+            img = ImageOps.grayscale(img)
+            try:
+                return pytesseract.image_to_string(img, lang='por+eng').strip()
+            except Exception:
+                return pytesseract.image_to_string(img, lang='eng').strip()
+        except Exception as e:
+            logger.debug(f'[Reembolsos] OCR local de imagem falhou: {e}')
+    return ''
+
+
+def _reembolso_render_pdf_pages_for_vision(file_bytes, max_pages=3):
+    if not file_bytes or not PYPDFIUM2_AVAILABLE or not PIL_AVAILABLE:
+        return []
+    images = []
+    try:
+        doc = pdfium.PdfDocument(file_bytes)
+        for i in range(min(len(doc), max_pages)):
+            page = doc[i]
+            bitmap = page.render(scale=200/72)
+            pil_img = bitmap.to_pil()
+            out = BytesIO()
+            pil_img.save(out, format='PNG')
+            images.append(('image/png', out.getvalue()))
+    except Exception as e:
+        logger.debug(f'[Reembolsos] Render de PDF para visão falhou: {e}')
+    return images
+
+
+def _reembolso_extract_receipt(file_bytes, mime, filename=''):
+    """Lê um comprovante via OCR local e, se preciso, IA de visão/texto."""
+    ocr_text = _reembolso_extract_text_from_bytes(file_bytes, mime, filename)
+    local_result = _reembolso_parse_receipt_text(ocr_text)
+    if local_result.get('data') and local_result.get('valor_cents') is not None:
+        return local_result
+
     or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
     if not or_key:
-        return {'data': None, 'valor_cents': None}
+        return local_result
 
     or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
     model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
     site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
     app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
 
-    image_data = base64.b64encode(file_bytes).decode('utf-8')
     prompt = (
         "Você está lendo um comprovante fiscal brasileiro (nota fiscal, recibo ou "
         "cupom). Extraia a data da despesa e o valor total pago. "
@@ -1841,14 +1989,28 @@ def _reembolso_extract_receipt(file_bytes, mime):
         "Se não conseguir identificar a data ou o valor com confiança, use null "
         "no campo correspondente. Não inclua markdown nem texto fora do JSON."
     )
+    if ocr_text:
+        prompt += "\n\nTexto extraído por OCR/PDF para conferência:\n" + ocr_text[:8000]
+
+    vision_inputs = []
+    if _reembolso_is_pdf(mime, filename):
+        vision_inputs = _reembolso_render_pdf_pages_for_vision(file_bytes)
+    elif _reembolso_is_image(mime, filename):
+        vision_inputs = [((mime or 'image/jpeg').split(';')[0].strip() or 'image/jpeg', file_bytes)]
+
+    content = [{'type': 'text', 'text': prompt}]
+    for item_mime, item_bytes in vision_inputs[:3]:
+        image_data = base64.b64encode(item_bytes).decode('utf-8')
+        content.append({'type': 'image_url', 'image_url': {'url': f'data:{item_mime};base64,{image_data}'}})
+
+    if not vision_inputs and not ocr_text:
+        return local_result
+
     payload = {
         'model': model,
         'messages': [
             {'role': 'system', 'content': 'Você é um leitor de comprovantes fiscais. Responda SEMPRE e SOMENTE com JSON válido.'},
-            {'role': 'user', 'content': [
-                {'type': 'text', 'text': prompt},
-                {'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,{image_data}'}}
-            ]}
+            {'role': 'user', 'content': content}
         ],
         'temperature': 0.1
     }
@@ -1876,11 +2038,14 @@ def _reembolso_extract_receipt(file_bytes, mime):
         parsed = json.loads(cleaned.strip())
         data_str = parsed.get('data')
         valor = parsed.get('valor')
-        valor_cents = round(float(valor) * 100) if isinstance(valor, (int, float)) else None
-        return {'data': data_str if isinstance(data_str, str) else None, 'valor_cents': valor_cents}
+        parsed_valor_cents = _reembolso_parse_value_to_cents(valor)
+        return {
+            'data': _reembolso_normalize_date_value(data_str) or local_result.get('data'),
+            'valor_cents': parsed_valor_cents if parsed_valor_cents is not None else local_result.get('valor_cents')
+        }
     except Exception as e:
         logger.warning(f'[Reembolsos][OpenRouter] Falha ao extrair comprovante: {e}')
-        return {'data': None, 'valor_cents': None}
+        return local_result
 
 
 def _relation_report_hex_to_color(value, fallback='#047857'):
@@ -4243,7 +4408,10 @@ def _itoca_extract_text_from_file(file_path_str):
                         try:
                             ocr_parts = []
                             for img in images:
-                                ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                                try:
+                                    ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                                except Exception:
+                                    ocr_text = pytesseract.image_to_string(img, lang='eng')
                                 if ocr_text.strip():
                                     ocr_parts.append(ocr_text.strip())
                             if ocr_parts:

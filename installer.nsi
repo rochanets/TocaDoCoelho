@@ -74,6 +74,21 @@ Section "Instalar Toca do Coelho" SecApp
     File "README.md"
     File "coelho_icon_transparent.ico"
 
+    ; OCR local para comprovantes/PDFs escaneados. O Python usa pytesseract
+    ; como wrapper, mas o binario tesseract.exe precisa existir na maquina do
+    ; usuario. Instalamos uma copia per-user dentro do proprio app.
+    !if /FileExists "tools\tesseract-ocr-w64-setup.exe"
+        SetOutPath "$INSTDIR\tools"
+        File "tools\tesseract-ocr-w64-setup.exe"
+        DetailPrint "Instalando Tesseract OCR local..."
+        ExecWait '"$INSTDIR\tools\tesseract-ocr-w64-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="$INSTDIR\tesseract"' $0
+        ${If} $0 != 0
+            DetailPrint "Aviso: instalador do Tesseract retornou codigo $0. OCR local pode ficar indisponivel."
+        ${EndIf}
+    !else
+        !warning "tools\tesseract-ocr-w64-setup.exe ausente no build: OCR local ficara indisponivel no instalador."
+    !endif
+
     ; WhatsApp Update: mini-servidor Node.js (sem Docker).
     ; node.exe   = Node.js portátil (baixado de nodejs.org/dist/.../node.exe antes do build).
     ; waha-lite/ = servidor + node_modules (rodar "npm install" em waha-lite/ antes do build).
