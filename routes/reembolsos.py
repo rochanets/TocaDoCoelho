@@ -210,3 +210,88 @@ def reembolsos_deslocamento_robot_task(task_id):
     if not task:
         return jsonify({'error': 'Tarefa não encontrada.'}), 404
     return jsonify(task)
+
+
+def _reembolso_process_almoco_async(task_id, history_id, payload, comprovantes):
+    from integrations.reembolso_robot import run_almoco_robot, ReembolsoRobotError
+
+    def on_progress(pct, step):
+        _reembolso_task_set(task_id, {'progress': pct, 'step': step})
+
+    try:
+        result = run_almoco_robot(payload, comprovantes, on_progress)
+        _reembolso_task_set(task_id, {
+            'status': 'done', 'progress': 100,
+            'step': 'Preenchimento concluído — revise e envie na janela do robô.',
+            'result': result,
+        })
+    except ReembolsoRobotError as e:
+        logger.warning(f'[Reembolsos][Robot] {e}')
+        _reembolso_task_set(task_id, {'status': 'error', 'error': str(e)})
+    except Exception as e:
+        logger.exception('[Reembolsos][Robot] Falha inesperada')
+        _reembolso_task_set(task_id, {'status': 'error', 'error': f'Falha inesperada no robô: {e}'})
+    finally:
+        _reembolso_task_cleanup(task_id)
+
+
+@app.route('/api/autotoca/reembolsos/almoco/robot', methods=['POST'])
+def reembolsos_almoco_robot():
+    try:
+        form = request.form
+        celula_custo = (form.get('celula_custo') or '').strip()
+        descricao_despesa = (form.get('descricao_despesa') or '').strip()
+        descricao = (form.get('descricao') or '').strip()
+
+        errors = []
+        if not celula_custo:
+            errors.append('Célula custo é obrigatória.')
+        if not descricao_despesa:
+            errors.append('Descrição da despesa é obrigatória.')
+        if not descricao:
+            errors.append('Descrição é obrigatória.')
+        comprovante_files = [f for f in request.files.getlist('comprovantes') if f and f.filename]
+        if not comprovante_files:
+            errors.append('Anexe ao menos um comprovante.')
+        if errors:
+            return jsonify({'error': ' '.join(errors)}), 400
+
+        payload = {
+            'celula_custo': celula_custo,
+            'descricao_despesa': descricao_despesa,
+            'quantidade': int(form.get('quantidade') or len(comprovante_files)),
+            'periodo_inicio': (form.get('periodo_inicio') or '').strip(),
+            'periodo_fim': (form.get('periodo_fim') or '').strip(),
+            'valor_total': float(form.get('valor_total') or 0),
+            'descricao': descricao,
+        }
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO reembolsos_history (tipo, payload_json, files_json) VALUES (?, ?, ?)',
+            ('almoco', json.dumps(payload, ensure_ascii=False), '{}')
+        )
+        conn.commit()
+        history_id = c.lastrowid
+
+        comprovantes = _reembolso_save_uploaded_files(history_id, 'comprovantes', comprovante_files)
+        c.execute('UPDATE reembolsos_history SET files_json = ? WHERE id = ?', (json.dumps({'comprovantes': comprovantes}, ensure_ascii=False), history_id))
+        conn.commit()
+        conn.close()
+
+        task_id = uuid.uuid4().hex
+        _reembolso_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
+        threading.Thread(target=_reembolso_process_almoco_async, args=(task_id, history_id, payload, comprovantes), daemon=True).start()
+        return jsonify({'task_id': task_id, 'history_id': history_id}), 202
+    except Exception as e:
+        logger.exception(f'[Reembolsos] POST /almoco/robot: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/reembolsos/almoco/robot/tasks/<task_id>', methods=['GET'])
+def reembolsos_almoco_robot_task(task_id):
+    task = _reembolso_task_get(task_id)
+    if not task:
+        return jsonify({'error': 'Tarefa não encontrada.'}), 404
+    return jsonify(task)

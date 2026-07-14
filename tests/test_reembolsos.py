@@ -225,3 +225,29 @@ def test_deslocamento_robot_dispara_task(client, monkeypatch, db_path):
     })
     assert resp.status_code == 202
     assert 'task_id' in resp.get_json()
+
+
+def test_almoco_robot_sem_celula_custo_400(client):
+    resp = client.post('/api/autotoca/reembolsos/almoco/robot', data={})
+    assert resp.status_code == 400
+
+
+def test_almoco_robot_dispara_task(client, monkeypatch, db_path):
+    monkeypatch.setattr(
+        toca, '_reembolso_process_almoco_async',
+        lambda task_id, history_id, payload, comprovantes: toca._reembolso_task_set(task_id, {'status': 'done', 'progress': 100})
+    )
+    _sync_thread(monkeypatch)
+    from io import BytesIO
+    resp = client.post('/api/autotoca/reembolsos/almoco/robot', data={
+        'celula_custo': '19 - DBD PEDROSO',
+        'descricao_despesa': 'Almoço com cliente X',
+        'quantidade': '1',
+        'periodo_inicio': '2026-06-01',
+        'periodo_fim': '2026-06-01',
+        'valor_total': '89.90',
+        'descricao': 'Almoço de negociação',
+        'comprovantes': (BytesIO(b'fake-bytes'), 'nota.jpg', 'image/jpeg'),
+    }, content_type='multipart/form-data')
+    assert resp.status_code == 202
+    assert 'task_id' in resp.get_json()
