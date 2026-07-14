@@ -183,3 +183,45 @@ def test_extract_endpoint_com_arquivo(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.get_json() == {'data': '2026-06-10', 'valor_cents': 4590}
+
+
+def _sync_thread(monkeypatch):
+    """Substitui threading.Thread por execução síncrona no teste, para não
+    depender de timing (o robô real é mockado por essas rotas nos testes)."""
+    class _SyncThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(toca.threading, 'Thread', _SyncThread)
+
+
+def test_deslocamento_robot_sem_celula_custo_400(client):
+    resp = client.post('/api/autotoca/reembolsos/deslocamento/robot', data={'sub_fluxo': 'deslocamento'})
+    assert resp.status_code == 400
+
+
+def test_deslocamento_robot_dispara_task(client, monkeypatch, db_path):
+    monkeypatch.setattr(
+        toca, '_reembolso_process_deslocamento_async',
+        lambda task_id, history_id, payload, file_paths: toca._reembolso_task_set(task_id, {'status': 'done', 'progress': 100})
+    )
+    _sync_thread(monkeypatch)
+
+    resp = client.post('/api/autotoca/reembolsos/deslocamento/robot', data={
+        'celula_custo': '19 - DBD PEDROSO',
+        'descricao_despesa': 'Visita comercial',
+        'sub_fluxo': 'estacionamento',
+        'conta': 'Conta Teste',
+        'quantidade': '2',
+        'periodo_inicio': '2026-06-01',
+        'periodo_fim': '2026-06-05',
+        'valor_total': '45.90',
+        'descricao_estacionamento': 'Estacionamento na visita',
+    })
+    assert resp.status_code == 202
+    assert 'task_id' in resp.get_json()

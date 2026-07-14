@@ -69,3 +69,144 @@ def reembolsos_extract():
     except Exception as e:
         logger.exception(f'[Reembolsos] POST /extract: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+def _reembolso_save_uploaded_files(history_id, field_key, file_storages):
+    saved = []
+    field_dir = REEMBOLSOS_UPLOAD_DIR / str(history_id) / field_key
+    field_dir.mkdir(parents=True, exist_ok=True)
+    for f in file_storages:
+        if not f or not f.filename:
+            continue
+        safe_name = secure_filename(f.filename) or f'arquivo_{uuid.uuid4().hex}'
+        target = field_dir / safe_name
+        counter = 1
+        while target.exists():
+            target = field_dir / f'{target.stem}_{counter}{target.suffix}'
+            counter += 1
+        f.save(str(target))
+        saved.append(str(target))
+    return saved
+
+
+def _reembolso_process_deslocamento_async(task_id, history_id, payload, file_paths):
+    from integrations.reembolso_robot import run_deslocamento_robot, ReembolsoRobotError
+
+    def on_progress(pct, step):
+        _reembolso_task_set(task_id, {'progress': pct, 'step': step})
+
+    try:
+        result = run_deslocamento_robot(payload, file_paths, on_progress)
+        if payload.get('destino') and payload.get('account_id'):
+            conn = get_db()
+            c = conn.cursor()
+            c.execute(
+                'INSERT INTO account_reembolso_enderecos (account_id, endereco) VALUES (?, ?) '
+                'ON CONFLICT(account_id) DO UPDATE SET endereco = excluded.endereco, updated_at = CURRENT_TIMESTAMP',
+                (payload['account_id'], payload['destino'])
+            )
+            conn.commit()
+            conn.close()
+        if payload.get('origem'):
+            conn = get_db()
+            c = conn.cursor()
+            c.execute('INSERT OR IGNORE INTO reembolso_origem_historico (texto) VALUES (?)', (payload['origem'],))
+            conn.commit()
+            conn.close()
+        _reembolso_task_set(task_id, {
+            'status': 'done', 'progress': 100,
+            'step': 'Preenchimento concluído — revise e envie na janela do robô.',
+            'result': result,
+        })
+    except ReembolsoRobotError as e:
+        logger.warning(f'[Reembolsos][Robot] {e}')
+        _reembolso_task_set(task_id, {'status': 'error', 'error': str(e)})
+    except Exception as e:
+        logger.exception('[Reembolsos][Robot] Falha inesperada')
+        _reembolso_task_set(task_id, {'status': 'error', 'error': f'Falha inesperada no robô: {e}'})
+    finally:
+        _reembolso_task_cleanup(task_id)
+
+
+@app.route('/api/autotoca/reembolsos/deslocamento/robot', methods=['POST'])
+def reembolsos_deslocamento_robot():
+    try:
+        form = request.form
+        celula_custo = (form.get('celula_custo') or '').strip()
+        descricao_despesa = (form.get('descricao_despesa') or '').strip()
+        sub_fluxo = (form.get('sub_fluxo') or '').strip()
+
+        errors = []
+        if not celula_custo:
+            errors.append('Célula custo é obrigatória.')
+        if not descricao_despesa:
+            errors.append('Descrição da despesa é obrigatória.')
+        if sub_fluxo not in ('deslocamento', 'estacionamento'):
+            errors.append('sub_fluxo deve ser "deslocamento" ou "estacionamento".')
+        if errors:
+            return jsonify({'error': ' '.join(errors)}), 400
+
+        payload = {'celula_custo': celula_custo, 'descricao_despesa': descricao_despesa, 'sub_fluxo': sub_fluxo}
+        if sub_fluxo == 'deslocamento':
+            payload.update({
+                'origem': (form.get('origem') or '').strip(),
+                'destino': (form.get('destino') or '').strip(),
+                'account_id': int(form['account_id']) if form.get('account_id') else None,
+                'conta': (form.get('conta') or '').strip(),
+                'data_deslocamento': (form.get('data_deslocamento') or '').strip(),
+                'tipo_transporte': (form.get('tipo_transporte') or '').strip(),
+                'ida_e_volta': (form.get('ida_e_volta') or '').lower() == 'true',
+                'pedagio_valor_total': float(form['pedagio_valor_total']) if form.get('pedagio_valor_total') else None,
+            })
+        else:
+            payload.update({
+                'quantidade': int(form.get('quantidade') or 0),
+                'periodo_inicio': (form.get('periodo_inicio') or '').strip(),
+                'periodo_fim': (form.get('periodo_fim') or '').strip(),
+                'valor_total': float(form.get('valor_total') or 0),
+                'descricao_estacionamento': (form.get('descricao_estacionamento') or '').strip(),
+            })
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            'INSERT INTO reembolsos_history (tipo, payload_json, files_json) VALUES (?, ?, ?)',
+            (f'deslocamento:{sub_fluxo}', json.dumps(payload, ensure_ascii=False), '{}')
+        )
+        conn.commit()
+        history_id = c.lastrowid
+
+        file_paths = {}
+        if sub_fluxo == 'deslocamento':
+            comprovante_data = [f for f in request.files.getlist('data_deslocamento_comprovante') if f and f.filename]
+            file_paths['data_deslocamento_comprovante'] = _reembolso_save_uploaded_files(history_id, 'data_deslocamento_comprovante', comprovante_data)
+            pedagio_files = [f for f in request.files.getlist('pedagio_comprovantes') if f and f.filename]
+            if payload.get('pedagio_valor_total') and not pedagio_files:
+                from integrations.reembolso_robot import gerar_comprovante_corrompido
+                corrompido = gerar_comprovante_corrompido(REEMBOLSOS_UPLOAD_DIR / str(history_id) / 'pedagio_comprovantes')
+                file_paths['pedagio_comprovantes'] = [str(corrompido)]
+            else:
+                file_paths['pedagio_comprovantes'] = _reembolso_save_uploaded_files(history_id, 'pedagio_comprovantes', pedagio_files)
+        else:
+            estac_files = [f for f in request.files.getlist('estacionamento_comprovantes') if f and f.filename]
+            file_paths['estacionamento_comprovantes'] = _reembolso_save_uploaded_files(history_id, 'estacionamento_comprovantes', estac_files)
+
+        c.execute('UPDATE reembolsos_history SET files_json = ? WHERE id = ?', (json.dumps(file_paths, ensure_ascii=False), history_id))
+        conn.commit()
+        conn.close()
+
+        task_id = uuid.uuid4().hex
+        _reembolso_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
+        threading.Thread(target=_reembolso_process_deslocamento_async, args=(task_id, history_id, payload, file_paths), daemon=True).start()
+        return jsonify({'task_id': task_id, 'history_id': history_id}), 202
+    except Exception as e:
+        logger.exception(f'[Reembolsos] POST /deslocamento/robot: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/reembolsos/deslocamento/robot/tasks/<task_id>', methods=['GET'])
+def reembolsos_deslocamento_robot_task(task_id):
+    task = _reembolso_task_get(task_id)
+    if not task:
+        return jsonify({'error': 'Tarefa não encontrada.'}), 404
+    return jsonify(task)
