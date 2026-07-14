@@ -1,4 +1,7 @@
 """Testes do submódulo AutoToca Reembolsos."""
+import json as _json
+from unittest.mock import patch, MagicMock
+
 import app as toca
 
 
@@ -65,3 +68,41 @@ def test_aggregate_receipts_ignora_entradas_invalidas():
 def test_aggregate_receipts_lista_vazia():
     result = toca._reembolso_aggregate_receipts([])
     assert result == {'valor_total_cents': 0, 'periodo_inicio': None, 'periodo_fim': None, 'quantidade': 0}
+
+
+def test_extract_receipt_parseia_resposta_openrouter(monkeypatch):
+    monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: 'fake-or-key' if key == 'openrouter_api_key' else None)
+    monkeypatch.setattr(toca, '_load_app_settings_map', lambda keys: {})
+
+    fake_response = MagicMock()
+    fake_response.read.return_value = _json.dumps({
+        'choices': [{'message': {'content': '{"data": "2026-06-10", "valor": 45.90}'}}]
+    }).encode('utf-8')
+
+    with patch('urllib.request.urlopen') as mock_urlopen:
+        mock_urlopen.return_value.__enter__.return_value = fake_response
+        result = toca._reembolso_extract_receipt(b'fake-image-bytes', 'image/jpeg')
+
+    assert result == {'data': '2026-06-10', 'valor_cents': 4590}
+
+
+def test_extract_receipt_sem_openrouter_retorna_none(monkeypatch):
+    monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: None)
+    result = toca._reembolso_extract_receipt(b'fake-image-bytes', 'image/jpeg')
+    assert result == {'data': None, 'valor_cents': None}
+
+
+def test_extract_receipt_resposta_invalida_retorna_none(monkeypatch):
+    monkeypatch.setattr(toca, '_resolve_setting', lambda key, env: 'fake-or-key' if key == 'openrouter_api_key' else None)
+    monkeypatch.setattr(toca, '_load_app_settings_map', lambda keys: {})
+
+    fake_response = MagicMock()
+    fake_response.read.return_value = _json.dumps({
+        'choices': [{'message': {'content': 'não é json'}}]
+    }).encode('utf-8')
+
+    with patch('urllib.request.urlopen') as mock_urlopen:
+        mock_urlopen.return_value.__enter__.return_value = fake_response
+        result = toca._reembolso_extract_receipt(b'fake-image-bytes', 'image/jpeg')
+
+    assert result == {'data': None, 'valor_cents': None}

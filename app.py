@@ -1818,6 +1818,71 @@ def _reembolso_aggregate_receipts(extracted):
     }
 
 
+def _reembolso_extract_receipt(file_bytes, mime):
+    """Lê um comprovante (imagem) via IA de visão e extrai {data, valor_cents}.
+    Usa OpenRouter com image_url em base64 — o template SAI de prompt simples só
+    aceita texto, então não há fallback de visão para SAI (mesma exceção documentada
+    em _portfolio_generate_offer_from_llm)."""
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if not or_key:
+        return {'data': None, 'valor_cents': None}
+
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+
+    image_data = base64.b64encode(file_bytes).decode('utf-8')
+    prompt = (
+        "Você está lendo um comprovante fiscal brasileiro (nota fiscal, recibo ou "
+        "cupom). Extraia a data da despesa e o valor total pago. "
+        'Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato: '
+        '{"data":"YYYY-MM-DD","valor":123.45}. '
+        "Se não conseguir identificar a data ou o valor com confiança, use null "
+        "no campo correspondente. Não inclua markdown nem texto fora do JSON."
+    )
+    payload = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': 'Você é um leitor de comprovantes fiscais. Responda SEMPRE e SOMENTE com JSON válido.'},
+            {'role': 'user', 'content': [
+                {'type': 'text', 'text': prompt},
+                {'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,{image_data}'}}
+            ]}
+        ],
+        'temperature': 0.1
+    }
+    try:
+        req = urllib.request.Request(
+            'https://openrouter.ai/api/v1/chat/completions',
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        cleaned = raw.strip()
+        if cleaned.startswith('```'):
+            cleaned = cleaned.split('```')[1]
+            if cleaned.startswith('json'):
+                cleaned = cleaned[4:]
+        parsed = json.loads(cleaned.strip())
+        data_str = parsed.get('data')
+        valor = parsed.get('valor')
+        valor_cents = round(float(valor) * 100) if isinstance(valor, (int, float)) else None
+        return {'data': data_str if isinstance(data_str, str) else None, 'valor_cents': valor_cents}
+    except Exception as e:
+        logger.warning(f'[Reembolsos][OpenRouter] Falha ao extrair comprovante: {e}')
+        return {'data': None, 'valor_cents': None}
+
+
 def _relation_report_hex_to_color(value, fallback='#047857'):
     if not REPORTLAB_AVAILABLE:
         return None
