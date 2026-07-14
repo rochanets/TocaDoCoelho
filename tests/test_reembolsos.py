@@ -106,3 +106,16 @@ def test_extract_receipt_resposta_invalida_retorna_none(monkeypatch):
         result = toca._reembolso_extract_receipt(b'fake-image-bytes', 'image/jpeg')
 
     assert result == {'data': None, 'valor_cents': None}
+
+
+def test_gerar_arquivo_corrompido(tmp_path):
+    from integrations.reembolso_robot import gerar_comprovante_corrompido
+    target_dir = tmp_path / 'pedagio'
+    target_dir.mkdir()
+    path = gerar_comprovante_corrompido(target_dir)
+    assert path.exists()
+    assert path.suffix == '.jpg'
+    content = path.read_bytes()
+    assert len(content) > 0
+    # Não é um JPEG válido: não começa com a assinatura JPEG (FF D8 FF)
+    assert content[:3] != b'\xff\xd8\xff'
