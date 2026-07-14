@@ -3319,6 +3319,87 @@
                 showError(error.message || 'Erro ao iniciar o robô.');
             }
         }
+
+        async function reembOnAlmComprovantesChange() {
+            const input = document.getElementById('reembAlmComprovantes');
+            const files = Array.from(input.files || []);
+            const resumoEl = document.getElementById('reembAlmResumo');
+            if (!files.length) { _reembAlmResumo = null; resumoEl.textContent = ''; return; }
+            resumoEl.textContent = 'Lendo comprovantes...';
+            const extracted = [];
+            for (const file of files) extracted.push(await _reembExtractFile(file));
+            const datas = extracted.map(e => e.data).filter(Boolean).sort();
+            const totalCents = extracted.reduce((sum, e) => sum + (e.valor_cents || 0), 0);
+            _reembAlmResumo = {
+                quantidade: files.length,
+                periodo_inicio: datas[0] || null,
+                periodo_fim: datas[datas.length - 1] || null,
+                valor_total_cents: totalCents,
+            };
+            resumoEl.textContent = `${files.length} comprovante(s) — total R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}` +
+                (datas.length ? ` — período ${datas[0]} a ${datas[datas.length - 1]}` : '');
+        }
+
+        function _reembAlmToggleRunning(running) {
+            const btn = document.getElementById('reembAlmRobotBtn');
+            const area = document.getElementById('reembAlmRobotProgress');
+            if (btn) btn.disabled = running;
+            if (area) area.style.display = running ? 'block' : 'none';
+        }
+
+        function _reembAlmSetProgress(pct, step) {
+            const bar = document.getElementById('reembAlmRobotBar');
+            const stepEl = document.getElementById('reembAlmRobotStep');
+            const pctEl = document.getElementById('reembAlmRobotPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        async function runReembAlmocoRobot(event) {
+            event?.preventDefault?.();
+            const celula = document.getElementById('reembAlmCelulaCusto').value.trim();
+            const descricaoDespesa = document.getElementById('reembAlmDescricaoDespesa').value.trim();
+            const descricao = document.getElementById('reembAlmDescricao').value.trim();
+            if (!celula) { showError('Célula custo é obrigatória.'); return; }
+            if (!descricaoDespesa) { showError('Descrição da despesa é obrigatória.'); return; }
+            if (!_reembAlmResumo || !_reembAlmResumo.quantidade) { showError('Anexe ao menos um comprovante.'); return; }
+            if (!descricao) { showError('Descrição é obrigatória.'); return; }
+
+            const fd = new FormData();
+            fd.append('celula_custo', celula);
+            fd.append('descricao_despesa', descricaoDespesa);
+            fd.append('quantidade', String(_reembAlmResumo.quantidade));
+            fd.append('periodo_inicio', _reembAlmResumo.periodo_inicio || '');
+            fd.append('periodo_fim', _reembAlmResumo.periodo_fim || '');
+            fd.append('valor_total', (_reembAlmResumo.valor_total_cents / 100).toFixed(2));
+            fd.append('descricao', descricao);
+            Array.from(document.getElementById('reembAlmComprovantes').files || []).forEach(f => fd.append('comprovantes', f));
+
+            _reembAlmToggleRunning(true);
+            _reembAlmSetProgress(5, 'Iniciando o robô...');
+
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/reembolsos/almoco/robot`, { method: 'POST', body: fd });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                const taskId = data.task_id;
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/autotoca/reembolsos/almoco/robot/tasks/${taskId}`,
+                    'Robô de Reembolso (Almoço)',
+                    sourceTab,
+                    () => { _reembAlmToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie na janela do robô.'); },
+                    (errMsg) => { _reembAlmToggleRunning(false); showError(errMsg || 'Erro no robô de Reembolsos.'); },
+                    (pct, step) => _reembAlmSetProgress(pct, step)
+                );
+            } catch (error) {
+                _reembAlmToggleRunning(false);
+                showError(error.message || 'Erro ao iniciar o robô.');
+            }
+        }
+
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
