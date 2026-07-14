@@ -1803,6 +1803,21 @@ def format_currency_br(cents):
     return f'R$ {formatted}'
 
 
+def _reembolso_aggregate_receipts(extracted):
+    """Soma valores e calcula período min/max de uma lista de comprovantes
+    já extraídos via IA. Cada item: {'data': 'YYYY-MM-DD'|None, 'valor_cents': int|None}.
+    Entradas sem data/valor não contam na soma/período, mas contam na quantidade
+    (o usuário anexou o arquivo, mesmo que a IA não tenha lido)."""
+    valido = [e for e in extracted if e.get('data') and e.get('valor_cents') is not None]
+    datas = sorted(e['data'] for e in valido)
+    return {
+        'valor_total_cents': sum(e['valor_cents'] for e in valido),
+        'periodo_inicio': datas[0] if datas else None,
+        'periodo_fim': datas[-1] if datas else None,
+        'quantidade': len(extracted),
+    }
+
+
 def _relation_report_hex_to_color(value, fallback='#047857'):
     if not REPORTLAB_AVAILABLE:
         return None

@@ -35,3 +35,33 @@ def test_account_reembolso_enderecos_um_por_conta(db_path, sample_client_id):
     conn.close()
     assert len(rows) == 1
     assert rows[0]['endereco'] == 'Rua B, 200, São Paulo, SP'
+
+
+def test_aggregate_receipts_soma_e_periodo():
+    extracted = [
+        {'data': '2026-06-10', 'valor_cents': 1500},
+        {'data': '2026-06-08', 'valor_cents': 2000},
+        {'data': '2026-06-12', 'valor_cents': 999},
+    ]
+    result = toca._reembolso_aggregate_receipts(extracted)
+    assert result['valor_total_cents'] == 4499
+    assert result['periodo_inicio'] == '2026-06-08'
+    assert result['periodo_fim'] == '2026-06-12'
+    assert result['quantidade'] == 3
+
+
+def test_aggregate_receipts_ignora_entradas_invalidas():
+    extracted = [
+        {'data': '2026-06-10', 'valor_cents': 1500},
+        {'data': None, 'valor_cents': None},
+    ]
+    result = toca._reembolso_aggregate_receipts(extracted)
+    assert result['valor_total_cents'] == 1500
+    assert result['periodo_inicio'] == '2026-06-10'
+    assert result['periodo_fim'] == '2026-06-10'
+    assert result['quantidade'] == 2  # conta todos os arquivos anexados, válidos ou não
+
+
+def test_aggregate_receipts_lista_vazia():
+    result = toca._reembolso_aggregate_receipts([])
+    assert result == {'valor_total_cents': 0, 'periodo_inicio': None, 'periodo_fim': None, 'quantidade': 0}
