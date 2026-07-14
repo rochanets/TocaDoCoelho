@@ -3116,6 +3116,209 @@
                 _autoTocaAppendLog(`Robô não iniciou: ${error.message || 'erro desconhecido'}`, 'error');
             }
         }
+
+        let _reembPedagioValorCents = 0;
+        let _reembEstacResumo = null;
+        let _reembAlmResumo = null;
+
+        function onReembTipoChange() {
+            const tipo = document.getElementById('reembTipo').value;
+            document.getElementById('reembFormDeslocamento').style.display = tipo === 'deslocamento' ? 'block' : 'none';
+            document.getElementById('reembFormAlmoco').style.display = tipo === 'almoco' ? 'block' : 'none';
+        }
+
+        function onReembSubFluxoChange() {
+            const sub = document.getElementById('reembSubFluxo').value;
+            document.getElementById('reembBlocoDeslocamento').style.display = sub === 'deslocamento' ? 'grid' : 'none';
+            document.getElementById('reembBlocoEstacionamento').style.display = sub === 'estacionamento' ? 'grid' : 'none';
+        }
+
+        async function loadReembContas() {
+            const response = await fetch(`${API_BASE}/autotoca/accounts`);
+            if (!response.ok) return;
+            const contas = await response.json();
+            const select = document.getElementById('reembConta');
+            select.innerHTML = contas.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+        }
+
+        async function onReembContaChange() {
+            const accountId = document.getElementById('reembConta').value;
+            const destinoInput = document.getElementById('reembDestino');
+            if (accountId === '0') {
+                destinoInput.value = '';
+                return;
+            }
+            const response = await fetch(`${API_BASE}/autotoca/reembolsos/conta-endereco/${accountId}`);
+            if (!response.ok) return;
+            const data = await response.json();
+            destinoInput.value = data.endereco || '';
+        }
+
+        async function loadReembOrigemHistorico() {
+            const response = await fetch(`${API_BASE}/autotoca/reembolsos/origem-historico`);
+            if (!response.ok) return;
+            const items = await response.json();
+            document.getElementById('reembOrigemHistorico').innerHTML =
+                items.map(i => `<option value="${escapeHtml(i.texto)}">`).join('');
+        }
+
+        async function reembBuscarEnderecoIA() {
+            const contaSelect = document.getElementById('reembConta');
+            const contaNome = contaSelect.options[contaSelect.selectedIndex]?.textContent || '';
+            if (!contaNome) { showError('Selecione uma conta primeiro.'); return; }
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/account-info`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_name: contaNome })
+                });
+                const data = await response.json();
+                if (data?.endereco) document.getElementById('reembDestino').value = data.endereco;
+                else showInfo('Não encontrei um endereço automaticamente — preencha manualmente.');
+            } catch (e) {
+                showError('Falha ao buscar endereço com IA.');
+            }
+        }
+
+        async function _reembExtractFile(file) {
+            const fd = new FormData();
+            fd.append('file', file);
+            const response = await fetch(`${API_BASE}/autotoca/reembolsos/extract`, { method: 'POST', body: fd });
+            if (!response.ok) return { data: null, valor_cents: null };
+            return response.json();
+        }
+
+        async function reembOnDataComprovanteChange() {
+            const input = document.getElementById('reembDataComprovante');
+            const file = input.files?.[0];
+            if (!file) return;
+            const result = await _reembExtractFile(file);
+            if (result.data) document.getElementById('reembDataDeslocamento').value = result.data;
+        }
+
+        async function reembOnPedagioChange() {
+            const input = document.getElementById('reembPedagioComprovantes');
+            const files = Array.from(input.files || []);
+            const resumoEl = document.getElementById('reembPedagioValor');
+            if (!files.length) { _reembPedagioValorCents = 0; resumoEl.textContent = ''; return; }
+            resumoEl.textContent = 'Lendo comprovantes...';
+            let totalCents = 0;
+            for (const file of files) {
+                const result = await _reembExtractFile(file);
+                totalCents += result.valor_cents || 0;
+            }
+            _reembPedagioValorCents = totalCents;
+            resumoEl.textContent = `Valor total do pedágio: R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}`;
+        }
+
+        async function reembOnEstacComprovantesChange() {
+            const input = document.getElementById('reembEstacComprovantes');
+            const files = Array.from(input.files || []);
+            const resumoEl = document.getElementById('reembEstacResumo');
+            if (!files.length) { _reembEstacResumo = null; resumoEl.textContent = ''; return; }
+            resumoEl.textContent = 'Lendo comprovantes...';
+            const extracted = [];
+            for (const file of files) extracted.push(await _reembExtractFile(file));
+            const datas = extracted.map(e => e.data).filter(Boolean).sort();
+            const totalCents = extracted.reduce((sum, e) => sum + (e.valor_cents || 0), 0);
+            _reembEstacResumo = {
+                quantidade: files.length,
+                periodo_inicio: datas[0] || null,
+                periodo_fim: datas[datas.length - 1] || null,
+                valor_total_cents: totalCents,
+            };
+            resumoEl.textContent = `${files.length} comprovante(s) — total R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}` +
+                (datas.length ? ` — período ${datas[0]} a ${datas[datas.length - 1]}` : '');
+        }
+
+        function _reembValidateDeslocamento(sub) {
+            const celula = document.getElementById('reembCelulaCusto').value.trim();
+            const descricao = document.getElementById('reembDescricaoDespesa').value.trim();
+            if (!celula) return 'Célula custo é obrigatória.';
+            if (!descricao) return 'Descrição da despesa é obrigatória.';
+            if (sub === 'deslocamento') {
+                if (!document.getElementById('reembDestino').value.trim()) return 'Destino é obrigatório.';
+                if (!document.getElementById('reembOrigem').value.trim()) return 'Origem é obrigatória.';
+                if (!document.getElementById('reembDataDeslocamento').value) return 'Data do deslocamento é obrigatória (anexe o comprovante).';
+            } else {
+                if (!_reembEstacResumo || !_reembEstacResumo.quantidade) return 'Anexe ao menos um comprovante de estacionamento.';
+                if (!document.getElementById('reembEstacDescricao').value.trim()) return 'Descrição é obrigatória.';
+            }
+            return null;
+        }
+
+        function _reembToggleRunning(running) {
+            const btn = document.getElementById('reembRobotBtn');
+            const area = document.getElementById('reembRobotProgress');
+            if (btn) btn.disabled = running;
+            if (area) area.style.display = running ? 'block' : 'none';
+        }
+
+        function _reembSetProgress(pct, step) {
+            const bar = document.getElementById('reembRobotBar');
+            const stepEl = document.getElementById('reembRobotStep');
+            const pctEl = document.getElementById('reembRobotPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        async function runReembDeslocamentoRobot(event) {
+            event?.preventDefault?.();
+            const sub = document.getElementById('reembSubFluxo').value;
+            const validationError = _reembValidateDeslocamento(sub);
+            if (validationError) { showError(validationError); return; }
+
+            const fd = new FormData();
+            fd.append('celula_custo', document.getElementById('reembCelulaCusto').value.trim());
+            fd.append('descricao_despesa', document.getElementById('reembDescricaoDespesa').value.trim());
+            fd.append('sub_fluxo', sub);
+
+            if (sub === 'deslocamento') {
+                const contaSelect = document.getElementById('reembConta');
+                fd.append('account_id', contaSelect.value);
+                fd.append('conta', contaSelect.options[contaSelect.selectedIndex]?.textContent || '');
+                fd.append('destino', document.getElementById('reembDestino').value.trim());
+                fd.append('origem', document.getElementById('reembOrigem').value.trim());
+                fd.append('data_deslocamento', document.getElementById('reembDataDeslocamento').value);
+                fd.append('tipo_transporte', document.getElementById('reembTipoTransporte').value);
+                fd.append('ida_e_volta', document.getElementById('reembIdaVolta').checked ? 'true' : 'false');
+                if (_reembPedagioValorCents > 0) fd.append('pedagio_valor_total', (_reembPedagioValorCents / 100).toFixed(2));
+                Array.from(document.getElementById('reembPedagioComprovantes').files || []).forEach(f => fd.append('pedagio_comprovantes', f));
+                const dataFile = document.getElementById('reembDataComprovante').files?.[0];
+                if (dataFile) fd.append('data_deslocamento_comprovante', dataFile);
+            } else {
+                fd.append('quantidade', String(_reembEstacResumo.quantidade));
+                fd.append('periodo_inicio', _reembEstacResumo.periodo_inicio || document.getElementById('reembDataDeslocamento').value);
+                fd.append('periodo_fim', _reembEstacResumo.periodo_fim || document.getElementById('reembDataDeslocamento').value);
+                fd.append('valor_total', (_reembEstacResumo.valor_total_cents / 100).toFixed(2));
+                fd.append('descricao_estacionamento', document.getElementById('reembEstacDescricao').value.trim());
+                Array.from(document.getElementById('reembEstacComprovantes').files || []).forEach(f => fd.append('estacionamento_comprovantes', f));
+            }
+
+            _reembToggleRunning(true);
+            _reembSetProgress(5, 'Iniciando o robô...');
+
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/reembolsos/deslocamento/robot`, { method: 'POST', body: fd });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                const taskId = data.task_id;
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/autotoca/reembolsos/deslocamento/robot/tasks/${taskId}`,
+                    'Robô de Reembolso (Deslocamento)',
+                    sourceTab,
+                    () => { _reembToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie na janela do robô.'); loadReembOrigemHistorico(); },
+                    (errMsg) => { _reembToggleRunning(false); showError(errMsg || 'Erro no robô de Reembolsos.'); },
+                    (pct, step) => _reembSetProgress(pct, step)
+                );
+            } catch (error) {
+                _reembToggleRunning(false);
+                showError(error.message || 'Erro ao iniciar o robô.');
+            }
+        }
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();
