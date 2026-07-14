@@ -45,7 +45,7 @@ def get_companies():
         c = conn.cursor()
         c.execute('''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
                      WHERE name IS NOT NULL AND TRIM(name) != ''
-                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''')
+                     ORDER BY name COLLATE NOCASE''')
         companies = [row['name'] for row in c.fetchall()]
         conn.close()
         return jsonify(companies)
