@@ -317,3 +317,67 @@ def _run_deslocamento_locked(payload, file_paths, on_progress):
     except Exception as e:
         _cleanup(pw, context)
         raise ReembolsoRobotError(f'Falha no robô de Deslocamento: {e}') from e
+
+
+def run_almoco_robot(payload, comprovantes, on_progress):
+    """payload: {'celula_custo', 'descricao_despesa', 'quantidade',
+                 'periodo_inicio', 'periodo_fim', 'valor_total', 'descricao'}
+    comprovantes: [str] caminhos dos arquivos.
+    """
+    if not _ROBOT_LOCK.acquire(blocking=False):
+        raise ReembolsoRobotError('Já existe um robô de Reembolsos em execução. Aguarde ele terminar.')
+    try:
+        return _run_almoco_locked(payload, comprovantes, on_progress)
+    finally:
+        _ROBOT_LOCK.release()
+
+
+def _run_almoco_locked(payload, comprovantes, on_progress):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        raise ReembolsoRobotError('Playwright não está instalado neste ambiente (pip install playwright).') from e
+
+    on_progress(8, 'Abrindo o navegador do robô...')
+    headless = os.environ.get('TOCA_ROBOT_HEADLESS') == '1'
+    pw = sync_playwright().start()
+    context = None
+    try:
+        context = _launch_context(pw, headless)
+        page = context.pages[0] if context.pages else context.new_page()
+
+        on_progress(15, 'Carregando o portal e-Reembolso...')
+        page.goto(OUTRAS_DESPESAS_URL, wait_until='domcontentloaded', timeout=60000)
+        _wait_for_login(page, 'ereembolso.stefanini.com.br')
+
+        on_progress(30, 'Preenchendo Célula Custo...')
+        choose_select2_option(page, 'CÉLULA CUSTO', payload['celula_custo'])
+        page.wait_for_timeout(800)
+
+        on_progress(38, 'Preenchendo Cliente e Serviço...')
+        choose_select2_option(page, 'CLIENTE', 'Stefanini - Sao Paulo')
+        choose_select2_option(page, 'SERVIÇO', 'Prospecção')
+        fill_text_field(page, 'DESCRIÇÃO DA DESPESA', payload['descricao_despesa'])
+
+        on_progress(55, 'Preenchendo despesa de Almoço com Cliente...')
+        select_native_option(page, 'TIPO DE DESPESA', 'Gasto com cliente')
+        select_native_option(page, 'QUANTIDADE', str(payload['quantidade']).zfill(2))
+        container = _field_container(page, 'PERIODO')
+        dates = container.locator('input').all()
+        if len(dates) >= 2:
+            dates[0].fill(_br_date(payload['periodo_inicio']))
+            dates[1].fill(_br_date(payload['periodo_fim']))
+        fill_text_field(page, 'VALOR TOTAL EM R$', f"{payload['valor_total']:.2f}".replace('.', ','))
+        upload_files(page, 'COMPROVANTE', comprovantes)
+        fill_text_field(page, 'DESCRIÇÃO', payload['descricao'])
+
+        on_progress(75, 'Adicionando despesa...')
+        page.get_by_role('button', name='adicionar').first.click(timeout=8000)
+
+        return _finish_and_wait_submit(page, context, pw, on_progress)
+    except ReembolsoRobotError:
+        _cleanup(pw, context)
+        raise
+    except Exception as e:
+        _cleanup(pw, context)
+        raise ReembolsoRobotError(f'Falha no robô de Almoço com Cliente: {e}') from e
