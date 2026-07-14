@@ -119,3 +119,50 @@ def test_gerar_arquivo_corrompido(tmp_path):
     assert len(content) > 0
     # Não é um JPEG válido: não começa com a assinatura JPEG (FF D8 FF)
     assert content[:3] != b'\xff\xd8\xff'
+
+
+def test_origem_historico_vazio_por_padrao(client):
+    resp = client.get('/api/autotoca/reembolsos/origem-historico')
+    assert resp.status_code == 200
+    assert resp.get_json() == []
+
+
+def test_origem_historico_lista_mais_recentes_primeiro(client, db_path):
+    conn = toca.get_db()
+    c = conn.cursor()
+    c.execute("INSERT INTO reembolso_origem_historico (texto) VALUES ('Rua A, 1, São Paulo, SP')")
+    c.execute("INSERT INTO reembolso_origem_historico (texto) VALUES ('Rua B, 2, São Paulo, SP')")
+    conn.commit()
+    conn.close()
+    resp = client.get('/api/autotoca/reembolsos/origem-historico')
+    assert resp.status_code == 200
+    textos = [r['texto'] for r in resp.get_json()]
+    assert textos == ['Rua B, 2, São Paulo, SP', 'Rua A, 1, São Paulo, SP']
+
+
+def test_conta_endereco_nao_encontrado_retorna_null(client, db_path):
+    conn = toca.get_db()
+    c = conn.cursor()
+    c.execute("INSERT INTO accounts (name) VALUES ('Conta Sem Endereco')")
+    account_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    resp = client.get(f'/api/autotoca/reembolsos/conta-endereco/{account_id}')
+    assert resp.status_code == 200
+    assert resp.get_json() == {'endereco': None}
+
+
+def test_conta_endereco_encontrado(client, db_path):
+    conn = toca.get_db()
+    c = conn.cursor()
+    c.execute("INSERT INTO accounts (name) VALUES ('Conta Com Endereco')")
+    account_id = c.lastrowid
+    c.execute(
+        "INSERT INTO account_reembolso_enderecos (account_id, endereco) VALUES (?, ?)",
+        (account_id, 'Av. Paulista, 1000, São Paulo, SP')
+    )
+    conn.commit()
+    conn.close()
+    resp = client.get(f'/api/autotoca/reembolsos/conta-endereco/{account_id}')
+    assert resp.status_code == 200
+    assert resp.get_json() == {'endereco': 'Av. Paulista, 1000, São Paulo, SP'}
