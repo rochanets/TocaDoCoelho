@@ -645,6 +645,7 @@ def _account_planning_search_async(task_id, company, segment, country=''):
         c = conn.cursor()
         c.execute("SELECT id, name, linkedin FROM clients WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''")
         existing = {_ap_normalize_linkedin_url(r['linkedin']): r['id'] for r in c.fetchall()}
+        conn.close()
 
         results = []
         seen_urls = set()
@@ -716,6 +717,12 @@ def _account_planning_search_async(task_id, company, segment, country=''):
             'country': country,
             'candidates': results,
         }
+        # Reabre a conexão só para a escrita final — mantê-la aberta durante
+        # toda a busca (Tavily/LLM/fotos, potencialmente minutos) prendia o
+        # lock de escrita do SQLite por tempo demais e derrubava outras
+        # gravações concorrentes (ex.: POST /api/atividades) com "database is locked".
+        conn = get_db()
+        c = conn.cursor()
         c.execute('INSERT INTO account_planning_runs (company, segment, result_json) VALUES (?, ?, ?)',
                   (company, segment, json.dumps(payload, ensure_ascii=False)))
         conn.commit()
