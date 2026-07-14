@@ -111,11 +111,27 @@ jobs:
             --hidden-import win32gui ^
             --collect-all faster_whisper ^
             --collect-all onnxruntime ^
+            --collect-all playwright ^
             launcher.py
           if %ERRORLEVEL% neq 0 (
             echo [ERRO] PyInstaller falhou
             exit /b 1
           )
+
+      - name: Verificar driver do Playwright no bundle
+        # Falha cedo se o driver do Playwright (usado pelo robô do Chamado Jurídico em
+        # integrations/forms_robot.py) não for empacotado: sem ele, `from playwright.sync_api
+        # import sync_playwright` funciona (é python puro), mas sync_playwright().start()
+        # falha em runtime porque o executável do driver está ausente do bundle.
+        shell: powershell
+        run: |
+          $driver = Get-ChildItem -Path 'dist\TocaDoCoelho\_internal\playwright\driver' -Recurse -ErrorAction SilentlyContinue
+          if (-not $driver) {
+            Write-Host '[ERRO] Driver do Playwright ausente em dist\TocaDoCoelho\_internal\playwright\driver'
+            Write-Host '       Verifique se o comando do PyInstaller inclui --collect-all playwright'
+            exit 1
+          }
+          Write-Host '[OK] Driver do Playwright presente no bundle.'
 
       - name: Escrever version.txt
         shell: cmd

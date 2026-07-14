@@ -15,7 +15,7 @@
 ### 1) Gerar executável (runtime embutido + FFmpeg + faster-whisper)
 
 ```bash
-pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --hidden-import win32com.client --hidden-import pywintypes --hidden-import app launcher.py
+pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --collect-all playwright --hidden-import win32com.client --hidden-import pywintypes --hidden-import app launcher.py
 ```
 
 Saída esperada:
@@ -88,5 +88,5 @@ O `app.py` detecta o Tesseract automaticamente nesta ordem:
 - Instale NSIS e rode o script novamente.
 
 ### App abre mas transcrição falha
-- Verifique se o build foi feito com `--add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --hidden-import app`.
+- Verifique se o build foi feito com `--add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all playwright --hidden-import app`.
 - Confirme que as dependências foram instaladas com `pip install -r requirements.txt` antes do build.

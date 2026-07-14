@@ -41,13 +41,16 @@ GRAPH_CLIENT_SECRET = 'seu-client-secret'
 ## 4) Gerar o executável (PyInstaller) **sem abrir janela de terminal**
 
 ```cmd
-pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "routes;routes" --add-data "public;public" --add-data "integrations;integrations" --add-data "graph_credentials.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --hidden-import win32com.client --hidden-import pywintypes --hidden-import app --hidden-import graph_credentials launcher.py
+pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "routes;routes" --add-data "public;public" --add-data "integrations;integrations" --add-data "graph_credentials.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --collect-all playwright --hidden-import win32com.client --hidden-import pywintypes --hidden-import app --hidden-import graph_credentials launcher.py
 ```
 
 > **Novo em relação à versão anterior:**
 > - `--add-data "integrations;integrations"` — inclui o pacote de integrações (Microsoft Graph)
 > - `--add-data "graph_credentials.py;."` — inclui as credenciais do Microsoft 365
 > - `--hidden-import graph_credentials` — garante que o módulo é reconhecido pelo PyInstaller
+> - `--collect-all playwright` — inclui o driver do Playwright (usado pelo robô do Chamado
+>   Jurídico em `integrations/forms_robot.py`); sem essa flag o import de `playwright.sync_api`
+>   falha em runtime porque o driver fica de fora do bundle
 
 ## 5) Validar se o executável foi criado
 
