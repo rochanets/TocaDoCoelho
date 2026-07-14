@@ -54,3 +54,18 @@ def reembolsos_conta_endereco(account_id):
     except Exception as e:
         logger.exception(f'[Reembolsos] GET /conta-endereco/{account_id}: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/reembolsos/extract', methods=['POST'])
+def reembolsos_extract():
+    try:
+        if 'file' not in request.files or not request.files['file'].filename:
+            return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
+        file = request.files['file']
+        file_bytes = file.read()
+        mime = (file.mimetype or 'image/jpeg').split(';')[0].strip() or 'image/jpeg'
+        result = _reembolso_extract_receipt(file_bytes, mime)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception(f'[Reembolsos] POST /extract: {e}')
+        return jsonify({'error': str(e)}), 500

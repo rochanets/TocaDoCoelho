@@ -166,3 +166,20 @@ def test_conta_endereco_encontrado(client, db_path):
     resp = client.get(f'/api/autotoca/reembolsos/conta-endereco/{account_id}')
     assert resp.status_code == 200
     assert resp.get_json() == {'endereco': 'Av. Paulista, 1000, São Paulo, SP'}
+
+
+def test_extract_endpoint_sem_arquivo(client):
+    resp = client.post('/api/autotoca/reembolsos/extract')
+    assert resp.status_code == 400
+
+
+def test_extract_endpoint_com_arquivo(client, monkeypatch):
+    monkeypatch.setattr(toca, '_reembolso_extract_receipt', lambda b, m: {'data': '2026-06-10', 'valor_cents': 4590})
+    from io import BytesIO
+    resp = client.post(
+        '/api/autotoca/reembolsos/extract',
+        data={'file': (BytesIO(b'fake-bytes'), 'nota.jpg', 'image/jpeg')},
+        content_type='multipart/form-data'
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {'data': '2026-06-10', 'valor_cents': 4590}
