@@ -56,3 +56,95 @@ def gerar_comprovante_corrompido(target_dir):
     path = target_dir / f'sem-comprovante-{uuid.uuid4().hex[:8]}.jpg'
     path.write_bytes(b'\x00\x00\x00 nao-e-um-jpeg-valido \x00\x00\x00')
     return path
+
+
+def _detect_default_browser_channel():
+    if sys.platform != 'win32':
+        return None
+    try:
+        import winreg
+        key_path = r'Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            prog_id = (winreg.QueryValueEx(key, 'ProgId')[0] or '').lower()
+        if 'chrome' in prog_id:
+            return 'chrome'
+        if 'edge' in prog_id:
+            return 'msedge'
+    except Exception:
+        pass
+    return None
+
+
+def _launch_context(pw, headless):
+    profile = _profile_dir()
+    args = ['--disable-blink-features=AutomationControlled']
+    kwargs = dict(headless=headless, args=args)
+    if headless:
+        kwargs['viewport'] = {'width': 1280, 'height': 920}
+    else:
+        kwargs['viewport'] = None
+        args.append('--start-maximized')
+    last_error = None
+
+    channels = []
+    detected = _detect_default_browser_channel()
+    if detected:
+        channels.append(detected)
+    for channel in ('chrome', 'msedge'):
+        if channel not in channels:
+            channels.append(channel)
+    channels.append(None)
+
+    for channel in channels:
+        try:
+            if channel:
+                return pw.chromium.launch_persistent_context(profile, channel=channel, **kwargs)
+            return pw.chromium.launch_persistent_context(profile, **kwargs)
+        except Exception as e:
+            last_error = e
+    raise ReembolsoRobotError(f'Não foi possível abrir um navegador (Chrome/Edge). Detalhe: {last_error}')
+
+
+def _field_container(page, label_text):
+    """Encontra o container do campo a partir do texto do label — sobe até o
+    ancestral mais próximo que também contenha um input/select/div de combo."""
+    label = page.get_by_text(label_text, exact=False).first
+    return label.locator(
+        'xpath=ancestor::*[.//input or .//select or .//textarea][1]'
+    ).first
+
+
+def fill_text_field(page, label_text, value):
+    container = _field_container(page, label_text)
+    target = container.locator('input[type="text"], textarea').first
+    target.click(timeout=8000)
+    target.fill('')
+    target.type(str(value), delay=TYPE_DELAY_MS)
+    actual = (target.input_value(timeout=4000) or '').strip()
+    if actual != str(value).strip():
+        raise ReembolsoRobotError(f'campo "{label_text}" não reteve o valor digitado (esperado "{value}", ficou "{actual}")')
+
+
+def select_native_option(page, label_text, option_text):
+    container = _field_container(page, label_text)
+    select = container.locator('select').first
+    select.select_option(label=option_text, timeout=8000)
+
+
+def choose_select2_option(page, label_text, option_text):
+    """Para combos Select2-like: clica para abrir, digita para filtrar,
+    clica na primeira opção visível que contenha o texto."""
+    container = _field_container(page, label_text)
+    container.locator('.select2-selection, [role="combobox"]').first.click(timeout=8000)
+    page.keyboard.type(option_text, delay=TYPE_DELAY_MS)
+    page.wait_for_timeout(400)
+    option = page.get_by_role('option', name=option_text).first
+    if option.count() == 0:
+        option = page.get_by_text(option_text, exact=False).first
+    option.click(timeout=8000)
+
+
+def upload_files(page, label_text, file_paths):
+    container = _field_container(page, label_text)
+    file_input = container.locator('input[type="file"]').first
+    file_input.set_input_files(file_paths, timeout=20000)
