@@ -192,6 +192,8 @@ AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / '
 AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
 CHAMADO_JURIDICO_UPLOAD_DIR = AUTOTOCA_UPLOAD_DIR / 'chamado-juridico'
 CHAMADO_JURIDICO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+REEMBOLSOS_UPLOAD_DIR = AUTOTOCA_UPLOAD_DIR / 'reembolsos'
+REEMBOLSOS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -830,6 +832,32 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_chamado_juridico_history_created_at ON chamado_juridico_history(created_at)')
+
+    # Reembolsos — histórico de endereços de Origem digitados (dropdown de
+    # reaproveitamento) e endereço de Destino salvo por conta.
+    c.execute('''CREATE TABLE IF NOT EXISTS reembolso_origem_historico (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        texto TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS account_reembolso_enderecos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        endereco TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS reembolsos_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        files_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_reembolsos_history_created_at ON reembolsos_history(created_at)')
 
     # Tokens de integrações OAuth por usuário (Outlook Graph e futuros conectores)
     outlook_graph_ensure_schema(conn)
