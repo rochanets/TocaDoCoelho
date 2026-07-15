@@ -65,6 +65,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'click_reembolso_control') {
+    const tabId = sender.tab?.id;
+    const controlId = String(message.controlId || '');
+    if (!tabId || !/^_ctl0_MainContent_[A-Za-z0-9_]+$/.test(controlId)) {
+      sendResponse({ ok: false, error: 'Controle externo inválido.' });
+      return false;
+    }
+    chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: id => {
+        const control = document.getElementById(id);
+        if (!control) return { ok: false, error: `Controle ${id} não encontrado.` };
+        const href = control.getAttribute('href') || '';
+        const postback = href.match(/^javascript:__doPostBack\('([^']*)','([^']*)'\)$/i);
+        if (postback && typeof window.__doPostBack === 'function') {
+          window.__doPostBack(postback[1], postback[2]);
+          return { ok: true, mode: 'postback' };
+        }
+        control.click();
+        return { ok: true, mode: 'click' };
+      },
+      args: [controlId],
+    })
+      .then(results => sendResponse(results?.[0]?.result || { ok: false, error: 'Clique não confirmado.' }))
+      .catch(e => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
   if (message.type === 'load_reembolso_task') {
     const task = message.task || {};
     if (!_validLocalApiBase(task.apiBase) || !task.taskId) {

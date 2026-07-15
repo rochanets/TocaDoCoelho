@@ -543,13 +543,18 @@ def test_extensao_reembolso_retoma_fluxo_apos_postback():
     manifest = _json.loads((extension_dir / 'manifest.json').read_text(encoding='utf-8'))
     core_source = (Path(__file__).parents[1] / 'public' / 'js' / 'core.js').read_text(encoding='utf-8')
 
-    assert manifest['version'] == '0.9.2'
+    assert manifest['version'] == '0.9.3'
     assert robot_source.count('if (optionMatches(selectedText, requested)) return;') == 3
     assert "setCheckpoint(task, 'deslocamento-added')" in robot_source
     assert robot_source.count("setCheckpoint(task, 'final-added')") >= 3
     assert "task.checkpoint === 'final-added'" in robot_source
-    assert "'outros-files-attached'" in robot_source
+    assert "'outros-files-attached-v093'" in robot_source
     assert "file: 'fuOutrosFile', attach: 'lkAnexarOutrosFile'" in robot_source
     assert "await fillOtherTravelFields(payload, null, 'Estacionamento')" in robot_source
     assert "message.type === 'set_reembolso_checkpoint'" in background_source
-    assert "(versionParts[2] || 0) >= 2" in core_source
+    assert "message.type === 'click_reembolso_control'" in background_source
+    assert "world: 'MAIN'" in background_source
+    assert "window.__doPostBack(postback[1], postback[2])" in background_source
+    assert "ids ? clickByIdInPage(ids.attach)" in robot_source
+    assert "await delay(3000)" in robot_source
+    assert "(versionParts[2] || 0) >= 3" in core_source

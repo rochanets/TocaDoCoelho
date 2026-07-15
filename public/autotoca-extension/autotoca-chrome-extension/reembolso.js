@@ -315,7 +315,7 @@
     if (String(inputs[1].value || '').trim() !== formatDate(end)) setNativeValue(inputs[1], formatDate(end));
   }
 
-  function clickByText(text, nearLabelText = '') {
+  function findClickableByText(text, nearLabelText = '') {
     const wanted = normalize(text);
     const candidates = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], a'))
       .filter(el => isVisible(el) && normalize(el.textContent || el.value) === wanted);
@@ -330,13 +330,37 @@
       }).sort((a, b) => a.score - b.score)[0]?.el;
     }
     if (!candidate) throw new Error(`Não encontrei o botão "${text}".`);
+    return candidate;
+  }
+
+  function clickByText(text, nearLabelText = '') {
+    const candidate = findClickableByText(text, nearLabelText);
     candidate.click();
   }
 
-  function clickById(idSuffix) {
+  async function clickInPageContext(control) {
+    if (!control?.id) throw new Error('O botão externo não possui um identificador utilizável.');
+    const response = await chrome.runtime.sendMessage({
+      type: 'click_reembolso_control', controlId: control.id,
+    });
+    if (!response?.ok) throw new Error(response?.error || `O portal não confirmou o clique em "${control.id}".`);
+  }
+
+  async function clickByIdInPage(idSuffix) {
     const control = findControlByIdSuffix(idSuffix);
     if (!control || !isVisible(control)) throw new Error(`Não encontrei o botão externo "${idSuffix}".`);
-    control.click();
+    await clickInPageContext(control);
+  }
+
+  async function clickByTextInPage(text, nearLabelText = '') {
+    await clickInPageContext(findClickableByText(text, nearLabelText));
+  }
+
+  async function clickAndAwaitReload(task, clickAction, rollbackCheckpoint, actionLabel) {
+    await clickAction();
+    await delay(3000);
+    await setCheckpoint(task, rollbackCheckpoint);
+    throw new Error(`O portal não recarregou após ${actionLabel}. Tente novamente.`);
   }
 
   async function fillCommon(task, data) {
@@ -382,12 +406,18 @@
 
   async function attachFiles(task, files, checkpoint, ids = null) {
     if (task.checkpoint === checkpoint) return false;
+    const rollbackCheckpoint = task.checkpoint;
+    showStatus('AutoToca: anexando comprovantes...');
     await updateTask(task, { status: 'processing', progress: 72, step: 'Anexando comprovantes no e-Reembolso...' });
     if (ids) await uploadFilesById(ids.file, files);
     else await uploadFiles('COMPROVANTE', files);
     await setCheckpoint(task, checkpoint);
-    if (ids) clickById(ids.attach);
-    else clickByText('Anexar', 'COMPROVANTE');
+    await clickAndAwaitReload(
+      task,
+      () => ids ? clickByIdInPage(ids.attach) : clickByTextInPage('Anexar', 'COMPROVANTE'),
+      rollbackCheckpoint,
+      'clicar em Anexar'
+    );
     return true;
   }
 
@@ -401,24 +431,46 @@
     if (data.flow === 'almoco') {
       await fillCommon(task, data);
       await updateTask(task, { status: 'processing', progress: 58, step: 'Preenchendo Almoço com Cliente...' });
+      showStatus('AutoToca: preenchendo Almoço com Cliente...');
       await chooseNative('TIPO DE DESPESA', 'Gasto com cliente');
       await fillExpenseFields(payload, null);
-      if (await attachFiles(task, data.files.comprovantes, 'expense-files-attached')) return;
+      if (await attachFiles(task, data.files.comprovantes, 'expense-files-attached-v093')) return;
+      await updateTask(task, { status: 'processing', progress: 84, step: 'Preenchendo a descrição do reembolso...' });
+      showStatus('AutoToca: preenchendo a descrição do reembolso...');
       await fillText('DESCRIÇÃO', payload.descricao);
+      await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o reembolso...' });
       await setCheckpoint(task, 'final-added');
-      clickByText('adicionar', 'DESCRIÇÃO');
+      showStatus('AutoToca: adicionando o reembolso...');
+      await clickAndAwaitReload(
+        task,
+        () => clickByTextInPage('adicionar', 'DESCRIÇÃO'),
+        'expense-files-attached-v093',
+        'adicionar o reembolso'
+      );
+      return;
     } else if (data.flow === 'deslocamento:estacionamento') {
       await fillCommon(task, data);
       await updateTask(task, { status: 'processing', progress: 58, step: 'Preenchendo Estacionamento...' });
+      showStatus('AutoToca: preenchendo Estacionamento...');
       await fillOtherTravelFields(payload, null, 'Estacionamento');
-      if (await attachFiles(task, data.files.estacionamento_comprovantes, 'outros-files-attached', {
+      if (await attachFiles(task, data.files.estacionamento_comprovantes, 'outros-files-attached-v093', {
         file: 'fuOutrosFile', attach: 'lkAnexarOutrosFile',
       })) return;
+      await updateTask(task, { status: 'processing', progress: 84, step: 'Preenchendo a descrição do estacionamento...' });
+      showStatus('AutoToca: preenchendo a descrição do estacionamento...');
       await fillOtherTravelFields(payload, payload.descricao_estacionamento, 'Estacionamento');
+      await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o estacionamento...' });
       await setCheckpoint(task, 'final-added');
-      clickById('Button1');
+      showStatus('AutoToca: adicionando o estacionamento...');
+      await clickAndAwaitReload(
+        task,
+        () => clickByIdInPage('Button1'),
+        'outros-files-attached-v093',
+        'adicionar o estacionamento'
+      );
+      return;
     } else {
-      if (!['deslocamento-added', 'outros-files-attached'].includes(task.checkpoint)) {
+      if (!['deslocamento-added', 'outros-files-attached', 'outros-files-attached-v093'].includes(task.checkpoint)) {
         await fillCommon(task, data);
         await updateTask(task, { status: 'processing', progress: 52, step: 'Preenchendo Origem e Destino...' });
         await fillText('ORIGEM', payload.origem);
@@ -444,14 +496,24 @@
           valor_total: payload.pedagio_valor_total,
         };
         await fillOtherTravelFields(tollPayload, null, 'Pedágio');
-        if (await attachFiles(task, data.files.pedagio_comprovantes, 'outros-files-attached', {
+        if (await attachFiles(task, data.files.pedagio_comprovantes, 'outros-files-attached-v093', {
           file: 'fuOutrosFile', attach: 'lkAnexarOutrosFile',
         })) return;
+        await updateTask(task, { status: 'processing', progress: 84, step: 'Preenchendo a descrição do pedágio...' });
+        showStatus('AutoToca: preenchendo a descrição do pedágio...');
         await fillOtherTravelFields(
           tollPayload, `Deslocamento para visitar cliente ${payload.conta}`, 'Pedágio'
         );
+        await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o pedágio...' });
         await setCheckpoint(task, 'final-added');
-        clickById('Button1');
+        showStatus('AutoToca: adicionando o pedágio...');
+        await clickAndAwaitReload(
+          task,
+          () => clickByIdInPage('Button1'),
+          'outros-files-attached-v093',
+          'adicionar o pedágio'
+        );
+        return;
       } else {
         await setCheckpoint(task, 'final-added');
       }
