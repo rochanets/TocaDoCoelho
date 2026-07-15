@@ -6,6 +6,8 @@
 
 REEMBOLSO_ROBOT_TASKS = {}
 REEMBOLSO_ROBOT_TASKS_LOCK = threading.Lock()
+REEMBOLSO_EXTENSION_TASKS = {}
+REEMBOLSO_EXTENSION_TASKS_LOCK = threading.Lock()
 
 
 def _reembolso_task_set(task_id, updates):
@@ -162,6 +164,92 @@ def _reembolso_save_uploaded_files(history_id, field_key, file_storages):
     return saved
 
 
+def _reembolso_start_extension_task(task_id, flow, payload, file_paths, target_url):
+    with REEMBOLSO_EXTENSION_TASKS_LOCK:
+        REEMBOLSO_EXTENSION_TASKS[task_id] = {
+            'flow': flow,
+            'payload': payload,
+            'file_paths': file_paths,
+            'target_url': target_url,
+        }
+    _reembolso_task_set(task_id, {
+        'status': 'processing',
+        'step': 'Abrindo o e-Reembolso em uma aba do navegador...',
+        'progress': 8,
+    })
+
+
+def _reembolso_extension_cleanup(task_id, delay=300):
+    def _cleanup():
+        time.sleep(delay)
+        with REEMBOLSO_EXTENSION_TASKS_LOCK:
+            REEMBOLSO_EXTENSION_TASKS.pop(task_id, None)
+    threading.Thread(target=_cleanup, daemon=True).start()
+
+
+@app.route('/api/autotoca/reembolsos/extension/tasks/<task_id>', methods=['GET'])
+def reembolsos_extension_task_payload(task_id):
+    import base64
+    import mimetypes
+
+    with REEMBOLSO_EXTENSION_TASKS_LOCK:
+        extension_task = dict(REEMBOLSO_EXTENSION_TASKS.get(task_id) or {})
+    if not extension_task:
+        return jsonify({'error': 'Tarefa da extensão não encontrada.'}), 404
+
+    files = {}
+    for field_key, paths in (extension_task.get('file_paths') or {}).items():
+        encoded = []
+        for raw_path in paths or []:
+            path = Path(raw_path)
+            if not path.is_file():
+                continue
+            mime = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
+            encoded.append({
+                'name': path.name,
+                'mime': mime,
+                'base64': base64.b64encode(path.read_bytes()).decode('ascii'),
+            })
+        files[field_key] = encoded
+
+    return jsonify({
+        'task_id': task_id,
+        'flow': extension_task['flow'],
+        'payload': extension_task['payload'],
+        'files': files,
+        'target_url': extension_task['target_url'],
+    })
+
+
+@app.route('/api/autotoca/reembolsos/extension/tasks/<task_id>', methods=['POST'])
+def reembolsos_extension_task_update(task_id):
+    with REEMBOLSO_EXTENSION_TASKS_LOCK:
+        exists = task_id in REEMBOLSO_EXTENSION_TASKS
+    if not exists:
+        return jsonify({'error': 'Tarefa da extensão não encontrada.'}), 404
+
+    data = request.get_json(silent=True) or {}
+    status = data.get('status') or 'processing'
+    if status not in ('processing', 'done', 'error'):
+        return jsonify({'error': 'Status inválido.'}), 400
+
+    updates = {
+        'status': status,
+        'progress': max(0, min(100, int(data.get('progress') or 0))),
+        'step': str(data.get('step') or ''),
+    }
+    if status == 'error':
+        updates['error'] = str(data.get('error') or 'Falha na automação pela extensão.')
+    if status == 'done':
+        updates['result'] = {'submitted': False, 'browser_mode': 'extension'}
+    _reembolso_task_set(task_id, updates)
+
+    if status in ('done', 'error'):
+        _reembolso_task_cleanup(task_id)
+        _reembolso_extension_cleanup(task_id)
+    return jsonify({'ok': True})
+
+
 def _reembolso_process_deslocamento_async(task_id, history_id, payload, file_paths):
     from integrations.reembolso_robot import run_deslocamento_robot, ReembolsoRobotError
 
@@ -269,9 +357,21 @@ def reembolsos_deslocamento_robot():
         conn.close()
 
         task_id = uuid.uuid4().hex
+        if form.get('browser_mode') == 'extension':
+            target_url = 'https://ereembolso.stefanini.com.br/Reembolso/Deslocamentos.aspx'
+            _reembolso_start_extension_task(
+                task_id, f'deslocamento:{sub_fluxo}', payload, file_paths, target_url
+            )
+            return jsonify({
+                'task_id': task_id,
+                'history_id': history_id,
+                'browser_mode': 'extension',
+                'target_url': target_url,
+            }), 202
+
         _reembolso_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
         threading.Thread(target=_reembolso_process_deslocamento_async, args=(task_id, history_id, payload, file_paths), daemon=True).start()
-        return jsonify({'task_id': task_id, 'history_id': history_id}), 202
+        return jsonify({'task_id': task_id, 'history_id': history_id, 'browser_mode': 'playwright'}), 202
     except Exception as e:
         logger.exception(f'[Reembolsos] POST /deslocamento/robot: {e}')
         return jsonify({'error': str(e)}), 500
@@ -354,9 +454,21 @@ def reembolsos_almoco_robot():
         conn.close()
 
         task_id = uuid.uuid4().hex
+        if form.get('browser_mode') == 'extension':
+            target_url = 'https://ereembolso.stefanini.com.br/Reembolso/OutrasDespesas.aspx'
+            _reembolso_start_extension_task(
+                task_id, 'almoco', payload, {'comprovantes': comprovantes}, target_url
+            )
+            return jsonify({
+                'task_id': task_id,
+                'history_id': history_id,
+                'browser_mode': 'extension',
+                'target_url': target_url,
+            }), 202
+
         _reembolso_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
         threading.Thread(target=_reembolso_process_almoco_async, args=(task_id, history_id, payload, comprovantes), daemon=True).start()
-        return jsonify({'task_id': task_id, 'history_id': history_id}), 202
+        return jsonify({'task_id': task_id, 'history_id': history_id, 'browser_mode': 'playwright'}), 202
     except Exception as e:
         logger.exception(f'[Reembolsos] POST /almoco/robot: {e}')
         return jsonify({'error': str(e)}), 500

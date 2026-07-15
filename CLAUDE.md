@@ -239,6 +239,15 @@ no contexto já conectado e não fecha o navegador do usuário ao terminar.
 Isso é opt-in: não se deve tentar anexar automaticamente a portas locais ou
 ao perfil pessoal sem que o usuário tenha habilitado a depuração.
 
+No módulo **Reembolsos**, a forma preferencial de reutilizar o Chrome já aberto
+é a extensão AutoToca **0.9.0 ou superior**. O frontend entrega à extensão apenas
+o identificador opaco da tarefa; a extensão abre o e-Reembolso em uma nova aba,
+mantém a tarefa pendente durante o login e busca os dados/anexos na API local
+depois da autenticação. Se a extensão estiver ausente ou desatualizada, o usuário
+deve confirmar explicitamente antes do fallback para a janela persistente do
+Playwright. Uma instância comum do Chrome não pode ser anexada pelo Playwright
+depois de aberta sem CDP ou extensão.
+
 ### Localização de campo: texto normalizado primeiro, posição numérica como fallback
 
 Cada campo é localizado pelo texto da pergunta **normalizado** (sem acento,

@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import threading
+import time
 import unicodedata
 import uuid
 from pathlib import Path
@@ -158,12 +159,14 @@ def _field_label(page, label_text):
 
 _FIELD_ROOT_SELECTOR = (
     'input, select, textarea, .select2-container, .select2-selection, '
+    '.select2-choice, .select2-input, '
     '.chosen-container, .chosen-single, .bootstrap-select, '
     '.ui-selectmenu-button, [role="combobox"], [data-select2-id]'
 )
 
 _FIELD_GLOBAL_SELECTOR = (
-    '.select2-container, .select2-selection, .chosen-container, .chosen-single, '
+    '.select2-container, .select2-selection, .select2-choice, '
+    '.chosen-container, .chosen-single, '
     '.bootstrap-select, .ui-selectmenu-button, [role="combobox"], select, '
     '[data-select2-id]'
 )
@@ -188,7 +191,7 @@ def _field_container(page, label_text):
                 any(controls.nth(index).is_visible() for index in range(controls.count()))
                 or candidate.evaluate(
                     "el => el.matches('select, input, textarea, .select2-container, "
-                    ".select2-selection, .chosen-container, .bootstrap-select, "
+                    ".select2-selection, .select2-choice, .chosen-container, .bootstrap-select, "
                     ".ui-selectmenu-button, [role=combobox]')"
                 )
             ):
@@ -278,13 +281,19 @@ def select_native_option(page, label_text, option_text):
 def _select2_control(page, label_text):
     container = _field_container(page, label_text)
     control = container.locator(
-        '.select2-container, .select2-selection, .chosen-container, .chosen-single, '
+        '.select2-choice, .select2-selection, .chosen-single, '
+        '.select2-container, .chosen-container, '
         '.bootstrap-select, .ui-selectmenu-button, [role="combobox"], select, [data-select2-id]'
     )
+    visible = []
     for index in range(control.count()):
         candidate = control.nth(index)
         if candidate.is_visible():
-            return candidate
+            visible.append(candidate)
+    if len(visible) == 1:
+        return visible[0]
+    if len(visible) > 1:
+        return _nearest_field_control(page, label_text)
     select = container.locator('select').first
     fallback = select.locator(
         'xpath=following-sibling::*[1]//*[contains(@class,"select2-selection")]'
@@ -297,12 +306,106 @@ def _select2_control(page, label_text):
     return nearest if nearest.count() else fallback.first
 
 
+def _option_search_text(option_text):
+    code = _option_numeric_code(option_text)
+    if code is not None:
+        return str(code)
+    normalized = _normalized_option_text(option_text)
+    tokens = [token for token in normalized.split() if len(token) >= 3]
+    return tokens[0] if tokens else normalized
+
+
+def _field_diagnostics(page, label_text):
+    """Resumo curto do DOM para que uma falha real seja diagnosticável pelo log."""
+    try:
+        return page.evaluate(
+            r"""labelText => {
+                const normalize = value => String(value || '')
+                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                    .replace(/[^a-zA-Z0-9]+/g, ' ').trim().toLowerCase();
+                const wanted = normalize(labelText);
+                const labels = Array.from(document.querySelectorAll(
+                    'label, .control-label, [class*="label" i], th, dt'
+                )).filter(el => normalize(el.textContent).includes(wanted)).slice(0, 4);
+                const controls = Array.from(document.querySelectorAll(
+                    'select, [role="combobox"], .select2-container, .select2-choice, '
+                    '.select2-selection, .chosen-container, .chosen-single'
+                )).filter(el => {
+                    const style = getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' &&
+                        rect.width > 0 && rect.height > 0;
+                }).slice(0, 12);
+                const describe = el => ({
+                    tag: el.tagName,
+                    id: el.id || '',
+                    className: String(el.className || '').slice(0, 120),
+                    text: String(el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 100),
+                    disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true')
+                });
+                return {
+                    url: location.href,
+                    labels: labels.map(describe),
+                    visibleControls: controls.map(describe)
+                };
+            }""",
+            label_text,
+        )
+    except Exception as e:
+        return {'diagnostic_error': str(e)}
+
+
+def _wait_for_select_control(page, label_text, timeout_ms=20000):
+    """Espera o combo existir, reaparecer após postback e ficar habilitado."""
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while time.monotonic() < deadline:
+        if page.is_closed():
+            raise ReembolsoRobotError('A janela do robô foi fechada durante o preenchimento.')
+        try:
+            control = _select2_control(page, label_text)
+            if control.count() > 0 and control.is_visible() and control.is_enabled():
+                return control
+        except Exception:
+            # O ASP.NET substitui os nós do formulário durante o postback; um
+            # locator pode ficar obsoleto por alguns milissegundos nesse intervalo.
+            pass
+        page.wait_for_timeout(250)
+    diagnostics = _field_diagnostics(page, label_text)
+    raise ReembolsoRobotError(
+        f'Não encontrei o controle habilitado do campo "{label_text}" após aguardar '
+        f'o recarregamento do formulário. Diagnóstico: {diagnostics}'
+    )
+
+
+def _wait_for_select_results(page, timeout_ms=8000):
+    selector = (
+        '[role="option"]:visible, li.select2-results__option:visible, '
+        '.select2-result-selectable:visible, .select2-result-label:visible, '
+        '.chosen-results li:visible, .dropdown-menu li:visible'
+    )
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while time.monotonic() < deadline:
+        options = page.locator(selector)
+        if options.count() > 0:
+            return options
+        page.wait_for_timeout(200)
+    return page.locator(selector)
+
+
+def _wait_for_dependent_select(page, label_text, timeout_ms=20000):
+    """Aguarda o postback/AJAX que popula um combo dependente."""
+    try:
+        page.wait_for_load_state('networkidle', timeout=min(timeout_ms, 12000))
+    except Exception:
+        # UpdatePanel nem sempre produz um estado networkidle observável.
+        pass
+    return _wait_for_select_control(page, label_text, timeout_ms=timeout_ms)
+
+
 def choose_select2_option(page, label_text, option_text):
     """Para combos Select2-like: clica para abrir, digita para filtrar,
     clica na primeira opção visível que contenha o texto."""
-    control = _select2_control(page, label_text)
-    if control.count() == 0:
-        raise ReembolsoRobotError(f'Não encontrei o controle do campo "{label_text}".')
+    control = _wait_for_select_control(page, label_text)
 
     try:
         if control.evaluate("el => el.tagName.toLowerCase()") == 'select':
@@ -326,20 +429,16 @@ def choose_select2_option(page, label_text, option_text):
         pass
 
     control.click(timeout=8000)
-    search_text = str(_option_numeric_code(option_text)) if _option_numeric_code(option_text) is not None else _normalized_option_text(option_text)
+    search_text = _option_search_text(option_text)
     search = page.locator(
-        '.select2-search__field:visible, .chosen-search input:visible, '
+        '.select2-input:visible, .select2-search__field:visible, .chosen-search input:visible, '
         'input[type="search"]:visible, input[aria-controls]:visible'
     ).last
     if search.count():
         search.fill(search_text)
     else:
         page.keyboard.type(search_text, delay=TYPE_DELAY_MS)
-    page.wait_for_timeout(400)
-    options = page.locator(
-        '[role="option"]:visible, li.select2-results__option:visible, '
-        '.chosen-results li:visible, .dropdown-menu li:visible'
-    )
+    options = _wait_for_select_results(page)
     for index in range(options.count()):
         option = options.nth(index)
         if _option_matches(option.inner_text(timeout=4000), option_text):
@@ -353,7 +452,8 @@ def choose_select2_option(page, label_text, option_text):
             option.click(timeout=8000)
             return
     raise ReembolsoRobotError(
-        f'Não encontrei a opção "{option_text}" no campo "{label_text}".'
+        f'Não encontrei a opção "{option_text}" no campo "{label_text}". '
+        f'Diagnóstico: {_field_diagnostics(page, label_text)}'
     )
 
 
@@ -536,10 +636,11 @@ def _run_deslocamento_locked(payload, file_paths, on_progress):
 
         on_progress(30, 'Preenchendo Célula Custo...')
         choose_select2_option(page, 'CÉLULA CUSTO', payload['celula_custo'])
-        page.wait_for_timeout(800)  # possível cascata Célula Custo -> Cliente
+        _wait_for_dependent_select(page, 'CLIENTE')
 
         on_progress(38, 'Preenchendo Cliente e Serviço...')
         choose_select2_option(page, 'CLIENTE', 'Stefanini - Sao Paulo')
+        _wait_for_dependent_select(page, 'SERVIÇO')
         choose_select2_option(page, 'SERVIÇO', 'Prospecção')
         fill_text_field(page, 'DESCRIÇÃO DA DESPESA', payload['descricao_despesa'])
 
@@ -629,10 +730,11 @@ def _run_almoco_locked(payload, comprovantes, on_progress):
 
         on_progress(30, 'Preenchendo Célula Custo...')
         choose_select2_option(page, 'CÉLULA CUSTO', payload['celula_custo'])
-        page.wait_for_timeout(800)
+        _wait_for_dependent_select(page, 'CLIENTE')
 
         on_progress(38, 'Preenchendo Cliente e Serviço...')
         choose_select2_option(page, 'CLIENTE', 'Stefanini - Sao Paulo')
+        _wait_for_dependent_select(page, 'SERVIÇO')
         choose_select2_option(page, 'SERVIÇO', 'Prospecção')
         fill_text_field(page, 'DESCRIÇÃO DA DESPESA', payload['descricao_despesa'])
 

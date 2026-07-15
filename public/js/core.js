@@ -3562,14 +3562,78 @@
             }
         }
 
+        async function _reembResolveBrowserMode() {
+            const extensionReady = await checkAutoTocaExtension(false);
+            const extensionVersion = window.__AUTOTOCA_EXTENSION_INFO__?.version || '0.0.0';
+            const versionParts = extensionVersion.split('.').map(part => Number(part) || 0);
+            const supportsReembolso = versionParts[0] > 0 || versionParts[1] >= 9;
+            if (extensionReady && supportsReembolso) return 'extension';
+
+            const extensionMessage = extensionReady
+                ? `A extensão AutoToca instalada (${extensionVersion}) precisa ser atualizada para a versão 0.9.0 ou superior. `
+                : 'Para abrir o e-Reembolso em uma aba deste mesmo navegador, instale e ative a extensão AutoToca. ';
+            const useControlledWindow = await uiConfirm(
+                extensionMessage +
+                'Sem a extensão, o robô precisa usar uma janela controlada com perfil separado. Deseja continuar assim?',
+                'Como abrir o e-Reembolso'
+            );
+            if (useControlledWindow) return 'playwright';
+            await showAutoTocaExtensionInstallGuide();
+            return null;
+        }
+
+        function _reembOpenExtensionTab(taskData) {
+            return new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
+                    reject(new Error('A extensão AutoToca não confirmou a abertura da aba. Recarregue a extensão e tente novamente.'));
+                }, 6000);
+                const onResult = event => {
+                    const detail = event?.detail || {};
+                    if (detail.command !== 'start_reembolso_task' || detail.taskId !== taskData.task_id) return;
+                    clearTimeout(timeout);
+                    window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
+                    if (detail.ok) resolve(detail);
+                    else reject(new Error(detail.message || 'A extensão não conseguiu abrir o e-Reembolso.'));
+                };
+                window.addEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
+                window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_COMMAND_EVENT, {
+                    detail: {
+                        command: 'start_reembolso_task',
+                        taskId: taskData.task_id,
+                        apiBase: window.location.origin,
+                        targetUrl: taskData.target_url,
+                    }
+                }));
+            });
+        }
+
+        async function _reembMarkExtensionError(taskId, error) {
+            try {
+                await fetch(`${API_BASE}/autotoca/reembolsos/extension/tasks/${encodeURIComponent(taskId)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        status: 'error', progress: 0, step: '',
+                        error: error?.message || String(error),
+                    }),
+                });
+            } catch (_) {
+                // O erro original de abertura é mais útil para o usuário.
+            }
+        }
+
         async function runReembDeslocamentoRobot(event) {
             event?.preventDefault?.();
             const sub = document.getElementById('reembSubFluxo').value;
             if (sub === 'estacionamento') _reembRecalculateReceiptSummary('estacionamento');
             const validationError = _reembValidateDeslocamento(sub);
             if (validationError) { showError(validationError); return; }
+            const browserMode = await _reembResolveBrowserMode();
+            if (!browserMode) return;
 
             const fd = new FormData();
+            fd.append('browser_mode', browserMode);
             fd.append('celula_custo', document.getElementById('reembCelulaCusto').value.trim());
             fd.append('descricao_despesa', document.getElementById('reembDescricaoDespesa').value.trim());
             fd.append('sub_fluxo', sub);
@@ -3607,6 +3671,14 @@
                 );
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                if (data.browser_mode === 'extension') {
+                    try {
+                        await _reembOpenExtensionTab(data);
+                    } catch (error) {
+                        await _reembMarkExtensionError(data.task_id, error);
+                        throw error;
+                    }
+                }
                 const taskId = data.task_id;
                 const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
                 BgTaskManager.register(
@@ -3614,7 +3686,7 @@
                     `${API_BASE}/autotoca/reembolsos/deslocamento/robot/tasks/${taskId}`,
                     'Robô de Reembolso (Deslocamento)',
                     sourceTab,
-                    () => { _reembToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie na janela do robô.'); loadReembOrigemHistorico(); },
+                    () => { _reembToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie no e-Reembolso.'); loadReembOrigemHistorico(); },
                     (errMsg) => { _reembToggleRunning(false); showError(errMsg || 'Erro no robô de Reembolsos.'); },
                     (pct, step) => _reembSetProgress(pct, step)
                 );
@@ -3667,8 +3739,11 @@
             if (!descricaoDespesa) { showError('Descrição da despesa é obrigatória.'); return; }
             if (!_reembAlmResumo || !_reembAlmResumo.quantidade) { showError('Anexe ao menos um comprovante.'); return; }
             if (!descricao) { showError('Descrição é obrigatória.'); return; }
+            const browserMode = await _reembResolveBrowserMode();
+            if (!browserMode) return;
 
             const fd = new FormData();
+            fd.append('browser_mode', browserMode);
             fd.append('celula_custo', celula);
             fd.append('descricao_despesa', descricaoDespesa);
             fd.append('quantidade', String(_reembAlmResumo.quantidade));
@@ -3689,6 +3764,14 @@
                 );
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                if (data.browser_mode === 'extension') {
+                    try {
+                        await _reembOpenExtensionTab(data);
+                    } catch (error) {
+                        await _reembMarkExtensionError(data.task_id, error);
+                        throw error;
+                    }
+                }
                 const taskId = data.task_id;
                 const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
                 BgTaskManager.register(
@@ -3696,7 +3779,7 @@
                     `${API_BASE}/autotoca/reembolsos/almoco/robot/tasks/${taskId}`,
                     'Robô de Reembolso (Almoço)',
                     sourceTab,
-                    () => { _reembAlmToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie na janela do robô.'); },
+                    () => { _reembAlmToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie no e-Reembolso.'); },
                     (errMsg) => { _reembAlmToggleRunning(false); showError(errMsg || 'Erro no robô de Reembolsos.'); },
                     (pct, step) => _reembAlmSetProgress(pct, step)
                 );

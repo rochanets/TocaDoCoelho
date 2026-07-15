@@ -355,6 +355,73 @@ def test_robot_normaliza_opcoes_com_zero_a_esquerda_e_acentos():
     assert reembolso_robot._option_matches('Gasto com cliente', 'Gasto com cliente')
 
 
+def test_robot_suporta_select2_legado_do_portal():
+    from integrations import reembolso_robot
+
+    assert '.select2-choice' in reembolso_robot._FIELD_ROOT_SELECTOR
+    assert '.select2-choice' in reembolso_robot._FIELD_GLOBAL_SELECTOR
+    assert reembolso_robot._option_search_text('001') == '1'
+    assert reembolso_robot._option_search_text('Stefanini - Sao Paulo') == 'stefanini'
+
+
+def test_robot_usa_proximidade_quando_bloco_tem_mais_de_um_combo(monkeypatch):
+    from integrations import reembolso_robot
+
+    page = MagicMock()
+    container = MagicMock()
+    controls = MagicMock()
+    controls.count.return_value = 2
+    first = MagicMock()
+    second = MagicMock()
+    first.is_visible.return_value = True
+    second.is_visible.return_value = True
+    controls.nth.side_effect = [first, second]
+    container.locator.return_value = controls
+    nearest = MagicMock()
+    monkeypatch.setattr(reembolso_robot, '_field_container', lambda *_: container)
+    monkeypatch.setattr(reembolso_robot, '_nearest_field_control', lambda *_: nearest)
+
+    found = reembolso_robot._select2_control(page, 'CLIENTE')
+
+    assert found is nearest
+
+
+def test_robot_aguarda_combo_recriado_por_postback(monkeypatch):
+    from integrations import reembolso_robot
+
+    page = MagicMock()
+    page.is_closed.return_value = False
+    control = MagicMock()
+    control.count.return_value = 1
+    control.is_visible.return_value = True
+    control.is_enabled.return_value = True
+    monkeypatch.setattr(
+        reembolso_robot,
+        '_select2_control',
+        MagicMock(side_effect=[RuntimeError('nó substituído'), control]),
+    )
+
+    found = reembolso_robot._wait_for_select_control(page, 'CLIENTE', timeout_ms=1000)
+
+    assert found is control
+    page.wait_for_timeout.assert_called_once_with(250)
+
+
+def test_robot_aguarda_rede_antes_do_combo_dependente(monkeypatch):
+    from integrations import reembolso_robot
+
+    page = MagicMock()
+    expected = MagicMock()
+    wait_control = MagicMock(return_value=expected)
+    monkeypatch.setattr(reembolso_robot, '_wait_for_select_control', wait_control)
+
+    found = reembolso_robot._wait_for_dependent_select(page, 'SERVIÇO', timeout_ms=9000)
+
+    assert found is expected
+    page.wait_for_load_state.assert_called_once_with('networkidle', timeout=9000)
+    wait_control.assert_called_once_with(page, 'SERVIÇO', timeout_ms=9000)
+
+
 def test_robot_pode_anexar_aba_em_navegador_existente_via_cdp(monkeypatch):
     from integrations import reembolso_robot
 
@@ -425,3 +492,41 @@ def test_almoco_robot_dispara_task(client, monkeypatch, db_path):
     }, content_type='multipart/form-data')
     assert resp.status_code == 202
     assert 'task_id' in resp.get_json()
+
+
+def test_almoco_extensao_abre_tarefa_sem_iniciar_playwright(client, db_path):
+    from io import BytesIO
+
+    resp = client.post('/api/autotoca/reembolsos/almoco/robot', data={
+        'browser_mode': 'extension',
+        'celula_custo': '001',
+        'descricao_despesa': 'Almoço com cliente',
+        'quantidade': '1',
+        'periodo_inicio': '2026-06-25',
+        'periodo_fim': '2026-06-25',
+        'valor_total': '89.90',
+        'descricao': 'Reunião comercial',
+        'comprovantes': (BytesIO(b'jpeg-de-teste'), 'nota.jpg', 'image/jpeg'),
+    }, content_type='multipart/form-data')
+
+    assert resp.status_code == 202
+    started = resp.get_json()
+    assert started['browser_mode'] == 'extension'
+    assert started['target_url'].endswith('/Reembolso/OutrasDespesas.aspx')
+
+    payload_resp = client.get(
+        f'/api/autotoca/reembolsos/extension/tasks/{started["task_id"]}'
+    )
+    assert payload_resp.status_code == 200
+    payload = payload_resp.get_json()
+    assert payload['flow'] == 'almoco'
+    assert payload['payload']['celula_custo'] == '001'
+    assert payload['files']['comprovantes'][0]['name'].startswith('nota')
+    assert payload['files']['comprovantes'][0]['name'].endswith('.jpg')
+    assert payload['files']['comprovantes'][0]['base64']
+
+    done_resp = client.post(
+        f'/api/autotoca/reembolsos/extension/tasks/{started["task_id"]}',
+        json={'status': 'done', 'progress': 100, 'step': 'Concluído'},
+    )
+    assert done_resp.status_code == 200
