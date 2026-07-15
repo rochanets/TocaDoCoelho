@@ -1458,6 +1458,41 @@ def _sai_simple_prompt(question: str) -> str | None:
     return None
 
 
+
+def _unwrap_llm_text_response(raw):
+    """Extrai texto útil de respostas de LLM/SAI que podem vir embrulhadas em JSON."""
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        candidates = [raw]
+    else:
+        text = str(raw).strip()
+        if not text:
+            return None
+        candidates = [text]
+        try:
+            parsed = json.loads(text)
+            candidates.insert(0, parsed)
+        except Exception:
+            parsed = _extract_json_object_from_text(text)
+            if parsed is not None:
+                candidates.insert(0, parsed)
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            for key in ('answer', 'output', 'result', 'text', 'response', 'content'):
+                value = candidate.get(key)
+                if isinstance(value, str) and value.strip():
+                    nested = _unwrap_llm_text_response(value)
+                    return nested or value.strip()
+            data = candidate.get('data')
+            if isinstance(data, (dict, str)):
+                nested = _unwrap_llm_text_response(data)
+                if nested:
+                    return nested
+        elif isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
 def api_error(status, code, message, details=None, hint=None):
     payload = {
         'error': message,
@@ -2355,46 +2390,45 @@ def _openrouter_web_prompt(question: str) -> str | None:
 
 
 def _relation_report_fetch_market_context(account_name: str) -> str | None:
-    search = f"Me de um resumo do momento atual da empresa {account_name} no mercado, resumido, em 1 paragrafo"
+    search = f"momento atual da empresa {account_name} mercado notícias resultados estratégia 2026"
 
-    # OpenRouter (com busca web) é a fonte primária aqui: o momento de mercado precisa de
-    # dados atuais/recentes, e os templates SAI não têm acesso à web em tempo real.
-    or_result = _openrouter_web_prompt(search)
+    # O briefing de mercado exige evidências atuais. SAI não pesquisa a internet; por isso
+    # primeiro buscamos fontes via Tavily e/ou OpenRouter Web, e só usamos SAI para sintetizar
+    # quando já houver evidências externas no prompt.
+    evidence_lines = []
+    tavily_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+    if tavily_key:
+        try:
+            results = _run_tavily_request(tavily_key, search, max_results=5)
+            for item in results[:5]:
+                title = (item.get('title') or '').strip()
+                snippet = (item.get('content') or item.get('snippet') or '').strip()
+                url = (item.get('url') or '').strip()
+                if title or snippet:
+                    evidence_lines.append(f"- {title}: {snippet[:500]} Fonte: {url}")
+        except Exception as e:
+            logger.warning(f'[RelationReport][Tavily] Falha ao buscar contexto de mercado: {e}')
+
+    if evidence_lines:
+        prompt = (
+            f"Com base SOMENTE nas evidências abaixo, escreva em português do Brasil um parágrafo "
+            f"executivo e conciso sobre o momento atual de mercado da empresa {account_name}. "
+            "Não invente fatos e não mencione limitações técnicas. Evidências:\n"
+            + "\n".join(evidence_lines)
+        )
+        synthesized = _llm_prompt(prompt, log_tag='RelationReportMarket', temperature=0.2, web=False)
+        synthesized = _unwrap_llm_text_response(synthesized)
+        if synthesized and len(synthesized) >= 30:
+            return synthesized
+
+    or_result = _openrouter_web_prompt(
+        f"Pesquise na web e resuma em 1 parágrafo, em português do Brasil, o momento atual de mercado da empresa {account_name}. "
+        "Use informações recentes, seja objetivo e não invente fatos."
+    )
+    or_result = _unwrap_llm_text_response(or_result)
     if or_result and len(or_result) >= 30:
         return or_result
 
-    # Fallback: template SAI dedicado (pode não trazer dados atualizados, mas é melhor
-    # que deixar o bloco vazio caso o OpenRouter não esteja configurado/disponível).
-    api_key = _resolve_setting('itoca_sai_api_key', 'ITOCA_SAI_API_KEY')
-    if not api_key:
-        return None
-    base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
-
-    # Esse template SAI dedicado também pode sofrer rate limit (HTTP 429) sob uso
-    # concorrente de outras chamadas SAI do app. Tenta novamente com backoff antes de desistir.
-    max_attempts = 3
-    backoff_seconds = (2, 4)
-    for attempt in range(max_attempts):
-        try:
-            resp = requests.post(
-                f'{base_url}/api/templates/67dc479828232c97f38a887f/execute',
-                json={'inputs': {'search': search}},
-                headers={'X-Api-Key': api_key},
-                timeout=45,
-            )
-            if resp.status_code == 429 and attempt < max_attempts - 1:
-                wait = backoff_seconds[min(attempt, len(backoff_seconds) - 1)]
-                logger.warning(f'[RelationReport] HTTP 429 (rate limit) no contexto de mercado, tentativa {attempt + 1}/{max_attempts}, aguardando {wait}s...')
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            text = resp.text.strip()
-            if not text or len(text) < 30:
-                return None
-            return text
-        except Exception as e:
-            logger.warning(f'[RelationReport] Falha ao buscar contexto de mercado: {e}')
-            return None
     return None
 
 
@@ -9246,7 +9280,7 @@ def _iata_call_llm(system_msg, user_msg, log_tag):
     """SAI como primário; OpenRouter como fallback."""
     # Tenta SAI primeiro
     question = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
-    raw = _sai_simple_prompt(question)
+    raw = _unwrap_llm_text_response(_sai_simple_prompt(question))
     if raw and str(raw).strip():
         logger.info(f'[iAta][{log_tag}] SAI respondeu com sucesso')
         return raw, 'SAI'
@@ -9280,7 +9314,7 @@ def _iata_call_llm(system_msg, user_msg, log_tag):
         )
         data = resp.json()
         choices = data.get('choices') or []
-        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        raw = _unwrap_llm_text_response((choices[0].get('message') or {}).get('content', '') if choices else '')
         if raw and str(raw).strip():
             logger.info(f'[iAta][{log_tag}][OpenRouter] Resposta gerada com sucesso')
             return raw, 'OpenRouter'
