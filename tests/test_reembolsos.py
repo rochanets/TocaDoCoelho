@@ -1,5 +1,6 @@
 """Testes do submódulo AutoToca Reembolsos."""
 import json as _json
+import sqlite3
 from unittest.mock import patch, MagicMock
 
 import app as toca
@@ -68,6 +69,42 @@ def test_aggregate_receipts_ignora_entradas_invalidas():
 def test_aggregate_receipts_lista_vazia():
     result = toca._reembolso_aggregate_receipts([])
     assert result == {'valor_total_cents': 0, 'periodo_inicio': None, 'periodo_fim': None, 'quantidade': 0}
+
+
+def test_parse_receipt_text_estacionamento_com_ocr_ruidoso():
+    result = toca._reembolso_parse_receipt_text(
+        'Entrada: 25/06/26 09:28:38\n'
+        'SUBTOTAL R$ 56,98\n'
+        'VALOR: R$ 56,98\n'
+    )
+    assert result == {'data': '2026-06-25', 'valor_cents': 5698}
+
+
+def test_migracao_reembolsos_para_banco_existente(tmp_path, monkeypatch):
+    path = tmp_path / 'legacy.db'
+    conn = sqlite3.connect(path)
+    conn.execute('CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT)')
+    conn.execute('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)')
+    conn.executemany(
+        'INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)',
+        [(version, f'migration_{version}', '') for version in range(1, 14)]
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(toca, 'DB_PATH', path)
+    toca._run_schema_migrations()
+
+    conn = sqlite3.connect(path)
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    version = conn.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]
+    conn.close()
+    assert version == 14
+    assert {'reembolso_origem_historico', 'account_reembolso_enderecos', 'reembolsos_history'} <= tables
 
 
 def test_extract_receipt_parseia_resposta_openrouter(monkeypatch):

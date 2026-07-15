@@ -3120,6 +3120,78 @@
         let _reembPedagioValorCents = 0;
         let _reembEstacResumo = null;
         let _reembAlmResumo = null;
+        const _reembFileSelections = {
+            data: [],
+            pedagio: [],
+            estacionamento: [],
+            almoco: [],
+        };
+
+        function _reembFileKeyForInput(inputId) {
+            return {
+                reembDataComprovante: 'data',
+                reembPedagioComprovantes: 'pedagio',
+                reembEstacComprovantes: 'estacionamento',
+                reembAlmComprovantes: 'almoco',
+            }[inputId];
+        }
+
+        function _reembFileIdentity(file) {
+            return `${file.name}|${file.size}|${file.lastModified}`;
+        }
+
+        function _reembSyncFileInput(inputId, files) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            const dt = new DataTransfer();
+            files.forEach(file => dt.items.add(file));
+            input.files = dt.files;
+        }
+
+        function _reembRenderFileList(inputId, key) {
+            const listEl = document.getElementById(`${inputId}List`);
+            if (!listEl) return;
+            listEl.innerHTML = _reembFileSelections[key].map((file, index) => `
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; max-width:100%; margin-top:4px; padding:4px 8px; background:#f3f4f6; border-radius:6px; font-size:12px;">
+                    <span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+                    <button type="button" onclick="_reembRemoveFile('${inputId}', ${index})" title="Remover arquivo" aria-label="Remover arquivo" style="flex:0 0 auto; border:0; background:transparent; color:#dc2626; cursor:pointer; padding:0 2px; line-height:1;"><i class="fas fa-times"></i></button>
+                </div>
+            `).join('');
+        }
+
+        function _reembUpdateFileSelection(inputId) {
+            const input = document.getElementById(inputId);
+            const key = _reembFileKeyForInput(inputId);
+            if (!input || !key) return [];
+            const selected = Array.from(input.files || []);
+            if (input.multiple) {
+                const existing = _reembFileSelections[key];
+                const identities = new Set(existing.map(_reembFileIdentity));
+                selected.forEach(file => {
+                    if (!identities.has(_reembFileIdentity(file))) {
+                        existing.push(file);
+                        identities.add(_reembFileIdentity(file));
+                    }
+                });
+            } else {
+                _reembFileSelections[key] = selected.slice(0, 1);
+            }
+            _reembSyncFileInput(inputId, _reembFileSelections[key]);
+            _reembRenderFileList(inputId, key);
+            return _reembFileSelections[key];
+        }
+
+        function _reembRemoveFile(inputId, index) {
+            const key = _reembFileKeyForInput(inputId);
+            if (!key) return;
+            _reembFileSelections[key].splice(index, 1);
+            _reembSyncFileInput(inputId, _reembFileSelections[key]);
+            _reembRenderFileList(inputId, key);
+            if (inputId === 'reembPedagioComprovantes') reembOnPedagioChange();
+            if (inputId === 'reembEstacComprovantes') reembOnEstacComprovantesChange();
+            if (inputId === 'reembAlmComprovantes') reembOnAlmComprovantesChange();
+            if (inputId === 'reembDataComprovante') reembOnDataComprovanteChange();
+        }
 
         function onReembTipoChange() {
             const tipo = document.getElementById('reembTipo').value;
@@ -3190,7 +3262,7 @@
 
         async function reembOnDataComprovanteChange() {
             const input = document.getElementById('reembDataComprovante');
-            const file = input.files?.[0];
+            const file = _reembUpdateFileSelection('reembDataComprovante')[0];
             if (!file) return;
             const result = await _reembExtractFile(file);
             if (result.data) document.getElementById('reembDataDeslocamento').value = result.data;
@@ -3198,7 +3270,7 @@
 
         async function reembOnPedagioChange() {
             const input = document.getElementById('reembPedagioComprovantes');
-            const files = Array.from(input.files || []);
+            const files = _reembUpdateFileSelection('reembPedagioComprovantes');
             const resumoEl = document.getElementById('reembPedagioValor');
             if (!files.length) { _reembPedagioValorCents = 0; resumoEl.textContent = ''; return; }
             resumoEl.textContent = 'Lendo comprovantes...';
@@ -3213,7 +3285,7 @@
 
         async function reembOnEstacComprovantesChange() {
             const input = document.getElementById('reembEstacComprovantes');
-            const files = Array.from(input.files || []);
+            const files = _reembUpdateFileSelection('reembEstacComprovantes');
             const resumoEl = document.getElementById('reembEstacResumo');
             if (!files.length) { _reembEstacResumo = null; resumoEl.textContent = ''; return; }
             resumoEl.textContent = 'Lendo comprovantes...';
@@ -3284,8 +3356,8 @@
                 fd.append('tipo_transporte', document.getElementById('reembTipoTransporte').value);
                 fd.append('ida_e_volta', document.getElementById('reembIdaVolta').checked ? 'true' : 'false');
                 if (_reembPedagioValorCents > 0) fd.append('pedagio_valor_total', (_reembPedagioValorCents / 100).toFixed(2));
-                Array.from(document.getElementById('reembPedagioComprovantes').files || []).forEach(f => fd.append('pedagio_comprovantes', f));
-                const dataFile = document.getElementById('reembDataComprovante').files?.[0];
+                _reembFileSelections.pedagio.forEach(f => fd.append('pedagio_comprovantes', f));
+                const dataFile = _reembFileSelections.data[0];
                 if (dataFile) fd.append('data_deslocamento_comprovante', dataFile);
             } else {
                 fd.append('quantidade', String(_reembEstacResumo.quantidade));
@@ -3293,7 +3365,7 @@
                 fd.append('periodo_fim', _reembEstacResumo.periodo_fim || document.getElementById('reembDataDeslocamento').value);
                 fd.append('valor_total', (_reembEstacResumo.valor_total_cents / 100).toFixed(2));
                 fd.append('descricao_estacionamento', document.getElementById('reembEstacDescricao').value.trim());
-                Array.from(document.getElementById('reembEstacComprovantes').files || []).forEach(f => fd.append('estacionamento_comprovantes', f));
+                _reembFileSelections.estacionamento.forEach(f => fd.append('estacionamento_comprovantes', f));
             }
 
             _reembToggleRunning(true);
@@ -3322,7 +3394,7 @@
 
         async function reembOnAlmComprovantesChange() {
             const input = document.getElementById('reembAlmComprovantes');
-            const files = Array.from(input.files || []);
+            const files = _reembUpdateFileSelection('reembAlmComprovantes');
             const resumoEl = document.getElementById('reembAlmResumo');
             if (!files.length) { _reembAlmResumo = null; resumoEl.textContent = ''; return; }
             resumoEl.textContent = 'Lendo comprovantes...';
@@ -3374,7 +3446,7 @@
             fd.append('periodo_fim', _reembAlmResumo.periodo_fim || '');
             fd.append('valor_total', (_reembAlmResumo.valor_total_cents / 100).toFixed(2));
             fd.append('descricao', descricao);
-            Array.from(document.getElementById('reembAlmComprovantes').files || []).forEach(f => fd.append('comprovantes', f));
+            _reembFileSelections.almoco.forEach(f => fd.append('comprovantes', f));
 
             _reembAlmToggleRunning(true);
             _reembAlmSetProgress(5, 'Iniciando o robô...');

@@ -112,12 +112,13 @@ except ImportError:
 
 try:
     from PIL import Image as PILImage
-    from PIL import ImageOps, ImageFilter
+    from PIL import ImageOps, ImageFilter, ImageEnhance
     PIL_AVAILABLE = True
 except ImportError:
     PILImage = None
     ImageOps = None
     ImageFilter = None
+    ImageEnhance = None
     PIL_AVAILABLE = False
 
 REPORTLAB_IMPORT_ERROR = None
@@ -1300,6 +1301,29 @@ SCHEMA_MIGRATIONS = [
         # preview quando não há corpo de texto nem mídia (ver _waha_is_content_message).
         "DELETE FROM inbound_messages WHERE preview = '(mensagem sem texto)' AND responded_at IS NULL",
     ]),
+    (14, 'reembolsos_schema', [
+        '''CREATE TABLE IF NOT EXISTS reembolso_origem_historico (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            texto TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS account_reembolso_enderecos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            endereco TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+            UNIQUE(account_id)
+        )''',
+        '''CREATE TABLE IF NOT EXISTS reembolsos_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            files_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_reembolsos_history_created_at ON reembolsos_history(created_at)',
+    ]),
 ]
 
 
@@ -1937,11 +1961,31 @@ def _reembolso_extract_text_from_bytes(file_bytes, mime, filename=''):
                 img = ImageOps.exif_transpose(img)
             except Exception:
                 pass
-            img = ImageOps.grayscale(img)
-            try:
-                return pytesseract.image_to_string(img, lang='por+eng').strip()
-            except Exception:
-                return pytesseract.image_to_string(img, lang='eng').strip()
+            gray = ImageOps.grayscale(img)
+            contrast = ImageEnhance.Contrast(ImageOps.autocontrast(gray)).enhance(2.0)
+            variants = [
+                gray,
+                ImageOps.autocontrast(gray),
+                contrast,
+                ImageOps.autocontrast(gray).point(lambda value: 0 if value < 170 else 255),
+            ]
+            best_text = ''
+            best_score = -1
+            for variant in variants:
+                for config in ('--psm 6', '--psm 11'):
+                    try:
+                        candidate = pytesseract.image_to_string(variant, lang='por+eng', config=config).strip()
+                    except Exception:
+                        candidate = pytesseract.image_to_string(variant, lang='eng', config=config).strip()
+                    parsed = _reembolso_parse_receipt_text(candidate)
+                    score = (3 if parsed.get('valor_cents') is not None else 0) + (2 if parsed.get('data') else 0)
+                    score += min(len(candidate), 4000) / 10000
+                    if score > best_score:
+                        best_text = candidate
+                        best_score = score
+                    if parsed.get('valor_cents') is not None and parsed.get('data'):
+                        return candidate
+            return best_text
         except Exception as e:
             logger.debug(f'[Reembolsos] OCR local de imagem falhou: {e}')
     return ''
