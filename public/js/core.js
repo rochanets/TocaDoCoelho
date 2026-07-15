@@ -3533,6 +3533,35 @@
             if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         }
 
+        async function _reembStartRobotRequest(url, body, label) {
+            try {
+                return await fetch(url, { method: 'POST', body });
+            } catch (error) {
+                let apiAvailable = false;
+                try {
+                    const health = await fetch(`${API_BASE}/system/config?_=${Date.now()}`, {
+                        cache: 'no-store',
+                    });
+                    apiAvailable = health.ok;
+                } catch (_) {
+                    // A segunda tentativa apenas identifica se a API local caiu.
+                }
+
+                const message = apiAvailable
+                    ? `A API local está ativa, mas a conexão foi interrompida ao iniciar o robô de ${label}. Recarregue a página e tente novamente.`
+                    : 'Não foi possível conectar à API local do Toca. Confirme que o servidor está em execução e recarregue a página.';
+                tocaDebug('reemb.robot.start.network_error', message, {
+                    url,
+                    label,
+                    apiAvailable,
+                    online: navigator.onLine,
+                    origin: window.location.origin,
+                    originalError: error?.message || String(error),
+                });
+                throw new Error(message);
+            }
+        }
+
         async function runReembDeslocamentoRobot(event) {
             event?.preventDefault?.();
             const sub = document.getElementById('reembSubFluxo').value;
@@ -3571,7 +3600,11 @@
             _reembSetProgress(5, 'Iniciando o robô...');
 
             try {
-                const response = await fetch(`${API_BASE}/autotoca/reembolsos/deslocamento/robot`, { method: 'POST', body: fd });
+                const response = await _reembStartRobotRequest(
+                    `${API_BASE}/autotoca/reembolsos/deslocamento/robot`,
+                    fd,
+                    'Deslocamento'
+                );
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
                 const taskId = data.task_id;
@@ -3649,7 +3682,11 @@
             _reembAlmSetProgress(5, 'Iniciando o robô...');
 
             try {
-                const response = await fetch(`${API_BASE}/autotoca/reembolsos/almoco/robot`, { method: 'POST', body: fd });
+                const response = await _reembStartRobotRequest(
+                    `${API_BASE}/autotoca/reembolsos/almoco/robot`,
+                    fd,
+                    'Almoço com Cliente'
+                );
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
                 const taskId = data.task_id;
