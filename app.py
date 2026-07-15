@@ -864,8 +864,8 @@ def init_db():
             ('Backlog', 1, 1, 0),
             ('Em Andamento', 2, 1, 0),
             ('Hold', 3, 1, 0),
-            ('Done', 4, 1, 1),
-            ('Descartado', 5, 1, 1)
+            ('Descartado', 4, 1, 1),
+            ('Done', 5, 1, 1)
         ]
         c.executemany(
             'INSERT INTO kanban_columns (title, display_order, is_system, is_locked) VALUES (?, ?, ?, ?)',

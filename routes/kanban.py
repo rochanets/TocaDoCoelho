@@ -4,11 +4,50 @@
 # tem acesso a todos os helpers/globals de app.py e registra as rotas no
 # mesmo objeto Flask `app`, com URLs idênticas às originais.
 
+
+def _normalize_kanban_column_order(c):
+    """Mantém Backlog sempre em primeiro e Done sempre em último."""
+    c.execute('SELECT id, title, display_order FROM kanban_columns ORDER BY display_order, id')
+    rows = [dict_from_row(row) for row in c.fetchall()]
+    if not rows:
+        return []
+
+    def is_backlog(row):
+        return str(row.get('title') or '').strip().lower() == 'backlog'
+
+    def is_done(row):
+        return str(row.get('title') or '').strip().lower() == 'done'
+
+    backlog = [row for row in rows if is_backlog(row)]
+    done = [row for row in rows if is_done(row)]
+    middle = [row for row in rows if not is_backlog(row) and not is_done(row)]
+    ordered = backlog[:1] + middle + done[:1]
+    ordered_ids = {row['id'] for row in ordered}
+    ordered.extend(row for row in rows if row['id'] not in ordered_ids)
+
+    for display_order, row in enumerate(ordered, start=1):
+        if int(row.get('display_order') or 0) != display_order:
+            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                      (display_order, row['id']))
+            row['display_order'] = display_order
+    return ordered
+
+
+def _kanban_fixed_column_kind(title):
+    normalized = str(title or '').strip().lower()
+    if normalized == 'backlog':
+        return 'backlog'
+    if normalized == 'done':
+        return 'done'
+    return ''
+
 @app.route('/api/kanban/columns', methods=['GET'])
 def list_kanban_columns():
     try:
         conn = get_db()
         c = conn.cursor()
+        _normalize_kanban_column_order(c)
+        conn.commit()
         c.execute("""SELECT kc.*, COUNT(kb.id) AS cards_count
                      FROM kanban_columns kc
                      LEFT JOIN kanban_cards kb ON kb.column_id = kc.id
@@ -31,9 +70,13 @@ def create_kanban_column():
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_columns')
-        next_order = (c.fetchone()[0] or 0) + 1
+        _normalize_kanban_column_order(c)
+        c.execute("SELECT display_order FROM kanban_columns WHERE lower(title) = 'done' ORDER BY display_order, id LIMIT 1")
+        done = c.fetchone()
+        next_order = done[0] if done else 2
+        c.execute('UPDATE kanban_columns SET display_order = display_order + 1 WHERE display_order >= ?', (next_order,))
         c.execute('INSERT INTO kanban_columns (title, display_order) VALUES (?, ?)', (title, next_order))
+        _normalize_kanban_column_order(c)
         conn.commit()
         new_id = c.lastrowid
         conn.close()
@@ -99,6 +142,57 @@ def delete_kanban_column(column_id):
         return jsonify({'message': 'Sessão removida com sucesso'})
     except Exception as e:
         logger.exception(f'[ERROR] DELETE /api/kanban/columns/{column_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kanban/columns/<int:column_id>/move', methods=['PATCH'])
+def move_kanban_column(column_id):
+    try:
+        data = request.json or {}
+        position = int(data.get('position') or 0)
+
+        conn = get_db()
+        c = conn.cursor()
+        _normalize_kanban_column_order(c)
+        c.execute('SELECT id, title FROM kanban_columns WHERE id = ?', (column_id,))
+        current = c.fetchone()
+        if not current:
+            conn.close()
+            return jsonify({'error': 'Sessão não encontrada'}), 404
+        current = dict_from_row(current)
+        if _kanban_fixed_column_kind(current.get('title')):
+            conn.close()
+            return jsonify({'error': 'Backlog e Done são sessões fixas e não podem ser movidas'}), 403
+
+        c.execute("""SELECT id, title FROM kanban_columns
+                     WHERE lower(title) NOT IN ('backlog', 'done') AND id != ?
+                     ORDER BY display_order, id""", (column_id,))
+        ids = [row[0] for row in c.fetchall()]
+        if position < 0:
+            position = 0
+        if position > len(ids):
+            position = len(ids)
+        ids.insert(position, column_id)
+
+        c.execute("SELECT id FROM kanban_columns WHERE lower(title) = 'backlog' ORDER BY display_order, id LIMIT 1")
+        backlog = c.fetchone()
+        order = 1
+        if backlog:
+            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, backlog[0]))
+            order += 1
+        for cid in ids:
+            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, cid))
+            order += 1
+        c.execute("SELECT id FROM kanban_columns WHERE lower(title) = 'done' ORDER BY display_order, id LIMIT 1")
+        done = c.fetchone()
+        if done:
+            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, done[0]))
+        _normalize_kanban_column_order(c)
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Sessão movida com sucesso'})
+    except Exception as e:
+        logger.exception(f'[ERROR] PATCH /api/kanban/columns/{column_id}/move: {e}')
         return jsonify({'error': str(e)}), 500
 
 

@@ -1975,7 +1975,8 @@
         .kanban-board::-webkit-scrollbar-thumb { background: #065f46; border-radius: 999px; }
         .kanban-board::-webkit-scrollbar-thumb:hover { background: #064e3b; }
         .kanban-column { min-width:280px; max-width:280px; background:rgba(255,255,255,0.9); border:1px solid rgba(52,211,153,0.25); border-radius:14px; padding:10px; display:flex; flex-direction:column; transition: border-color .18s ease, background-color .18s ease, transform .18s ease, box-shadow .18s ease; }
-        .kanban-column-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; }
+        .kanban-column-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; cursor:grab; }
+        .kanban-column-fixed .kanban-column-head { cursor:default; }
         .kanban-column-title { font-size:14px; font-weight:700; color:#047857; }
         .kanban-cards { display:flex; flex-direction:column; gap:10px; min-height:100px; padding:4px 2px; transition: background-color .18s ease, box-shadow .18s ease; border-radius:10px; }
         .kanban-cards.sortable-over { background:rgba(16,185,129,.11); box-shadow: inset 0 0 0 2px rgba(16,185,129,.5); }
