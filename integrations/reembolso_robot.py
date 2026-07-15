@@ -155,19 +155,70 @@ def _br_date(iso_value):
     return datetime.strptime(iso_value, '%Y-%m-%d').strftime('%d/%m/%Y')
 
 
-def _wait_for_login(page, host):
+def _portal_form_ready(page, label_text):
+    try:
+        label = page.get_by_text(label_text, exact=False).first
+        if label.count() == 0:
+            return False
+        container = _field_container(page, label_text)
+        return container.locator(
+            'input, select, textarea, .select2-selection, [role="combobox"]'
+        ).count() > 0
+    except Exception:
+        return False
+
+
+def _is_login_screen(page):
+    try:
+        url = (page.url or '').lower()
+        if any(token in url for token in ('login', 'signin', 'sign-in', 'logon', 'oauth', 'saml')):
+            return True
+        return page.locator('input[type="password"]').count() > 0
+    except Exception:
+        return False
+
+
+def _wait_for_login(page, target_url, ready_label, on_progress):
     import time as _time
+    host = target_url.split('/')[2]
+    started_at = _time.time()
     deadline = _time.time() + LOGIN_TIMEOUT_SECONDS
+    login_notified = False
+    saw_login = False
+    retried_target = False
     while True:
         if page.is_closed():
             raise ReembolsoRobotError('A janela do robô foi fechada antes do preenchimento.')
-        try:
-            if host in (page.url or '') and page.locator('label').first.count() > 0:
-                return
-        except Exception:
-            pass
+        if _portal_form_ready(page, ready_label):
+            if login_notified:
+                on_progress(26, 'Login confirmado. Preparando o formulário...')
+            return
+
+        login_screen = _is_login_screen(page)
+        saw_login = saw_login or login_screen
+        if not login_notified and (_time.time() - started_at >= 2 or login_screen):
+            on_progress(
+                20,
+                'Login necessário: entre no e-Reembolso na nova janela. '
+                'O robô continuará automaticamente após a autenticação.'
+            )
+            login_notified = True
+
+        current_url = page.url or ''
+        if saw_login and not login_screen and host in current_url and not retried_target:
+            # Alguns provedores de identidade retornam à página inicial do portal.
+            # Depois da autenticação, voltamos uma única vez ao formulário solicitado.
+            retried_target = True
+            try:
+                page.goto(target_url, wait_until='domcontentloaded', timeout=60000)
+            except Exception:
+                pass
+
         if _time.time() > deadline:
-            raise ReembolsoRobotError('Tempo esgotado aguardando o portal carregar (login pendente?).')
+            raise ReembolsoRobotError(
+                'Tempo esgotado aguardando o login e o formulário do e-Reembolso. '
+                'Inicie novamente e conclua a autenticação na janela aberta.'
+            )
         _time.sleep(1.0)
 
 
@@ -259,7 +310,7 @@ def _run_deslocamento_locked(payload, file_paths, on_progress):
 
         on_progress(15, 'Carregando o portal e-Reembolso...')
         page.goto(DESLOCAMENTOS_URL, wait_until='domcontentloaded', timeout=60000)
-        _wait_for_login(page, 'ereembolso.stefanini.com.br')
+        _wait_for_login(page, DESLOCAMENTOS_URL, 'CÉLULA CUSTO', on_progress)
 
         on_progress(30, 'Preenchendo Célula Custo...')
         choose_select2_option(page, 'CÉLULA CUSTO', payload['celula_custo'])
@@ -348,7 +399,7 @@ def _run_almoco_locked(payload, comprovantes, on_progress):
 
         on_progress(15, 'Carregando o portal e-Reembolso...')
         page.goto(OUTRAS_DESPESAS_URL, wait_until='domcontentloaded', timeout=60000)
-        _wait_for_login(page, 'ereembolso.stefanini.com.br')
+        _wait_for_login(page, OUTRAS_DESPESAS_URL, 'CÉLULA CUSTO', on_progress)
 
         on_progress(30, 'Preenchendo Célula Custo...')
         choose_select2_option(page, 'CÉLULA CUSTO', payload['celula_custo'])

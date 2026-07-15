@@ -57,13 +57,14 @@ def test_aggregate_receipts_soma_e_periodo():
 def test_aggregate_receipts_ignora_entradas_invalidas():
     extracted = [
         {'data': '2026-06-10', 'valor_cents': 1500},
+        {'data': None, 'valor_cents': 725},
         {'data': None, 'valor_cents': None},
     ]
     result = toca._reembolso_aggregate_receipts(extracted)
-    assert result['valor_total_cents'] == 1500
+    assert result['valor_total_cents'] == 2225
     assert result['periodo_inicio'] == '2026-06-10'
     assert result['periodo_fim'] == '2026-06-10'
-    assert result['quantidade'] == 2  # conta todos os arquivos anexados, válidos ou não
+    assert result['quantidade'] == 3  # conta todos os arquivos anexados, válidos ou não
 
 
 def test_aggregate_receipts_lista_vazia():
@@ -78,6 +79,29 @@ def test_parse_receipt_text_estacionamento_com_ocr_ruidoso():
         'VALOR: R$ 56,98\n'
     )
     assert result == {'data': '2026-06-25', 'valor_cents': 5698}
+
+
+def test_parse_receipt_text_ignora_cnpj_e_prioriza_valor_pago():
+    result = toca._reembolso_parse_receipt_text(
+        'CNPJ: 66,815,560/0034-88\n'
+        '03/07/26 14:38\n'
+        'AVULSO R$ 47,98\n'
+        'DINHEIRO R$ 47,98\n'
+    )
+    assert result == {'data': '2026-07-03', 'valor_cents': 4798}
+
+
+def test_aggregate_receipts_caso_dasa_e_planisa():
+    result = toca._reembolso_aggregate_receipts([
+        {'data': '2026-07-03', 'valor_cents': 4798},
+        {'data': '2026-06-25', 'valor_cents': 2500},
+    ])
+    assert result == {
+        'valor_total_cents': 7298,
+        'periodo_inicio': '2026-06-25',
+        'periodo_fim': '2026-07-03',
+        'quantidade': 2,
+    }
 
 
 def test_migracao_reembolsos_para_banco_existente(tmp_path, monkeypatch):
@@ -268,6 +292,57 @@ def _sync_thread(monkeypatch):
             self._target(*self._args, **self._kwargs)
 
     monkeypatch.setattr(toca.threading, 'Thread', _SyncThread)
+
+
+def test_extract_task_processa_lote_e_agrega(monkeypatch):
+    results = {
+        'Visita Dasa.jpeg': {'data': '2026-07-03', 'valor_cents': 4798},
+        'Evento Planisa.jpeg': {'data': '2026-06-25', 'valor_cents': 2500},
+    }
+    monkeypatch.setattr(
+        toca,
+        '_reembolso_extract_receipt',
+        lambda file_bytes, mime, filename='': results[filename],
+    )
+    monkeypatch.setattr(toca, '_reembolso_task_cleanup', lambda task_id: None)
+    task_id = 'extract-batch-test'
+    toca._reembolso_task_set(task_id, {'status': 'processing', 'progress': 5})
+
+    toca._reembolso_process_extract_async(task_id, [
+        {'bytes': b'dasa', 'mime': 'image/jpeg', 'filename': 'Visita Dasa.jpeg'},
+        {'bytes': b'planisa', 'mime': 'image/jpeg', 'filename': 'Evento Planisa.jpeg'},
+    ])
+
+    task = toca._reembolso_task_get(task_id)
+    assert task['status'] == 'done'
+    assert task['progress'] == 100
+    assert task['result']['valor_total_cents'] == 7298
+    assert task['result']['quantidade'] == 2
+    assert [item['filename'] for item in task['result']['items']] == [
+        'Visita Dasa.jpeg', 'Evento Planisa.jpeg'
+    ]
+
+
+def test_wait_for_login_avisa_e_continua_quando_formulario_aparece(monkeypatch):
+    from integrations import reembolso_robot
+
+    page = MagicMock()
+    page.is_closed.return_value = False
+    page.url = 'https://login.microsoftonline.com/'
+    monkeypatch.setattr(reembolso_robot, '_portal_form_ready', MagicMock(side_effect=[False, True]))
+    monkeypatch.setattr(reembolso_robot, '_is_login_screen', lambda current_page: True)
+    progress = MagicMock()
+
+    with patch('time.sleep'):
+        reembolso_robot._wait_for_login(
+            page,
+            reembolso_robot.DESLOCAMENTOS_URL,
+            'CÉLULA CUSTO',
+            progress,
+        )
+
+    assert any('Login necessário' in call.args[1] for call in progress.call_args_list)
+    assert any('Login confirmado' in call.args[1] for call in progress.call_args_list)
 
 
 def test_deslocamento_robot_sem_celula_custo_400(client):

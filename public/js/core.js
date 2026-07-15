@@ -3126,6 +3126,18 @@
             estacionamento: [],
             almoco: [],
         };
+        const _reembAnalysisVersions = {
+            data: 0,
+            pedagio: 0,
+            estacionamento: 0,
+            almoco: 0,
+        };
+        const _reembAnalysisPrefixes = {
+            data: 'reembDataAnalysis',
+            pedagio: 'reembPedagioAnalysis',
+            estacionamento: 'reembEstacAnalysis',
+            almoco: 'reembAlmAnalysis',
+        };
 
         function _reembFileKeyForInput(inputId) {
             return {
@@ -3252,55 +3264,134 @@
             }
         }
 
-        async function _reembExtractFile(file) {
+        function _reembEnsureAnalysisProgress(key) {
+            const prefix = _reembAnalysisPrefixes[key];
+            const host = document.getElementById(`${prefix}Progress`);
+            if (!host || host.dataset.initialized === 'true') return prefix;
+            host.dataset.initialized = 'true';
+            host.style.display = 'none';
+            host.style.padding = '14px 4px 8px';
+            host.style.maxWidth = '640px';
+            host.innerHTML = `
+                <div id="${prefix}Step" style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center; overflow-wrap:anywhere;">Preparando os comprovantes...</div>
+                <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                    <div id="${prefix}Bar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div style="text-align:right; padding:0 16px; font-size:11px; color:#6b7280;" id="${prefix}Pct">5%</div>
+            `;
+            return prefix;
+        }
+
+        function _reembSetAnalysisProgress(key, pct, step, visible = true) {
+            const prefix = _reembEnsureAnalysisProgress(key);
+            const host = document.getElementById(`${prefix}Progress`);
+            const bar = document.getElementById(`${prefix}Bar`);
+            const stepEl = document.getElementById(`${prefix}Step`);
+            const pctEl = document.getElementById(`${prefix}Pct`);
+            if (host) host.style.display = visible ? 'block' : 'none';
+            if (bar) bar.style.width = `${Math.max(5, Math.min(100, Number(pct) || 0))}%`;
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = `${Math.round(Number(pct) || 0)}%`;
+        }
+
+        function _reembCancelAnalysis(key) {
+            _reembAnalysisVersions[key] += 1;
+            _reembSetAnalysisProgress(key, 5, '', false);
+        }
+
+        async function _reembAnalyzeFiles(key, files) {
+            const version = ++_reembAnalysisVersions[key];
+            if (!files.length) {
+                _reembSetAnalysisProgress(key, 5, '', false);
+                return null;
+            }
+
             const fd = new FormData();
-            fd.append('file', file);
-            const response = await fetch(`${API_BASE}/autotoca/reembolsos/extract`, { method: 'POST', body: fd });
-            if (!response.ok) return { data: null, valor_cents: null };
-            return response.json();
+            files.forEach(file => fd.append('files', file));
+            _reembSetAnalysisProgress(key, 5, 'Preparando os comprovantes...');
+
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/reembolsos/extract/tasks`, { method: 'POST', body: fd });
+                const started = await response.json().catch(() => ({}));
+                if (!response.ok || !started.task_id) {
+                    throw new Error(started.error || 'Não foi possível iniciar a análise dos comprovantes.');
+                }
+
+                while (_reembAnalysisVersions[key] === version) {
+                    const statusResponse = await fetch(
+                        `${API_BASE}/autotoca/reembolsos/extract/tasks/${encodeURIComponent(started.task_id)}`
+                    );
+                    const task = await statusResponse.json().catch(() => ({}));
+                    if (!statusResponse.ok) throw new Error(task.error || 'Falha ao acompanhar a análise.');
+                    _reembSetAnalysisProgress(key, task.progress || 5, task.step || 'Analisando comprovantes...');
+
+                    if (task.status === 'done') {
+                        window.setTimeout(() => {
+                            if (_reembAnalysisVersions[key] === version) {
+                                _reembSetAnalysisProgress(key, 100, task.step || '', false);
+                            }
+                        }, 900);
+                        return task.result || null;
+                    }
+                    if (task.status === 'error') {
+                        throw new Error(task.error || 'Falha ao analisar os comprovantes.');
+                    }
+                    await new Promise(resolve => window.setTimeout(resolve, 800));
+                }
+            } catch (error) {
+                if (_reembAnalysisVersions[key] === version) {
+                    _reembSetAnalysisProgress(key, 5, '', false);
+                    showError(error.message || 'Falha ao analisar os comprovantes.');
+                }
+            }
+            return null;
         }
 
         async function reembOnDataComprovanteChange() {
-            const input = document.getElementById('reembDataComprovante');
             const file = _reembUpdateFileSelection('reembDataComprovante')[0];
-            if (!file) return;
-            const result = await _reembExtractFile(file);
-            if (result.data) document.getElementById('reembDataDeslocamento').value = result.data;
+            if (!file) {
+                _reembCancelAnalysis('data');
+                document.getElementById('reembDataDeslocamento').value = '';
+                return;
+            }
+            const result = await _reembAnalyzeFiles('data', [file]);
+            const item = result?.items?.[0];
+            if (item?.data) document.getElementById('reembDataDeslocamento').value = item.data;
         }
 
         async function reembOnPedagioChange() {
-            const input = document.getElementById('reembPedagioComprovantes');
             const files = _reembUpdateFileSelection('reembPedagioComprovantes');
             const resumoEl = document.getElementById('reembPedagioValor');
-            if (!files.length) { _reembPedagioValorCents = 0; resumoEl.textContent = ''; return; }
-            resumoEl.textContent = 'Lendo comprovantes...';
-            let totalCents = 0;
-            for (const file of files) {
-                const result = await _reembExtractFile(file);
-                totalCents += result.valor_cents || 0;
+            if (!files.length) {
+                _reembCancelAnalysis('pedagio');
+                _reembPedagioValorCents = 0;
+                resumoEl.textContent = '';
+                return;
             }
-            _reembPedagioValorCents = totalCents;
-            resumoEl.textContent = `Valor total do pedágio: R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}`;
+            resumoEl.textContent = '';
+            const result = await _reembAnalyzeFiles('pedagio', files);
+            if (!result) return;
+            _reembPedagioValorCents = result.valor_total_cents || 0;
+            resumoEl.textContent = `Valor total do pedágio: R$ ${(_reembPedagioValorCents / 100).toFixed(2).replace('.', ',')}`;
         }
 
         async function reembOnEstacComprovantesChange() {
-            const input = document.getElementById('reembEstacComprovantes');
             const files = _reembUpdateFileSelection('reembEstacComprovantes');
             const resumoEl = document.getElementById('reembEstacResumo');
-            if (!files.length) { _reembEstacResumo = null; resumoEl.textContent = ''; return; }
-            resumoEl.textContent = 'Lendo comprovantes...';
-            const extracted = [];
-            for (const file of files) extracted.push(await _reembExtractFile(file));
-            const datas = extracted.map(e => e.data).filter(Boolean).sort();
-            const totalCents = extracted.reduce((sum, e) => sum + (e.valor_cents || 0), 0);
-            _reembEstacResumo = {
-                quantidade: files.length,
-                periodo_inicio: datas[0] || null,
-                periodo_fim: datas[datas.length - 1] || null,
-                valor_total_cents: totalCents,
-            };
-            resumoEl.textContent = `${files.length} comprovante(s) — total R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}` +
-                (datas.length ? ` — período ${datas[0]} a ${datas[datas.length - 1]}` : '');
+            if (!files.length) {
+                _reembCancelAnalysis('estacionamento');
+                _reembEstacResumo = null;
+                resumoEl.textContent = '';
+                return;
+            }
+            resumoEl.textContent = '';
+            const result = await _reembAnalyzeFiles('estacionamento', files);
+            if (!result) return;
+            _reembEstacResumo = result;
+            resumoEl.textContent = `${result.quantidade} comprovante(s) — total R$ ${((result.valor_total_cents || 0) / 100).toFixed(2).replace('.', ',')}` +
+                (result.periodo_inicio ? ` — período ${result.periodo_inicio} a ${result.periodo_fim}` : '');
         }
 
         function _reembValidateDeslocamento(sub) {
@@ -3393,23 +3484,20 @@
         }
 
         async function reembOnAlmComprovantesChange() {
-            const input = document.getElementById('reembAlmComprovantes');
             const files = _reembUpdateFileSelection('reembAlmComprovantes');
             const resumoEl = document.getElementById('reembAlmResumo');
-            if (!files.length) { _reembAlmResumo = null; resumoEl.textContent = ''; return; }
-            resumoEl.textContent = 'Lendo comprovantes...';
-            const extracted = [];
-            for (const file of files) extracted.push(await _reembExtractFile(file));
-            const datas = extracted.map(e => e.data).filter(Boolean).sort();
-            const totalCents = extracted.reduce((sum, e) => sum + (e.valor_cents || 0), 0);
-            _reembAlmResumo = {
-                quantidade: files.length,
-                periodo_inicio: datas[0] || null,
-                periodo_fim: datas[datas.length - 1] || null,
-                valor_total_cents: totalCents,
-            };
-            resumoEl.textContent = `${files.length} comprovante(s) — total R$ ${(totalCents / 100).toFixed(2).replace('.', ',')}` +
-                (datas.length ? ` — período ${datas[0]} a ${datas[datas.length - 1]}` : '');
+            if (!files.length) {
+                _reembCancelAnalysis('almoco');
+                _reembAlmResumo = null;
+                resumoEl.textContent = '';
+                return;
+            }
+            resumoEl.textContent = '';
+            const result = await _reembAnalyzeFiles('almoco', files);
+            if (!result) return;
+            _reembAlmResumo = result;
+            resumoEl.textContent = `${result.quantidade} comprovante(s) — total R$ ${((result.valor_total_cents || 0) / 100).toFixed(2).replace('.', ',')}` +
+                (result.periodo_inicio ? ` — período ${result.periodo_inicio} a ${result.periodo_fim}` : '');
         }
 
         function _reembAlmToggleRunning(running) {

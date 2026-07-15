@@ -1830,12 +1830,13 @@ def format_currency_br(cents):
 def _reembolso_aggregate_receipts(extracted):
     """Soma valores e calcula período min/max de uma lista de comprovantes
     já extraídos via IA. Cada item: {'data': 'YYYY-MM-DD'|None, 'valor_cents': int|None}.
-    Entradas sem data/valor não contam na soma/período, mas contam na quantidade
-    (o usuário anexou o arquivo, mesmo que a IA não tenha lido)."""
-    valido = [e for e in extracted if e.get('data') and e.get('valor_cents') is not None]
-    datas = sorted(e['data'] for e in valido)
+    Valores e datas são agregados de forma independente: uma data ilegível não
+    descarta um valor reconhecido. Todos os anexos contam na quantidade."""
+    datas = sorted(e['data'] for e in extracted if e.get('data'))
     return {
-        'valor_total_cents': sum(e['valor_cents'] for e in valido),
+        'valor_total_cents': sum(
+            e['valor_cents'] for e in extracted if e.get('valor_cents') is not None
+        ),
         'periodo_inicio': datas[0] if datas else None,
         'periodo_fim': datas[-1] if datas else None,
         'quantidade': len(extracted),
@@ -1893,9 +1894,14 @@ def _reembolso_parse_receipt_text(text):
     currency_pattern = re.compile(r'(?:R\$\s*)?\d{1,3}(?:\.\d{3})*,\d{2}|(?:R\$\s*)?\d+,\d{2}|R\$\s*\d+\.\d{2}', re.IGNORECASE)
     positive_labels = (
         'valor total', 'total pago', 'valor pago', 'total a pagar', 'vl total',
-        'valor da venda', 'valor cobrado', 'valor recebido', 'total r$', 'total'
+        'valor da venda', 'valor cobrado', 'valor recebido', 'total r$',
+        'avulso', 'dinheiro', 'pagto', 'pagamento', 'credito', 'crédito', 'total'
     )
-    negative_labels = ('subtotal', 'sub total', 'desconto', 'troco', 'saldo', 'cnpj', 'cpf')
+    identifier_labels = (
+        'cnpj', 'cpf', 'ccm', 'inscricao', 'inscrição', 'ticket', 'cupom',
+        'rps', 'serie', 'série', 'cartao', 'cartão', 'placa', 'doc=', 'aut='
+    )
+    negative_labels = ('subtotal', 'sub total', 'desconto', 'troco', 'saldo')
 
     labeled_candidates = []
     all_candidates = []
@@ -1908,8 +1914,13 @@ def _reembolso_parse_receipt_text(text):
         values = [v for v in values if v is not None]
         if not values:
             continue
+        # OCR costuma inserir vírgulas em CNPJ, tickets e outros identificadores.
+        # Esses números não podem participar nem mesmo do fallback de valor.
+        has_positive_label = any(label in lower for label in positive_labels)
+        if any(label in lower for label in identifier_labels) and not has_positive_label:
+            continue
         all_candidates.extend(values)
-        if any(label in lower for label in positive_labels) and not any(label in lower for label in negative_labels):
+        if has_positive_label and not any(label in lower for label in negative_labels):
             labeled_candidates.extend(values)
 
     source = labeled_candidates or all_candidates

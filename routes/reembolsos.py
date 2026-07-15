@@ -71,6 +71,79 @@ def reembolsos_extract():
         return jsonify({'error': str(e)}), 500
 
 
+def _reembolso_process_extract_async(task_id, uploads):
+    try:
+        extracted = []
+        total = len(uploads)
+        for index, upload in enumerate(uploads, start=1):
+            progress = 8 + int(((index - 1) / max(total, 1)) * 82)
+            _reembolso_task_set(task_id, {
+                'progress': progress,
+                'step': f'Analisando comprovante {index} de {total}: {upload["filename"]}',
+            })
+            result = _reembolso_extract_receipt(
+                upload['bytes'], upload['mime'], upload['filename']
+            )
+            extracted.append({
+                'filename': upload['filename'],
+                'data': result.get('data'),
+                'valor_cents': result.get('valor_cents'),
+            })
+
+        summary = _reembolso_aggregate_receipts(extracted)
+        summary['items'] = extracted
+        _reembolso_task_set(task_id, {
+            'status': 'done',
+            'progress': 100,
+            'step': f'{total} comprovante(s) analisado(s).',
+            'result': summary,
+        })
+    except Exception as e:
+        logger.exception('[Reembolsos] Falha na análise assíncrona de comprovantes')
+        _reembolso_task_set(task_id, {
+            'status': 'error',
+            'error': f'Falha ao analisar os comprovantes: {e}',
+        })
+    finally:
+        _reembolso_task_cleanup(task_id)
+
+
+@app.route('/api/autotoca/reembolsos/extract/tasks', methods=['POST'])
+def reembolsos_extract_task_start():
+    files = [f for f in request.files.getlist('files') if f and f.filename]
+    if not files:
+        return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
+
+    uploads = []
+    for file in files:
+        uploads.append({
+            'filename': file.filename,
+            'mime': (file.mimetype or 'image/jpeg').split(';')[0].strip() or 'image/jpeg',
+            'bytes': file.read(),
+        })
+
+    task_id = uuid.uuid4().hex
+    _reembolso_task_set(task_id, {
+        'status': 'processing',
+        'step': 'Preparando os comprovantes...',
+        'progress': 5,
+    })
+    threading.Thread(
+        target=_reembolso_process_extract_async,
+        args=(task_id, uploads),
+        daemon=True,
+    ).start()
+    return jsonify({'task_id': task_id}), 202
+
+
+@app.route('/api/autotoca/reembolsos/extract/tasks/<task_id>', methods=['GET'])
+def reembolsos_extract_task_status(task_id):
+    task = _reembolso_task_get(task_id)
+    if not task:
+        return jsonify({'error': 'Tarefa não encontrada.'}), 404
+    return jsonify(task)
+
+
 def _reembolso_save_uploaded_files(history_id, field_key, file_storages):
     saved = []
     field_dir = REEMBOLSOS_UPLOAD_DIR / str(history_id) / field_key
