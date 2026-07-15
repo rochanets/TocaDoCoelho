@@ -223,6 +223,43 @@
     control.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  function findControlByIdSuffix(idSuffix) {
+    return document.getElementById(`_ctl0_MainContent_${idSuffix}`) ||
+      document.querySelector(`[id$="_${idSuffix}"]`);
+  }
+
+  async function waitForControlById(idSuffix, timeoutMs = 20000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const control = findControlByIdSuffix(idSuffix);
+      if (control && !control.disabled && control.getAttribute('aria-disabled') !== 'true') return control;
+      await delay(250);
+    }
+    throw new Error(`Não encontrei o controle externo "${idSuffix}".`);
+  }
+
+  async function chooseNativeById(idSuffix, requested) {
+    const control = await waitForControlById(idSuffix);
+    if (control.tagName !== 'SELECT') throw new Error(`O controle "${idSuffix}" não é uma lista de opções.`);
+    const selectedText = control.options?.[control.selectedIndex]?.textContent;
+    if (optionMatches(selectedText, requested)) return;
+    const option = Array.from(control.options).find(item => optionMatches(item.textContent, requested));
+    if (!option) throw new Error(`Não encontrei a opção "${requested}" no controle "${idSuffix}".`);
+    control.value = option.value;
+    control.dispatchEvent(new Event('input', { bubbles: true }));
+    control.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  async function fillTextById(idSuffix, value) {
+    const control = await waitForControlById(idSuffix);
+    if (String(control.value || '').trim() === String(value).trim()) return;
+    control.focus();
+    setNativeValue(control, value);
+    if (String(control.value || '').trim() !== String(value).trim()) {
+      throw new Error(`O controle "${idSuffix}" não reteve o valor informado.`);
+    }
+  }
+
   function filesFromPayload(items) {
     return (items || []).map(item => {
       const binary = atob(item.base64);
@@ -234,6 +271,16 @@
 
   async function uploadFiles(labelText, encodedItems) {
     const input = await waitForField(labelText, 'file');
+    const transfer = new DataTransfer();
+    filesFromPayload(encodedItems).forEach(file => transfer.items.add(file));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  async function uploadFilesById(idSuffix, encodedItems) {
+    const input = await waitForControlById(idSuffix);
+    if (input.type !== 'file') throw new Error(`O controle "${idSuffix}" não aceita arquivos.`);
     const transfer = new DataTransfer();
     filesFromPayload(encodedItems).forEach(file => transfer.items.add(file));
     input.files = transfer.files;
@@ -286,6 +333,12 @@
     candidate.click();
   }
 
+  function clickById(idSuffix) {
+    const control = findControlByIdSuffix(idSuffix);
+    if (!control || !isVisible(control)) throw new Error(`Não encontrei o botão externo "${idSuffix}".`);
+    control.click();
+  }
+
   async function fillCommon(task, data) {
     const payload = data.payload;
     await updateTask(task, { status: 'processing', progress: 30, step: 'Preenchendo Célula Custo...' });
@@ -311,12 +364,31 @@
     });
   }
 
-  async function fillExpenseCommon(payload, files, description) {
+  async function fillExpenseFields(payload, description) {
     await chooseNative('QUANTIDADE', String(payload.quantidade).padStart(2, '0'));
     await fillPeriod(payload.periodo_inicio, payload.periodo_fim);
     await fillText('VALOR TOTAL EM R$', Number(payload.valor_total).toFixed(2).replace('.', ','));
-    await uploadFiles('COMPROVANTE', files);
-    await fillText('DESCRIÇÃO', description);
+    if (description !== null) await fillText('DESCRIÇÃO', description);
+  }
+
+  async function fillOtherTravelFields(payload, description, travelType) {
+    await chooseNativeById('ddlOutrosTipoDeslocamento', travelType);
+    await chooseNativeById('ddlOutrosQuantidade', String(payload.quantidade).padStart(2, '0'));
+    await fillTextById('txtOutrosPeriodoDe', formatDate(payload.periodo_inicio));
+    await fillTextById('txtOutrosPeriodoA', formatDate(payload.periodo_fim));
+    await fillTextById('txtOutrosValor', Number(payload.valor_total).toFixed(2).replace('.', ','));
+    if (description !== null) await fillTextById('txtOutrosDescricao', description);
+  }
+
+  async function attachFiles(task, files, checkpoint, ids = null) {
+    if (task.checkpoint === checkpoint) return false;
+    await updateTask(task, { status: 'processing', progress: 72, step: 'Anexando comprovantes no e-Reembolso...' });
+    if (ids) await uploadFilesById(ids.file, files);
+    else await uploadFiles('COMPROVANTE', files);
+    await setCheckpoint(task, checkpoint);
+    if (ids) clickById(ids.attach);
+    else clickByText('Anexar', 'COMPROVANTE');
+    return true;
   }
 
   async function runTask(task, data) {
@@ -330,18 +402,23 @@
       await fillCommon(task, data);
       await updateTask(task, { status: 'processing', progress: 58, step: 'Preenchendo Almoço com Cliente...' });
       await chooseNative('TIPO DE DESPESA', 'Gasto com cliente');
-      await fillExpenseCommon(payload, data.files.comprovantes, payload.descricao);
+      await fillExpenseFields(payload, null);
+      if (await attachFiles(task, data.files.comprovantes, 'expense-files-attached')) return;
+      await fillText('DESCRIÇÃO', payload.descricao);
       await setCheckpoint(task, 'final-added');
       clickByText('adicionar', 'DESCRIÇÃO');
     } else if (data.flow === 'deslocamento:estacionamento') {
       await fillCommon(task, data);
       await updateTask(task, { status: 'processing', progress: 58, step: 'Preenchendo Estacionamento...' });
-      await chooseOption('TIPO DO DESLOCAMENTO', 'Estacionamento');
-      await fillExpenseCommon(payload, data.files.estacionamento_comprovantes, payload.descricao_estacionamento);
+      await fillOtherTravelFields(payload, null, 'Estacionamento');
+      if (await attachFiles(task, data.files.estacionamento_comprovantes, 'outros-files-attached', {
+        file: 'fuOutrosFile', attach: 'lkAnexarOutrosFile',
+      })) return;
+      await fillOtherTravelFields(payload, payload.descricao_estacionamento, 'Estacionamento');
       await setCheckpoint(task, 'final-added');
-      clickByText('adicionar', 'DESCRIÇÃO');
+      clickById('Button1');
     } else {
-      if (task.checkpoint !== 'deslocamento-added') {
+      if (!['deslocamento-added', 'outros-files-attached'].includes(task.checkpoint)) {
         await fillCommon(task, data);
         await updateTask(task, { status: 'processing', progress: 52, step: 'Preenchendo Origem e Destino...' });
         await fillText('ORIGEM', payload.origem);
@@ -360,15 +437,21 @@
         await delay(900);
       }
       if (payload.pedagio_valor_total) {
-        await chooseOption('TIPO DO DESLOCAMENTO', 'Pedágio');
-        await fillExpenseCommon({
+        const tollPayload = {
           quantidade: Math.max(1, data.files.pedagio_comprovantes?.length || 0),
           periodo_inicio: payload.data_deslocamento,
           periodo_fim: payload.data_deslocamento,
           valor_total: payload.pedagio_valor_total,
-        }, data.files.pedagio_comprovantes, `Deslocamento para visitar cliente ${payload.conta}`);
+        };
+        await fillOtherTravelFields(tollPayload, null, 'Pedágio');
+        if (await attachFiles(task, data.files.pedagio_comprovantes, 'outros-files-attached', {
+          file: 'fuOutrosFile', attach: 'lkAnexarOutrosFile',
+        })) return;
+        await fillOtherTravelFields(
+          tollPayload, `Deslocamento para visitar cliente ${payload.conta}`, 'Pedágio'
+        );
         await setCheckpoint(task, 'final-added');
-        clickByText('adicionar', 'DESCRIÇÃO');
+        clickById('Button1');
       } else {
         await setCheckpoint(task, 'final-added');
       }

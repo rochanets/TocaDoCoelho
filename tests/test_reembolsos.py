@@ -541,10 +541,15 @@ def test_extensao_reembolso_retoma_fluxo_apos_postback():
     robot_source = (extension_dir / 'reembolso.js').read_text(encoding='utf-8')
     background_source = (extension_dir / 'background.js').read_text(encoding='utf-8')
     manifest = _json.loads((extension_dir / 'manifest.json').read_text(encoding='utf-8'))
+    core_source = (Path(__file__).parents[1] / 'public' / 'js' / 'core.js').read_text(encoding='utf-8')
 
-    assert manifest['version'] == '0.9.1'
-    assert robot_source.count('if (optionMatches(selectedText, requested)) return;') == 2
+    assert manifest['version'] == '0.9.2'
+    assert robot_source.count('if (optionMatches(selectedText, requested)) return;') == 3
     assert "setCheckpoint(task, 'deslocamento-added')" in robot_source
     assert robot_source.count("setCheckpoint(task, 'final-added')") >= 3
     assert "task.checkpoint === 'final-added'" in robot_source
+    assert "'outros-files-attached'" in robot_source
+    assert "file: 'fuOutrosFile', attach: 'lkAnexarOutrosFile'" in robot_source
+    assert "await fillOtherTravelFields(payload, null, 'Estacionamento')" in robot_source
     assert "message.type === 'set_reembolso_checkpoint'" in background_source
+    assert "(versionParts[2] || 0) >= 2" in core_source
