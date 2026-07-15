@@ -2850,7 +2850,8 @@
 
             board.innerHTML = kanbanColumns.map(column => {
                 const locked = Number(column.is_locked) === 1;
-                const normalizedTitle = String(column.title || '').toLowerCase();
+                const normalizedTitle = String(column.title || '').trim().toLowerCase();
+                const isFixedColumn = normalizedTitle === 'backlog' || normalizedTitle === 'done';
                 const isDiscardedColumn = normalizedTitle === 'descartado';
                 const isDoneColumn = normalizedTitle === 'done';
                 const actionButtons = locked ? '' : `
@@ -2880,8 +2881,8 @@
                         <span class="kanban-urgency-chip" onclick="event.stopPropagation(); openKanbanUrgencyEditor(event, ${card.id}, '${(card.urgency || 'Média').replace(/'/g, "\\'")}')">${escapeHtml(card.urgency || 'Média')}</span>
                     </div>`;
                 }).join('');
-                return `<div class="kanban-column" data-column-id="${column.id}" data-column-locked="${locked ? 1 : 0}">
-                    <div class="kanban-column-head">
+                return `<div class="kanban-column ${isFixedColumn ? 'kanban-column-fixed' : ''}" data-column-id="${column.id}" data-column-locked="${locked ? 1 : 0}" data-column-fixed="${isFixedColumn ? 1 : 0}">
+                    <div class="kanban-column-head" title="${isFixedColumn ? 'Sessão fixa' : 'Arraste para reordenar a sessão'}">
                         <span class="kanban-column-title">${escapeHtml(column.title)}</span>
                         ${actionButtons}
                     </div>
@@ -3222,6 +3223,85 @@
         function destroyKanbanSortableInstances() {
             kanbanSortableInstances.forEach(instance => instance.destroy());
             kanbanSortableInstances.clear();
+            if (kanbanColumnSortableInstance) {
+                kanbanColumnSortableInstance.destroy();
+                kanbanColumnSortableInstance = null;
+            }
+        }
+
+        function cloneKanbanColumnsState() {
+            return (kanbanColumns || []).map(column => ({ ...column }));
+        }
+
+        function getMovableKanbanColumnIndex(columnId, columns = kanbanColumns) {
+            return (columns || [])
+                .filter(column => !['backlog', 'done'].includes(String(column.title || '').trim().toLowerCase()))
+                .findIndex(column => Number(column.id) === Number(columnId));
+        }
+
+        function applyKanbanColumnMoveLocally(columnId, newIndex) {
+            const backlog = kanbanColumns.filter(column => String(column.title || '').trim().toLowerCase() === 'backlog');
+            const done = kanbanColumns.filter(column => String(column.title || '').trim().toLowerCase() === 'done');
+            const movable = kanbanColumns.filter(column => !['backlog', 'done'].includes(String(column.title || '').trim().toLowerCase()));
+            const movingIndex = movable.findIndex(column => Number(column.id) === Number(columnId));
+            if (movingIndex < 0) return false;
+            const [movingColumn] = movable.splice(movingIndex, 1);
+            const boundedIndex = Math.max(0, Math.min(Number(newIndex) || 0, movable.length));
+            movable.splice(boundedIndex, 0, movingColumn);
+            kanbanColumns = [...backlog.slice(0, 1), ...movable, ...done.slice(0, 1)];
+            return true;
+        }
+
+        async function persistKanbanColumnMove(columnId, position) {
+            const response = await fetch(`${API_BASE}/kanban/columns/${columnId}/move`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ position: Number(position) })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Erro ao mover sessão');
+            return data;
+        }
+
+        function initKanbanColumnSortable() {
+            const board = document.getElementById('kanbanBoard');
+            if (!board || typeof Sortable === 'undefined') return;
+            kanbanColumnSortableInstance = Sortable.create(board, {
+                animation: 150,
+                handle: '.kanban-column-head',
+                draggable: '.kanban-column',
+                filter: '.kanban-column-fixed, button, a, input, textarea, select',
+                preventOnFilter: false,
+                ghostClass: 'sortable-ghost',
+                dragClass: 'sortable-drag',
+                chosenClass: 'sortable-chosen',
+                onMove: (evt) => {
+                    const draggedFixed = evt.dragged?.getAttribute('data-column-fixed') === '1';
+                    const relatedFixed = evt.related?.getAttribute('data-column-fixed') === '1';
+                    return !draggedFixed && !relatedFixed;
+                },
+                onEnd: async (evt) => {
+                    const columnId = Number(evt.item?.getAttribute('data-column-id'));
+                    if (!columnId || evt.oldIndex === evt.newIndex) return;
+                    const localSnapshot = cloneKanbanColumnsState();
+                    const newMovableIndex = getMovableKanbanColumnIndex(columnId, Array.from(board.querySelectorAll('.kanban-column')).map(el => ({
+                        id: Number(el.getAttribute('data-column-id')),
+                        title: kanbanColumns.find(col => Number(col.id) === Number(el.getAttribute('data-column-id')))?.title || ''
+                    })));
+                    if (newMovableIndex < 0 || !applyKanbanColumnMoveLocally(columnId, newMovableIndex)) {
+                        kanbanColumns = localSnapshot;
+                        renderKanban();
+                        return;
+                    }
+                    try {
+                        await persistKanbanColumnMove(columnId, newMovableIndex);
+                    } catch (e) {
+                        kanbanColumns = localSnapshot;
+                        renderKanban();
+                        showError(e.message);
+                    }
+                }
+            });
         }
 
         function initKanbanSortable() {
@@ -3230,6 +3310,7 @@
                 console.warn('SortableJS não carregado; DnD do Kanban desativado.');
                 return;
             }
+            initKanbanColumnSortable();
             const columns = Array.from(document.querySelectorAll('.kanban-column[data-column-id]'));
             columns.forEach(columnEl => {
                 const cardsContainer = columnEl.querySelector('.kanban-cards');

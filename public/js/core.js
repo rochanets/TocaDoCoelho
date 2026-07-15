@@ -362,6 +362,7 @@
         let kanbanContacts = [];
         let kanbanDragState = { movedAt: 0, snapshot: null, sorting: false, rollbackCount: 0, requestInFlight: false };
         let kanbanSortableInstances = new Map();
+        let kanbanColumnSortableInstance = null;
         let _gestaoContaCurrentSubTab = 'accounts';
         let autoTocaMailingClients = [];
         let autoTocaMailingPositions = [];
