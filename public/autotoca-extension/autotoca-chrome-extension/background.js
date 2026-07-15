@@ -48,6 +48,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'set_reembolso_checkpoint') {
+    const taskId = message.taskId;
+    chrome.storage.local.get(REEMBOLSO_TASK_KEY)
+      .then(async stored => {
+        const task = stored[REEMBOLSO_TASK_KEY] || null;
+        if (!task || task.taskId !== taskId) {
+          sendResponse({ ok: false, error: 'Tarefa ativa não encontrada.' });
+          return;
+        }
+        const updated = { ...task, checkpoint: String(message.checkpoint || '') };
+        await chrome.storage.local.set({ [REEMBOLSO_TASK_KEY]: updated });
+        sendResponse({ ok: true, task: updated });
+      })
+      .catch(e => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
   if (message.type === 'load_reembolso_task') {
     const task = message.task || {};
     if (!_validLocalApiBase(task.apiBase) || !task.taskId) {

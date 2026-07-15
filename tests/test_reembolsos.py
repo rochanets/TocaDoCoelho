@@ -1,6 +1,7 @@
 """Testes do submódulo AutoToca Reembolsos."""
 import json as _json
 import sqlite3
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import app as toca
@@ -530,3 +531,20 @@ def test_almoco_extensao_abre_tarefa_sem_iniciar_playwright(client, db_path):
         json={'status': 'done', 'progress': 100, 'step': 'Concluído'},
     )
     assert done_resp.status_code == 200
+
+
+def test_extensao_reembolso_retoma_fluxo_apos_postback():
+    extension_dir = (
+        Path(__file__).resolve().parents[1]
+        / 'public' / 'autotoca-extension' / 'autotoca-chrome-extension'
+    )
+    robot_source = (extension_dir / 'reembolso.js').read_text(encoding='utf-8')
+    background_source = (extension_dir / 'background.js').read_text(encoding='utf-8')
+    manifest = _json.loads((extension_dir / 'manifest.json').read_text(encoding='utf-8'))
+
+    assert manifest['version'] == '0.9.1'
+    assert robot_source.count('if (optionMatches(selectedText, requested)) return;') == 2
+    assert "setCheckpoint(task, 'deslocamento-added')" in robot_source
+    assert robot_source.count("setCheckpoint(task, 'final-added')") >= 3
+    assert "task.checkpoint === 'final-added'" in robot_source
+    assert "message.type === 'set_reembolso_checkpoint'" in background_source

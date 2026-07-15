@@ -57,6 +57,14 @@
     if (!response?.ok) throw new Error(response?.error || 'Falha ao atualizar a tarefa no AutoToca.');
   }
 
+  async function setCheckpoint(task, checkpoint) {
+    const response = await chrome.runtime.sendMessage({
+      type: 'set_reembolso_checkpoint', taskId: task.taskId, checkpoint,
+    });
+    if (!response?.ok) throw new Error(response?.error || 'Falha ao salvar o progresso da automação.');
+    task.checkpoint = checkpoint;
+  }
+
   function findLabel(labelText) {
     const wanted = normalize(labelText);
     const candidates = Array.from(document.querySelectorAll(
@@ -139,6 +147,7 @@
       return label?.parentElement?.parentElement?.contains(el);
     });
     const control = occurrence === 0 ? initial : (controls[occurrence] || initial);
+    if (String(control.value || '').trim() === String(value).trim()) return;
     control.focus();
     setNativeValue(control, value);
     if (String(control.value || '').trim() !== String(value).trim()) {
@@ -148,6 +157,10 @@
 
   async function chooseOption(labelText, requested) {
     let control = await waitForField(labelText, 'combo');
+    const selectedText = control.tagName === 'SELECT'
+      ? control.options?.[control.selectedIndex]?.textContent
+      : control.textContent;
+    if (optionMatches(selectedText, requested)) return;
     if (control.tagName === 'SELECT' && isVisible(control)) {
       const option = Array.from(control.options).find(item => optionMatches(item.textContent, requested));
       if (!option) throw new Error(`Não encontrei a opção "${requested}" no campo "${labelText}".`);
@@ -201,6 +214,8 @@
       .find(items => items.length === 1)?.[0];
     const control = select?.tagName === 'SELECT' ? select : (nearby || findFieldControl(labelText, 'combo'));
     if (!control || control.tagName !== 'SELECT') return chooseOption(labelText, requested);
+    const selectedText = control.options?.[control.selectedIndex]?.textContent;
+    if (optionMatches(selectedText, requested)) return;
     const option = Array.from(control.options).find(item => optionMatches(item.textContent, requested));
     if (!option) throw new Error(`Não encontrei a opção "${requested}" no campo "${labelText}".`);
     control.value = option.value;
@@ -249,8 +264,8 @@
     const second = ranked.slice(1).find(item => Math.abs(item.rect.top - first?.rect.top) < 40) || ranked[1];
     const inputs = [first?.el, second?.el].filter(Boolean);
     if (inputs.length < 2) throw new Error('Não encontrei os dois campos de PERÍODO.');
-    setNativeValue(inputs[0], formatDate(start));
-    setNativeValue(inputs[1], formatDate(end));
+    if (String(inputs[0].value || '').trim() !== formatDate(start)) setNativeValue(inputs[0], formatDate(start));
+    if (String(inputs[1].value || '').trim() !== formatDate(end)) setNativeValue(inputs[1], formatDate(end));
   }
 
   function clickByText(text, nearLabelText = '') {
@@ -288,6 +303,14 @@
     await fillText('DESCRIÇÃO DA DESPESA', payload.descricao_despesa);
   }
 
+  async function completeTask(task) {
+    showStatus('AutoToca: preenchimento concluído. Revise os dados e envie.');
+    await updateTask(task, {
+      status: 'done', progress: 100,
+      step: 'Preenchimento concluído. Revise os dados e clique em Enviar.',
+    });
+  }
+
   async function fillExpenseCommon(payload, files, description) {
     await chooseNative('QUANTIDADE', String(payload.quantidade).padStart(2, '0'));
     await fillPeriod(payload.periodo_inicio, payload.periodo_fim);
@@ -297,34 +320,46 @@
   }
 
   async function runTask(task, data) {
-    await fillCommon(task, data);
     const payload = data.payload;
+    if (task.checkpoint === 'final-added') {
+      await completeTask(task);
+      return;
+    }
+
     if (data.flow === 'almoco') {
+      await fillCommon(task, data);
       await updateTask(task, { status: 'processing', progress: 58, step: 'Preenchendo Almoço com Cliente...' });
       await chooseNative('TIPO DE DESPESA', 'Gasto com cliente');
       await fillExpenseCommon(payload, data.files.comprovantes, payload.descricao);
+      await setCheckpoint(task, 'final-added');
       clickByText('adicionar', 'DESCRIÇÃO');
     } else if (data.flow === 'deslocamento:estacionamento') {
+      await fillCommon(task, data);
       await updateTask(task, { status: 'processing', progress: 58, step: 'Preenchendo Estacionamento...' });
       await chooseOption('TIPO DO DESLOCAMENTO', 'Estacionamento');
       await fillExpenseCommon(payload, data.files.estacionamento_comprovantes, payload.descricao_estacionamento);
+      await setCheckpoint(task, 'final-added');
       clickByText('adicionar', 'DESCRIÇÃO');
     } else {
-      await updateTask(task, { status: 'processing', progress: 52, step: 'Preenchendo Origem e Destino...' });
-      await fillText('ORIGEM', payload.origem);
-      await fillText('DESTINO', payload.destino);
-      await fillText('DATA DO DESLOCAMENTO', formatDate(payload.data_deslocamento));
-      await chooseOption('TIPO DO TRANSPORTE', payload.tipo_transporte);
-      if (payload.ida_e_volta) {
-        const checkboxLabel = findLabel('DESLOCAMENTO IDA E VOLTA');
-        const checkbox = checkboxLabel?.querySelector('input[type="checkbox"]') ||
-          checkboxLabel?.parentElement?.querySelector('input[type="checkbox"]');
-        if (checkbox && !checkbox.checked) checkboxLabel.click();
+      if (task.checkpoint !== 'deslocamento-added') {
+        await fillCommon(task, data);
+        await updateTask(task, { status: 'processing', progress: 52, step: 'Preenchendo Origem e Destino...' });
+        await fillText('ORIGEM', payload.origem);
+        await fillText('DESTINO', payload.destino);
+        await fillText('DATA DO DESLOCAMENTO', formatDate(payload.data_deslocamento));
+        await chooseOption('TIPO DO TRANSPORTE', payload.tipo_transporte);
+        if (payload.ida_e_volta) {
+          const checkboxLabel = findLabel('DESLOCAMENTO IDA E VOLTA');
+          const checkbox = checkboxLabel?.querySelector('input[type="checkbox"]') ||
+            checkboxLabel?.parentElement?.querySelector('input[type="checkbox"]');
+          if (checkbox && !checkbox.checked) checkboxLabel.click();
+        }
+        await fillText('DESCRIÇÃO DO DESLOCAMENTO', `Visita ao cliente ${payload.conta}, de ${payload.origem} à ${payload.destino}`);
+        await setCheckpoint(task, 'deslocamento-added');
+        clickByText('adicionar', 'DESCRIÇÃO DO DESLOCAMENTO');
+        await delay(900);
       }
-      await fillText('DESCRIÇÃO DO DESLOCAMENTO', `Visita ao cliente ${payload.conta}, de ${payload.origem} à ${payload.destino}`);
-      clickByText('adicionar', 'DESCRIÇÃO DO DESLOCAMENTO');
       if (payload.pedagio_valor_total) {
-        await delay(700);
         await chooseOption('TIPO DO DESLOCAMENTO', 'Pedágio');
         await fillExpenseCommon({
           quantidade: Math.max(1, data.files.pedagio_comprovantes?.length || 0),
@@ -332,15 +367,15 @@
           periodo_fim: payload.data_deslocamento,
           valor_total: payload.pedagio_valor_total,
         }, data.files.pedagio_comprovantes, `Deslocamento para visitar cliente ${payload.conta}`);
+        await setCheckpoint(task, 'final-added');
         clickByText('adicionar', 'DESCRIÇÃO');
+      } else {
+        await setCheckpoint(task, 'final-added');
       }
     }
 
-    showStatus('AutoToca: preenchimento concluído. Revise os dados e envie.');
-    await updateTask(task, {
-      status: 'done', progress: 100,
-      step: 'Preenchimento concluído. Revise os dados e clique em Enviar.',
-    });
+    await delay(900);
+    await completeTask(task);
   }
 
   async function init() {
