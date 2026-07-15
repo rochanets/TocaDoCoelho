@@ -228,6 +228,17 @@ context = pw.chromium.launch_persistent_context(profile_dir, channel='chrome', v
   usuário perceber que dava pra rolar — especificamente, o botão Enviar pode
   ficar fora da área visível.
 
+### Abrir em uma aba da sessão já aberta (opcional)
+
+Por padrão, o robô usa o perfil persistente próprio do AutoToca, porque uma
+instância comum do Chrome/Edge não permite que outro processo se conecte às
+abas existentes. Quando o navegador do usuário é iniciado com depuração remota,
+é possível reaproveitar a sessão autenticada definindo
+`TOCA_ROBOT_CDP_URL=http://127.0.0.1:9222`. Nesse modo o robô abre uma nova aba
+no contexto já conectado e não fecha o navegador do usuário ao terminar.
+Isso é opt-in: não se deve tentar anexar automaticamente a portas locais ou
+ao perfil pessoal sem que o usuário tenha habilitado a depuração.
+
 ### Localização de campo: texto normalizado primeiro, posição numérica como fallback
 
 Cada campo é localizado pelo texto da pergunta **normalizado** (sem acento,

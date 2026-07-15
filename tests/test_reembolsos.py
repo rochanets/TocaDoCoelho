@@ -355,6 +355,25 @@ def test_robot_normaliza_opcoes_com_zero_a_esquerda_e_acentos():
     assert reembolso_robot._option_matches('Gasto com cliente', 'Gasto com cliente')
 
 
+def test_robot_pode_anexar_aba_em_navegador_existente_via_cdp(monkeypatch):
+    from integrations import reembolso_robot
+
+    browser = MagicMock()
+    context = MagicMock()
+    browser.contexts = [context]
+    playwright = MagicMock()
+    playwright.chromium.connect_over_cdp.return_value = browser
+    monkeypatch.setenv('TOCA_ROBOT_CDP_URL', 'http://127.0.0.1:9222')
+
+    attached = reembolso_robot._launch_context(playwright, headless=False)
+
+    assert attached is context
+    playwright.chromium.connect_over_cdp.assert_called_once_with('http://127.0.0.1:9222')
+    reembolso_robot._cleanup(playwright, context)
+    context.close.assert_not_called()
+    playwright.stop.assert_called_once()
+
+
 def test_deslocamento_robot_sem_celula_custo_400(client):
     resp = client.post('/api/autotoca/reembolsos/deslocamento/robot', data={'sub_fluxo': 'deslocamento'})
     assert resp.status_code == 400

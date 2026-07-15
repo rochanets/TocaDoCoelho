@@ -25,6 +25,7 @@ import uuid
 from pathlib import Path
 
 _ROBOT_LOCK = threading.Lock()
+_ATTACHED_CONTEXT_IDS = set()
 
 LOGIN_TIMEOUT_SECONDS = 300
 REVIEW_TIMEOUT_SECONDS = 900
@@ -78,6 +79,26 @@ def _detect_default_browser_channel():
 
 
 def _launch_context(pw, headless):
+    cdp_url = (os.environ.get('TOCA_ROBOT_CDP_URL') or '').strip()
+    if cdp_url:
+        try:
+            browser = pw.chromium.connect_over_cdp(cdp_url)
+            if not browser.contexts:
+                raise ReembolsoRobotError(
+                    'O navegador conectado via CDP não possui uma sessão disponível.'
+                )
+            context = browser.contexts[0]
+            _ATTACHED_CONTEXT_IDS.add(id(context))
+            return context
+        except ReembolsoRobotError:
+            raise
+        except Exception as e:
+            raise ReembolsoRobotError(
+                'Não foi possível conectar ao navegador já aberto. '
+                'Confirme TOCA_ROBOT_CDP_URL e a porta de depuração remota. '
+                f'Detalhe: {e}'
+            ) from e
+
     profile = _profile_dir()
     args = ['--disable-blink-features=AutomationControlled']
     kwargs = dict(headless=headless, args=args)
@@ -135,31 +156,89 @@ def _field_label(page, label_text):
     return page.get_by_text(label_text, exact=False).first
 
 
+_FIELD_ROOT_SELECTOR = (
+    'input, select, textarea, .select2-container, .select2-selection, '
+    '.chosen-container, .chosen-single, .bootstrap-select, '
+    '.ui-selectmenu-button, [role="combobox"], [data-select2-id]'
+)
+
+_FIELD_GLOBAL_SELECTOR = (
+    '.select2-container, .select2-selection, .chosen-container, .chosen-single, '
+    '.bootstrap-select, .ui-selectmenu-button, [role="combobox"], select, '
+    '[data-select2-id]'
+)
+
+
 def _field_container(page, label_text):
-    """Encontra o bloco do label, inclusive quando o Select2 é irmão do label."""
+    """Encontra o bloco do label, inclusive quando o combo é irmão distante."""
     label = _field_label(page, label_text)
     candidates = [
+        label,
         label.locator('xpath=..').first,
+        label.locator('xpath=../..').first,
+        label.locator('xpath=../../..').first,
         label.locator('xpath=ancestor::*[.//input or .//select or .//textarea][1]').first,
+        label.locator('xpath=following-sibling::*[1]').first,
+        label.locator('xpath=following-sibling::*[1]/..').first,
     ]
     for candidate in candidates:
         try:
-            controls = candidate.locator(
-                'input, select, textarea, .select2-container, .select2-selection, [role="combobox"]'
-            )
-            if candidate.count() and any(controls.nth(index).is_visible() for index in range(controls.count())):
+            controls = candidate.locator(_FIELD_ROOT_SELECTOR)
+            if candidate.count() and (
+                any(controls.nth(index).is_visible() for index in range(controls.count()))
+                or candidate.evaluate(
+                    "el => el.matches('select, input, textarea, .select2-container, "
+                    ".select2-selection, .chosen-container, .bootstrap-select, "
+                    ".ui-selectmenu-button, [role=combobox]')"
+                )
+            ):
                 return candidate
         except Exception:
             continue
     for candidate in candidates:
         try:
             if candidate.count() and candidate.locator(
-                'input, select, textarea, .select2-container, .select2-selection, [role="combobox"]'
+                _FIELD_ROOT_SELECTOR
             ).count() > 0:
                 return candidate
         except Exception:
             continue
-    return candidates[-1]
+    return candidates[1]
+
+
+def _nearest_field_control(page, label_text):
+    """Fallback espacial para portais que renderizam o combo fora do wrapper."""
+    label = _field_label(page, label_text)
+    if label.count() == 0:
+        return page.locator(_FIELD_GLOBAL_SELECTOR).first
+    try:
+        label_box = label.bounding_box()
+    except Exception:
+        label_box = None
+    controls = page.locator(_FIELD_GLOBAL_SELECTOR)
+    best = None
+    best_score = None
+    for index in range(controls.count()):
+        candidate = controls.nth(index)
+        try:
+            if not candidate.is_visible():
+                continue
+            box = candidate.bounding_box()
+            if not box:
+                continue
+            if label_box:
+                score = (
+                    abs((box['x'] + box['width'] / 2) - (label_box['x'] + label_box['width'] / 2))
+                    + abs((box['y'] + box['height'] / 2) - (label_box['y'] + label_box['height']))
+                )
+            else:
+                score = index
+            if best_score is None or score < best_score:
+                best = candidate
+                best_score = score
+        except Exception:
+            continue
+    return best or controls.first
 
 
 def fill_text_field(page, label_text, value):
@@ -198,7 +277,10 @@ def select_native_option(page, label_text, option_text):
 
 def _select2_control(page, label_text):
     container = _field_container(page, label_text)
-    control = container.locator('.select2-selection, [role="combobox"]')
+    control = container.locator(
+        '.select2-container, .select2-selection, .chosen-container, .chosen-single, '
+        '.bootstrap-select, .ui-selectmenu-button, [role="combobox"], select, [data-select2-id]'
+    )
     for index in range(control.count()):
         candidate = control.nth(index)
         if candidate.is_visible():
@@ -211,7 +293,8 @@ def _select2_control(page, label_text):
         candidate = fallback.nth(index)
         if candidate.is_visible():
             return candidate
-    return fallback.first
+    nearest = _nearest_field_control(page, label_text)
+    return nearest if nearest.count() else fallback.first
 
 
 def choose_select2_option(page, label_text, option_text):
@@ -220,14 +303,46 @@ def choose_select2_option(page, label_text, option_text):
     control = _select2_control(page, label_text)
     if control.count() == 0:
         raise ReembolsoRobotError(f'Não encontrei o controle do campo "{label_text}".')
+
+    try:
+        if control.evaluate("el => el.tagName.toLowerCase()") == 'select':
+            options = control.locator('option')
+            for index in range(options.count()):
+                option = options.nth(index)
+                visible_text = option.inner_text(timeout=4000)
+                if _option_matches(visible_text, option_text):
+                    value = option.get_attribute('value')
+                    if value is not None:
+                        control.select_option(value=value, timeout=8000)
+                    else:
+                        control.select_option(label=visible_text, timeout=8000)
+                    return
+            raise ReembolsoRobotError(
+                f'Não encontrei a opção "{option_text}" no campo "{label_text}".'
+            )
+    except ReembolsoRobotError:
+        raise
+    except Exception:
+        pass
+
     control.click(timeout=8000)
     search_text = str(_option_numeric_code(option_text)) if _option_numeric_code(option_text) is not None else _normalized_option_text(option_text)
-    page.keyboard.type(search_text, delay=TYPE_DELAY_MS)
+    search = page.locator(
+        '.select2-search__field:visible, .chosen-search input:visible, '
+        'input[type="search"]:visible, input[aria-controls]:visible'
+    ).last
+    if search.count():
+        search.fill(search_text)
+    else:
+        page.keyboard.type(search_text, delay=TYPE_DELAY_MS)
     page.wait_for_timeout(400)
-    options = page.get_by_role('option')
+    options = page.locator(
+        '[role="option"]:visible, li.select2-results__option:visible, '
+        '.chosen-results li:visible, .dropdown-menu li:visible'
+    )
     for index in range(options.count()):
         option = options.nth(index)
-        if option.is_visible() and _option_matches(option.inner_text(timeout=4000), option_text):
+        if _option_matches(option.inner_text(timeout=4000), option_text):
             option.click(timeout=8000)
             return
 
@@ -260,9 +375,11 @@ def _portal_form_ready(page, label_text):
             return False
         container = _field_container(page, label_text)
         controls = container.locator(
-            'input, select, textarea, .select2-selection, [role="combobox"]'
+            _FIELD_ROOT_SELECTOR
         )
-        return any(controls.nth(index).is_visible() for index in range(controls.count()))
+        if any(controls.nth(index).is_visible() for index in range(controls.count())):
+            return True
+        return _nearest_field_control(page, label_text).count() > 0
     except Exception:
         return False
 
@@ -344,10 +461,12 @@ def _finish_and_wait_submit(page, context, pw, on_progress):
 
 def _cleanup(pw, context):
     try:
-        if context is not None:
+        if context is not None and id(context) not in _ATTACHED_CONTEXT_IDS:
             context.close()
     except Exception:
         pass
+    if context is not None:
+        _ATTACHED_CONTEXT_IDS.discard(id(context))
     try:
         pw.stop()
     except Exception:
@@ -405,7 +524,11 @@ def _run_deslocamento_locked(payload, file_paths, on_progress):
     context = None
     try:
         context = _launch_context(pw, headless)
-        page = context.pages[0] if context.pages else context.new_page()
+        page = (
+            context.new_page()
+            if id(context) in _ATTACHED_CONTEXT_IDS
+            else (context.pages[0] if context.pages else context.new_page())
+        )
 
         on_progress(15, 'Carregando o portal e-Reembolso...')
         page.goto(DESLOCAMENTOS_URL, wait_until='domcontentloaded', timeout=60000)
@@ -494,7 +617,11 @@ def _run_almoco_locked(payload, comprovantes, on_progress):
     context = None
     try:
         context = _launch_context(pw, headless)
-        page = context.pages[0] if context.pages else context.new_page()
+        page = (
+            context.new_page()
+            if id(context) in _ATTACHED_CONTEXT_IDS
+            else (context.pages[0] if context.pages else context.new_page())
+        )
 
         on_progress(15, 'Carregando o portal e-Reembolso...')
         page.goto(OUTRAS_DESPESAS_URL, wait_until='domcontentloaded', timeout=60000)
