@@ -345,6 +345,16 @@ def test_wait_for_login_avisa_e_continua_quando_formulario_aparece(monkeypatch):
     assert any('Login confirmado' in call.args[1] for call in progress.call_args_list)
 
 
+def test_robot_normaliza_opcoes_com_zero_a_esquerda_e_acentos():
+    from integrations import reembolso_robot
+
+    assert reembolso_robot._option_matches('1 - DBD IGOR - HENRIQUE NETTO', '001')
+    assert reembolso_robot._option_matches('STEFANINI - SAO PAULO', 'Stefanini - Sao Paulo')
+    assert reembolso_robot._option_matches('PROSPECCAO', 'Prospecção')
+    assert reembolso_robot._option_matches('02', '2')
+    assert reembolso_robot._option_matches('Gasto com cliente', 'Gasto com cliente')
+
+
 def test_deslocamento_robot_sem_celula_custo_400(client):
     resp = client.post('/api/autotoca/reembolsos/deslocamento/robot', data={'sub_fluxo': 'deslocamento'})
     assert resp.status_code == 400

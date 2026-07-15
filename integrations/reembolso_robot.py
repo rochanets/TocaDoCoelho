@@ -17,8 +17,10 @@ seção "Itens a confirmar ao vivo").
 """
 
 import os
+import re
 import sys
 import threading
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -105,18 +107,68 @@ def _launch_context(pw, headless):
     raise ReembolsoRobotError(f'Não foi possível abrir um navegador (Chrome/Edge). Detalhe: {last_error}')
 
 
+def _normalized_option_text(value):
+    text = unicodedata.normalize('NFKD', str(value or ''))
+    text = ''.join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r'[^a-zA-Z0-9]+', ' ', text).strip().casefold()
+
+
+def _option_numeric_code(value):
+    match = re.match(r'^\s*0*(\d+)(?:\s|[-–—]|$)', str(value or ''))
+    return int(match.group(1)) if match else None
+
+
+def _option_matches(option_text, requested_text):
+    requested = _normalized_option_text(requested_text)
+    option = _normalized_option_text(option_text)
+    requested_code = _option_numeric_code(requested_text)
+    option_code = _option_numeric_code(option_text)
+    if requested_code is not None and option_code == requested_code:
+        return True
+    return bool(requested and (requested == option or requested in option or option in requested))
+
+
+def _field_label(page, label_text):
+    labels = page.locator('label').filter(has_text=label_text)
+    if labels.count() > 0:
+        return labels.first
+    return page.get_by_text(label_text, exact=False).first
+
+
 def _field_container(page, label_text):
-    """Encontra o container do campo a partir do texto do label — sobe até o
-    ancestral mais próximo que também contenha um input/select/div de combo."""
-    label = page.get_by_text(label_text, exact=False).first
-    return label.locator(
-        'xpath=ancestor::*[.//input or .//select or .//textarea][1]'
-    ).first
+    """Encontra o bloco do label, inclusive quando o Select2 é irmão do label."""
+    label = _field_label(page, label_text)
+    candidates = [
+        label.locator('xpath=..').first,
+        label.locator('xpath=ancestor::*[.//input or .//select or .//textarea][1]').first,
+    ]
+    for candidate in candidates:
+        try:
+            controls = candidate.locator(
+                'input, select, textarea, .select2-container, .select2-selection, [role="combobox"]'
+            )
+            if candidate.count() and any(controls.nth(index).is_visible() for index in range(controls.count())):
+                return candidate
+        except Exception:
+            continue
+    for candidate in candidates:
+        try:
+            if candidate.count() and candidate.locator(
+                'input, select, textarea, .select2-container, .select2-selection, [role="combobox"]'
+            ).count() > 0:
+                return candidate
+        except Exception:
+            continue
+    return candidates[-1]
 
 
 def fill_text_field(page, label_text, value):
     container = _field_container(page, label_text)
-    target = container.locator('input[type="text"], textarea').first
+    targets = container.locator('input[type="text"], textarea')
+    target = next(
+        (targets.nth(index) for index in range(targets.count()) if targets.nth(index).is_visible()),
+        targets.first,
+    )
     target.click(timeout=8000)
     target.fill('')
     target.type(str(value), delay=TYPE_DELAY_MS)
@@ -128,20 +180,66 @@ def fill_text_field(page, label_text, value):
 def select_native_option(page, label_text, option_text):
     container = _field_container(page, label_text)
     select = container.locator('select').first
-    select.select_option(label=option_text, timeout=8000)
+    options = select.locator('option')
+    for index in range(options.count()):
+        option = options.nth(index)
+        visible_text = option.inner_text(timeout=4000)
+        if _option_matches(visible_text, option_text):
+            value = option.get_attribute('value')
+            if value is not None:
+                select.select_option(value=value, timeout=8000)
+            else:
+                select.select_option(label=visible_text, timeout=8000)
+            return
+    raise ReembolsoRobotError(
+        f'Não encontrei a opção "{option_text}" no campo "{label_text}".'
+    )
+
+
+def _select2_control(page, label_text):
+    container = _field_container(page, label_text)
+    control = container.locator('.select2-selection, [role="combobox"]')
+    for index in range(control.count()):
+        candidate = control.nth(index)
+        if candidate.is_visible():
+            return candidate
+    select = container.locator('select').first
+    fallback = select.locator(
+        'xpath=following-sibling::*[1]//*[contains(@class,"select2-selection")]'
+    )
+    for index in range(fallback.count()):
+        candidate = fallback.nth(index)
+        if candidate.is_visible():
+            return candidate
+    return fallback.first
 
 
 def choose_select2_option(page, label_text, option_text):
     """Para combos Select2-like: clica para abrir, digita para filtrar,
     clica na primeira opção visível que contenha o texto."""
-    container = _field_container(page, label_text)
-    container.locator('.select2-selection, [role="combobox"]').first.click(timeout=8000)
-    page.keyboard.type(option_text, delay=TYPE_DELAY_MS)
+    control = _select2_control(page, label_text)
+    if control.count() == 0:
+        raise ReembolsoRobotError(f'Não encontrei o controle do campo "{label_text}".')
+    control.click(timeout=8000)
+    search_text = str(_option_numeric_code(option_text)) if _option_numeric_code(option_text) is not None else _normalized_option_text(option_text)
+    page.keyboard.type(search_text, delay=TYPE_DELAY_MS)
     page.wait_for_timeout(400)
-    option = page.get_by_role('option', name=option_text).first
-    if option.count() == 0:
-        option = page.get_by_text(option_text, exact=False).first
-    option.click(timeout=8000)
+    options = page.get_by_role('option')
+    for index in range(options.count()):
+        option = options.nth(index)
+        if option.is_visible() and _option_matches(option.inner_text(timeout=4000), option_text):
+            option.click(timeout=8000)
+            return
+
+    fallback = page.locator('li.select2-results__option:visible')
+    for index in range(fallback.count()):
+        option = fallback.nth(index)
+        if _option_matches(option.inner_text(timeout=4000), option_text):
+            option.click(timeout=8000)
+            return
+    raise ReembolsoRobotError(
+        f'Não encontrei a opção "{option_text}" no campo "{label_text}".'
+    )
 
 
 def upload_files(page, label_text, file_paths):
@@ -161,9 +259,10 @@ def _portal_form_ready(page, label_text):
         if label.count() == 0:
             return False
         container = _field_container(page, label_text)
-        return container.locator(
+        controls = container.locator(
             'input, select, textarea, .select2-selection, [role="combobox"]'
-        ).count() > 0
+        )
+        return any(controls.nth(index).is_visible() for index in range(controls.count()))
     except Exception:
         return False
 

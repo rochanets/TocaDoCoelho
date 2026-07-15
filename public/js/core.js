@@ -3126,6 +3126,12 @@
             estacionamento: [],
             almoco: [],
         };
+        const _reembReceiptItems = {
+            data: [],
+            pedagio: [],
+            estacionamento: [],
+            almoco: [],
+        };
         const _reembAnalysisVersions = {
             data: 0,
             pedagio: 0,
@@ -3137,6 +3143,12 @@
             pedagio: 'reembPedagioAnalysis',
             estacionamento: 'reembEstacAnalysis',
             almoco: 'reembAlmAnalysis',
+        };
+        const _reembReceiptReviewIds = {
+            data: 'reembDataReceiptReview',
+            pedagio: 'reembPedagioReceiptReview',
+            estacionamento: 'reembEstacReceiptReview',
+            almoco: 'reembAlmReceiptReview',
         };
 
         function _reembFileKeyForInput(inputId) {
@@ -3169,6 +3181,99 @@
                     <button type="button" onclick="_reembRemoveFile('${inputId}', ${index})" title="Remover arquivo" aria-label="Remover arquivo" style="flex:0 0 auto; border:0; background:transparent; color:#dc2626; cursor:pointer; padding:0 2px; line-height:1;"><i class="fas fa-times"></i></button>
                 </div>
             `).join('');
+        }
+
+        function _reembFormatCents(cents) {
+            if (cents === null || cents === undefined || cents === '') return '';
+            return (Number(cents) / 100).toFixed(2).replace('.', ',');
+        }
+
+        function _reembParseCents(value) {
+            const raw = String(value ?? '').trim().replace(/R\$\s*/gi, '').replace(/[^\d,.-]/g, '');
+            if (!raw) return null;
+            const normalized = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw;
+            const parsed = Number(normalized);
+            return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
+        }
+
+        function _reembRenderReceiptReview(key) {
+            const reviewEl = document.getElementById(_reembReceiptReviewIds[key]);
+            if (!reviewEl) return;
+            const items = _reembReceiptItems[key] || [];
+            if (!items.length) {
+                reviewEl.innerHTML = '';
+                return;
+            }
+            reviewEl.innerHTML = `
+                <div class="reemb-receipt-review-title">Dados identificados por comprovante</div>
+                ${items.map((item, index) => `
+                    <div class="reemb-receipt-item">
+                        <div class="reemb-receipt-file" title="${escapeHtml(item.filename || '')}">${escapeHtml(item.filename || `Comprovante ${index + 1}`)}</div>
+                        <div class="reemb-receipt-field">
+                            <label for="reembReceiptDate_${key}_${index}">Data</label>
+                            <input id="reembReceiptDate_${key}_${index}" type="date" value="${escapeHtml(item.data || '')}" onchange="_reembReceiptEdited('${key}', ${index}, 'data', this.value)">
+                        </div>
+                        <div class="reemb-receipt-field">
+                            <label for="reembReceiptValue_${key}_${index}">Valor (R$)</label>
+                            <input id="reembReceiptValue_${key}_${index}" type="text" inputmode="decimal" value="${escapeHtml(_reembFormatCents(item.valor_cents))}" placeholder="Não identificado" onchange="_reembReceiptEdited('${key}', ${index}, 'valor', this.value)">
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        function _reembRecalculateReceiptSummary(key) {
+            const items = _reembReceiptItems[key] || [];
+            const dates = items.map(item => item.data).filter(Boolean).sort();
+            const summary = {
+                quantidade: items.length,
+                periodo_inicio: dates[0] || null,
+                periodo_fim: dates[dates.length - 1] || null,
+                valor_total_cents: items.reduce((total, item) => total + (item.valor_cents || 0), 0),
+                items,
+            };
+            if (key === 'data') {
+                const dateInput = document.getElementById('reembDataDeslocamento');
+                if (dateInput && items[0]?.data) dateInput.value = items[0].data;
+            } else if (key === 'pedagio') {
+                _reembPedagioValorCents = summary.valor_total_cents;
+                const summaryEl = document.getElementById('reembPedagioValor');
+                if (summaryEl) summaryEl.textContent = `Valor total do pedágio: R$ ${_reembFormatCents(summary.valor_total_cents)}`;
+            } else if (key === 'estacionamento') {
+                _reembEstacResumo = summary;
+                const summaryEl = document.getElementById('reembEstacResumo');
+                if (summaryEl) summaryEl.textContent = `${summary.quantidade} comprovante(s) — total R$ ${_reembFormatCents(summary.valor_total_cents)}` +
+                    (summary.periodo_inicio ? ` — período ${summary.periodo_inicio} a ${summary.periodo_fim}` : '');
+            } else if (key === 'almoco') {
+                _reembAlmResumo = summary;
+                const summaryEl = document.getElementById('reembAlmResumo');
+                if (summaryEl) summaryEl.textContent = `${summary.quantidade} comprovante(s) — total R$ ${_reembFormatCents(summary.valor_total_cents)}` +
+                    (summary.periodo_inicio ? ` — período ${summary.periodo_inicio} a ${summary.periodo_fim}` : '');
+            }
+            return summary;
+        }
+
+        function _reembSetReceiptItems(key, result) {
+            _reembReceiptItems[key] = (result?.items || []).map(item => ({
+                filename: item.filename || '',
+                data: item.data || null,
+                valor_cents: item.valor_cents === null || item.valor_cents === undefined ? null : Number(item.valor_cents),
+            }));
+            _reembRenderReceiptReview(key);
+            return _reembRecalculateReceiptSummary(key);
+        }
+
+        function _reembClearReceiptItems(key) {
+            _reembReceiptItems[key] = [];
+            _reembRenderReceiptReview(key);
+        }
+
+        function _reembReceiptEdited(key, index, field, value) {
+            const item = _reembReceiptItems[key]?.[index];
+            if (!item) return;
+            if (field === 'data') item.data = value || null;
+            if (field === 'valor') item.valor_cents = _reembParseCents(value);
+            _reembRecalculateReceiptSummary(key);
         }
 
         function _reembUpdateFileSelection(inputId) {
@@ -3353,12 +3458,13 @@
             const file = _reembUpdateFileSelection('reembDataComprovante')[0];
             if (!file) {
                 _reembCancelAnalysis('data');
+                _reembClearReceiptItems('data');
                 document.getElementById('reembDataDeslocamento').value = '';
                 return;
             }
+            _reembClearReceiptItems('data');
             const result = await _reembAnalyzeFiles('data', [file]);
-            const item = result?.items?.[0];
-            if (item?.data) document.getElementById('reembDataDeslocamento').value = item.data;
+            if (result) _reembSetReceiptItems('data', result);
         }
 
         async function reembOnPedagioChange() {
@@ -3366,15 +3472,16 @@
             const resumoEl = document.getElementById('reembPedagioValor');
             if (!files.length) {
                 _reembCancelAnalysis('pedagio');
+                _reembClearReceiptItems('pedagio');
                 _reembPedagioValorCents = 0;
                 resumoEl.textContent = '';
                 return;
             }
+            _reembClearReceiptItems('pedagio');
             resumoEl.textContent = '';
             const result = await _reembAnalyzeFiles('pedagio', files);
             if (!result) return;
-            _reembPedagioValorCents = result.valor_total_cents || 0;
-            resumoEl.textContent = `Valor total do pedágio: R$ ${(_reembPedagioValorCents / 100).toFixed(2).replace('.', ',')}`;
+            _reembSetReceiptItems('pedagio', result);
         }
 
         async function reembOnEstacComprovantesChange() {
@@ -3382,16 +3489,16 @@
             const resumoEl = document.getElementById('reembEstacResumo');
             if (!files.length) {
                 _reembCancelAnalysis('estacionamento');
+                _reembClearReceiptItems('estacionamento');
                 _reembEstacResumo = null;
                 resumoEl.textContent = '';
                 return;
             }
+            _reembClearReceiptItems('estacionamento');
             resumoEl.textContent = '';
             const result = await _reembAnalyzeFiles('estacionamento', files);
             if (!result) return;
-            _reembEstacResumo = result;
-            resumoEl.textContent = `${result.quantidade} comprovante(s) — total R$ ${((result.valor_total_cents || 0) / 100).toFixed(2).replace('.', ',')}` +
-                (result.periodo_inicio ? ` — período ${result.periodo_inicio} a ${result.periodo_fim}` : '');
+            _reembSetReceiptItems('estacionamento', result);
         }
 
         function _reembValidateDeslocamento(sub) {
@@ -3429,6 +3536,7 @@
         async function runReembDeslocamentoRobot(event) {
             event?.preventDefault?.();
             const sub = document.getElementById('reembSubFluxo').value;
+            if (sub === 'estacionamento') _reembRecalculateReceiptSummary('estacionamento');
             const validationError = _reembValidateDeslocamento(sub);
             if (validationError) { showError(validationError); return; }
 
@@ -3488,16 +3596,16 @@
             const resumoEl = document.getElementById('reembAlmResumo');
             if (!files.length) {
                 _reembCancelAnalysis('almoco');
+                _reembClearReceiptItems('almoco');
                 _reembAlmResumo = null;
                 resumoEl.textContent = '';
                 return;
             }
+            _reembClearReceiptItems('almoco');
             resumoEl.textContent = '';
             const result = await _reembAnalyzeFiles('almoco', files);
             if (!result) return;
-            _reembAlmResumo = result;
-            resumoEl.textContent = `${result.quantidade} comprovante(s) — total R$ ${((result.valor_total_cents || 0) / 100).toFixed(2).replace('.', ',')}` +
-                (result.periodo_inicio ? ` — período ${result.periodo_inicio} a ${result.periodo_fim}` : '');
+            _reembSetReceiptItems('almoco', result);
         }
 
         function _reembAlmToggleRunning(running) {
@@ -3518,6 +3626,7 @@
 
         async function runReembAlmocoRobot(event) {
             event?.preventDefault?.();
+            _reembRecalculateReceiptSummary('almoco');
             const celula = document.getElementById('reembAlmCelulaCusto').value.trim();
             const descricaoDespesa = document.getElementById('reembAlmDescricaoDespesa').value.trim();
             const descricao = document.getElementById('reembAlmDescricao').value.trim();

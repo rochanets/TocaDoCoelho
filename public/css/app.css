@@ -2075,6 +2075,73 @@
             width: auto;
             pointer-events: none;
         }
+
+        .reemb-receipt-review {
+            display: grid;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .reemb-receipt-review:empty {
+            display: none;
+        }
+        .reemb-receipt-review-title {
+            color: #065f46;
+            font-size: 12px;
+            font-weight: 700;
+            margin: 2px 0 2px;
+        }
+        .reemb-receipt-item {
+            display: grid;
+            grid-template-columns: minmax(180px, 1fr) minmax(140px, .35fr) minmax(130px, .25fr);
+            gap: 8px;
+            align-items: end;
+            padding: 8px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+        }
+        .reemb-receipt-file {
+            min-width: 0;
+            align-self: center;
+            color: #334155;
+            font-size: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .reemb-receipt-field {
+            display: grid;
+            gap: 3px;
+        }
+        .reemb-receipt-field label {
+            color: #64748b;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .reemb-receipt-field input {
+            box-sizing: border-box;
+            min-width: 0;
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 5px;
+            background: #fff;
+            color: #0f172a;
+            font-size: 12px;
+        }
+        .reemb-receipt-field input:focus {
+            outline: 2px solid rgba(16,185,129,.28);
+            border-color: #10b981;
+        }
+        @media (max-width: 680px) {
+            .reemb-receipt-item {
+                grid-template-columns: 1fr 1fr;
+            }
+            .reemb-receipt-file {
+                grid-column: 1 / -1;
+            }
+        }
         .bgi-label {
             background: rgba(255,255,255,0.95);
             border: 1.5px solid rgba(16,185,129,0.3);
