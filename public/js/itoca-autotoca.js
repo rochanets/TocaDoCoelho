@@ -4468,7 +4468,7 @@
         async function loadWikiTocaData() {
             const query = (document.getElementById('wikiSearchInput')?.value || '').trim();
             const params = query ? `?q=${encodeURIComponent(query)}` : '';
-            const results = await Promise.allSettled([loadWikiEntries(params), loadWikiDocuments()]);
+            const results = await Promise.allSettled([loadWikiEntries(params), loadWikiDocuments(params)]);
             const failed = results.some(result => result.status === 'rejected');
             if (failed) {
                 showError('Não foi possível atualizar todos os dados do WikiToca. Tente novamente.');
@@ -4540,13 +4540,13 @@
             `).join('');
         }
 
-        async function loadWikiDocuments() {
+        async function loadWikiDocuments(params = '') {
             const el = document.getElementById('wikiDocumentsList');
             if (!el) return;
-            let response = await fetch(`${API_BASE}/wikitoca/documents`);
+            let response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
             if (!response.ok) {
                 await new Promise(resolve => setTimeout(resolve, 250));
-                response = await fetch(`${API_BASE}/wikitoca/documents`);
+                response = await fetch(`${API_BASE}/wikitoca/documents${params}`);
             }
             if (!response.ok) {
                 const err = await response.json().catch(() => ({}));

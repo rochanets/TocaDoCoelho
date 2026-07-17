@@ -9,6 +9,24 @@
 Name "Toca do Coelho - Registro de Atividades"
 OutFile "TocaDoCoelho-${APP_VERSION}-Setup.exe"
 
+; --- Identidade visual: instalador com a cara do sistema (verde + coelho) ---
+; Ícone do instalador/desinstalador (mesmo coelho usado no exe, atalhos e bandeja).
+!define MUI_ICON "coelho_icon_transparent.ico"
+!define MUI_UNICON "coelho_icon_transparent.ico"
+
+; Banner verde no topo das páginas internas (Diretório, Componentes, Progresso).
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "installer_assets\header.bmp"
+!define MUI_HEADERIMAGE_UNBITMAP "installer_assets\header.bmp"
+
+; Ilustração verde com o coelho na lateral das páginas de boas-vindas/conclusão.
+!define MUI_WELCOMEFINISHPAGE_BITMAP "installer_assets\welcome.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "installer_assets\welcome.bmp"
+
+; Barra de progresso colorida (verde) durante a cópia dos arquivos.
+!define MUI_INSTFILESPAGE_PROGRESSBAR "colored"
+!define MUI_INSTFILESPAGE_COLORS "FFFFFF 065F46"
+
 ; Instalação per-user, SEM elevação UAC. Instalar em $PROGRAMFILES exigia admin e,
 ; em contas sem esse privilégio, o UAC pedia credenciais de OUTRA conta — o instalador
 ; inteiro passava a rodar como ela, e tudo que é por usuário (registro HKCU, atalhos,
@@ -28,6 +46,8 @@ Function .onInit
     ReadRegStr $OldInstallDir HKCU "Software\TocaDoCoelho" "InstallPath"
 FunctionEnd
 
+!define MUI_WELCOMEPAGE_TITLE "Bem-vindo ao instalador do Toca do Coelho"
+!define MUI_WELCOMEPAGE_TEXT "Este assistente vai instalar o Toca do Coelho no seu computador.$\r$\n$\r$\nClique em Avançar para continuar."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_STARTMENU "Application" $StartMenuFolder
@@ -35,11 +55,19 @@ FunctionEnd
 !insertmacro MUI_PAGE_INSTFILES
 
 ; Ao concluir, oferece reabrir o app automaticamente (usado pela atualização automática)
+!define MUI_FINISHPAGE_TITLE "Instalação concluída"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\TocaDoCoelho.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Iniciar o Toca do Coelho agora"
 !insertmacro MUI_PAGE_FINISH
 
+!insertmacro MUI_UNPAGE_WELCOME
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_UNPAGE_FINISH
+
 !insertmacro MUI_LANGUAGE "PortugueseBR"
+
+BrandingText "Toca do Coelho"
 
 LangString DESC_SecApp ${LANG_PORTUGUESEBR} "Instala o Toca do Coelho"
 LangString DESC_SecShortcuts ${LANG_PORTUGUESEBR} "Cria atalhos na Área de Trabalho e no Menu Iniciar"
