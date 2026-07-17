@@ -3567,11 +3567,11 @@
             const extensionVersion = window.__AUTOTOCA_EXTENSION_INFO__?.version || '0.0.0';
             const versionParts = extensionVersion.split('.').map(part => Number(part) || 0);
             const supportsReembolso = versionParts[0] > 0 || versionParts[1] > 9 ||
-                (versionParts[1] === 9 && (versionParts[2] || 0) >= 4);
+                (versionParts[1] === 9 && (versionParts[2] || 0) >= 5);
             if (extensionReady && supportsReembolso) return 'extension';
 
             const extensionMessage = extensionReady
-                ? `A extensão AutoToca instalada (${extensionVersion}) precisa ser atualizada para a versão 0.9.4 ou superior. `
+                ? `A extensão AutoToca instalada (${extensionVersion}) precisa ser atualizada para a versão 0.9.5 ou superior. `
                 : 'Para abrir o e-Reembolso em uma aba deste mesmo navegador, instale e ative a extensão AutoToca. ';
             const useControlledWindow = await uiConfirm(
                 extensionMessage +

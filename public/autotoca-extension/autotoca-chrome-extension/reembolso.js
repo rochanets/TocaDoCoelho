@@ -356,11 +356,22 @@
     await clickInPageContext(findClickableByText(text, nearLabelText));
   }
 
-  async function clickAndAwaitReload(task, clickAction, rollbackCheckpoint, actionLabel) {
+  async function waitForPortalUpdate(predicate, timeoutMs = 15000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        if (predicate()) return true;
+      } catch (_) {}
+      await delay(250);
+    }
+    return false;
+  }
+
+  async function clickAndConfirmPortalUpdate(task, clickAction, rollbackCheckpoint, actionLabel, predicate) {
     await clickAction();
-    await delay(3000);
+    if (await waitForPortalUpdate(predicate)) return;
     await setCheckpoint(task, rollbackCheckpoint);
-    throw new Error(`O portal não recarregou após ${actionLabel}. Tente novamente.`);
+    throw new Error(`O portal não confirmou a ação de ${actionLabel}. Tente novamente.`);
   }
 
   async function fillCommon(task, data) {
@@ -404,6 +415,22 @@
     if (description !== null) await fillTextById('txtOutrosDescricao', description);
   }
 
+  function attachmentsConfirmed(files, ids = null) {
+    const input = ids ? findControlByIdSuffix(ids.file) : findFieldControl('COMPROVANTE', 'file');
+    if (input?.files?.length) return false;
+    const pageText = normalize(document.body?.innerText || document.body?.textContent);
+    const namesVisible = (files || []).every(file => pageText.includes(normalize(file.name)));
+    const downloads = Array.from(document.querySelectorAll('a'))
+      .filter(link => isVisible(link) && normalize(link.textContent) === 'download');
+    return namesVisible && downloads.length >= (files || []).length;
+  }
+
+  function tableSignature(idSuffix) {
+    const table = findControlByIdSuffix(idSuffix);
+    if (!table) return '';
+    return `${table.querySelectorAll('tbody tr').length}|${normalize(table.textContent)}`;
+  }
+
   async function attachFiles(task, files, checkpoint, ids = null) {
     if (task.checkpoint === checkpoint) return false;
     const rollbackCheckpoint = task.checkpoint;
@@ -412,13 +439,14 @@
     if (ids) await uploadFilesById(ids.file, files);
     else await uploadFiles('COMPROVANTE', files);
     await setCheckpoint(task, checkpoint);
-    await clickAndAwaitReload(
+    await clickAndConfirmPortalUpdate(
       task,
       () => ids ? clickByIdInPage(ids.attach) : clickByTextInPage('Anexar', 'COMPROVANTE'),
       rollbackCheckpoint,
-      'clicar em Anexar'
+      'anexar os comprovantes',
+      () => attachmentsConfirmed(files, ids)
     );
-    return true;
+    return false;
   }
 
   async function runTask(task, data) {
@@ -437,16 +465,25 @@
       if (await attachFiles(task, data.files.comprovantes, 'expense-files-attached-v093')) return;
       await updateTask(task, { status: 'processing', progress: 84, step: 'Preenchendo a descrição do reembolso...' });
       showStatus('AutoToca: preenchendo a descrição do reembolso...');
-      await fillText('DESCRIÇÃO', payload.descricao);
+      await fillExpenseFields(payload, payload.descricao);
       await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o reembolso...' });
       await setCheckpoint(task, 'final-added');
       showStatus('AutoToca: adicionando o reembolso...');
-      await clickAndAwaitReload(
+      const descriptionControl = await waitForField('DESCRIÇÃO', 'text');
+      const descriptionControlId = descriptionControl.id;
+      await clickAndConfirmPortalUpdate(
         task,
         () => clickByTextInPage('adicionar', 'DESCRIÇÃO'),
         'expense-files-attached-v093',
-        'adicionar o reembolso'
+        'adicionar o reembolso',
+        () => {
+          const currentDescription = descriptionControlId
+            ? document.getElementById(descriptionControlId)
+            : descriptionControl;
+          return !currentDescription || String(currentDescription.value || '').trim() === '';
+        }
       );
+      await completeTask(task);
       return;
     } else if (data.flow === 'deslocamento:estacionamento') {
       await fillCommon(task, data);
@@ -460,14 +497,21 @@
       showStatus('AutoToca: preenchendo a descrição do estacionamento...');
       await fillOtherTravelFields(payload, payload.descricao_estacionamento, 'Estacionamento');
       await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o estacionamento...' });
+      const beforeTable = tableSignature('gvOutrosDeslocamentos');
       await setCheckpoint(task, 'final-added');
       showStatus('AutoToca: adicionando o estacionamento...');
-      await clickAndAwaitReload(
+      await clickAndConfirmPortalUpdate(
         task,
         () => clickByIdInPage('Button1'),
         'outros-files-attached-v093',
-        'adicionar o estacionamento'
+        'adicionar o estacionamento',
+        () => {
+          const description = findControlByIdSuffix('txtOutrosDescricao');
+          const afterTable = tableSignature('gvOutrosDeslocamentos');
+          return String(description?.value || '').trim() === '' && Boolean(afterTable) && afterTable !== beforeTable;
+        }
       );
+      await completeTask(task);
       return;
     } else {
       if (!['deslocamento-added', 'outros-files-attached', 'outros-files-attached-v093'].includes(task.checkpoint)) {
@@ -505,14 +549,21 @@
           tollPayload, `Deslocamento para visitar cliente ${payload.conta}`, 'Pedágio'
         );
         await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o pedágio...' });
+        const beforeTable = tableSignature('gvOutrosDeslocamentos');
         await setCheckpoint(task, 'final-added');
         showStatus('AutoToca: adicionando o pedágio...');
-        await clickAndAwaitReload(
+        await clickAndConfirmPortalUpdate(
           task,
           () => clickByIdInPage('Button1'),
           'outros-files-attached-v093',
-          'adicionar o pedágio'
+          'adicionar o pedágio',
+          () => {
+            const description = findControlByIdSuffix('txtOutrosDescricao');
+            const afterTable = tableSignature('gvOutrosDeslocamentos');
+            return String(description?.value || '').trim() === '' && Boolean(afterTable) && afterTable !== beforeTable;
+          }
         );
+        await completeTask(task);
         return;
       } else {
         await setCheckpoint(task, 'final-added');

@@ -543,7 +543,7 @@ def test_extensao_reembolso_retoma_fluxo_apos_postback():
     manifest = _json.loads((extension_dir / 'manifest.json').read_text(encoding='utf-8'))
     core_source = (Path(__file__).parents[1] / 'public' / 'js' / 'core.js').read_text(encoding='utf-8')
 
-    assert manifest['version'] == '0.9.4'
+    assert manifest['version'] == '0.9.5'
     assert 'https://ereembolso.stefanini.com.br/*' in manifest['host_permissions']
     assert robot_source.count('if (optionMatches(selectedText, requested)) return;') == 3
     assert "setCheckpoint(task, 'deslocamento-added')" in robot_source
@@ -557,5 +557,8 @@ def test_extensao_reembolso_retoma_fluxo_apos_postback():
     assert "world: 'MAIN'" in background_source
     assert "window.__doPostBack(postback[1], postback[2])" in background_source
     assert "ids ? clickByIdInPage(ids.attach)" in robot_source
-    assert "await delay(3000)" in robot_source
-    assert "(versionParts[2] || 0) >= 4" in core_source
+    assert "attachmentsConfirmed(files, ids)" in robot_source
+    assert "tableSignature('gvOutrosDeslocamentos')" in robot_source
+    assert "await fillExpenseFields(payload, payload.descricao)" in robot_source
+    assert "await completeTask(task)" in robot_source
+    assert "(versionParts[2] || 0) >= 5" in core_source
