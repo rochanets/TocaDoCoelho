@@ -22,14 +22,19 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 
 logger = logging.getLogger('toca-do-coelho')
 
 _EXT_BASE = Path(__file__).resolve().parent.parent / 'public' / 'autotoca-extension'
+_EXT_SOURCE_DIR = _EXT_BASE / 'autotoca-chrome-extension'
 CRX_PATH = _EXT_BASE / 'autotoca-helper.crx'
 PUBKEY_PATH = _EXT_BASE / 'autotoca-helper.pubkey'
-_MANIFEST_PATH = _EXT_BASE / 'autotoca-chrome-extension' / 'manifest.json'
+_MANIFEST_PATH = _EXT_SOURCE_DIR / 'manifest.json'
+
+# Arquivos que compõem a extensão (o que é copiado para a pasta estável).
+_EXT_FILES = ['manifest.json', 'background.js', 'content.js', 'reembolso.js']
 
 # Nome do arquivo do .crx exposto pela rota Flask (ver routes/config.py).
 CRX_FILENAME = 'autotoca-helper.crx'
@@ -56,6 +61,40 @@ def bundled_version() -> str:
         return (json.loads(_MANIFEST_PATH.read_text(encoding='utf-8')).get('version') or '').strip()
     except Exception:  # pragma: no cover - defensivo
         return ''
+
+
+def _manifest_version(path: Path) -> str:
+    try:
+        return (json.loads(path.read_text(encoding='utf-8')).get('version') or '').strip()
+    except Exception:
+        return ''
+
+
+def publish_unpacked(dest_dir: Path) -> Path | None:
+    """Publica os arquivos da extensão numa pasta ESTÁVEL, sempre na versão atual.
+
+    O usuário faz "Carregar sem compactação" uma única vez apontando para essa pasta.
+    A cada atualização do app, sobrescrevemos os arquivos aqui e a própria extensão se
+    recarrega sozinha (``chrome.runtime.reload()`` — ver background.js), sem download,
+    descompactação ou re-adição manual. Só copia quando a versão empacotada difere da
+    já publicada, para não mexer nos arquivos à toa.
+    """
+    try:
+        dest_dir = Path(dest_dir)
+        current = bundled_version()
+        published = _manifest_version(dest_dir / 'manifest.json') if dest_dir.exists() else ''
+        if current and current == published:
+            return dest_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for name in _EXT_FILES:
+            src = _EXT_SOURCE_DIR / name
+            if src.exists():
+                shutil.copy2(src, dest_dir / name)
+        logger.info(f'[ExtAutoUpdate] Extensão publicada em {dest_dir} (versão {current or "?"}).')
+        return dest_dir
+    except Exception as exc:  # pragma: no cover - defensivo
+        logger.warning(f'[ExtAutoUpdate] Falha ao publicar a extensão em pasta estável: {exc}')
+        return None
 
 
 def updates_xml(crx_url: str) -> str:
@@ -159,8 +198,17 @@ def register_autoinstall(port: int) -> None:
         logger.warning(f'[ExtAutoUpdate] Não foi possível registrar a auto-instalação: {exc}')
 
 
-def bootstrap(port: int) -> None:
-    """Chamado no startup do app (best-effort, nunca deve derrubar o servidor)."""
+def bootstrap(port: int, local_dir: Path | None = None) -> None:
+    """Chamado no startup do app (best-effort, nunca deve derrubar o servidor).
+
+    - Publica a extensão na pasta estável (para o "carregar sem compactação" + auto-reload).
+    - Registra a política de auto-instalação (Chrome/Edge/Brave) para máquinas não gerenciadas.
+    """
+    try:
+        if local_dir is not None:
+            publish_unpacked(local_dir)
+    except Exception as exc:  # pragma: no cover - defensivo
+        logger.warning(f'[ExtAutoUpdate] publish_unpacked falhou: {exc}')
     try:
         register_autoinstall(port)
     except Exception as exc:  # pragma: no cover - defensivo

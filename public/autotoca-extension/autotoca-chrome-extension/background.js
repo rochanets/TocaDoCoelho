@@ -22,7 +22,60 @@ function _validReembolsoUrl(value) {
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[AutoToca Helper] instalada com sucesso');
+  _checkForUpdate();
 });
+
+// ---------------------------------------------------------------------------
+// Auto-atualização: a extensão é carregada "sem compactação" de uma pasta estável
+// que o app mantém sempre na versão mais nova. Aqui verificamos periodicamente a
+// versão publicada pelo app e, se estivermos defasados, chamamos
+// chrome.runtime.reload() — o Chrome recarrega a extensão do disco (já atualizado
+// pelo app), sem download, descompactação ou re-adição manual.
+// ---------------------------------------------------------------------------
+const _UPDATE_CHECK_URLS = [
+  'http://localhost:3000/api/extension/current-version',
+  'http://127.0.0.1:3000/api/extension/current-version',
+];
+const _UPDATE_ALARM = 'autotoca-update-check';
+
+function _cmpVersion(a, b) {
+  const pa = String(a).split('.').map(n => Number(n) || 0);
+  const pb = String(b).split('.').map(n => Number(n) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+async function _checkForUpdate() {
+  const current = chrome.runtime.getManifest().version;
+  for (const url of _UPDATE_CHECK_URLS) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const latest = String(data.version || '');
+      if (latest && _cmpVersion(current, latest) < 0) {
+        console.log(`[AutoToca Helper] atualizando ${current} -> ${latest} (reload)`);
+        chrome.runtime.reload();
+      }
+      return; // app respondeu — não tenta o próximo host
+    } catch (_) {
+      // app provavelmente fechado; tenta o próximo host e desiste em silêncio
+    }
+  }
+}
+
+chrome.runtime.onStartup.addListener(_checkForUpdate);
+try {
+  chrome.alarms.create(_UPDATE_ALARM, { periodInMinutes: 30 });
+  chrome.alarms.onAlarm.addListener(alarm => {
+    if (alarm.name === _UPDATE_ALARM) _checkForUpdate();
+  });
+} catch (_) {
+  // Ambiente sem chrome.alarms — o check em onStartup/onInstalled ainda cobre o caso comum.
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'start_reembolso_task') {

@@ -1467,17 +1467,29 @@
         }
 
         async function showAutoTocaExtensionInstallGuide() {
+            // Carrega uma ÚNICA vez a partir da pasta estável mantida pelo app.
+            // Depois disso, as atualizações se aplicam sozinhas (a extensão se
+            // recarrega quando o app publica uma versão nova) — sem baixar,
+            // descompactar ou re-adicionar nada.
+            let folder = null;
+            try {
+                const info = await (await fetch(`${API_BASE}/extension/local-folder`, { method: 'POST' })).json();
+                folder = info?.path || null;
+            } catch (_) { /* segue com instrução genérica */ }
+            const folderStep = folder
+                ? `2. Selecione esta pasta (já foi aberta para você):\n     ${folder}`
+                : '2. Selecione a pasta da extensão publicada pelo app (…\\toca-do-coelho\\extension).';
             await openSystemDialog({
-                title: 'Como instalar a extensão do AutoToca',
+                title: 'Instalar a extensão do AutoToca (só uma vez)',
                 message: [
-                    '1. Clique em “Baixar Extensão”.',
-                    '2. Extraia o arquivo ZIP em uma pasta do seu computador.',
-                    '3. Abra chrome://extensions no Google Chrome.',
-                    '4. Ative o “Modo do desenvolvedor” (canto superior direito).',
-                    '5. Clique em “Carregar sem compactação”.',
-                    '6. Selecione a pasta extraída da extensão.',
-                    '⚠️ 7. IMPORTANTE: Recarregue esta página (F5) após instalar.',
-                    '8. Clique em “Verificar novamente”.',
+                    'Você carrega a extensão UMA vez. Depois, as atualizações são automáticas.',
+                    '',
+                    '1. Abra chrome://extensions e ative o “Modo do desenvolvedor” (canto superior direito).',
+                    folderStep,
+                    '3. Clique em “Carregar sem compactação” e selecione a pasta acima.',
+                    '⚠️ 4. Recarregue esta página (F5) e clique em “Verificar novamente”.',
+                    '',
+                    'Não precisa mais baixar ZIP nem reinstalar a cada versão — o app cuida disso.',
                 ].join('\n'),
                 showCancel: false,
             });

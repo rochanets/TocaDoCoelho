@@ -1070,3 +1070,36 @@ def extension_update_seen():
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/extension/update-status/seen: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/extension/current-version', methods=['GET'])
+def extension_current_version():
+    """Versão da extensão empacotada com este build. A própria extensão consulta
+    este endpoint periodicamente e, se estiver defasada, se recarrega sozinha do
+    disco (ver background.js -> chrome.runtime.reload())."""
+    try:
+        return jsonify({'version': _extension_bundled_version()})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/extension/current-version: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/extension/local-folder', methods=['GET', 'POST'])
+def extension_local_folder():
+    """Caminho da pasta estável onde a extensão fica publicada (para o
+    "carregar sem compactação" uma única vez). No POST, abre a pasta no
+    gerenciador de arquivos (Windows), facilitando o carregamento inicial."""
+    try:
+        folder = str(EXT_LOCAL_DIR)
+        ext_autoupdate.publish_unpacked(EXT_LOCAL_DIR)
+        opened = False
+        if request.method == 'POST' and os.name == 'nt':
+            try:
+                os.startfile(folder)  # noqa: only exists on Windows
+                opened = True
+            except Exception as open_exc:
+                logger.debug(f'[ExtAutoUpdate] Falha ao abrir pasta da extensão: {open_exc}')
+        return jsonify({'path': folder, 'version': _extension_bundled_version(), 'opened': opened})
+    except Exception as e:
+        logger.exception(f'[ERROR] /api/extension/local-folder: {e}')
+        return jsonify({'error': str(e)}), 500

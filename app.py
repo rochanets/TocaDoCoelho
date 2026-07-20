@@ -190,6 +190,13 @@ WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Pasta ESTÁVEL onde a extensão AutoToca é publicada para o "carregar sem compactação"
+# + auto-reload (o usuário carrega uma vez; atualizações se aplicam sozinhas).
+EXT_LOCAL_DIR = DATA_DIR / 'extension'
+try:
+    ext_autoupdate.publish_unpacked(EXT_LOCAL_DIR)
+except Exception as _ext_exc:  # best-effort
+    logging.getLogger('toca-do-coelho').debug(f'[ExtAutoUpdate] publish inicial: {_ext_exc}')
 AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / 'chamado-juridico'
 AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
 CHAMADO_JURIDICO_UPLOAD_DIR = AUTOTOCA_UPLOAD_DIR / 'chamado-juridico'
@@ -12153,6 +12160,6 @@ if __name__ == '__main__':
 
     # Registra a extensão AutoToca para auto-instalação/atualização pelo navegador
     # (hospedagem local; best-effort, só no Windows). Ver integrations/ext_autoupdate.py.
-    threading.Thread(target=ext_autoupdate.bootstrap, args=(port,), daemon=True).start()
+    threading.Thread(target=ext_autoupdate.bootstrap, args=(port, EXT_LOCAL_DIR), daemon=True).start()
 
     app.run(host='localhost', port=port, debug=fixed_debug_mode, use_reloader=False)
