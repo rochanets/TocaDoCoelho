@@ -155,6 +155,27 @@
     }
   }
 
+  // Dropdown select2 atualmente ABERTO (só há um por vez). Serve para escopar a
+  // caixa de busca e as opções ao campo certo — sem isso, a busca pega a primeira
+  // caixa visível da página e pode cair no dropdown do campo anterior (ex.: a
+  // CÉLULA CUSTO que reabre após o postback da cascata Célula→Cliente).
+  function _activeSelectDrop() {
+    const sel = '.select2-drop-active, .select2-drop.select2-drop-active, ' +
+      '.select2-container--open .select2-dropdown, .chosen-with-drop .chosen-drop';
+    return Array.from(document.querySelectorAll(sel)).find(isVisible) || null;
+  }
+
+  // Fecha qualquer dropdown select2 que tenha ficado aberto, para o próximo campo
+  // abrir limpo (Escape na caixa de busca aberta é o modo mais seguro).
+  function _closeOpenSelectDropdowns() {
+    const openSearch = Array.from(document.querySelectorAll(
+      '.select2-input, .select2-search__field, .chosen-search input'
+    )).find(isVisible);
+    if (openSearch) {
+      openSearch.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape', keyCode: 27, which: 27 }));
+    }
+  }
+
   async function chooseOption(labelText, requested) {
     let control = await waitForField(labelText, 'combo');
     const selectedText = control.tagName === 'SELECT'
@@ -174,22 +195,32 @@
       const parent = control.parentElement;
       control = parent?.querySelector('.select2-choice, .select2-selection, .chosen-single, [role="combobox"]') || control;
     }
+
+    // Fecha um dropdown anterior que tenha ficado aberto antes de abrir este campo.
+    _closeOpenSelectDropdowns();
+    await delay(150);
     control.click();
 
     const deadline = Date.now() + 10000;
     let options = [];
     while (Date.now() < deadline) {
-      const search = Array.from(document.querySelectorAll(
+      // Escopo = o dropdown aberto (preferido); se não detectar, cai para a página
+      // toda — mas aí o _closeOpenSelectDropdowns() acima já garantiu que só o
+      // dropdown DESTE campo está aberto, então a busca não vaza para o anterior.
+      const scope = _activeSelectDrop() || document;
+      const search = Array.from(scope.querySelectorAll(
         '.select2-input, .select2-search__field, .chosen-search input, input[type="search"]'
       )).find(isVisible);
       if (search) {
         const normalized = normalize(requested);
         const firstUsefulToken = normalized.split(' ').find(token => token.length >= 3) || normalized;
         const searchValue = optionCode(requested) !== null ? String(optionCode(requested)) : firstUsefulToken;
-        setNativeValue(search, searchValue);
-        search.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        if (String(search.value || '') !== searchValue) {
+          setNativeValue(search, searchValue);
+          search.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        }
       }
-      options = Array.from(document.querySelectorAll(
+      options = Array.from(scope.querySelectorAll(
         '[role="option"], .select2-results__option, .select2-result-selectable, .select2-result-label, .chosen-results li'
       )).filter(isVisible);
       const match = options.find(item => optionMatches(item.textContent, requested));
