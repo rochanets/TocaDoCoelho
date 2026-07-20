@@ -161,6 +161,23 @@ Section "Uninstall"
     RMDir "$SMPROGRAMS\$StartMenuFolder"
     Delete "$DESKTOP\Toca.lnk"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TocaDoCoelho"
+
+    ; Remove a política de auto-instalação da extensão AutoToca (Chrome/Edge/Brave).
+    ; O app grava, sob Software\TocaDoCoelho\ExtForcelist, uma marca por política:
+    ; nome = a subchave da política, dado = o índice que criamos naquela lista.
+    ReadRegStr $0 HKCU "Software\TocaDoCoelho\ExtForcelist" "Software\Policies\Google\Chrome\ExtensionInstallForcelist"
+    ${If} $0 != ""
+        DeleteRegValue HKCU "Software\Policies\Google\Chrome\ExtensionInstallForcelist" "$0"
+    ${EndIf}
+    ReadRegStr $0 HKCU "Software\TocaDoCoelho\ExtForcelist" "Software\Policies\Microsoft\Edge\ExtensionInstallForcelist"
+    ${If} $0 != ""
+        DeleteRegValue HKCU "Software\Policies\Microsoft\Edge\ExtensionInstallForcelist" "$0"
+    ${EndIf}
+    ReadRegStr $0 HKCU "Software\TocaDoCoelho\ExtForcelist" "Software\Policies\BraveSoftware\Brave-Browser\ExtensionInstallForcelist"
+    ${If} $0 != ""
+        DeleteRegValue HKCU "Software\Policies\BraveSoftware\Brave-Browser\ExtensionInstallForcelist" "$0"
+    ${EndIf}
+
     DeleteRegKey HKCU "Software\TocaDoCoelho"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho"
 SectionEnd

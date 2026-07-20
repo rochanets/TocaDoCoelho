@@ -1012,15 +1012,53 @@ def extension_update_status():
         conn.close()
         first_run = (not has_profile) and (not _resolve_setting('first_run_seen', ''))
         update_available = bool(current) and (seen != current) and not first_run
+        # Quando o auto-update local está ativo (Windows + .crx assinado empacotado),
+        # o navegador atualiza a extensão sozinho — não há por que pedir download manual.
+        auto_update = (os.name == 'nt') and ext_autoupdate.is_available()
+        if auto_update:
+            update_available = False
         return jsonify({
             'current': current,
             'seen': seen or None,
             'update_available': update_available,
+            'auto_update': auto_update,
             'download_url': '/autotoca-extension/autotoca-chrome-extension.zip',
         })
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/extension/update-status: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ext/updates.xml', methods=['GET'])
+def extension_update_manifest():
+    """Manifesto Omaha lido pelo Chrome/Edge para auto-atualizar a extensão AutoToca.
+    Servido localmente pelo próprio app (ver integrations/ext_autoupdate.py)."""
+    try:
+        if not ext_autoupdate.is_available():
+            return Response('extensão assinada indisponível neste build', status=404)
+        crx_url = request.url_root.rstrip('/') + '/ext/' + ext_autoupdate.CRX_FILENAME
+        xml = ext_autoupdate.updates_xml(crx_url)
+        return Response(xml, mimetype='application/xml')
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /ext/updates.xml: {e}')
+        return Response(str(e), status=500)
+
+
+@app.route('/ext/autotoca-helper.crx', methods=['GET'])
+def extension_crx():
+    """Entrega o pacote .crx3 assinado para o navegador instalar/atualizar."""
+    try:
+        if not ext_autoupdate.CRX_PATH.exists():
+            return Response('pacote .crx indisponível', status=404)
+        return send_file(
+            str(ext_autoupdate.CRX_PATH),
+            mimetype='application/x-chrome-extension',
+            as_attachment=False,
+            download_name=ext_autoupdate.CRX_FILENAME,
+        )
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /ext/autotoca-helper.crx: {e}')
+        return Response(str(e), status=500)
 
 
 @app.route('/api/extension/update-status/seen', methods=['POST'])

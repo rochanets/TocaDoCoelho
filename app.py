@@ -55,6 +55,7 @@ from integrations.outlook_graph import (
     parse_state as outlook_graph_parse_state,
     send_mail as outlook_graph_send_mail,
 )
+from integrations import ext_autoupdate
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
@@ -12149,5 +12150,9 @@ if __name__ == '__main__':
     
     thread = threading.Thread(target=open_browser, daemon=True)
     thread.start()
-    
+
+    # Registra a extensão AutoToca para auto-instalação/atualização pelo navegador
+    # (hospedagem local; best-effort, só no Windows). Ver integrations/ext_autoupdate.py.
+    threading.Thread(target=ext_autoupdate.bootstrap, args=(port,), daemon=True).start()
+
     app.run(host='localhost', port=port, debug=fixed_debug_mode, use_reloader=False)
