@@ -1415,11 +1415,27 @@
             _autoTocaSetAutomationEnabled(true);
         }
 
+        function _cmpExtVersion(a, b) {
+            const pa = String(a || '0').split('.').map(n => Number(n) || 0);
+            const pb = String(b || '0').split('.').map(n => Number(n) || 0);
+            for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+                const diff = (pa[i] || 0) - (pb[i] || 0);
+                if (diff !== 0) return diff < 0 ? -1 : 1;
+            }
+            return 0;
+        }
+
         function handleAutoTocaExtensionPong(event) {
             const detail = event?.detail || {};
             autoTocaExtensionInstalled = true;
             autoTocaExtensionLastSeenAt = new Date().toLocaleTimeString('pt-BR');
-            window.__AUTOTOCA_EXTENSION_INFO__ = detail;
+            // Se houver mais de uma extensão instalada (ex.: uma versão antiga que
+            // sobrou), fica com a de MAIOR versão — assim uma 0.9.5 remanescente não
+            // "rebaixa" a detecção de uma versão nova.
+            const current = window.__AUTOTOCA_EXTENSION_INFO__;
+            if (!current || _cmpExtVersion(detail.version, current.version) >= 0) {
+                window.__AUTOTOCA_EXTENSION_INFO__ = detail;
+            }
             renderAutoTocaExtensionState();
         }
 
@@ -1447,6 +1463,7 @@
 
         async function checkAutoTocaExtension(showFeedback = false) {
             autoTocaExtensionInstalled = false;
+            window.__AUTOTOCA_EXTENSION_INFO__ = null;
             renderAutoTocaExtensionState();
             window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_REQUEST_EVENT, {
                 detail: {

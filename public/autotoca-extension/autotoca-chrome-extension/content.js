@@ -1,6 +1,8 @@
 (() => {
   // Confirmação visível no DevTools (F12 → Console) para diagnóstico
-  console.log('[AutoToca Helper] content.js v0.9.5 carregado em:', window.location.href);
+  let _extVersion = '0.0.0';
+  try { _extVersion = chrome.runtime.getManifest().version || _extVersion; } catch (_) {}
+  console.log(`[AutoToca Helper] content.js v${_extVersion} carregado em:`, window.location.href);
 
   const WEB_PING_EVENT    = 'autotoca-extension-ping';
   const WEB_PONG_EVENT    = 'autotoca-extension-pong';
@@ -75,7 +77,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.9.5',
+        version: _extVersion,
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -722,7 +724,7 @@
 
   _lastUrl = window.location.href;
 
-  _log('info', 'Extensão AutoToca v0.9.5 carregada', {
+  _log('info', `Extensão AutoToca v${_extVersion} carregada`, {
     isLinkedInProfile: isLinkedInProfilePage(),
     isForms: isFormsPage(),
     pathname: window.location.pathname,
