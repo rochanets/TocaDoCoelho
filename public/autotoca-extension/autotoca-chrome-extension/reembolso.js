@@ -465,7 +465,7 @@
       if (await attachFiles(task, data.files.comprovantes, 'expense-files-attached-v093')) return;
       await updateTask(task, { status: 'processing', progress: 84, step: 'Preenchendo a descrição do reembolso...' });
       showStatus('AutoToca: preenchendo a descrição do reembolso...');
-      await fillExpenseFields(payload, payload.descricao);
+      await fillText('DESCRIÇÃO', payload.descricao);
       await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o reembolso...' });
       await setCheckpoint(task, 'final-added');
       showStatus('AutoToca: adicionando o reembolso...');
