@@ -48,11 +48,11 @@ from integrations.outlook_graph import (
     OutlookOAuthError,
     OutlookSyncError,
     build_authorize_url as outlook_graph_build_authorize_url,
+    consume_oauth_state as outlook_graph_consume_oauth_state,
     ensure_schema as outlook_graph_ensure_schema,
     exchange_code_and_store as outlook_graph_exchange_code_and_store,
     fetch_messages as outlook_graph_fetch_messages,
     get_valid_access_token as outlook_graph_get_valid_access_token,
-    parse_state as outlook_graph_parse_state,
     send_mail as outlook_graph_send_mail,
 )
 try:
