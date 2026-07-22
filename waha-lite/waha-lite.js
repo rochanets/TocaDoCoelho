@@ -442,18 +442,46 @@ app.get('/api/:session/auth/qr', async (req, res) => {
   res.json({ value: currentQr });
 });
 
+/**
+ * Resolve o WID (WhatsApp ID) real de um chatId "adivinhado" (DDI+DDD+número,
+ * calculado a partir do telefone cadastrado no CRM). Contas do WhatsApp criadas
+ * antes da obrigatoriedade do 9º dígito nos celulares (2012) podem continuar
+ * registradas SEM ele mesmo que o número "visível" hoje já inclua o 9 — nesse
+ * caso getChatById(chatId adivinhado) não encontra a conversa real (404) mesmo
+ * que ela exista de verdade, e o cliente acaba contado como "sem novidade" na
+ * sincronização. getNumberId() consulta o próprio WhatsApp em vez de adivinhar,
+ * e devolve o ID que ele realmente usa para aquele número.
+ */
+async function resolveChatId(chatId) {
+  if (!chatId.endsWith('@c.us')) return chatId; // grupo (@g.us) — não se aplica
+  const digits = chatId.split('@')[0];
+  try {
+    const numberId = await waClient.getNumberId(digits);
+    if (numberId && numberId._serialized) {
+      if (numberId._serialized !== chatId) {
+        log('INFO', `chatId ajustado por getNumberId: ${chatId} -> ${numberId._serialized}`);
+      }
+      return numberId._serialized;
+    }
+  } catch (e) {
+    log('WARN', `resolveChatId: getNumberId falhou para ${digits}: ${e.message}`);
+  }
+  return chatId; // getNumberId não respondeu — segue com o palpite original
+}
+
 /** GET /api/:session/chats/:chatId/messages — mensagens filtradas por timestamp */
 app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
   if (!waClient || clientStatus !== 'WORKING') {
     return res.status(503).json({ error: 'WhatsApp não conectado', status: clientStatus });
   }
 
-  const { chatId } = req.params;
+  const { chatId: rawChatId } = req.params;
   const limit = Math.min(parseInt(req.query.limit || '500', 10), 2000);
   const gteTs = parseInt(req.query['filter.timestamp.gte'] || '0', 10);
   const lteTs = parseInt(req.query['filter.timestamp.lte'] || String(Math.floor(Date.now() / 1000)), 10);
 
   try {
+    const chatId   = await resolveChatId(rawChatId);
     const chat     = await waClient.getChatById(chatId);
     const messages = await chat.fetchMessages({ limit });
 
@@ -476,7 +504,9 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
     log('INFO', `Mensagens de ${chatId}: ${filtered.length} no intervalo.`);
     res.json(filtered);
   } catch (_err) {
-    // Chat inexistente = sem conversa com este contato
+    // Chat inexistente = sem conversa com este contato (ou getNumberId não resolveu
+    // o WID real) — loga o chatId original para diagnosticar sem precisar reproduzir.
+    log('WARN', `Chat não encontrado para ${rawChatId}: ${_err.message}`);
     res.status(404).json({ error: _err.message });
   }
 });
