@@ -442,31 +442,79 @@ app.get('/api/:session/auth/qr', async (req, res) => {
   res.json({ value: currentQr });
 });
 
+// Cache dos chats já sincronizados. getChats() é caro e, numa sincronização,
+// dezenas de contatos são consultados em sequência — revalidar a cada 60s evita
+// varrer a lista inteira a cada contato sem deixar o cache velho demais.
+let _chatsCache   = null;
+let _chatsCacheAt = 0;
+const CHATS_CACHE_MS = 60000;
+
+async function getChatsCached() {
+  const now = Date.now();
+  if (_chatsCache && (now - _chatsCacheAt) < CHATS_CACHE_MS) return _chatsCache;
+  _chatsCache   = await waClient.getChats();
+  _chatsCacheAt = now;
+  log('INFO', `getChats(): ${_chatsCache.length} conversas carregadas (cache 60s).`);
+  return _chatsCache;
+}
+
+/** Variantes do número para casar contas antigas sem o 9º dígito e vice-versa. */
+function phoneVariants(digits) {
+  const set = new Set([digits]);
+  const withNine = digits.match(/^55(\d{2})9(\d{8})$/); // 13 díg. (com 9) -> sem o 9
+  if (withNine) set.add('55' + withNine[1] + withNine[2]);
+  const noNine = digits.match(/^55(\d{2})(\d{8})$/);      // 12 díg. (sem 9) -> com o 9
+  if (noNine) set.add('55' + noNine[1] + '9' + noNine[2]);
+  return set;
+}
+
 /**
- * Resolve o WID (WhatsApp ID) real de um chatId "adivinhado" (DDI+DDD+número,
- * calculado a partir do telefone cadastrado no CRM). Contas do WhatsApp criadas
- * antes da obrigatoriedade do 9º dígito nos celulares (2012) podem continuar
- * registradas SEM ele mesmo que o número "visível" hoje já inclua o 9 — nesse
- * caso getChatById(chatId adivinhado) não encontra a conversa real (404) mesmo
- * que ela exista de verdade, e o cliente acaba contado como "sem novidade" na
- * sincronização. getNumberId() consulta o próprio WhatsApp em vez de adivinhar,
- * e devolve o ID que ele realmente usa para aquele número.
+ * Localiza o Chat de um contato de forma resiliente. O caminho "óbvio"
+ * getChatById('numero@c.us') QUEBRA no WhatsApp Web atual: a migração para
+ * endereçamento por LID faz a resolução por id adivinhado lançar "No LID for
+ * user" (ou um erro minificado) para praticamente todos os contatos, zerando a
+ * sincronização mesmo havendo conversas. Por isso a estratégia principal é
+ * varrer os chats que o WhatsApp Web JÁ sincronizou (getChats(), que não passa
+ * pela resolução por LID) e casar pelo número — com e sem o 9º dígito, cobrindo
+ * as contas antigas. getNumberId()/getChatById ficam só como fallback.
  */
-async function resolveChatId(chatId) {
-  if (!chatId.endsWith('@c.us')) return chatId; // grupo (@g.us) — não se aplica
-  const digits = chatId.split('@')[0];
+async function findChat(rawChatId) {
+  const digits   = rawChatId.split('@')[0];
+  const variants = phoneVariants(digits);
+
+  // 1) Varre os chats já carregados e casa por número (com/sem 9º dígito).
   try {
-    const numberId = await waClient.getNumberId(digits);
-    if (numberId && numberId._serialized) {
-      if (numberId._serialized !== chatId) {
-        log('INFO', `chatId ajustado por getNumberId: ${chatId} -> ${numberId._serialized}`);
-      }
-      return numberId._serialized;
+    const chats = await getChatsCached();
+    for (const chat of chats) {
+      if (chat.isGroup) continue;
+      const u = chat.id && chat.id.user;
+      if (u && variants.has(u)) return chat;
     }
   } catch (e) {
-    log('WARN', `resolveChatId: getNumberId falhou para ${digits}: ${e.message}`);
+    log('WARN', `findChat: getChats falhou: ${e.message}`);
   }
-  return chatId; // getNumberId não respondeu — segue com o palpite original
+
+  // 2) Fallback: resolve o WID real via getNumberId e tenta getChatById.
+  try {
+    const numberId = await waClient.getNumberId(digits);
+    const wid = numberId && numberId._serialized;
+    if (wid) {
+      const chat = await waClient.getChatById(wid);
+      if (chat) return chat;
+    }
+  } catch (e) {
+    log('WARN', `findChat: getNumberId/getChatById falhou para ${digits}: ${e.message}`);
+  }
+
+  // 3) Último recurso: getChatById com o id adivinhado. Sabemos que isso lança o
+  //    erro de LID no WhatsApp Web atual — devolve null para o endpoint reportar
+  //    um "sem conversa" limpo em vez de vazar o erro interno.
+  try {
+    return await waClient.getChatById(rawChatId);
+  } catch (e) {
+    log('WARN', `findChat: getChatById(${rawChatId}) falhou: ${e.message}`);
+    return null;
+  }
 }
 
 /** GET /api/:session/chats/:chatId/messages — mensagens filtradas por timestamp */
@@ -481,8 +529,11 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
   const lteTs = parseInt(req.query['filter.timestamp.lte'] || String(Math.floor(Date.now() / 1000)), 10);
 
   try {
-    const chatId   = await resolveChatId(rawChatId);
-    const chat     = await waClient.getChatById(chatId);
+    const chat = await findChat(rawChatId);
+    if (!chat) {
+      log('INFO', `Sem conversa sincronizada para ${rawChatId}.`);
+      return res.status(404).json({ error: 'Sem conversa para este contato.' });
+    }
     const messages = await chat.fetchMessages({ limit });
 
     const filtered = messages
@@ -501,11 +552,11 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
         hasMedia: m.hasMedia,
       }));
 
-    log('INFO', `Mensagens de ${chatId}: ${filtered.length} no intervalo.`);
+    log('INFO', `Mensagens de ${chat.id._serialized}: ${filtered.length} no intervalo.`);
     res.json(filtered);
   } catch (_err) {
-    // Chat inexistente = sem conversa com este contato (ou getNumberId não resolveu
-    // o WID real) — loga o chatId original para diagnosticar sem precisar reproduzir.
+    // Chat inexistente = sem conversa com este contato (ou a resolução por LID do
+    // WhatsApp Web falhou) — loga o chatId original para diagnosticar sem reproduzir.
     log('WARN', `Chat não encontrado para ${rawChatId}: ${_err.message}`);
     res.status(404).json({ error: _err.message });
   }
