@@ -209,7 +209,26 @@
                 _stopPollIfIdle();
             }
 
-            return { register, onIndicatorClick, claimTask, setProgressFn, minimize, cancel };
+            // Chamado ao entrar numa aba (switchTab): se havia uma tarefa concluída
+            // enquanto o usuário estava fora dessa aba (ex.: WhatsApp Update minimizado
+            // e "0 novidades" ao terminar), mostra o resultado agora em vez de deixar o
+            // usuário só com a tela padrão da aba e o pequeno indicador verde no canto —
+            // sem isso, terminar sem novidade parecia o sistema ter travado.
+            function notifyTabActive(tabName) {
+                for (let i = _done.length - 1; i >= 0; i--) {
+                    const task = _done[i];
+                    if (task.sourceTab !== tabName) continue;
+                    _done.splice(i, 1);
+                    if (task.onComplete) {
+                        try { task.onComplete(task._result); } catch(e) {}
+                    }
+                }
+                _closeDoneList();
+                _render();
+                _stopPollIfIdle();
+            }
+
+            return { register, onIndicatorClick, claimTask, setProgressFn, minimize, cancel, notifyTabActive };
         })();
 
         // Helper: injeta botões Minimizar / Cancelar no topo de uma área de progresso
@@ -454,6 +473,7 @@
 
             targetTab.classList.add('active');
             _currentTab = tabName;
+            if (typeof BgTaskManager !== 'undefined') BgTaskManager.notifyTabActive(tabName);
             updateTopbarModuleHeader(tabName);
             updateTopbarSettingsState(tabName);
 
