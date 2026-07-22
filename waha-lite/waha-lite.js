@@ -41,7 +41,8 @@ const MAX_RECREATE     = parseInt(process.env.WAHA_MAX_RECREATE || '3', 10);
 //
 // Pode ser configurada SEM editar este arquivo, por (em ordem de prioridade):
 //   1) variável de ambiente WAHA_WEB_VERSION
-//   2) arquivo "web-version.txt" ao lado deste script (1 linha com a versão)
+//   2) arquivo "web-version.txt" ao lado deste script (linhas iniciadas por # são
+//      comentários; a primeira linha útil é a versão)
 // Ex. de versão: 2.3000.1041467552-alpha  (lista em github.com/wppconnect-team/wa-version)
 function resolveWebVersion() {
   const fromEnv = (process.env.WAHA_WEB_VERSION || '').trim();
@@ -49,8 +50,10 @@ function resolveWebVersion() {
   try {
     const f = path.join(__dirname, 'web-version.txt');
     if (fs.existsSync(f)) {
-      const v = fs.readFileSync(f, 'utf8').trim();
-      if (v && !v.startsWith('#')) return v;
+      for (const line of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
+        const v = line.trim();
+        if (v && !v.startsWith('#')) return v; // primeira linha não-comentário = versão
+      }
     }
   } catch (_) { /* sem arquivo = sem fixar */ }
   return '';
