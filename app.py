@@ -1272,6 +1272,115 @@ SCHEMA_MIGRATIONS = [
         # preview quando não há corpo de texto nem mídia (ver _waha_is_content_message).
         "DELETE FROM inbound_messages WHERE preview = '(mensagem sem texto)' AND responded_at IS NULL",
     ]),
+    # -----------------------------------------------------------------------
+    # Migração 14 — Fundação multiusuário (Fase A do plano de migração web).
+    #
+    # 100% ADITIVA E REVERSÍVEL: só cria tabelas novas e colunas `owner_id`
+    # NULLABLE. Nenhum código existente é obrigado a conhecer `owner_id` — como
+    # a coluna aceita NULL, todos os INSERTs atuais das rotas continuam válidos
+    # (a coluna fica NULL até o wiring de auth/ACL nas fases seguintes).
+    #
+    # Modelo escolhido (decisões confirmadas com o usuário):
+    #   - Uma única organização fundadora (seed); memberships/teams ficam para
+    #     quando a UI de compartilhamento for desenhada (evita tabelas vazias).
+    #   - `owner_id` só nas ENTIDADES-RAIZ de negócio. Tabelas filhas/junção
+    #     (contatos de conta, itens de oferta, respostas de ambiente, cards de
+    #     kanban, eventos de troca de cargo, etc.) herdam a dona via FK do pai —
+    #     não ganham `owner_id` próprio.
+    #   - `users.entra_object_id` fica NULL; será preenchido no 1º login SSO
+    #     (Fase 3), casando pelo e-mail. Nada do Azure é necessário agora.
+    # -----------------------------------------------------------------------
+    (14, 'multiusuario_fase_a_users_orgs_shares_owner_id', [
+        # --- Tabelas de identidade e compartilhamento ---
+        '''CREATE TABLE IF NOT EXISTS organizations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            entra_tenant_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        # `users` substituirá `user_profile` (singleton id=1) como fonte de
+        # identidade nas próximas fases. Múltiplos NULL em entra_object_id são
+        # permitidos (SQLite trata NULLs como distintos em UNIQUE), então vários
+        # usuários pré-SSO podem coexistir sem Entra ID.
+        '''CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER REFERENCES organizations(id),
+            entra_object_id TEXT UNIQUE,
+            email TEXT,
+            full_name TEXT,
+            nickname TEXT,
+            position TEXT,
+            photo_url TEXT,
+            role TEXT NOT NULL DEFAULT 'member',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        # Compartilhamento seletivo por usuário (por-time fica para depois).
+        '''CREATE TABLE IF NOT EXISTS shares (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_type TEXT NOT NULL,
+            record_id INTEGER NOT NULL,
+            shared_with_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            permission TEXT NOT NULL DEFAULT 'read',
+            created_by INTEGER REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(record_type, record_id, shared_with_user_id)
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id)',
+        'CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)',
+        'CREATE INDEX IF NOT EXISTS idx_shares_record ON shares(record_type, record_id)',
+        'CREATE INDEX IF NOT EXISTS idx_shares_user ON shares(shared_with_user_id)',
+
+        # --- Seed: organização fundadora (nome placeholder, renomeável) ---
+        "INSERT INTO organizations (name) SELECT 'Toca do Coelho' "
+        "WHERE NOT EXISTS (SELECT 1 FROM organizations)",
+        # --- Seed: usuário fundador a partir do user_profile (id=1) ---
+        # role='admin' (fundador da org). entra_object_id NULL (preenchido no
+        # 1º login SSO). No-op se não houver user_profile (banco novo/vazio).
+        '''INSERT INTO users (org_id, entra_object_id, email, full_name, nickname, position, photo_url, role)
+           SELECT (SELECT MIN(id) FROM organizations), NULL,
+                  email, full_name, nickname, position, photo_url, 'admin'
+           FROM user_profile
+           WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM users)''',
+
+        # --- owner_id (NULLABLE) nas entidades-raiz de negócio ---
+        'ALTER TABLE clients ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE accounts ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE campaigns ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE commitments ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE activities ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE kanban_columns ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE wiki_entries ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE wiki_documents ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE portfolio_offers ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE iata_records ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE environment_cards ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_clients_owner ON clients(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_accounts_owner ON accounts(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_campaigns_owner ON campaigns(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_commitments_owner ON commitments(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_activities_owner ON activities(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_kanban_columns_owner ON kanban_columns(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_wiki_entries_owner ON wiki_entries(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_wiki_documents_owner ON wiki_documents(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_portfolio_offers_owner ON portfolio_offers(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_iata_records_owner ON iata_records(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_environment_cards_owner ON environment_cards(owner_id)',
+
+        # --- Backfill: dono = fundador (MIN(users.id)). No-op se não houver
+        #     fundador (banco novo) — owner_id permanece NULL sem erro. ---
+        'UPDATE clients SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE accounts SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE campaigns SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE commitments SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE activities SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE kanban_columns SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE wiki_entries SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE wiki_documents SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE portfolio_offers SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE iata_records SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE environment_cards SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
 ]
 
 
