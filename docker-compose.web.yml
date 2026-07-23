@@ -1,0 +1,22 @@
+# Execução local da imagem web (para testar a Fase 0 num container real):
+#
+#   docker compose -f docker-compose.web.yml up --build
+#
+# Depois acesse http://localhost:3000  (health: http://localhost:3000/healthz)
+# O banco SQLite fica no volume `toca_data`, persistindo entre execuções.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      TOCA_DATA_DIR: /data
+      WEB_CONCURRENCY: "1"   # ver nota em gunicorn.conf.py antes de aumentar
+    volumes:
+      - toca_data:/data
+    restart: unless-stopped
+
+volumes:
+  toca_data:

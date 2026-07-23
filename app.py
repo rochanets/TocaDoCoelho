@@ -162,8 +162,24 @@ except ImportError:
 app = Flask(__name__, static_folder='public', static_url_path='')
 CORS(app)
 
-# Diretorio de dados
-if sys.platform == 'win32':
+
+@app.route('/healthz')
+def healthz():
+    """Liveness probe para container/orquestrador (Docker HEALTHCHECK, Nginx,
+    load balancer). Sem auth e sem tocar no banco — só confirma que o processo
+    está de pé e servindo requisições."""
+    return jsonify({'status': 'ok'}), 200
+
+# Diretorio de dados.
+# Em produção web (container/servidor), a variável de ambiente TOCA_DATA_DIR
+# aponta para um volume persistente montado (ex.: /data). Sem ela, mantém-se
+# EXATAMENTE o comportamento desktop de sempre — o app local não muda em nada.
+_data_dir_override = os.getenv('TOCA_DATA_DIR')
+if _data_dir_override:
+    DATA_DIR = Path(_data_dir_override)
+    LEGACY_DATA_DIR_V2 = None
+    LEGACY_DATA_DIR_V1 = None
+elif sys.platform == 'win32':
     DATA_DIR = Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho'
     LEGACY_DATA_DIR_V2 = Path('C:/toca-do-coelho-version2')
     LEGACY_DATA_DIR_V1 = Path('C:/toca-do-coelho')
