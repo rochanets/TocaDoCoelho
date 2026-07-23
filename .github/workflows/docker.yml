@@ -1,0 +1,36 @@
+name: Docker (imagem web)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build da imagem web
+        run: docker build -t tocadocoelho-web:ci .
+
+      - name: Subir o container
+        run: docker run -d --name toca-web -p 3000:3000 tocadocoelho-web:ci
+
+      - name: Smoke test — /healthz responde 200
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/healthz; then
+              echo; echo "healthz OK"; exit 0
+            fi
+            echo "tentativa $i: ainda subindo..."; sleep 2
+          done
+          echo "healthz não respondeu a tempo"; exit 1
+
+      - name: Logs do container
+        if: always()
+        run: docker logs toca-web || true
+
+      - name: Derrubar o container
+        if: always()
+        run: docker rm -f toca-web || true

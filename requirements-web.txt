@@ -1,0 +1,16 @@
+# Dependências da imagem WEB (container), servida por Gunicorn — Fase 0 da
+# migração para web multiusuário.
+#
+# É o conjunto necessário para BOOTAR o app e servir a SPA + o CRUD sobre
+# SQLite. As dependências pesadas/opcionais (PDF, OCR, docx, áudio/ML) NÃO
+# entram aqui e serão adicionadas conforme cada feature for portada para a
+# web; as desktop-only (pywin32, Playwright, Selenium) vão para o "Toca
+# Companion". O app importa todas essas de forma guardada (try/except), então
+# a ausência apenas desativa a feature específica, sem quebrar o boot.
+Flask==2.3.3
+Flask-CORS==4.0.0
+Werkzeug==2.3.7
+requests>=2.31.0
+chardet==5.2.0
+cryptography>=41.0.0
+gunicorn>=21.2.0

@@ -1,0 +1,48 @@
+# Mantém o contexto de build enxuto e a imagem sem artefatos desktop/dev.
+.git
+.github
+.gitignore
+.manus
+.claude
+
+# Caches / builds
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Bancos e backups locais (o container usa o volume /data)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+BD_teste/
+backups/
+
+# Desktop-only / empacotamento Windows (vão para o Toca Companion)
+launcher.py
+installer.nsi
+installer_assets/
+BUILD_INSTALLER.bat
+*.bat
+coelho_icon_transparent.ico
+
+# Mídia pesada não usada pelo runtime web
+public/videos/
+
+# Integrações auxiliares rodadas fora do app
+waha-lite/
+
+# Documentação e notas
+docs/
+*.md
