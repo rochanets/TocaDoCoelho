@@ -1162,6 +1162,9 @@ def init_db():
 
 
 def run_automatic_db_backup(interval_days=3):
+    if DB_BACKEND != 'sqlite':
+        return  # backup por cópia de arquivo é específico do SQLite (o backup
+                # do PostgreSQL será tratado na infraestrutura, fase posterior)
     try:
         conn = sqlite3.connect(str(DB_PATH))
         c = conn.cursor()
@@ -1458,20 +1461,51 @@ def _open_sqlite(path, *, timeout=15.0, row_factory=False, foreign_keys=False):
     return conn
 
 
+def _open_postgres(*, row_factory=False):
+    """Abre uma conexão PostgreSQL via psycopg (Fase 2 sub-PR 2a).
+
+    Só o TRANSPORTE entra aqui. A tradução do SQL dialetal SQLite→PostgreSQL
+    (placeholders, RETURNING, funções de data, DDL) chega nas sub-PRs 2b/2c —
+    por isso migrations e queries de runtime ainda não rodam neste backend.
+    """
+    url = os.getenv('DATABASE_URL') or DATABASE_URL
+    if not url:
+        raise RuntimeError('DATABASE_URL não definida para o backend PostgreSQL.')
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as e:
+        raise RuntimeError(
+            "Backend PostgreSQL requer o pacote 'psycopg'. "
+            "Instale com: pip install \"psycopg[binary]\"."
+        ) from e
+    return psycopg.connect(url, row_factory=dict_row if row_factory else None)
+
+
 def _open_main_db(*, timeout=15.0, row_factory=False, foreign_keys=False):
     """Abre uma conexão com o banco de dados da aplicação, despachando por
-    backend. Hoje só SQLite; PostgreSQL chega na próxima sub-PR da Fase 2."""
+    backend. `timeout`/`foreign_keys` são específicos do SQLite e ignorados
+    no PostgreSQL."""
     if DB_BACKEND == 'sqlite':
         return _open_sqlite(DB_PATH, timeout=timeout, row_factory=row_factory,
                             foreign_keys=foreign_keys)
+    if DB_BACKEND == 'postgresql':
+        return _open_postgres(row_factory=row_factory)
     raise NotImplementedError(
         f"Backend de banco '{DB_BACKEND}' ainda não é suportado. "
-        "O suporte a PostgreSQL chega na próxima sub-PR da Fase 2. "
-        "Sem DATABASE_URL (ou com sqlite), o app funciona normalmente."
+        "Use SQLite (sem DATABASE_URL) ou PostgreSQL (postgresql://...)."
     )
 
 
 def _run_schema_migrations():
+    if DB_BACKEND != 'sqlite':
+        # As migrations em SCHEMA_MIGRATIONS são DDL SQLite. A execução no
+        # PostgreSQL (com tradução de dialeto) chega na sub-PR 2b da Fase 2.
+        logger.warning(
+            f"[Database] Migrations no backend '{DB_BACKEND}' ainda não "
+            "implementadas (sub-PR 2b da Fase 2). Pulando."
+        )
+        return
     conn = _open_main_db(timeout=5.0)
     try:
         c = conn.cursor()
@@ -1505,6 +1539,8 @@ def _run_schema_migrations():
 
 def _mark_interrupted_background_tasks():
     """Ao subir, marca tasks 'processing' de execuções anteriores como interrompidas."""
+    if DB_BACKEND != 'sqlite':
+        return  # rotina de manutenção só habilitada no PostgreSQL após a sub-PR 2c
     try:
         conn = _open_main_db(timeout=5.0)
         conn.execute(
@@ -5627,6 +5663,8 @@ def ensure_account_for_company(cursor, company_name):
 
 
 def sync_accounts_from_clients():
+    if DB_BACKEND != 'sqlite':
+        return  # sincronização de bootstrap só habilitada no PostgreSQL após 2c
     try:
         conn = get_db()
         c = conn.cursor()

@@ -1,0 +1,44 @@
+name: Postgres (transporte — Fase 2)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pg-connection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: toca
+          POSTGRES_PASSWORD: toca
+          POSTGRES_DB: toca
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U toca"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://toca:toca@localhost:5432/toca
+      # Desliga pollers/schedulers em background durante o teste (o app ainda
+      # não roda ponta-a-ponta no Postgres — só validamos o transporte).
+      TOCA_DISABLE_BG_JOBS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Instalar dependências web (inclui psycopg) + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-web.txt pytest
+      - name: Teste de transporte PostgreSQL
+        run: python -m pytest tests/test_postgres_connection.py -v
