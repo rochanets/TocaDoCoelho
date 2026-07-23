@@ -193,6 +193,36 @@ DB_PATH = DATA_DIR / 'toca-do-coelho.db'
 TEST_DB_TEMPLATE_PATH = Path(__file__).resolve().parent / 'BD_teste' / 'toca-do-coelho-ficticio-reduzido.db'
 BACKUP_DIR = DATA_DIR / 'backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Seam de configuração do banco (Fase 2 — sub-PR 1: camada de acesso).
+#
+# Ponto ÚNICO onde se decide qual backend o app usa. Hoje só SQLite; a próxima
+# sub-PR liga o PostgreSQL aqui, sem mexer nas rotas. Sem DATABASE_URL, tudo
+# funciona exatamente como antes.
+#
+# DATABASE_URL seleciona o BACKEND (ex.: 'postgresql://...'). Para SQLite, o
+# caminho do arquivo continua sendo DB_PATH (controlado por TOCA_DATA_DIR) —
+# não extraímos caminho de URL sqlite:// de propósito, para evitar a clássica
+# confusão de barras de URLs sqlite.
+# ---------------------------------------------------------------------------
+DATABASE_URL = os.getenv('DATABASE_URL') or None
+
+
+def _resolve_db_backend(url):
+    """Deriva o backend a partir do esquema da DATABASE_URL. Default: sqlite."""
+    if not url:
+        return 'sqlite'
+    scheme = (urlparse(url).scheme or '').lower()
+    if scheme in ('', 'sqlite', 'sqlite3', 'file'):
+        return 'sqlite'
+    if scheme in ('postgres', 'postgresql'):
+        return 'postgresql'
+    return scheme
+
+
+DB_BACKEND = _resolve_db_backend(DATABASE_URL)
 LOG_DIR = DATA_DIR / 'logs'
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / 'app.log'
@@ -1400,11 +1430,50 @@ SCHEMA_MIGRATIONS = [
 ]
 
 
-def _run_schema_migrations():
-    conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
+# ---------------------------------------------------------------------------
+# Fábrica de conexões do banco de dados (camada de acesso — Fase 2 sub-PR 1).
+#
+# `_open_sqlite` é o ÚNICO lugar que chama sqlite3.connect para o banco de dados
+# da aplicação e aplica os PRAGMAs padrão. `get_db()`, o runner de migrations e
+# o marcador de tasks interrompidas passam por aqui, via `_open_main_db`, que é
+# o ponto de despacho por backend. Quando o suporte a PostgreSQL entrar (próxima
+# sub-PR), só este despacho muda — nenhuma rota precisa ser tocada.
+#
+# Observação: conexões que operam sobre ARQUIVOS .db avulsos (backup, restore,
+# merge de importação, validação de banco de teste, init_db) seguem usando
+# sqlite3.connect direto de propósito — são operações inerentes a arquivo
+# SQLite, não ao "backend de dados" da aplicação, e serão revisadas à parte.
+# ---------------------------------------------------------------------------
+def _open_sqlite(path, *, timeout=15.0, row_factory=False, foreign_keys=False):
+    conn = sqlite3.connect(str(path), timeout=timeout)
+    if row_factory:
+        conn.row_factory = sqlite3.Row
     try:
         conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
+        if foreign_keys:
+            conn.execute('PRAGMA foreign_keys=ON')
+    except Exception as e:
+        logger.debug(f'[Database] Falha ao aplicar PRAGMAs de conexão: {e}')
+    return conn
+
+
+def _open_main_db(*, timeout=15.0, row_factory=False, foreign_keys=False):
+    """Abre uma conexão com o banco de dados da aplicação, despachando por
+    backend. Hoje só SQLite; PostgreSQL chega na próxima sub-PR da Fase 2."""
+    if DB_BACKEND == 'sqlite':
+        return _open_sqlite(DB_PATH, timeout=timeout, row_factory=row_factory,
+                            foreign_keys=foreign_keys)
+    raise NotImplementedError(
+        f"Backend de banco '{DB_BACKEND}' ainda não é suportado. "
+        "O suporte a PostgreSQL chega na próxima sub-PR da Fase 2. "
+        "Sem DATABASE_URL (ou com sqlite), o app funciona normalmente."
+    )
+
+
+def _run_schema_migrations():
+    conn = _open_main_db(timeout=5.0)
+    try:
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER PRIMARY KEY,
@@ -1437,7 +1506,7 @@ def _run_schema_migrations():
 def _mark_interrupted_background_tasks():
     """Ao subir, marca tasks 'processing' de execuções anteriores como interrompidas."""
     try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
+        conn = _open_main_db(timeout=5.0)
         conn.execute(
             "UPDATE background_tasks SET status = 'interrupted', updated_at = CURRENT_TIMESTAMP "
             "WHERE status = 'processing'"
@@ -1454,20 +1523,15 @@ run_automatic_db_backup(interval_days=3)
 
 # Funcoes auxiliares
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH), timeout=15.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=15000')
-        conn.execute('PRAGMA foreign_keys=ON')
-    except Exception as e:
-        logger.debug(f'[Database] Falha ao aplicar PRAGMAs de conexão: {e}')
+    conn = _open_main_db(timeout=15.0, row_factory=True, foreign_keys=True)
     # Garante que o arquivo de banco só seja acessível pelo usuário atual do SO
-    try:
-        import stat as _stat
-        os.chmod(str(DB_PATH), _stat.S_IRUSR | _stat.S_IWUSR)
-    except Exception as e:
-        logger.debug(f'[get_db] exceção ignorada: {e}')
+    # (aplicável apenas ao backend SQLite, baseado em arquivo).
+    if DB_BACKEND == 'sqlite':
+        try:
+            import stat as _stat
+            os.chmod(str(DB_PATH), _stat.S_IRUSR | _stat.S_IWUSR)
+        except Exception as e:
+            logger.debug(f'[get_db] exceção ignorada: {e}')
     return conn
 
 def dict_from_row(row):
