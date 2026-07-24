@@ -461,6 +461,79 @@ def exchange_code_and_store(conn, code: str, user_id: int, verifier: str, settin
     }
 
 
+# ── Login SSO (Fase 3) ───────────────────────────────────────────────────────
+# Fluxo de LOGIN (autenticar quem é o usuário na web), distinto do fluxo de
+# conectar o mailbox acima. Diferenças:
+#   - o state/PKCE ficam no cookie de sessão do próprio navegador (pré-auth), não
+#     em outlook_oauth_attempts — no login o usuário ainda é anônimo, não há
+#     user_id para amarrar o state no banco;
+#   - NÃO persiste tokens em user_integrations: o login só precisa das claims de
+#     identidade (oid/email/nome), obtidas via Graph /me com o access token
+#     recém-emitido pela troca do code (PKCE), sobre TLS.
+# Reaproveita o MESMO app registration (client_id/tenant) — só muda o escopo
+# (openid/profile/email/User.Read) e o redirect de login.
+
+def new_pkce_pair():
+    """(verifier, challenge) para um novo fluxo PKCE de login."""
+    verifier = _pkce_make_verifier()
+    return verifier, _pkce_make_challenge(verifier)
+
+
+def build_login_authorize_url(settings, state: str, nonce: str, code_challenge: str, login_hint: str = None):
+    cfg = _oauth_config(settings)
+    params = {
+        'client_id': cfg['client_id'],
+        'response_type': 'code',
+        'redirect_uri': cfg['redirect_uri'],
+        'response_mode': 'query',
+        'scope': cfg['scope'],
+        'state': state,
+        'nonce': nonce,
+        'code_challenge': code_challenge,
+        'code_challenge_method': 'S256',
+        # Deixa o usuário escolher a conta (evita reusar silenciosamente uma
+        # sessão AAD anterior no mesmo navegador).
+        'prompt': 'select_account',
+    }
+    if login_hint:
+        params['login_hint'] = login_hint
+    return f"{cfg['authorize_url']}?{urllib.parse.urlencode(params)}"
+
+
+def exchange_login_code(code: str, verifier: str, settings):
+    """Troca o authorization code pelo token de login (PKCE). Devolve o payload
+    do token endpoint (inclui access_token e, com openid, id_token) SEM persistir
+    nada — o chamador usa o access_token só para ler as claims via /me."""
+    cfg = _oauth_config(settings)
+    body = {
+        'client_id': cfg['client_id'],
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': cfg['redirect_uri'],
+        'scope': cfg['scope'],
+        'code_verifier': verifier,
+    }
+    payload = _http_form_post(cfg['token_url'], body)
+    if not payload.get('access_token'):
+        raise OutlookOAuthError('Token OAuth de login inválido: access_token ausente.')
+    return payload
+
+
+def fetch_user_claims(access_token: str):
+    """Lê a identidade do usuário logado via Graph /me. Retorna
+    {'oid', 'email', 'name'} — oid é o object id do Entra (estável)."""
+    data = _http_get_json(
+        f'{GRAPH_BASE_URL}/me?$select=id,displayName,mail,userPrincipalName',
+        headers={'Authorization': f'Bearer {access_token}', 'Accept': 'application/json'},
+    )
+    email = (data.get('mail') or data.get('userPrincipalName') or '').strip().lower()
+    return {
+        'oid': (data.get('id') or '').strip(),
+        'email': email,
+        'name': (data.get('displayName') or '').strip(),
+    }
+
+
 def _load_integration(conn, user_id: int):
     c = conn.cursor()
     c.execute(
