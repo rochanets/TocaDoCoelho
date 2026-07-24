@@ -162,3 +162,38 @@ def test_pg_kanban_child_activity_recursion(client, monkeypatch):
         s['user_id'] = b_id
     client.get('/api/kanban/columns')
     assert client.post(f'/api/kanban/cards/{card}/activities', json={'content': 'x'}).status_code == 404
+
+
+# ── Agenda: UNION (commitments + account_renewal_events filha) + DATE() no PG ─
+
+def test_pg_agenda_union_filtered(client, monkeypatch):
+    """A visão unificada da agenda cruza commitments (raiz) e
+    account_renewal_events (filha de accounts) com DATE() e visible_where —
+    valida a tradução do UNION + EXISTS(pai) + funções de data no Postgres."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    ca = _new_client(a_id, f'ca-{tag}'); cb = _new_client(b_id, f'cb-{tag}')
+    c.execute("INSERT INTO commitments (client_id, title, notes, due_date, source_type, owner_id) "
+              "VALUES (?, ?, ?, '2026-08-01', 'manual', ?)", (ca, f'CA-{tag}', 'x', a_id))
+    c.execute("INSERT INTO commitments (client_id, title, notes, due_date, source_type, owner_id) "
+              "VALUES (?, ?, ?, '2026-08-01', 'manual', ?)", (cb, f'CB-{tag}', 'x', b_id))
+    # evento de renovação (filho de accounts) do A
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'accR-{tag}', a_id))
+    acc = c.lastrowid
+    c.execute("INSERT INTO account_presences (account_id, delivery_name) VALUES (?, 'D')", (acc,))
+    pres = c.lastrowid
+    c.execute("INSERT INTO account_renewal_events (account_id, presence_id, title, due_date) "
+              "VALUES (?, ?, 'Renovação', '2026-08-02')", (acc, pres))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    r = client.get('/api/agenda')
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    items = r.get_json()
+    titles = {i['title'] for i in items}
+    companies = {i.get('client_company') for i in items}
+    assert f'CA-{tag}' in titles and f'CB-{tag}' not in titles    # commitments filtrados
+    assert f'accR-{tag}' in companies                              # renovação (filha) do A visível

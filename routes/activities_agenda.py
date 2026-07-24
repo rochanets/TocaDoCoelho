@@ -14,9 +14,11 @@ def get_activities():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('''SELECT a.*, c.name, c.company, c.position FROM activities a
+        _vw, _vp = visible_where('activities', alias='a')
+        c.execute(f'''SELECT a.*, c.name, c.company, c.position FROM activities a
                      JOIN clients c ON a.client_id = c.id
-                     ORDER BY a.activity_date DESC''')
+                     WHERE {_vw}
+                     ORDER BY a.activity_date DESC''', _vp)
         activities = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
         return jsonify(activities)
@@ -48,16 +50,16 @@ def create_atividade():
         conn = get_db()
         c = conn.cursor()
         
-        # Verificar se cliente existe
+        # Verificar se cliente existe e é visível ao usuário
         c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('clients', client_id, c):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
-        
+
         # Salvar com campos separados
-        c.execute('''INSERT INTO activities (client_id, contact_type, information)
-                     VALUES (?, ?, ?)''',
-                  (client_id, contact_type, information))
+        c.execute('''INSERT INTO activities (client_id, contact_type, information, owner_id)
+                     VALUES (?, ?, ?, ?)''',
+                  (client_id, contact_type, information, _acl_owner_for_insert()))
         conn.commit()
         activity_id = c.lastrowid
 
@@ -97,15 +99,15 @@ def create_activity():
         conn = get_db()
         c = conn.cursor()
         
-        # Verificar se cliente existe
+        # Verificar se cliente existe e é visível ao usuário
         c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('clients', client_id, c):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
-        
-        c.execute('''INSERT INTO activities (client_id, information)
-                     VALUES (?, ?)''',
-                  (client_id, description))
+
+        c.execute('''INSERT INTO activities (client_id, information, owner_id)
+                     VALUES (?, ?, ?)''',
+                  (client_id, description, _acl_owner_for_insert()))
         conn.commit()
         activity_id = c.lastrowid
 
@@ -147,7 +149,12 @@ def update_atividade(activity_id):
         
         conn = get_db()
         c = conn.cursor()
-        
+        if not can_read('activities', activity_id, c):
+            conn.close()
+            return jsonify({'error': 'Atividade não encontrada'}), 404
+        if not can_write('activities', activity_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta atividade.', 'error_type': 'forbidden'}), 403
         c.execute('''UPDATE activities SET contact_type = ?, information = ? WHERE id = ?''',
                   (contact_type, information, activity_id))
         conn.commit()
@@ -172,6 +179,12 @@ def delete_activity(activity_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('activities', activity_id, c):
+            conn.close()
+            return jsonify({'error': 'Atividade não encontrada'}), 404
+        if not can_write('activities', activity_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir esta atividade.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM activities WHERE id = ?', (activity_id,))
         conn.commit()
         conn.close()
@@ -190,22 +203,27 @@ def get_agenda():
         conn = get_db()
         c = conn.cursor()
 
-        query = '''SELECT CAST(cm.id AS TEXT) as id, cm.client_id, cm.activity_id, cm.title, cm.notes, cm.due_date, cm.due_time, cm.source_type,
+        _vcm, _pcm = visible_where('commitments', alias='cm')
+        _vev, _pev = visible_where('account_renewal_events', alias='ev')
+        query = f'''SELECT CAST(cm.id AS TEXT) as id, cm.client_id, cm.activity_id, cm.title, cm.notes, cm.due_date, cm.due_time, cm.source_type,
                           cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
                    FROM commitments cm
-                   JOIN clients cl ON cm.client_id = cl.id'''
-        params = []
+                   JOIN clients cl ON cm.client_id = cl.id
+                   WHERE {_vcm}'''
+        params = list(_pcm)
 
         if start_date and end_date:
-            query += ' WHERE DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
+            query += ' AND DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
             params.extend([start_date, end_date])
 
-        query += ''' UNION ALL SELECT 'acc-' || CAST(ev.id AS TEXT) as id, NULL as client_id, NULL as activity_id, ev.title, ev.title as notes, ev.due_date, ev.due_time, 'account_presence' as source_type,
+        query += f''' UNION ALL SELECT 'acc-' || CAST(ev.id AS TEXT) as id, NULL as client_id, NULL as activity_id, ev.title, ev.title as notes, ev.due_date, ev.due_time, 'account_presence' as source_type,
                           ac.name as client_name, ac.name as client_company, 'Conta' as client_position, NULL as client_email, ac.logo_url as client_photo
                    FROM account_renewal_events ev
-                   JOIN accounts ac ON ev.account_id = ac.id'''
+                   JOIN accounts ac ON ev.account_id = ac.id
+                   WHERE {_vev}'''
+        params.extend(_pev)
         if start_date and end_date:
-            query += ' WHERE DATE(ev.due_date) >= ? AND DATE(ev.due_date) <= ?'
+            query += ' AND DATE(ev.due_date) >= ? AND DATE(ev.due_date) <= ?'
             params.extend([start_date, end_date])
 
         query += ' ORDER BY due_date ASC, id ASC'
@@ -234,13 +252,13 @@ def create_agenda_item():
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM clients WHERE id = ?', (client_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('clients', client_id, c):
             conn.close()
             return jsonify({'error': 'Cliente não encontrado'}), 404
 
-        c.execute('''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type)
-                     VALUES (?, ?, ?, ?, ?, ?)''',
-                  (client_id, title or 'Agenda manual', notes or title or 'Agenda manual', due_date, due_time, 'manual'))
+        c.execute('''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type, owner_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                  (client_id, title or 'Agenda manual', notes or title or 'Agenda manual', due_date, due_time, 'manual', _acl_owner_for_insert()))
         commitment_id = c.lastrowid
         conn.commit()
 
@@ -264,6 +282,12 @@ def update_agenda_time(commitment_id):
 
         conn = get_db()
         c = conn.cursor()
+        if not can_read('commitments', commitment_id, c):
+            conn.close()
+            return jsonify({'error': 'Compromisso não encontrado'}), 404
+        if not can_write('commitments', commitment_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar este compromisso.', 'error_type': 'forbidden'}), 403
         c.execute('UPDATE commitments SET due_time = ? WHERE id = ?', (due_time, commitment_id))
         conn.commit()
         conn.close()
@@ -278,6 +302,12 @@ def delete_agenda_item(commitment_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('commitments', commitment_id, c):
+            conn.close()
+            return jsonify({'error': 'Compromisso não encontrado'}), 404
+        if not can_write('commitments', commitment_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir este compromisso.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM commitments WHERE id = ?', (commitment_id,))
         conn.commit()
         conn.close()
@@ -295,6 +325,8 @@ def download_agenda_ics(commitment_id):
         c = conn.cursor()
         c.execute('SELECT cm.*, cl.name as client_name, cl.company as client_company, cl.email as client_email FROM commitments cm JOIN clients cl ON cm.client_id = cl.id WHERE cm.id = ?', (commitment_id,))
         item = dict_from_row(c.fetchone())
+        if item and not can_read('commitments', commitment_id, c):
+            item = None  # existe, mas não é visível → 404
         conn.close()
 
         if not item:
@@ -351,9 +383,10 @@ def get_week_commitments_count():
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('''SELECT COUNT(*) as total FROM commitments
-                     WHERE DATE(due_date) >= ? AND DATE(due_date) <= ?''',
-                  (start_week.isoformat(), end_week.isoformat()))
+        _vw, _vp = visible_where('commitments')
+        c.execute(f'''SELECT COUNT(*) as total FROM commitments
+                     WHERE DATE(due_date) >= ? AND DATE(due_date) <= ? AND {_vw}''',
+                  [start_week.isoformat(), end_week.isoformat()] + _vp)
         total = c.fetchone()['total']
         conn.close()
 
@@ -379,18 +412,20 @@ def export_atividades():
         conn = get_db()
         c = conn.cursor()
         
+        _vw, _vp = visible_where('activities', alias='a')
         if start_date and end_date:
-            c.execute('''SELECT a.id, c.name, c.company, c.position, a.description, a.created_at 
+            c.execute(f'''SELECT a.id, c.name, c.company, c.position, a.description, a.created_at
                         FROM activities a
                         JOIN clients c ON a.client_id = c.id
-                        WHERE DATE(a.created_at) >= ? AND DATE(a.created_at) <= ?
+                        WHERE DATE(a.created_at) >= ? AND DATE(a.created_at) <= ? AND {_vw}
                         ORDER BY a.created_at DESC''',
-                     (start_date, end_date))
+                     [start_date, end_date] + _vp)
         else:
-            c.execute('''SELECT a.id, c.name, c.company, c.position, a.description, a.created_at 
+            c.execute(f'''SELECT a.id, c.name, c.company, c.position, a.description, a.created_at
                         FROM activities a
                         JOIN clients c ON a.client_id = c.id
-                        ORDER BY a.created_at DESC''')
+                        WHERE {_vw}
+                        ORDER BY a.created_at DESC''', _vp)
         
         rows = c.fetchall()
         conn.close()
@@ -428,18 +463,20 @@ def commitments_alerts():
         today = datetime.now().strftime('%Y-%m-%d')
         conn = get_db()
         c = conn.cursor()
-        c.execute("""
+        _vw, _vp = visible_where('commitments', alias='co')
+        c.execute(f"""
             SELECT co.id, co.title, co.due_date, co.due_time, cl.name, cl.company,
                    CASE WHEN co.due_date < ? THEN 'overdue' ELSE 'today' END AS kind
             FROM commitments co
             JOIN clients cl ON cl.id = co.client_id
             WHERE COALESCE(cl.is_archived, 0) = 0
               AND co.due_date <= ?
+              AND {_vw}
               AND NOT EXISTS (SELECT 1 FROM activities a
                               WHERE a.client_id = co.client_id
                                 AND date(a.activity_date) >= co.due_date)
             ORDER BY co.due_date ASC, co.due_time ASC
-        """, (today, today))
+        """, [today, today] + _vp)
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
         return jsonify({
