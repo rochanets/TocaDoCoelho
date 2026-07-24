@@ -1494,6 +1494,53 @@ def _transpile_to_postgres(sql):
     return out
 
 
+# FKs de nível de tabela adiadas para depois que todas as tabelas existem.
+# No SQLite, um CREATE TABLE pode referenciar uma tabela ainda inexistente
+# (referência futura tolerada); no PostgreSQL a tabela referenciada precisa já
+# existir. Em vez de reordenar as ~40 tabelas do init_db à mão, criamos cada
+# tabela SEM as FKs e as adicionamos via ALTER no fim (preservando ON DELETE).
+_PG_PENDING_FKS = []
+
+
+def _split_pg_foreign_keys(pg_sql):
+    """Para um CREATE TABLE já em PostgreSQL, remove as FKs de nível de tabela e
+    devolve (create_sem_fk, [ALTER ... ADD FOREIGN KEY ...]). Statements que não
+    são CREATE TABLE com FK voltam inalterados."""
+    if 'FOREIGN KEY' not in pg_sql.upper():
+        return pg_sql, []
+    import sqlglot
+    from sqlglot import exp
+    try:
+        tree = sqlglot.parse_one(pg_sql, read='postgres')
+    except Exception:
+        return pg_sql, []
+    if not isinstance(tree, exp.Create) or tree.args.get('kind') != 'TABLE':
+        return pg_sql, []
+    schema = tree.this
+    if not isinstance(schema, exp.Schema):
+        return pg_sql, []
+    fks = [e for e in schema.expressions if isinstance(e, exp.ForeignKey)]
+    if not fks:
+        return pg_sql, []
+    table_sql = schema.this.sql(dialect='postgres')
+    for fk in fks:
+        schema.expressions.remove(fk)
+    alters = [f'ALTER TABLE {table_sql} ADD {fk.sql(dialect="postgres")}' for fk in fks]
+    return tree.sql(dialect='postgres'), alters
+
+
+def _pg_flush_pending_fks(conn):
+    """Aplica as FKs adiadas (já em SQL PostgreSQL, sem passar pelo transpiler)."""
+    if not _PG_PENDING_FKS:
+        return
+    raw = conn._conn if isinstance(conn, _PgConnection) else conn
+    cur = raw.cursor()
+    for alter in _PG_PENDING_FKS:
+        cur.execute(alter)
+    raw.commit()
+    _PG_PENDING_FKS.clear()
+
+
 class _PgCursor:
     """Cursor que transpila o SQL SQLite→PostgreSQL antes de executar.
 
@@ -1505,6 +1552,9 @@ class _PgCursor:
 
     def execute(self, sql, params=None):
         pg = _transpile_to_postgres(sql)
+        pg, deferred_fks = _split_pg_foreign_keys(pg)
+        if deferred_fks:
+            _PG_PENDING_FKS.extend(deferred_fks)
         if params is None:
             self._cur.execute(pg)
         else:
@@ -1660,6 +1710,10 @@ def _run_schema_migrations():
             )
             conn.commit()
             logger.info(f'[Database] Migração {version} ({name}) aplicada')
+        # No PostgreSQL, aplica as FKs adiadas agora que todas as tabelas
+        # (baseline + incrementais) já existem.
+        if DB_BACKEND == 'postgresql':
+            _pg_flush_pending_fks(conn)
     finally:
         conn.close()
 
