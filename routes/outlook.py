@@ -47,7 +47,7 @@ def outlook_diagnose():
         c = conn.cursor()
         c.execute('SELECT COUNT(*) FROM clients')
         total_clients = (c.fetchone() or [0])[0]
-        c.execute('SELECT COUNT(*) FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+        c.execute("SELECT COUNT(*) FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
         clients_with_email = (c.fetchone() or [0])[0]
         conn.close()
     except Exception as e:

@@ -28,7 +28,7 @@ def get_positions():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != "" ORDER BY position')
+        c.execute("SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != '' ORDER BY position")
         positions = [row['position'] for row in c.fetchall()]
         conn.close()
         return jsonify(positions)
