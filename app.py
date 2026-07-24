@@ -2075,7 +2075,8 @@ _ACL_ROOT_TABLES = {
 _ACL_PARENTS = {
     'kanban_cards': ('kanban_columns', 'column_id'),
     'kanban_card_activities': ('kanban_cards', 'card_id'),
-    # (agenda: meeting_briefings/account_renewal_events entram na PR 4.3)
+    'account_renewal_events': ('accounts', 'account_id'),
+    # (briefings: meeting_briefings entra na PR 4.4)
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
@@ -7139,9 +7140,9 @@ def create_commitments_from_activity(cursor, client_id, activity_id, text):
     created = []
     for due_date in dates:
         cursor.execute(
-            '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?)''',
-            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity')
+            '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type, owner_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity', _acl_owner_for_insert())
         )
         created.append({
             'id': cursor.lastrowid,
