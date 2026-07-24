@@ -37,3 +37,24 @@ def test_first_runtime_insert_with_cold_id_cache(monkeypatch):
         conn.commit()
     finally:
         conn.close()
+
+
+def test_migrations_reset_id_cache_for_late_tables(monkeypatch):
+    """organizations/users/shares nascem na migration 14 — DEPOIS de o cache de
+    tabelas-com-id (_PG_ID_TABLES) poder ter sido montado no meio de migrations
+    anteriores. A finalização das migrations deve INVALIDAR esse cache para o
+    runtime reconstruí-lo completo; senão um INSERT nessas tabelas não recebe
+    RETURNING id e cursor.lastrowid vem None (quebrava o provisionamento de
+    usuários no PostgreSQL)."""
+    # Simula o cache 'congelado' sem as tabelas da migration 14.
+    monkeypatch.setattr(toca, '_PG_ID_TABLES', {'clients', 'accounts'})
+    toca._run_schema_migrations()
+    assert toca._PG_ID_TABLES is None, 'migrations não invalidaram o cache de id-tables'
+    conn = toca.get_db()
+    try:
+        c = conn.cursor()
+        c.execute("INSERT INTO organizations (name) VALUES (?)", ('Org Regressao',))
+        assert c.lastrowid, 'lastrowid None para tabela criada em migration tardia'
+        conn.commit()
+    finally:
+        conn.close()
