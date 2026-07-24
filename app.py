@@ -27,6 +27,7 @@ import mimetypes
 import uuid
 import hashlib
 import secrets
+import functools
 from datetime import datetime, timedelta, date
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
@@ -1944,6 +1945,14 @@ def _run_schema_migrations():
         if DB_BACKEND == 'postgresql':
             _pg_flush_pending_fks(conn)
             _pg_bootstrap(conn)
+            # Invalida o cache de tabelas-com-id (emulação de lastrowid): ele
+            # pode ter sido montado no MEIO das migrations, antes de tabelas de
+            # migrations posteriores existirem (ex.: users/organizations/shares
+            # na 14). Sem isso, um INSERT de runtime nessas tabelas não recebe
+            # RETURNING id e cursor.lastrowid vem None. O 1º INSERT de runtime
+            # reconstrói o cache já com o schema completo.
+            global _PG_ID_TABLES
+            _PG_ID_TABLES = None
     finally:
         conn.close()
 
@@ -2122,6 +2131,28 @@ def _apply_login_to_user(conn, user, oid, name):
     c = conn.cursor()
     c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", params)
     conn.commit()
+
+
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+def _valid_email(email):
+    return bool(_EMAIL_RE.match((email or '').strip()))
+
+
+def admin_required(fn):
+    """Restringe uma rota a usuários com role='admin'. Com o login ligado, exige
+    sessão de admin; com o login desligado (desktop), current_user() é o fundador
+    (admin), então o dono da instância continua podendo administrar."""
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        user = current_user()
+        if not user:
+            return jsonify({'error': 'Autenticação necessária.', 'error_type': 'auth_required'}), 401
+        if (user.get('role') or '').strip().lower() != 'admin':
+            return jsonify({'error': 'Acesso restrito a administradores.', 'error_type': 'forbidden'}), 403
+        return fn(*args, **kwargs)
+    return _wrapper
 
 
 # Endpoints sempre públicos (sem redirect): /healthz e o próprio fluxo de auth.
@@ -12630,7 +12661,7 @@ def handle_unexpected_exception(error):
 # apenas organizado por assunto. Novas rotas devem ir no arquivo do domínio.
 # No build PyInstaller, incluir --add-data "routes;routes".
 # ---------------------------------------------------------------------------
-ROUTE_MODULES = ['auth', 'clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
+ROUTE_MODULES = ['auth', 'admin', 'clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
                  'portfolio', 'config', 'home']
 
