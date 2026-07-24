@@ -219,7 +219,7 @@ def outlook_graph_config():
     conn = get_db()
     c = conn.cursor()
     for key, value in [('outlook_graph_tenant_id', tenant), ('outlook_graph_client_id', client_id)]:
-        c.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', (key, value))
+        c.execute('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP', (key, value))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})

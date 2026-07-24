@@ -1476,16 +1476,25 @@ def _open_sqlite(path, *, timeout=15.0, row_factory=False, foreign_keys=False):
 # ---------------------------------------------------------------------------
 _TRANSPILE_CACHE = {}
 _INSERT_OR_IGNORE_RE = re.compile(r'^(\s*)INSERT\s+OR\s+IGNORE\s+INTO', re.I)
+# Funções de data SQLite → funções de emulação criadas no PostgreSQL
+# (ver _PG_BOOTSTRAP_SQL). O \b evita casar dentro de nomes como activity_date.
+_SQLITE_DATE_FN_RE = re.compile(r'\b(datetime|date|julianday)\s*\(', re.I)
 
 
 def _pg_prepare_sqlite_sql(sql):
     """Ajustes de sintaxe SQLite que o sqlglot não converte sozinho para
-    PostgreSQL. Hoje: `INSERT OR IGNORE` → `INSERT ... ON CONFLICT DO NOTHING`
-    (mesma semântica: ignora violação de PK/UNIQUE)."""
+    PostgreSQL:
+    - `INSERT OR IGNORE` → `INSERT ... ON CONFLICT DO NOTHING`.
+    - funções de data `datetime()/date()/julianday()` → `sqlite_*` (emuladas no
+      PG, ver _PG_BOOTSTRAP_SQL) — preserva a semântica de comparação do SQLite
+      (datas TEXT comparadas como string, TIMESTAMP como timestamp).
+    """
     if _INSERT_OR_IGNORE_RE.match(sql):
         sql = _INSERT_OR_IGNORE_RE.sub(r'\1INSERT INTO', sql)
         if 'ON CONFLICT' not in sql.upper():
             sql = sql.rstrip().rstrip(';') + ' ON CONFLICT DO NOTHING'
+    if _SQLITE_DATE_FN_RE.search(sql):
+        sql = _SQLITE_DATE_FN_RE.sub(lambda m: 'sqlite_' + m.group(1).lower() + '(', sql)
     return sql
 
 
@@ -1503,8 +1512,19 @@ def _transpile_to_postgres(sql):
             f"Falha ao transpilar SQL para PostgreSQL via sqlglot: {e}\n--- SQL ---\n{sql}"
         ) from e
     out = ';\n'.join(parts)
+    # sqlglot mapeia %H/%Y etc., mas não %w (dia da semana). Corrige o
+    # TO_CHAR(..., '%w') resultante para EXTRACT(DOW ...) — mesmo intervalo
+    # 0=Dom..6=Sáb do SQLite.
+    if "'%w'" in out:
+        out = _PG_STRFTIME_DOW_RE.sub(r'EXTRACT(DOW FROM \1)', out)
     _TRANSPILE_CACHE[sql] = out
     return out
+
+
+_PG_STRFTIME_DOW_RE = re.compile(r"TO_CHAR\(\s*(.+?)\s*,\s*'%w'\s*\)", re.I)
+# Placeholders válidos do psycopg; qualquer outro '%' precisa virar '%%' quando
+# há parâmetros (senão o psycopg interpreta como placeholder). Ex.: LIKE '%x%'.
+_PG_PERCENT_LITERAL_RE = re.compile(r'%(?![sbt])')
 
 
 # FKs de nível de tabela adiadas para depois que todas as tabelas existem.
@@ -1554,6 +1574,60 @@ def _pg_flush_pending_fks(conn):
     _PG_PENDING_FKS.clear()
 
 
+# Objetos PostgreSQL que emulam recursos do SQLite usados pelo app, para as
+# queries rodarem sem reescrita (Fase 2 sub-PR 2c):
+#  - collation `nocase`: resolve `COLLATE NOCASE` (ordenação case-insensitive).
+#  - funções sqlite_datetime/date/julianday: emulam as funções de data do
+#    SQLite. `datetime` devolve timestamp (compara com colunas TIMESTAMP) e
+#    `date` devolve texto 'YYYY-MM-DD' (compara como string com colunas de data
+#    TEXT), preservando a semântica do SQLite.
+_PG_BOOTSTRAP_SQL = [
+    "CREATE COLLATION IF NOT EXISTS nocase "
+    "(provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+
+    """CREATE OR REPLACE FUNCTION sqlite_datetime(VARIADIC args text[])
+       RETURNS timestamp AS $$
+       DECLARE ts timestamp; m text; i int;
+       BEGIN
+         IF args[1] = 'now' THEN ts := now() AT TIME ZONE 'UTC';
+         ELSE ts := args[1]::timestamp; END IF;
+         FOR i IN 2 .. coalesce(array_length(args, 1), 1) LOOP
+           m := args[i];
+           IF m IN ('localtime', 'utc') THEN CONTINUE;
+           ELSE ts := ts + m::interval; END IF;
+         END LOOP;
+         RETURN ts;
+       END $$ LANGUAGE plpgsql IMMUTABLE""",
+    """CREATE OR REPLACE FUNCTION sqlite_datetime(ts timestamp)
+       RETURNS timestamp AS $$ SELECT ts $$ LANGUAGE sql IMMUTABLE""",
+
+    """CREATE OR REPLACE FUNCTION sqlite_date(VARIADIC args text[])
+       RETURNS text AS $$
+       SELECT to_char(sqlite_datetime(VARIADIC args), 'YYYY-MM-DD')
+       $$ LANGUAGE sql IMMUTABLE""",
+    """CREATE OR REPLACE FUNCTION sqlite_date(ts timestamp)
+       RETURNS text AS $$ SELECT to_char(ts, 'YYYY-MM-DD') $$ LANGUAGE sql IMMUTABLE""",
+
+    """CREATE OR REPLACE FUNCTION sqlite_julianday(ts timestamp)
+       RETURNS double precision AS $$
+       SELECT EXTRACT(EPOCH FROM ts) / 86400.0 + 2440587.5
+       $$ LANGUAGE sql IMMUTABLE""",
+    """CREATE OR REPLACE FUNCTION sqlite_julianday(VARIADIC args text[])
+       RETURNS double precision AS $$
+       SELECT sqlite_julianday(sqlite_datetime(VARIADIC args))
+       $$ LANGUAGE sql IMMUTABLE""",
+]
+
+
+def _pg_bootstrap(conn):
+    """Cria/atualiza os objetos de emulação SQLite no PostgreSQL (idempotente)."""
+    raw = conn._conn if isinstance(conn, _PgConnection) else conn
+    cur = raw.cursor()
+    for stmt in _PG_BOOTSTRAP_SQL:
+        cur.execute(stmt)
+    raw.commit()
+
+
 # `PRAGMA table_info(x)` é usado pelo app para introspecção de colunas (guardas
 # de "adiciona coluna se faltar"). No PostgreSQL vira uma consulta a
 # information_schema com o MESMO formato de linha do PRAGMA (índice 1 = nome da
@@ -1577,16 +1651,36 @@ def _pragma_table_info_to_pg(table):
     )
 
 
+# SQLite popula cursor.lastrowid após um INSERT; o psycopg não. Para preservar
+# o padrão `c.execute('INSERT ...'); id = c.lastrowid`, o wrapper anexa
+# `RETURNING id` a INSERTs em tabelas que têm coluna `id` e captura o valor.
+_PG_ID_TABLES = None
+_INSERT_INTO_RE = re.compile(r'^\s*INSERT\s+INTO\s+"?(?P<t>\w+)"?', re.I)
+
+
+def _pg_id_tables(cur):
+    global _PG_ID_TABLES
+    if _PG_ID_TABLES is None:
+        cur.execute(
+            "SELECT table_name::text FROM information_schema.columns "
+            "WHERE column_name = 'id' AND table_schema = 'public'"
+        )
+        _PG_ID_TABLES = {r[0] for r in cur.fetchall()}
+    return _PG_ID_TABLES
+
+
 class _PgCursor:
     """Cursor que transpila o SQL SQLite→PostgreSQL antes de executar.
 
     Expõe a interface que o código do app espera de um cursor sqlite3
-    (execute/executemany/fetch*/rowcount/description/iteração)."""
+    (execute/executemany/fetch*/rowcount/description/iteração/lastrowid)."""
 
     def __init__(self, cur):
         self._cur = cur
+        self._lastrowid = None
 
     def execute(self, sql, params=None):
+        self._lastrowid = None
         m = _PRAGMA_TABLE_INFO_RE.match(sql)
         if m:
             # Introspecção de colunas: traduz PRAGMA → information_schema.
@@ -1596,10 +1690,23 @@ class _PgCursor:
         pg, deferred_fks = _split_pg_foreign_keys(pg)
         if deferred_fks:
             _PG_PENDING_FKS.extend(deferred_fks)
+        # Emula lastrowid: anexa RETURNING id em INSERT numa tabela com `id`.
+        want_id = False
+        ins = _INSERT_INTO_RE.match(pg)
+        if ins and 'RETURNING' not in pg.upper():
+            if ins.group('t').lower() in _pg_id_tables(self._cur):
+                pg = pg.rstrip().rstrip(';') + ' RETURNING id'
+                want_id = True
         if params is None:
             self._cur.execute(pg)
         else:
-            self._cur.execute(pg, params)
+            # Com parâmetros, o psycopg trata '%' como placeholder — escapa os
+            # '%' literais (ex.: LIKE '%x%') para '%%', preservando os '%s'.
+            self._cur.execute(_PG_PERCENT_LITERAL_RE.sub('%%', pg), params)
+        if want_id:
+            row = self._cur.fetchone()
+            if row is not None:
+                self._lastrowid = row['id'] if isinstance(row, dict) else row[0]
         return self
 
     def executemany(self, sql, seq_of_params):
@@ -1617,7 +1724,7 @@ class _PgCursor:
 
     @property
     def lastrowid(self):
-        return getattr(self._cur, 'lastrowid', None)
+        return self._lastrowid
 
     @property
     def rowcount(self):
@@ -1752,17 +1859,17 @@ def _run_schema_migrations():
             conn.commit()
             logger.info(f'[Database] Migração {version} ({name}) aplicada')
         # No PostgreSQL, aplica as FKs adiadas agora que todas as tabelas
-        # (baseline + incrementais) já existem.
+        # (baseline + incrementais) já existem, e cria os objetos de emulação
+        # (collation nocase + funções de data) usados pelas queries de runtime.
         if DB_BACKEND == 'postgresql':
             _pg_flush_pending_fks(conn)
+            _pg_bootstrap(conn)
     finally:
         conn.close()
 
 
 def _mark_interrupted_background_tasks():
     """Ao subir, marca tasks 'processing' de execuções anteriores como interrompidas."""
-    if DB_BACKEND != 'sqlite':
-        return  # rotina de manutenção só habilitada no PostgreSQL após a sub-PR 2c
     try:
         conn = _open_main_db(timeout=5.0)
         conn.execute(
@@ -5885,8 +5992,6 @@ def ensure_account_for_company(cursor, company_name):
 
 
 def sync_accounts_from_clients():
-    if DB_BACKEND != 'sqlite':
-        return  # sincronização de bootstrap só habilitada no PostgreSQL após 2c
     try:
         conn = get_db()
         c = conn.cursor()
@@ -8053,7 +8158,7 @@ def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, 
                 _total_act = (_cur_s.fetchone() or [0])[0]
                 _cur_s.execute('SELECT COUNT(*) as n FROM account_presences')
                 _total_srv = (_cur_s.fetchone() or [0])[0]
-                _cur_s.execute("SELECT COUNT(*) as n FROM activities WHERE activity_date >= date('now', '-30 days')")
+                _cur_s.execute("SELECT COUNT(*) as n FROM activities WHERE date(activity_date) >= date('now', '-30 days')")
                 _act_30d = (_cur_s.fetchone() or [0])[0]
                 _conn_s.close()
                 _stats_snip = (

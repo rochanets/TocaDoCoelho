@@ -351,7 +351,7 @@ def inbound_metrics():
             SELECT (julianday(responded_at) - julianday(received_at)) * 24 AS hours
             FROM inbound_messages
             WHERE responded_at IS NOT NULL
-              AND received_at >= datetime('now', 'localtime', '-30 days')
+              AND datetime(received_at) >= datetime('now', 'localtime', '-30 days')
             ORDER BY hours
         """)
         hours = [r['hours'] for r in c.fetchall() if r['hours'] is not None and r['hours'] >= 0]
