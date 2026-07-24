@@ -1053,14 +1053,18 @@ def job_change_open_account(event_id):
             conn.close()
             return jsonify({'error': 'Sem permissão para tratar este evento.', 'error_type': 'forbidden'}), 403
         account_id = ensure_account_for_company(c, ev['empresa_nova'])
-        # card na primeira coluna do Kanban (sem duplicar se já houver card do evento)
-        c.execute('SELECT id FROM kanban_columns ORDER BY display_order ASC, id ASC LIMIT 1')
+        # card na primeira coluna do Kanban do PRÓPRIO usuário (quadro por-usuário):
+        # garante o quadro e escopa a busca da coluna/dedup ao dono atual.
+        _ensure_kanban_board(c)
+        _kow, _kop = owned_where('kanban_columns')
+        c.execute(f'SELECT id FROM kanban_columns WHERE {_kow} ORDER BY display_order ASC, id ASC LIMIT 1', _kop)
         col = c.fetchone()
         card_id = None
         if col:
             title = f'Oportunidade a explorar — {ev["empresa_nova"]}'
-            c.execute("""SELECT id FROM kanban_cards WHERE title = ? AND account_id = ?""",
-                      (title, account_id))
+            _kcw, _kcp = owned_where('kanban_cards', 'kb')
+            c.execute(f"""SELECT kb.id FROM kanban_cards kb WHERE kb.title = ? AND kb.account_id = ? AND {_kcw}""",
+                      [title, account_id] + _kcp)
             existing_card = c.fetchone()
             if existing_card:
                 card_id = existing_card['id']

@@ -6,8 +6,10 @@
 
 
 def _normalize_kanban_column_order(c):
-    """Mantém Backlog sempre em primeiro e Done sempre em último."""
-    c.execute('SELECT id, title, display_order FROM kanban_columns ORDER BY display_order, id')
+    """Mantém Backlog sempre em primeiro e Done sempre em último (no quadro do
+    usuário atual — a ordenação é por-dono)."""
+    _ow, _op = owned_where('kanban_columns')
+    c.execute(f'SELECT id, title, display_order FROM kanban_columns WHERE {_ow} ORDER BY display_order, id', _op)
     rows = [dict_from_row(row) for row in c.fetchall()]
     if not rows:
         return []
@@ -41,18 +43,49 @@ def _kanban_fixed_column_kind(title):
         return 'done'
     return ''
 
+
+# Quadro Kanban é PESSOAL (por-usuário): cada dono tem seu próprio conjunto de
+# colunas de sistema; os cards herdam a visibilidade da coluna. Por isso o
+# escopo aqui é `owned_where`/`owns` (estritamente do dono), não visible_where.
+_KANBAN_DEFAULT_COLUMNS = [
+    ('Backlog', 1, 1, 0),
+    ('Em Andamento', 2, 1, 0),
+    ('Hold', 3, 1, 0),
+    ('Descartado', 4, 1, 1),
+    ('Done', 5, 1, 1),
+]
+
+
+def _ensure_kanban_board(c):
+    """Garante que o usuário atual tenha o quadro padrão (colunas de sistema),
+    semeando-o no 1º acesso. No-op se já tiver colunas próprias ou sem usuário
+    resolvido. Login off: o fundador já tem as colunas do init → no-op."""
+    owner = _acl_owner_for_insert()
+    if owner is None:
+        return
+    _ow, _op = owned_where('kanban_columns')
+    c.execute(f'SELECT 1 FROM kanban_columns WHERE {_ow} LIMIT 1', _op)
+    if c.fetchone():
+        return
+    for title, order, is_system, is_locked in _KANBAN_DEFAULT_COLUMNS:
+        c.execute('INSERT INTO kanban_columns (title, display_order, is_system, is_locked, owner_id) '
+                  'VALUES (?, ?, ?, ?, ?)', (title, order, is_system, is_locked, owner))
+
 @app.route('/api/kanban/columns', methods=['GET'])
 def list_kanban_columns():
     try:
         conn = get_db()
         c = conn.cursor()
+        _ensure_kanban_board(c)
         _normalize_kanban_column_order(c)
         conn.commit()
-        c.execute("""SELECT kc.*, COUNT(kb.id) AS cards_count
+        _ow, _op = owned_where('kanban_columns', 'kc')
+        c.execute(f"""SELECT kc.*, COUNT(kb.id) AS cards_count
                      FROM kanban_columns kc
                      LEFT JOIN kanban_cards kb ON kb.column_id = kc.id
+                     WHERE {_ow}
                      GROUP BY kc.id
-                     ORDER BY kc.display_order, kc.id""")
+                     ORDER BY kc.display_order, kc.id""", _op)
         rows = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
         return jsonify(rows)
@@ -70,12 +103,14 @@ def create_kanban_column():
 
         conn = get_db()
         c = conn.cursor()
+        _ensure_kanban_board(c)
         _normalize_kanban_column_order(c)
-        c.execute("SELECT display_order FROM kanban_columns WHERE lower(title) = 'done' ORDER BY display_order, id LIMIT 1")
+        _ow, _op = owned_where('kanban_columns')
+        c.execute(f"SELECT display_order FROM kanban_columns WHERE lower(title) = 'done' AND {_ow} ORDER BY display_order, id LIMIT 1", _op)
         done = c.fetchone()
-        next_order = done[0] if done else 2
-        c.execute('UPDATE kanban_columns SET display_order = display_order + 1 WHERE display_order >= ?', (next_order,))
-        c.execute('INSERT INTO kanban_columns (title, display_order) VALUES (?, ?)', (title, next_order))
+        next_order = done['display_order'] if done else 2
+        c.execute(f'UPDATE kanban_columns SET display_order = display_order + 1 WHERE display_order >= ? AND {_ow}', [next_order] + _op)
+        c.execute('INSERT INTO kanban_columns (title, display_order, owner_id) VALUES (?, ?, ?)', (title, next_order, _acl_owner_for_insert()))
         _normalize_kanban_column_order(c)
         conn.commit()
         new_id = c.lastrowid
@@ -97,7 +132,7 @@ def update_kanban_column(column_id):
         c = conn.cursor()
         c.execute('SELECT * FROM kanban_columns WHERE id = ?', (column_id,))
         current = c.fetchone()
-        if not current:
+        if not current or not owns('kanban_columns', column_id, c):
             conn.close()
             return jsonify({'error': 'Sessão não encontrada'}), 404
         current = dict_from_row(current)
@@ -121,7 +156,7 @@ def delete_kanban_column(column_id):
         c = conn.cursor()
         c.execute('SELECT * FROM kanban_columns WHERE id = ?', (column_id,))
         current = c.fetchone()
-        if not current:
+        if not current or not owns('kanban_columns', column_id, c):
             conn.close()
             return jsonify({'error': 'Sessão não encontrada'}), 404
         current = dict_from_row(current)
@@ -129,9 +164,10 @@ def delete_kanban_column(column_id):
             conn.close()
             return jsonify({'error': 'Sessão bloqueada não pode ser apagada'}), 403
 
-        c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
+        _ow, _op = owned_where('kanban_columns')
+        c.execute(f'SELECT id FROM kanban_columns WHERE {_ow} ORDER BY display_order, id LIMIT 1', _op)
         first_column = c.fetchone()
-        first_column_id = first_column[0] if first_column else None
+        first_column_id = first_column['id'] if first_column else None
 
         if first_column_id and first_column_id != column_id:
             c.execute('UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE column_id = ?', (first_column_id, column_id))
@@ -156,7 +192,7 @@ def move_kanban_column(column_id):
         _normalize_kanban_column_order(c)
         c.execute('SELECT id, title FROM kanban_columns WHERE id = ?', (column_id,))
         current = c.fetchone()
-        if not current:
+        if not current or not owns('kanban_columns', column_id, c):
             conn.close()
             return jsonify({'error': 'Sessão não encontrada'}), 404
         current = dict_from_row(current)
@@ -164,29 +200,30 @@ def move_kanban_column(column_id):
             conn.close()
             return jsonify({'error': 'Backlog e Done são sessões fixas e não podem ser movidas'}), 403
 
-        c.execute("""SELECT id, title FROM kanban_columns
-                     WHERE lower(title) NOT IN ('backlog', 'done') AND id != ?
-                     ORDER BY display_order, id""", (column_id,))
-        ids = [row[0] for row in c.fetchall()]
+        _ow, _op = owned_where('kanban_columns')
+        c.execute(f"""SELECT id, title FROM kanban_columns
+                     WHERE lower(title) NOT IN ('backlog', 'done') AND id != ? AND {_ow}
+                     ORDER BY display_order, id""", [column_id] + _op)
+        ids = [row['id'] for row in c.fetchall()]
         if position < 0:
             position = 0
         if position > len(ids):
             position = len(ids)
         ids.insert(position, column_id)
 
-        c.execute("SELECT id FROM kanban_columns WHERE lower(title) = 'backlog' ORDER BY display_order, id LIMIT 1")
+        c.execute(f"SELECT id FROM kanban_columns WHERE lower(title) = 'backlog' AND {_ow} ORDER BY display_order, id LIMIT 1", _op)
         backlog = c.fetchone()
         order = 1
         if backlog:
-            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, backlog[0]))
+            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, backlog['id']))
             order += 1
         for cid in ids:
             c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, cid))
             order += 1
-        c.execute("SELECT id FROM kanban_columns WHERE lower(title) = 'done' ORDER BY display_order, id LIMIT 1")
+        c.execute(f"SELECT id FROM kanban_columns WHERE lower(title) = 'done' AND {_ow} ORDER BY display_order, id LIMIT 1", _op)
         done = c.fetchone()
         if done:
-            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, done[0]))
+            c.execute('UPDATE kanban_columns SET display_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (order, done['id']))
         _normalize_kanban_column_order(c)
         conn.commit()
         conn.close()
@@ -201,7 +238,8 @@ def list_kanban_cards():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("""SELECT kb.*,
+        _ow, _op = owned_where('kanban_cards', 'kb')
+        c.execute(f"""SELECT kb.*,
                             acc.name AS account_name,
                             acc.logo_url AS account_logo_url,
                             cl.name AS contact_name,
@@ -210,7 +248,8 @@ def list_kanban_cards():
                      FROM kanban_cards kb
                      LEFT JOIN accounts acc ON acc.id = kb.account_id
                      LEFT JOIN clients cl ON cl.id = kb.contact_id
-                     ORDER BY kb.column_id, kb.display_order, kb.id""")
+                     WHERE {_ow}
+                     ORDER BY kb.column_id, kb.display_order, kb.id""", _op)
         rows = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
         return jsonify(rows)
@@ -236,15 +275,17 @@ def create_kanban_card():
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
+        _ensure_kanban_board(c)
+        _ow, _op = owned_where('kanban_columns')
+        c.execute(f'SELECT id FROM kanban_columns WHERE {_ow} ORDER BY display_order, id LIMIT 1', _op)
         first = c.fetchone()
         if not first:
             conn.close()
             return jsonify({'error': 'Nenhuma sessão disponível no Kanban'}), 400
-        first_column_id = first[0]
+        first_column_id = first['id']
 
-        c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (first_column_id,))
-        next_order = (c.fetchone()[0] or 0) + 1
+        c.execute('SELECT COALESCE(MAX(display_order), 0) AS n FROM kanban_cards WHERE column_id = ?', (first_column_id,))
+        next_order = (c.fetchone()['n'] or 0) + 1
 
         c.execute('''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, urgency, column_id, display_order)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
@@ -275,6 +316,9 @@ def update_kanban_card(card_id):
 
         conn = get_db()
         c = conn.cursor()
+        if not owns('kanban_cards', card_id, c):
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
         c.execute('''UPDATE kanban_cards
                      SET title = ?, description = ?, tag = ?, account_id = ?, contact_id = ?, urgency = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''',
@@ -302,7 +346,7 @@ def get_kanban_card(card_id):
                      LEFT JOIN clients cl ON cl.id = kb.contact_id
                      WHERE kb.id = ?''', (card_id,))
         row = c.fetchone()
-        if not row:
+        if not row or not owns('kanban_cards', card_id, c):
             conn.close()
             return jsonify({'error': 'Card não encontrado'}), 404
         card = dict_from_row(row)
@@ -323,8 +367,7 @@ def add_kanban_card_activity(card_id):
             return jsonify({'error': 'Atividade é obrigatória'}), 400
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
-        if not c.fetchone():
+        if not owns('kanban_cards', card_id, c):
             conn.close()
             return jsonify({'error': 'Card não encontrado'}), 404
         c.execute('INSERT INTO kanban_card_activities (card_id, content) VALUES (?, ?)', (card_id, content))
@@ -344,6 +387,9 @@ def delete_kanban_card(card_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not owns('kanban_cards', card_id, c):
+            conn.close()
+            return jsonify({'error': 'Card não encontrado'}), 404
         c.execute('DELETE FROM kanban_cards WHERE id = ?', (card_id,))
         conn.commit()
         conn.close()
@@ -362,8 +408,7 @@ def update_kanban_card_urgency(card_id):
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
-        if not c.fetchone():
+        if not owns('kanban_cards', card_id, c):
             conn.close()
             return jsonify({'error': 'Card não encontrado'}), 404
 
@@ -387,20 +432,18 @@ def move_kanban_card(card_id):
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id FROM kanban_cards WHERE id = ?', (card_id,))
-        if not c.fetchone():
+        if not owns('kanban_cards', card_id, c):
             conn.close()
             return jsonify({'error': 'Card não encontrado'}), 404
 
-        c.execute('SELECT id FROM kanban_columns WHERE id = ?', (column_id,))
-        if not c.fetchone():
+        if not owns('kanban_columns', column_id, c):
             conn.close()
             return jsonify({'error': 'Sessão de destino não encontrada'}), 404
 
         c.execute('''SELECT id FROM kanban_cards
                      WHERE column_id = ? AND id != ?
                      ORDER BY display_order, id''', (column_id, card_id))
-        ids = [row[0] for row in c.fetchall()]
+        ids = [row['id'] for row in c.fetchall()]
         if position < 0:
             position = 0
         if position > len(ids):
