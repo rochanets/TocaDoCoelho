@@ -40,10 +40,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-web.txt pytest
-      - name: Transporte + migrations + rotas no PostgreSQL
+      - name: Transporte + migrations + rotas + ETL no PostgreSQL
         run: |
           python -m pytest -v \
             tests/test_postgres_connection.py \
             tests/test_postgres_migrations.py \
             tests/test_sql_transpile.py \
-            tests/test_postgres_routes.py
+            tests/test_postgres_routes.py \
+            tests/test_postgres_etl.py
