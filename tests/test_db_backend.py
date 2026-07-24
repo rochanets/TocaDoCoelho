@@ -66,8 +66,18 @@ def test_open_main_db_uses_sqlite_by_default(db_path):
 
 
 def test_open_main_db_rejects_unimplemented_backend(monkeypatch):
-    monkeypatch.setattr(toca, 'DB_BACKEND', 'postgresql')
+    # sqlite e postgresql são suportados; qualquer outro esquema é recusado.
+    monkeypatch.setattr(toca, 'DB_BACKEND', 'mysql')
     with pytest.raises(NotImplementedError):
+        toca._open_main_db()
+
+
+def test_open_main_db_postgres_requires_database_url(monkeypatch):
+    # Backend postgresql agora é roteado; sem DATABASE_URL, erro claro de config.
+    monkeypatch.setattr(toca, 'DB_BACKEND', 'postgresql')
+    monkeypatch.setattr(toca, 'DATABASE_URL', None)
+    monkeypatch.delenv('DATABASE_URL', raising=False)
+    with pytest.raises(RuntimeError):
         toca._open_main_db()
 
 
