@@ -943,7 +943,7 @@ def init_db():
     if 'is_archived' not in columns:
         c.execute('ALTER TABLE clients ADD COLUMN is_archived INTEGER DEFAULT 0')
     if 'relationship_stage' not in columns:
-        c.execute('ALTER TABLE clients ADD COLUMN relationship_stage TEXT DEFAULT ""')
+        c.execute("ALTER TABLE clients ADD COLUMN relationship_stage TEXT DEFAULT ''")
 
     c.execute("PRAGMA table_info(commitments)")
     commitment_columns = [col[1] for col in c.fetchall()]
@@ -1475,6 +1475,18 @@ def _open_sqlite(path, *, timeout=15.0, row_factory=False, foreign_keys=False):
 # conforme aparecem no CI-Postgres.
 # ---------------------------------------------------------------------------
 _TRANSPILE_CACHE = {}
+_INSERT_OR_IGNORE_RE = re.compile(r'^(\s*)INSERT\s+OR\s+IGNORE\s+INTO', re.I)
+
+
+def _pg_prepare_sqlite_sql(sql):
+    """Ajustes de sintaxe SQLite que o sqlglot não converte sozinho para
+    PostgreSQL. Hoje: `INSERT OR IGNORE` → `INSERT ... ON CONFLICT DO NOTHING`
+    (mesma semântica: ignora violação de PK/UNIQUE)."""
+    if _INSERT_OR_IGNORE_RE.match(sql):
+        sql = _INSERT_OR_IGNORE_RE.sub(r'\1INSERT INTO', sql)
+        if 'ON CONFLICT' not in sql.upper():
+            sql = sql.rstrip().rstrip(';') + ' ON CONFLICT DO NOTHING'
+    return sql
 
 
 def _transpile_to_postgres(sql):
@@ -1483,8 +1495,9 @@ def _transpile_to_postgres(sql):
     if hit is not None:
         return hit
     import sqlglot
+    prepared = _pg_prepare_sqlite_sql(sql)
     try:
-        parts = [s for s in sqlglot.transpile(sql, read='sqlite', write='postgres') if s.strip()]
+        parts = [s for s in sqlglot.transpile(prepared, read='sqlite', write='postgres') if s.strip()]
     except Exception as e:
         raise RuntimeError(
             f"Falha ao transpilar SQL para PostgreSQL via sqlglot: {e}\n--- SQL ---\n{sql}"
@@ -1541,6 +1554,29 @@ def _pg_flush_pending_fks(conn):
     _PG_PENDING_FKS.clear()
 
 
+# `PRAGMA table_info(x)` é usado pelo app para introspecção de colunas (guardas
+# de "adiciona coluna se faltar"). No PostgreSQL vira uma consulta a
+# information_schema com o MESMO formato de linha do PRAGMA (índice 1 = nome da
+# coluna), para os consumidores existentes (`col[1]`) seguirem funcionando.
+_PRAGMA_TABLE_INFO_RE = re.compile(
+    r"""^\s*PRAGMA\s+table_info\s*\(\s*['"]?(?P<t>\w+)['"]?\s*\)\s*;?\s*$""", re.I
+)
+
+
+def _pragma_table_info_to_pg(table):
+    # column_name/data_type são do tipo `sql_identifier`/`name` — sem o ::text o
+    # psycopg os devolve como bytes, quebrando comparações `'col' in nomes`.
+    return (
+        "SELECT (ordinal_position - 1) AS cid, column_name::text AS name, "
+        "data_type::text AS type, "
+        "CASE WHEN is_nullable = 'NO' THEN 1 ELSE 0 END AS notnull, "
+        "column_default::text AS dflt_value, 0 AS pk "
+        "FROM information_schema.columns "
+        f"WHERE table_name = '{table}' AND table_schema = 'public' "
+        "ORDER BY ordinal_position"
+    )
+
+
 class _PgCursor:
     """Cursor que transpila o SQL SQLite→PostgreSQL antes de executar.
 
@@ -1551,6 +1587,11 @@ class _PgCursor:
         self._cur = cur
 
     def execute(self, sql, params=None):
+        m = _PRAGMA_TABLE_INFO_RE.match(sql)
+        if m:
+            # Introspecção de colunas: traduz PRAGMA → information_schema.
+            self._cur.execute(_pragma_table_info_to_pg(m.group('t')))
+            return self
         pg = _transpile_to_postgres(sql)
         pg, deferred_fks = _split_pg_foreign_keys(pg)
         if deferred_fks:
@@ -4970,7 +5011,7 @@ def _itoca_build_environment_items(conn):
             FROM environment_responses er
             LEFT JOIN environment_cards ec ON er.card_id = ec.id
             LEFT JOIN clients cl ON er.client_id = cl.id
-            WHERE er.response IS NOT NULL AND TRIM(er.response) != ""
+            WHERE er.response IS NOT NULL AND TRIM(er.response) != ''
             ORDER BY er.updated_at DESC
         ''')
         for row in cursor.fetchall():
@@ -5849,7 +5890,7 @@ def sync_accounts_from_clients():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != ""')
+        c.execute("SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != ''")
         companies = [row['company'] for row in c.fetchall()]
         for company in companies:
             ensure_account_for_company(c, company)
@@ -6964,7 +7005,7 @@ def _outlook_import_emails(emails_data, conn):
     Retorna (imported, skipped_duplicates, skipped_no_match).
     """
     c = conn.cursor()
-    c.execute('SELECT id, email FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+    c.execute("SELECT id, email FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
     email_to_client = {}
     for row in c.fetchall():
         normalized = (row['email'] or '').strip().lower()
@@ -7223,7 +7264,7 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
 
             conn = get_db()
             c = conn.cursor()
-            c.execute('SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+            c.execute("SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
             clients_map = {}
             domain_map = {}
             for row in c.fetchall():
@@ -7803,7 +7844,7 @@ def _outlook_match_emails(emails_data, conn):
     Retorna (activities, unmatched, all_clients_for_select).
     """
     c = conn.cursor()
-    c.execute('SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ""')
+    c.execute("SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
     clients_map = {}
     domain_map = {}
     for row in c.fetchall():

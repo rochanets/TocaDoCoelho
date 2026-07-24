@@ -51,3 +51,17 @@ def test_result_is_cached():
     first = toca._transpile_to_postgres(sql)
     assert sql in toca._TRANSPILE_CACHE
     assert toca._transpile_to_postgres(sql) == first
+
+
+def test_insert_or_ignore_becomes_on_conflict():
+    out = toca._transpile_to_postgres(
+        'INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)'
+    ).upper()
+    assert 'OR IGNORE' not in out
+    assert 'ON CONFLICT' in out and 'DO NOTHING' in out
+
+
+def test_pragma_table_info_maps_to_information_schema():
+    out = toca._pragma_table_info_to_pg('clients')
+    assert 'information_schema.columns' in out
+    assert "column_name::text AS name" in out
