@@ -1665,7 +1665,15 @@ def _pg_id_tables(cur):
             "SELECT table_name::text FROM information_schema.columns "
             "WHERE column_name = 'id' AND table_schema = 'public'"
         )
-        _PG_ID_TABLES = {r[0] for r in cur.fetchall()}
+        # A linha pode vir como tupla (cursor padrão) ou dict (row_factory=True,
+        # usado por get_db em runtime). Sem tratar os dois, o PRIMEIRO INSERT de
+        # runtime num processo que sobe contra um banco JÁ migrado — quando este
+        # cache ainda é None — estoura KeyError: 0 no cursor dict. Mesmo padrão
+        # de _PgCursor.execute (row['id'] if isinstance(row, dict) else row[0]).
+        _PG_ID_TABLES = {
+            (r['table_name'] if isinstance(r, dict) else r[0])
+            for r in cur.fetchall()
+        }
     return _PG_ID_TABLES
 
 
