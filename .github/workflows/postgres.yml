@@ -48,4 +48,5 @@ jobs:
             tests/test_sql_transpile.py \
             tests/test_postgres_routes.py \
             tests/test_postgres_lastrowid.py \
-            tests/test_postgres_etl.py
+            tests/test_postgres_etl.py \
+            tests/test_postgres_acl.py

@@ -14,7 +14,8 @@ def get_clients():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM clients ORDER BY name')
+        _vw, _vp = visible_where('clients')
+        c.execute(f'SELECT * FROM clients WHERE {_vw} ORDER BY name', _vp)
         clients = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
         return jsonify(clients)
@@ -28,7 +29,8 @@ def get_positions():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != '' ORDER BY position")
+        _vw, _vp = visible_where('clients')
+        c.execute(f"SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != '' AND {_vw} ORDER BY position", _vp)
         positions = [row['position'] for row in c.fetchall()]
         conn.close()
         return jsonify(positions)
@@ -43,9 +45,10 @@ def get_companies():
         sync_accounts_from_clients()
         conn = get_db()
         c = conn.cursor()
-        c.execute('''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
-                     WHERE name IS NOT NULL AND TRIM(name) != ''
-                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''')
+        _vw, _vp = visible_where('accounts')
+        c.execute(f'''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
+                     WHERE name IS NOT NULL AND TRIM(name) != '' AND {_vw}
+                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''', _vp)
         companies = [row['name'] for row in c.fetchall()]
         conn.close()
         return jsonify(companies)
@@ -61,8 +64,10 @@ def get_client(client_id):
         c = conn.cursor()
         c.execute('SELECT * FROM clients WHERE id = ?', (client_id,))
         client = dict_from_row(c.fetchone())
+        if client and not can_read('clients', client_id, c):
+            client = None  # existe, mas não é visível: trata como inexistente (404)
         conn.close()
-        
+
         if not client:
             return jsonify({'error': 'Cliente nao encontrado'}), 404
         return jsonify(client)
@@ -96,10 +101,16 @@ def check_duplicate_client():
             return jsonify({'matches': []})
 
         where = ' OR '.join(f'({c})' for c in clauses)
-        sql = f'SELECT * FROM clients WHERE {where}'
+        sql = f'SELECT * FROM clients WHERE ({where})'
         if exclude_id:
             sql += ' AND id != ?'
             params.append(int(exclude_id))
+        # Duplicidade é verificada só entre os contatos VISÍVEIS ao usuário
+        # (modelo privado-por-dono): dois usuários podem cadastrar "o mesmo"
+        # contato sem colidir.
+        _vw, _vp = visible_where('clients')
+        sql += f' AND {_vw}'
+        params += _vp
 
         conn = get_db()
         c = conn.cursor()
@@ -293,7 +304,10 @@ def create_client():
             if duplicate_clauses:
                 conn = get_db()
                 c = conn.cursor()
-                c.execute(f"SELECT * FROM clients WHERE {' OR '.join([f'({cl})' for cl in duplicate_clauses])} ORDER BY id DESC LIMIT 1", duplicate_params)
+                # Só alerta duplicidade contra contatos visíveis ao usuário — não
+                # vaza (via 409) um contato de outro dono.
+                _vw, _vp = visible_where('clients')
+                c.execute(f"SELECT * FROM clients WHERE ({' OR '.join([f'({cl})' for cl in duplicate_clauses])}) AND {_vw} ORDER BY id DESC LIMIT 1", duplicate_params + _vp)
                 existing = dict_from_row(c.fetchone())
                 conn.close()
                 if existing:
@@ -315,9 +329,9 @@ def create_client():
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
-                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact))
+        c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived, owner_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)''',
+                  (name, company, position, area_of_activity or None, email or None, phone or None, linkedin or None, photo_url, is_target, is_cold_contact, _acl_owner_for_insert()))
         client_id = c.lastrowid
         ensure_account_for_company(c, company)
         conn.commit()
@@ -363,9 +377,12 @@ def update_client(client_id):
         # Obter cliente atual
         c.execute('SELECT * FROM clients WHERE id = ?', (client_id,))
         client = dict_from_row(c.fetchone())
-        if not client:
+        if not client or not can_read('clients', client_id, c):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
+        if not can_write('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar este cliente.', 'error_type': 'forbidden'}), 403
         
         # Suporte a foto em base64 (enviada pela extensão AutoToca)
         if autofind_photo_url and autofind_photo_url.startswith('data:image/'):
@@ -407,6 +424,12 @@ def delete_client(client_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Cliente nao encontrado'}), 404
+        if not can_write('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir este cliente.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM clients WHERE id = ?', (client_id,))
         conn.commit()
         conn.close()
@@ -430,9 +453,12 @@ def archive_client(client_id):
         c = conn.cursor()
         c.execute('SELECT id, company FROM clients WHERE id = ?', (client_id,))
         existing = dict_from_row(c.fetchone())
-        if not existing:
+        if not existing or not can_read('clients', client_id, c):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
+        if not can_write('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para arquivar este cliente.', 'error_type': 'forbidden'}), 403
 
         old_company = (existing.get('company') or '').strip()
         if remove_company:
@@ -471,9 +497,12 @@ def unarchive_client(client_id):
         c = conn.cursor()
         c.execute('SELECT id, company FROM clients WHERE id = ?', (client_id,))
         existing = dict_from_row(c.fetchone())
-        if not existing:
+        if not existing or not can_read('clients', client_id, c):
             conn.close()
             return jsonify({'error': 'Cliente nao encontrado'}), 404
+        if not can_write('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para desarquivar este cliente.', 'error_type': 'forbidden'}), 403
 
         current_company = (existing.get('company') or '').strip()
         if not current_company and not new_company:
@@ -514,6 +543,12 @@ def update_client_target(client_id):
 
         conn = get_db()
         c = conn.cursor()
+        if not can_read('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Cliente nao encontrado'}), 404
+        if not can_write('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar este cliente.', 'error_type': 'forbidden'}), 403
         c.execute('UPDATE clients SET is_target = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (is_target, client_id))
         conn.commit()
         conn.close()
@@ -544,7 +579,10 @@ def update_target_bulk():
             where.append('position = ?')
             params.append(position)
 
-        c.execute(f"UPDATE clients SET is_target = 1, updated_at = CURRENT_TIMESTAMP WHERE {' AND '.join(where)}", params)
+        # Só marca em massa os contatos que o usuário PODE editar (dono/share
+        # de escrita/admin). Login off → cláusula 1=1 (sem efeito).
+        _vw, _vp = visible_where('clients', mode='write')
+        c.execute(f"UPDATE clients SET is_target = 1, updated_at = CURRENT_TIMESTAMP WHERE ({' AND '.join(where)}) AND {_vw}", params + _vp)
         affected = c.rowcount
         conn.commit()
         conn.close()
@@ -598,7 +636,8 @@ def export_clientes():
         conn = get_db()
         c = conn.cursor()
         db_fields = ', '.join([allowed_fields[field][0] for field in selected_fields])
-        c.execute(f'SELECT {db_fields} FROM clients ORDER BY name')
+        _vw, _vp = visible_where('clients')
+        c.execute(f'SELECT {db_fields} FROM clients WHERE {_vw} ORDER BY name', _vp)
         rows = c.fetchall()
         conn.close()
         
@@ -825,20 +864,22 @@ def import_clients():
         try:
             imported_count = 0
             duplicates_count = 0
-            
+            _import_owner_id = _acl_owner_for_insert()
+
             for row_data in valid_rows:
                 # Verificar se cliente ja existe
-                c.execute('SELECT id FROM clients WHERE name = ? AND company = ?', 
-                         (row_data['name'], row_data['company']))
+                _vw, _vp = visible_where('clients')
+                c.execute(f'SELECT id FROM clients WHERE name = ? AND company = ? AND {_vw}',
+                         [row_data['name'], row_data['company']] + _vp)
                 if c.fetchone():
                     duplicates_count += 1
                     continue
                 
                 # Inserir novo cliente
-                c.execute('''INSERT INTO clients (name, company, position, email, phone, linkedin, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                         (row_data['name'], row_data['company'], row_data['position'], 
-                          row_data['email'], row_data['phone'], row_data.get('linkedin')))
+                c.execute('''INSERT INTO clients (name, company, position, email, phone, linkedin, owner_id, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                         (row_data['name'], row_data['company'], row_data['position'],
+                          row_data['email'], row_data['phone'], row_data.get('linkedin'), _import_owner_id))
                 ensure_account_for_company(c, row_data['company'])
                 imported_count += 1
             
@@ -897,9 +938,10 @@ def linkedin_watchlist():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("""SELECT id, linkedin FROM clients
+        _vw, _vp = visible_where('clients')
+        c.execute(f"""SELECT id, linkedin FROM clients
                      WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''
-                       AND COALESCE(is_archived, 0) = 0""")
+                       AND COALESCE(is_archived, 0) = 0 AND {_vw}""", _vp)
         out = []
         for row in c.fetchall():
             slug = _ap_normalize_linkedin_url(row['linkedin'])
@@ -930,9 +972,10 @@ def linkedin_auto_capture():
 
         conn = get_db()
         c = conn.cursor()
-        c.execute("""SELECT id, name, company, position, linkedin FROM clients
+        _vw, _vp = visible_where('clients')
+        c.execute(f"""SELECT id, name, company, position, linkedin FROM clients
                      WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''
-                       AND COALESCE(is_archived, 0) = 0""")
+                       AND COALESCE(is_archived, 0) = 0 AND {_vw}""", _vp)
         client = None
         for row in c.fetchall():
             if re.search(r'linkedin\.com/in/' + re.escape(slug),
@@ -976,7 +1019,8 @@ def linkedin_auto_capture():
             conn.close()
             return jsonify({'ok': True, 'changed': True, 'duplicate': True})
 
-        c.execute('SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (empresa_nova,))
+        _vw, _vp = visible_where('accounts')
+        c.execute(f'SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND {_vw}', [empresa_nova] + _vp)
         potential_new = 0 if c.fetchone() else 1
         c.execute("""INSERT INTO job_change_events
                      (client_id, empresa_antiga, empresa_nova, cargo_novo, potential_new_account)
@@ -1002,9 +1046,12 @@ def job_change_open_account(event_id):
         c = conn.cursor()
         c.execute('SELECT * FROM job_change_events WHERE id = ?', (event_id,))
         ev = dict_from_row(c.fetchone())
-        if not ev:
+        if not ev or not can_read('clients', ev['client_id'], c):
             conn.close()
             return jsonify({'error': 'Evento não encontrado'}), 404
+        if not can_write('clients', ev['client_id'], c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para tratar este evento.', 'error_type': 'forbidden'}), 403
         account_id = ensure_account_for_company(c, ev['empresa_nova'])
         # card na primeira coluna do Kanban (sem duplicar se já houver card do evento)
         c.execute('SELECT id FROM kanban_columns ORDER BY display_order ASC, id ASC LIMIT 1')
@@ -1041,6 +1088,14 @@ def job_change_archive(event_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        c.execute('SELECT client_id FROM job_change_events WHERE id = ?', (event_id,))
+        _ev = c.fetchone()
+        if not _ev or not can_read('clients', _ev['client_id'], c):
+            conn.close()
+            return jsonify({'error': 'Evento não encontrado'}), 404
+        if not can_write('clients', _ev['client_id'], c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para tratar este evento.', 'error_type': 'forbidden'}), 403
         c.execute("UPDATE job_change_events SET status = 'tratado' WHERE id = ?", (event_id,))
         if c.rowcount == 0:
             conn.close()

@@ -9,9 +9,10 @@ def get_accounts_support_data():
     try:
         sync_accounts_from_clients()
         conn = get_db(); c = conn.cursor()
-        c.execute('''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
-                     WHERE name IS NOT NULL AND TRIM(name) != ''
-                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''')
+        _vw, _vp = visible_where('accounts')
+        c.execute(f'''SELECT name, COALESCE(is_target, 0) as is_target FROM accounts
+                     WHERE name IS NOT NULL AND TRIM(name) != '' AND {_vw}
+                     ORDER BY COALESCE(is_target, 0) DESC, name COLLATE NOCASE''', _vp)
         companies = [row['name'] for row in c.fetchall()]
         c.execute('SELECT name FROM account_sectors ORDER BY name COLLATE NOCASE')
         sectors = [row['name'] for row in c.fetchall()]
@@ -27,7 +28,8 @@ def list_accounts():
     try:
         sync_accounts_from_clients()
         conn = get_db(); c = conn.cursor()
-        c.execute('SELECT * FROM accounts ORDER BY name COLLATE NOCASE')
+        _vw, _vp = visible_where('accounts')
+        c.execute(f'SELECT * FROM accounts WHERE {_vw} ORDER BY name COLLATE NOCASE', _vp)
         accounts = [dict_from_row(r) for r in c.fetchall()]
         for acc in accounts:
             c.execute('''SELECT p.* FROM account_presences p WHERE p.account_id = ? ORDER BY p.delivery_name COLLATE NOCASE''', (acc['id'],))
@@ -45,12 +47,15 @@ def get_account(account_id):
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         account = dict_from_row(c.fetchone())
-        if not account:
+        if not account or not can_read('accounts', account_id, c):
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
-        c.execute('''SELECT c.id, c.name, c.position, c.photo_url, c.email
+        # Contatos da conta = clientes da empresa; mostra só os VISÍVEIS ao usuário
+        # (cada cliente tem dono próprio).
+        _cvw, _cvp = visible_where('clients', alias='c')
+        c.execute(f'''SELECT c.id, c.name, c.position, c.photo_url, c.email
                      FROM clients c
-                     WHERE LOWER(TRIM(c.company)) = LOWER(TRIM(?))
-                     ORDER BY c.name''', (account['name'],))
+                     WHERE LOWER(TRIM(c.company)) = LOWER(TRIM(?)) AND {_cvw}
+                     ORDER BY c.name''', [account['name']] + _cvp)
         account['contacts'] = [dict_from_row(r) for r in c.fetchall()]
         c.execute('''SELECT client_id FROM account_main_contacts WHERE account_id = ? ORDER BY id''', (account_id,))
         account['main_contact_ids'] = [row['client_id'] for row in c.fetchall()]
@@ -101,9 +106,9 @@ def create_account():
                 filename = secure_filename(f"acc_{int(datetime.now().timestamp())}_{f.filename}")
                 f.save(str(ACCOUNT_UPLOAD_DIR / filename))
                 logo_url = f'/uploads/accounts/{filename}'
-        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                  (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence))
+        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, owner_id, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                  (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, _acl_owner_for_insert()))
         account_id = c.lastrowid
         if sector:
             c.execute('INSERT OR IGNORE INTO account_sectors (name) VALUES (?)', (sector,))
@@ -133,8 +138,10 @@ def update_account(account_id):
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         row = dict_from_row(c.fetchone())
-        if not row:
+        if not row or not can_read('accounts', account_id, c):
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if not can_write('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para editar esta conta.', 'error_type': 'forbidden'}), 403
         old_name = row['name']
         new_name = name or old_name
         # Renomear conta: propagar para os contatos (clients.company) e mesclar conta duplicada,
@@ -144,6 +151,10 @@ def update_account(account_id):
             conflict = c.fetchone()
             if conflict:
                 conflict_id = conflict['id'] if isinstance(conflict, sqlite3.Row) else conflict[0]
+                # A conta conflitante será absorvida e removida: exige permissão de
+                # escrita sobre ela também.
+                if not can_write('accounts', conflict_id, c):
+                    conn.close(); return jsonify({'error': 'Já existe uma conta com esse nome que você não pode alterar.', 'error_type': 'forbidden'}), 403
                 # Move os dados da conta conflitante para esta conta e remove a duplicata
                 c.execute('UPDATE account_presences SET account_id=? WHERE account_id=?', (account_id, conflict_id))
                 c.execute('UPDATE account_renewal_events SET account_id=? WHERE account_id=?', (account_id, conflict_id))
@@ -151,8 +162,10 @@ def update_account(account_id):
                 c.execute('UPDATE kanban_cards SET account_id=? WHERE account_id=?', (account_id, conflict_id))
                 c.execute('DELETE FROM account_main_contacts WHERE account_id=?', (conflict_id,))
                 c.execute('DELETE FROM accounts WHERE id=?', (conflict_id,))
-            # Atualiza a referência do nome em todos os contatos vinculados
-            c.execute('UPDATE clients SET company=?, updated_at=CURRENT_TIMESTAMP WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (new_name, old_name))
+            # Atualiza a referência do nome nos contatos VINCULADOS que o usuário
+            # pode editar (não mexe em contatos de outros donos).
+            _cvw, _cvp = visible_where('clients', mode='write')
+            c.execute(f'UPDATE clients SET company=?, updated_at=CURRENT_TIMESTAMP WHERE LOWER(TRIM(company)) = LOWER(TRIM(?)) AND {_cvw}', [new_name, old_name] + _cvp)
         logo_url = None if remove_logo else (autofill_logo_url or row.get('logo_url'))
         if 'logo' in request.files:
             f = request.files['logo']
@@ -182,12 +195,17 @@ def delete_account(account_id):
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
         account = dict_from_row(c.fetchone())
-        if not account:
+        if not account or not can_read('accounts', account_id, c):
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if not can_write('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para excluir esta conta.', 'error_type': 'forbidden'}), 403
         name = account['name']
 
-        # Contatos (clients) vinculados à conta pelo nome da empresa
-        c.execute('SELECT * FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))', (name,))
+        # Contatos (clients) vinculados à conta pelo nome da empresa — apenas os
+        # que o usuário pode editar (o snapshot e a exclusão em cascata abaixo
+        # derivam desta lista, então nunca tocam contatos de outros donos).
+        _cvw, _cvp = visible_where('clients', mode='write')
+        c.execute(f'SELECT * FROM clients WHERE LOWER(TRIM(company)) = LOWER(TRIM(?)) AND {_cvw}', [name] + _cvp)
         clients = [dict_from_row(r) for r in c.fetchall()]
         client_ids = [cl['id'] for cl in clients]
 
@@ -223,10 +241,10 @@ def delete_account(account_id):
             'renewal_events': renewal_events,
             'account_activities': account_activities,
         }
-        c.execute('''INSERT INTO account_archives (account_name, snapshot_json, contacts_count, activities_count)
-                     VALUES (?, ?, ?, ?)''',
+        c.execute('''INSERT INTO account_archives (account_name, snapshot_json, contacts_count, activities_count, owner_id)
+                     VALUES (?, ?, ?, ?, ?)''',
                   (name, json.dumps(snapshot, default=str, ensure_ascii=False),
-                   len(clients), len(client_activities) + len(account_activities)))
+                   len(clients), len(client_activities) + len(account_activities), _acl_owner_for_insert()))
 
         # Remove dados específicos da conta
         c.execute('DELETE FROM account_renewal_events WHERE account_id = ?', (account_id,))
@@ -257,8 +275,9 @@ def delete_account(account_id):
 def list_account_archives():
     try:
         conn = get_db(); c = conn.cursor()
-        c.execute('''SELECT id, account_name, contacts_count, activities_count, archived_at
-                     FROM account_archives ORDER BY archived_at DESC, id DESC''')
+        _vw, _vp = visible_where('account_archives')
+        c.execute(f'''SELECT id, account_name, contacts_count, activities_count, archived_at
+                     FROM account_archives WHERE {_vw} ORDER BY archived_at DESC, id DESC''', _vp)
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close(); return jsonify(rows)
     except Exception as e:
@@ -273,8 +292,11 @@ def restore_account_archive(archive_id):
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT * FROM account_archives WHERE id = ?', (archive_id,))
         arch = dict_from_row(c.fetchone())
-        if not arch:
+        if not arch or not can_read('account_archives', archive_id, c):
             conn.close(); return jsonify({'error': 'Arquivo não encontrado'}), 404
+        if not can_write('account_archives', archive_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para restaurar este arquivo.', 'error_type': 'forbidden'}), 403
+        _owner = _acl_owner_for_insert()
         snap = json.loads(arch['snapshot_json'])
         account = snap.get('account') or {}
         name = account.get('name') or arch['account_name']
@@ -284,21 +306,21 @@ def restore_account_archive(archive_id):
             conn.close()
             return jsonify({'error': f'Já existe uma conta com o nome "{name}". Renomeie ou exclua a conta atual antes de restaurar.'}), 409
 
-        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+        c.execute('''INSERT INTO accounts (name, logo_url, is_target, sector, average_revenue_cents, professionals_count, global_presence, owner_id, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
                   (name, account.get('logo_url'), account.get('is_target', 0), account.get('sector'),
                    account.get('average_revenue_cents'), account.get('professionals_count'),
-                   account.get('global_presence'), account.get('created_at')))
+                   account.get('global_presence'), _owner, account.get('created_at')))
         new_account_id = c.lastrowid
 
         # Recria os contatos (clients), mapeando id antigo -> novo
         client_id_map = {}
         for cl in snap.get('clients', []):
-            c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
+            c.execute('''INSERT INTO clients (name, company, position, area_of_activity, email, phone, linkedin, photo_url, is_target, is_cold_contact, is_archived, owner_id, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)''',
                       (cl.get('name'), name, cl.get('position'), cl.get('area_of_activity'), cl.get('email'),
                        cl.get('phone'), cl.get('linkedin'), cl.get('photo_url'), cl.get('is_target', 0),
-                       cl.get('is_cold_contact', 0), cl.get('is_archived', 0), cl.get('created_at')))
+                       cl.get('is_cold_contact', 0), cl.get('is_archived', 0), _owner, cl.get('created_at')))
             client_id_map[cl.get('id')] = c.lastrowid
 
         # Atividades dos contatos
@@ -376,6 +398,10 @@ def restore_account_archive(archive_id):
 def delete_account_archive(archive_id):
     try:
         conn = get_db(); c = conn.cursor()
+        if not can_read('account_archives', archive_id, c):
+            conn.close(); return jsonify({'error': 'Arquivo não encontrado'}), 404
+        if not can_write('account_archives', archive_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para excluir este arquivo.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM account_archives WHERE id = ?', (archive_id,))
         conn.commit(); conn.close()
         return jsonify({'message': 'Arquivo excluído'})
@@ -424,8 +450,10 @@ def create_account_presence(account_id):
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT name FROM accounts WHERE id = ?', (account_id,))
         account = c.fetchone()
-        if not account:
+        if not account or not can_read('accounts', account_id, c):
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if not can_write('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para editar esta conta.', 'error_type': 'forbidden'}), 403
         c.execute('''INSERT INTO account_presences (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id, updated_at)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
                   (account_id, delivery_name, stf_owner, delivery_cell, service_id, billing_type, validity_month, contract_duration_months, contract_end_date, early_terminated, current_revenue_cents, focal_client_id))
@@ -478,8 +506,10 @@ def update_account_presence(account_id, presence_id):
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT name FROM accounts WHERE id = ?', (account_id,))
         account = c.fetchone()
-        if not account:
+        if not account or not can_read('accounts', account_id, c):
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if not can_write('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para editar esta conta.', 'error_type': 'forbidden'}), 403
         c.execute('''UPDATE account_presences
                      SET delivery_name=?, stf_owner=?, delivery_cell=?, service_id=?, billing_type=?, validity_month=?, contract_duration_months=?, contract_end_date=?, early_terminated=?, current_revenue_cents=?, focal_client_id=?, updated_at=CURRENT_TIMESTAMP
                      WHERE id=? AND account_id=?''',
@@ -499,6 +529,10 @@ def update_account_presence(account_id, presence_id):
 def delete_account_presence(account_id, presence_id):
     try:
         conn = get_db(); c = conn.cursor()
+        if not can_read('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if not can_write('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para editar esta conta.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM account_renewal_events WHERE presence_id = ?', (presence_id,))
         c.execute('DELETE FROM account_presences WHERE id = ? AND account_id = ?', (presence_id, account_id))
         conn.commit(); conn.close()
@@ -513,7 +547,7 @@ def get_account_activities(account_id):
     try:
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('accounts', account_id, c):
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
         c.execute('''SELECT id, account_id, description, activity_date, created_at
                      FROM account_activities
@@ -537,8 +571,10 @@ def create_account_activity(account_id):
             return jsonify({'error': 'Descrição é obrigatória'}), 400
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('accounts', account_id, c):
             conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if not can_write('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para editar esta conta.', 'error_type': 'forbidden'}), 403
         if activity_date:
             c.execute('''INSERT INTO account_activities (account_id, description, activity_date)
                          VALUES (?, ?, ?)''', (account_id, description, activity_date))
@@ -558,6 +594,10 @@ def create_account_activity(account_id):
 def delete_account_activity(account_id, activity_id):
     try:
         conn = get_db(); c = conn.cursor()
+        if not can_read('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Conta não encontrada'}), 404
+        if not can_write('accounts', account_id, c):
+            conn.close(); return jsonify({'error': 'Sem permissão para editar esta conta.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM account_activities WHERE id = ? AND account_id = ?', (activity_id, account_id))
         conn.commit(); conn.close()
         return jsonify({'message': 'Atividade removida'})
@@ -636,14 +676,17 @@ def _ap_normalize_with_llm(title, snippet, company):
         return None, None
 
 
-def _account_planning_search_async(task_id, company, segment, country=''):
+def _account_planning_search_async(task_id, company, segment, country='', acl_user=None):
     try:
         api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
         _bg_task_set(task_id, {'step': 'Preparando busca de decisores...', 'progress': 5})
 
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT id, name, linkedin FROM clients WHERE linkedin IS NOT NULL AND TRIM(linkedin) != ''")
+        # Roda em thread de background (sem request): a visibilidade é resolvida
+        # com o usuário capturado no handler (acl_user), não via current_user().
+        _vw, _vp = visible_where('clients', user=acl_user)
+        c.execute(f"SELECT id, name, linkedin FROM clients WHERE linkedin IS NOT NULL AND TRIM(linkedin) != '' AND {_vw}", _vp)
         existing = {_ap_normalize_linkedin_url(r['linkedin']): r['id'] for r in c.fetchall()}
         conn.close()
 
@@ -723,8 +766,8 @@ def _account_planning_search_async(task_id, company, segment, country=''):
         # gravações concorrentes (ex.: POST /api/atividades) com "database is locked".
         conn = get_db()
         c = conn.cursor()
-        c.execute('INSERT INTO account_planning_runs (company, segment, result_json) VALUES (?, ?, ?)',
-                  (company, segment, json.dumps(payload, ensure_ascii=False)))
+        c.execute('INSERT INTO account_planning_runs (company, segment, result_json, owner_id) VALUES (?, ?, ?, ?)',
+                  (company, segment, json.dumps(payload, ensure_ascii=False), (acl_user or {}).get('id')))
         conn.commit()
         run_id = c.lastrowid
         conn.close()
@@ -752,7 +795,9 @@ def account_planning_search():
     task_id = uuid.uuid4().hex
     _bg_task_register_persistent(task_id, 'account_planning')
     _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 3})
-    threading.Thread(target=_account_planning_search_async, args=(task_id, company, segment, country), daemon=True).start()
+    # Captura o usuário AQUI (ainda em request) para a thread aplicar visibilidade/dono.
+    acl_user = current_user()
+    threading.Thread(target=_account_planning_search_async, args=(task_id, company, segment, country, acl_user), daemon=True).start()
     return jsonify({'task_id': task_id}), 202
 
 
@@ -768,7 +813,8 @@ def account_planning_task_poll(task_id):
 def account_planning_runs():
     conn = get_db()
     c = conn.cursor()
-    c.execute('SELECT id, company, segment, created_at FROM account_planning_runs ORDER BY id DESC LIMIT 20')
+    _vw, _vp = visible_where('account_planning_runs')
+    c.execute(f'SELECT id, company, segment, created_at FROM account_planning_runs WHERE {_vw} ORDER BY id DESC LIMIT 20', _vp)
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return jsonify(rows)
@@ -780,6 +826,8 @@ def account_planning_run_detail(run_id):
     c = conn.cursor()
     c.execute('SELECT id, company, segment, result_json, created_at FROM account_planning_runs WHERE id = ?', (run_id,))
     row = c.fetchone()
+    if row and not can_read('account_planning_runs', run_id, c):
+        row = None
     conn.close()
     if not row:
         return jsonify({'error': 'Busca não encontrada'}), 404
@@ -805,8 +853,9 @@ def account_planning_segments():
     de mercado + setores já usados nas contas cadastradas."""
     conn = get_db()
     c = conn.cursor()
-    c.execute("""SELECT DISTINCT TRIM(sector) AS seg FROM accounts
-                 WHERE sector IS NOT NULL AND TRIM(sector) != ''""")
+    _vw, _vp = visible_where('accounts')
+    c.execute(f"""SELECT DISTINCT TRIM(sector) AS seg FROM accounts
+                 WHERE sector IS NOT NULL AND TRIM(sector) != '' AND {_vw}""", _vp)
     extras = [r['seg'] for r in c.fetchall()]
     conn.close()
     seen = {s.lower() for s in _MARKET_SEGMENTS}
@@ -850,10 +899,11 @@ def _account_thread_score(c, account_id, account_name, is_target, grouping_map=N
         grouping_map = _thread_grouping_map(c)
     if get_thresholds is None:
         get_thresholds = _home_status_thresholds(c)
-    c.execute('''SELECT id, name, position, last_activity_date FROM clients
+    _vw, _vp = visible_where('clients')
+    c.execute(f'''SELECT id, name, position, last_activity_date FROM clients
                  WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))
-                   AND COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0''',
-              (account_name,))
+                   AND COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0 AND {_vw}''',
+              [account_name] + _vp)
     contacts = c.fetchall()
     active = []
     for cl in contacts:
@@ -887,7 +937,7 @@ def account_thread_score(account_id):
         c = conn.cursor()
         c.execute('SELECT id, name, COALESCE(is_target, 0) AS is_target FROM accounts WHERE id = ?', (account_id,))
         acc = c.fetchone()
-        if not acc:
+        if not acc or not can_read('accounts', account_id, c):
             conn.close()
             return jsonify({'error': 'Conta não encontrada'}), 404
         result = _account_thread_score(c, acc['id'], acc['name'], acc['is_target'])
@@ -906,7 +956,8 @@ def account_thread_scores_all():
         c = conn.cursor()
         grouping_map = _thread_grouping_map(c)
         get_thresholds = _home_status_thresholds(c)
-        c.execute('SELECT id, name, COALESCE(is_target, 0) AS is_target FROM accounts')
+        _vw, _vp = visible_where('accounts')
+        c.execute(f'SELECT id, name, COALESCE(is_target, 0) AS is_target FROM accounts WHERE {_vw}', _vp)
         accounts_rows = c.fetchall()
         out = {}
         for acc in accounts_rows:

@@ -1505,6 +1505,21 @@ SCHEMA_MIGRATIONS = [
         'UPDATE iata_records SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
         'UPDATE environment_cards SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
     ]),
+
+    # Fase 4 — owner_id nas duas tabelas "raiz-like" do domínio de contas que a
+    # migração 14 não cobriu: `account_archives` (lixeira de contas excluídas —
+    # não tem pai vivo para herdar) e `account_planning_runs` (histórico de
+    # planejamento por IA). Mesmo padrão aditivo/reversível da 14: coluna
+    # NULLABLE + índice + backfill para o fundador. Sem elas, as rotas de
+    # arquivo/planejamento não teriam como aplicar a visibilidade da Fase 4.
+    (15, 'multiusuario_fase_4_owner_id_account_side_tables', [
+        'ALTER TABLE account_archives ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE account_planning_runs ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_account_archives_owner ON account_archives(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_account_planning_runs_owner ON account_planning_runs(owner_id)',
+        'UPDATE account_archives SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE account_planning_runs SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
 ]
 
 
@@ -2015,6 +2030,127 @@ def _founder_user_id(conn):
     c.execute('SELECT id FROM users ORDER BY id LIMIT 1')
     row = c.fetchone()
     return row['id'] if row else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Camada de ACL / visibilidade (Fase 4) — PONTO ÚNICO de aplicação.
+#
+# Nenhuma rota deve consultar/escrever uma entidade-raiz sem passar por aqui.
+# Três primitivas:
+#   visible_where(record_type, alias, mode) → (cláusula WHERE, params)
+#       injetada nas queries de LISTA/agregação sobre tabelas-raiz.
+#   can_read / can_write(record_type, record_id) → bool
+#       guarda de rotas pontuais (GET/PUT/DELETE por id, e filhas via a raiz).
+#   _acl_owner_for_insert() → id do dono a gravar em novas linhas-raiz.
+#
+# REGRA DE OURO: com o login DESLIGADO (desktop/SQLite), tudo é no-op —
+# visible_where devolve '1=1', can_* devolve True e o dono de novas linhas é o
+# fundador (ou NULL num banco sem fundador semeado). O comportamento
+# mono-usuário de sempre fica idêntico.
+#
+# Regra (login ligado):
+#   - Dono privado: vê/edita quem é `owner_id`.
+#   - `shares` explícito: leitura com qualquer permissão; escrita exige
+#     permission='write'.
+#   - Admin: vê/edita tudo da PRÓPRIA organização (org-scoped).
+#   - `owner_id` NULL (legado/pré-Fase 4) conta como do fundador (COALESCE),
+#     então continua privado ao fundador/admin — nunca vaza para membros.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Entidades-raiz (têm coluna própria `owner_id`). record_type é sempre um
+# literal do nosso código — validado contra este conjunto antes de ir para o
+# SQL (as tabelas são interpoladas no texto da query).
+_ACL_ROOT_TABLES = {
+    'clients', 'accounts', 'campaigns', 'commitments', 'activities',
+    'kanban_columns', 'wiki_entries', 'wiki_documents', 'portfolio_offers',
+    'iata_records', 'environment_cards', 'account_archives',
+    'account_planning_runs',
+}
+
+# Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
+# Subquery NÃO correlacionada → o planejador (SQLite/PG) avalia uma única vez.
+def _acl_effective_owner_expr(q):
+    return f"COALESCE({q}.owner_id, (SELECT MIN(id) FROM users))"
+
+
+def visible_where(record_type, user=None, alias=None, mode='read'):
+    """Cláusula de visibilidade para injetar numa query sobre uma TABELA-RAIZ.
+
+    Devolve (sql, params). `alias` é o alias da tabela na query (obrigatório
+    quando a query usa alias, ex.: `FROM clients c` → alias='c'); sem alias,
+    qualifica pelo nome da tabela. `mode` só afeta a semântica de `shares`
+    ('read' = qualquer share; 'write' = share com permission='write').
+
+    Login desligado → ('1=1', []). Sem usuário resolvido (login ligado) →
+    ('1=0', []) (nada visível, fecha por padrão)."""
+    if record_type not in _ACL_ROOT_TABLES:
+        raise ValueError(f'record_type desconhecido para ACL: {record_type!r}')
+    if not _auth_enabled():
+        return '1=1', []
+    if user is None:
+        user = current_user()
+    if not user:
+        return '1=0', []
+    q = alias or record_type
+    owner = _acl_effective_owner_expr(q)
+    role = (user.get('role') or '').strip().lower()
+    if role == 'admin':
+        org_id = user.get('org_id')
+        if org_id is None:
+            # Admin sem org definida: sem particionamento a aplicar (1 org hoje).
+            return '1=1', []
+        return f"{owner} IN (SELECT id FROM users WHERE org_id = ?)", [org_id]
+    me = user.get('id')
+    share_cond = " AND s.permission = 'write'" if mode == 'write' else ''
+    where = (
+        f"({owner} = ? OR EXISTS (SELECT 1 FROM shares s "
+        f"WHERE s.record_type = ? AND s.record_id = {q}.id "
+        f"AND s.shared_with_user_id = ?{share_cond}))"
+    )
+    return where, [me, record_type, me]
+
+
+def _acl_can(record_type, record_id, mode, cur=None):
+    """Reusa visible_where como fonte ÚNICA de verdade: a linha é acessível se
+    existe e casa a mesma cláusula de visibilidade. Login off → True."""
+    if not _auth_enabled():
+        return True
+    where, params = visible_where(record_type, mode=mode)
+    close = False
+    if cur is None:
+        conn = get_db()
+        cur = conn.cursor()
+        close = True
+    try:
+        cur.execute(
+            f'SELECT 1 FROM {record_type} WHERE id = ? AND ({where}) LIMIT 1',
+            [record_id] + list(params),
+        )
+        return cur.fetchone() is not None
+    finally:
+        if close:
+            conn.close()
+
+
+def can_read(record_type, record_id, cur=None):
+    """True se o usuário atual pode LER a linha-raiz dada. Login off → True."""
+    return _acl_can(record_type, record_id, 'read', cur)
+
+
+def can_write(record_type, record_id, cur=None):
+    """True se o usuário atual pode ESCREVER (editar/excluir) a linha-raiz dada.
+    Login off → True."""
+    return _acl_can(record_type, record_id, 'write', cur)
+
+
+def _acl_owner_for_insert():
+    """owner_id a gravar em NOVAS linhas-raiz: o usuário da requisição (fundador
+    quando o login está desligado). Devolve None quando não há usuário resolvido
+    — ex.: banco sem fundador semeado, ou inserção fora de contexto de request —
+    evitando violar a FK owner_id→users(id). NÃO usa o fallback-para-1 de
+    current_user_id(): para uma FK, 'desconhecido' precisa virar NULL, não 1."""
+    u = current_user()
+    return u['id'] if u and u.get('id') else None
 
 
 def current_user():
@@ -6273,7 +6409,12 @@ def ensure_account_for_company(cursor, company_name):
     row = cursor.fetchone()
     if row:
         return row['id'] if isinstance(row, sqlite3.Row) else row[0]
-    cursor.execute('INSERT INTO accounts (name, updated_at) VALUES (?, CURRENT_TIMESTAMP)', (name,))
+    # Conta auto-criada herda o dono da requisição atual (fundador quando login
+    # off; NULL fora de request/sem fundador — ver _acl_owner_for_insert).
+    cursor.execute(
+        'INSERT INTO accounts (name, owner_id, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+        (name, _acl_owner_for_insert()),
+    )
     return cursor.lastrowid
 
 
@@ -6281,7 +6422,12 @@ def sync_accounts_from_clients():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != ''")
+        # Só sincroniza contas a partir dos contatos VISÍVEIS ao usuário — evita
+        # que uma listagem de um membro materialize contas (donas dele) para as
+        # empresas de contatos de outros donos. Login off → 1=1 (comportamento de
+        # sempre); fora de request com login on → 1=0 (não cria nada no import).
+        _vw, _vp = visible_where('clients')
+        c.execute(f"SELECT DISTINCT company FROM clients WHERE company IS NOT NULL AND TRIM(company) != '' AND {_vw}", _vp)
         companies = [row['company'] for row in c.fetchall()]
         for company in companies:
             ensure_account_for_company(c, company)
