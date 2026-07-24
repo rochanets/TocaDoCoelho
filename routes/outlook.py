@@ -127,7 +127,7 @@ def sync_outlook_stream():
         return _outlook_sync_stream_graph()
 
     # auto: prioriza Graph se houver integração conectada; fallback para COM em Windows
-    user_id = max(1, int(request.args.get('user_id', 1)))
+    user_id = current_user_id()
     has_graph_integration = False
     try:
         conn = get_db()
@@ -155,7 +155,7 @@ def sync_outlook_stream_graph():
 @app.route('/api/outlook/oauth/start', methods=['GET'])
 def outlook_oauth_start():
     try:
-        user_id = max(1, int(request.args.get('user_id', 1)))
+        user_id = current_user_id()
         settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
         conn = get_db()
         try:
@@ -229,9 +229,10 @@ def outlook_graph_config():
 def outlook_graph_status_endpoint():
     """Retorna se o usuário está conectado ao Microsoft Graph e com qual email."""
     try:
+        uid = current_user_id()
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT expires_at FROM user_integrations WHERE provider = 'outlook_graph' AND user_id = 1 LIMIT 1")
+        c.execute("SELECT expires_at FROM user_integrations WHERE provider = 'outlook_graph' AND user_id = ? LIMIT 1", (uid,))
         row = c.fetchone()
         conn.close()
         if not row:
@@ -240,7 +241,7 @@ def outlook_graph_status_endpoint():
         try:
             settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
             conn2 = get_db()
-            token = outlook_graph_get_valid_access_token(conn=conn2, user_id=1, settings=settings)
+            token = outlook_graph_get_valid_access_token(conn=conn2, user_id=uid, settings=settings)
             conn2.close()
             req = urllib.request.Request('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', method='GET')
             req.add_header('Authorization', f'Bearer {token}')
@@ -261,7 +262,7 @@ def outlook_graph_disconnect():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("DELETE FROM user_integrations WHERE provider = 'outlook_graph'")
+        c.execute("DELETE FROM user_integrations WHERE provider = 'outlook_graph' AND user_id = ?", (current_user_id(),))
         conn.commit()
         conn.close()
         return jsonify({'ok': True})

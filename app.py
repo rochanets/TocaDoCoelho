@@ -26,12 +26,13 @@ import base64
 import mimetypes
 import uuid
 import hashlib
+import secrets
 from datetime import datetime, timedelta, date
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect, session, g, has_request_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 try:
@@ -270,6 +271,73 @@ def setup_logging():
 
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
+
+
+# ---------------------------------------------------------------------------
+# Sessão / autenticação web (Fase 3 — SSO Microsoft).
+#
+# REGRA DE OURO: sem TOCA_AUTH_ENABLED, o app roda EXATAMENTE como o desktop
+# mono-usuário de sempre — o gate de login (before_request, mais abaixo) é
+# no-op e `current_user_id()` devolve o fundador. Tudo aqui só passa a atuar
+# quando a flag é ligada (ambiente web). O fluxo SSO em si (login/callback)
+# entra na PR 3.2; esta PR estabelece a sessão, o gate e a identidade da
+# requisição.
+#
+# O cookie de sessão é assinado com SECRET_KEY. Em produção web (múltiplos
+# workers) a SECRET_KEY DEVE vir do ambiente, compartilhada entre os workers —
+# senão cada worker assina com uma chave diferente e as sessões não validam
+# entre eles. No desktop/dev, persistimos uma chave local (0600) em DATA_DIR
+# para os cookies sobreviverem a reinícios sem exigir nenhuma configuração.
+# ---------------------------------------------------------------------------
+def _env_flag(name, default='0'):
+    return (os.environ.get(name, default) or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _load_or_create_session_secret():
+    env_secret = (os.environ.get('SECRET_KEY') or os.environ.get('TOCA_SECRET_KEY') or '').strip()
+    if env_secret:
+        return env_secret
+    key_path = DATA_DIR / '.session_secret'
+    try:
+        if key_path.exists():
+            existing = key_path.read_text(encoding='utf-8').strip()
+            if existing:
+                return existing
+        generated = secrets.token_urlsafe(48)
+        fd = os.open(str(key_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, generated.encode('utf-8'))
+        finally:
+            os.close(fd)
+        try:
+            os.chmod(str(key_path), 0o600)
+        except Exception:
+            logger.debug('[auth] Não foi possível restringir permissões de .session_secret.', exc_info=True)
+        return generated
+    except Exception:
+        # Diretório de dados não gravável: chave efêmera (cookies não sobrevivem
+        # a restart, mas o app não quebra). Só ocorre em ambiente mal configurado.
+        logger.warning('[auth] Falha ao persistir SECRET_KEY local; usando chave efêmera de processo.')
+        return secrets.token_urlsafe(48)
+
+
+app.secret_key = _load_or_create_session_secret()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    # Secure por padrão (produção atrás de TLS). Ambientes http (dev/desktop,
+    # test client) podem desligar com TOCA_COOKIE_SECURE=0.
+    SESSION_COOKIE_SECURE=_env_flag('TOCA_COOKIE_SECURE', '1'),
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+    SESSION_REFRESH_EACH_REQUEST=True,
+)
+
+
+def _auth_enabled():
+    """Login SSO exigido? Desligado por padrão — o desktop/SQLite roda sem
+    login, como sempre. Ativado só na web via TOCA_AUTH_ENABLED (Fase 3)."""
+    return _env_flag('TOCA_AUTH_ENABLED', '0')
+
 
 def _resolve_app_version():
     default_version = '1.0.0'
@@ -1911,6 +1979,106 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Identidade da requisição (Fase 3): current_user()/current_user_id() + gate.
+#
+# Ponto único onde se resolve "quem é o usuário desta request". As rotas usam
+# `current_user_id()` no lugar dos antigos `user_id=1` fixos — assim a
+# integração do Outlook (e futuras) passa a ser por-usuário automaticamente
+# quando o login liga, sem reescrever a lógica de cada rota.
+# ---------------------------------------------------------------------------
+def _fetch_user_row(conn, user_id):
+    c = conn.cursor()
+    c.execute('SELECT * FROM users WHERE id = ? LIMIT 1', (user_id,))
+    return c.fetchone()
+
+
+def _founder_user_id(conn):
+    """Fundador da org = menor id em `users` (semeado na migração 14 a partir do
+    user_profile id=1). É o dono padrão quando o login está desligado."""
+    c = conn.cursor()
+    c.execute('SELECT id FROM users ORDER BY id LIMIT 1')
+    row = c.fetchone()
+    return row['id'] if row else None
+
+
+def current_user():
+    """Usuário da requisição atual (dict) ou None.
+    - Login ligado: derivado de session['user_id'].
+    - Login desligado: o fundador (comportamento mono-usuário de sempre).
+    Resolvido uma vez por request e cacheado em `g`. Fora de contexto de request
+    (ex.: threads de background) devolve None — os chamadores caem no fundador."""
+    if not has_request_context():
+        return None
+    if getattr(g, '_toca_user_loaded', False):
+        return g._toca_user
+    user = None
+    conn = None
+    try:
+        if _auth_enabled():
+            uid = session.get('user_id')
+            if uid:
+                conn = get_db()
+                user = dict_from_row(_fetch_user_row(conn, uid))
+        else:
+            conn = get_db()
+            fid = _founder_user_id(conn)
+            if fid is not None:
+                user = dict_from_row(_fetch_user_row(conn, fid))
+    except Exception:
+        logger.debug('[auth] Falha ao resolver current_user.', exc_info=True)
+        user = None
+    finally:
+        if conn is not None:
+            conn.close()
+    g._toca_user = user
+    g._toca_user_loaded = True
+    return user
+
+
+def current_user_id():
+    """Id do usuário da requisição. Fallback defensivo para 1 (fundador) quando
+    não há usuário resolvido — preserva o comportamento histórico do desktop e
+    das threads de background, que sempre usaram user_id=1."""
+    user = current_user()
+    if user and user.get('id'):
+        return user['id']
+    return 1
+
+
+# Endpoints públicos = a casca do SPA e seus assets (pasta public/), servidos
+# por `index`/`serve_static` (e o `static` embutido do Flask), mais o /healthz.
+# NÃO inclui as rotas de /uploads/* (arquivos de negócio: logos, docs, anexos),
+# que têm endpoints próprios e portanto ficam atrás do login.
+_AUTH_PUBLIC_ENDPOINTS = {'static', 'index', 'serve_static', 'healthz'}
+_AUTH_PUBLIC_PREFIXES = ('/api/auth/',)
+
+
+@app.before_request
+def _enforce_login_required():
+    """Gate de autenticação. No-op quando o login está desligado (desktop/SQLite
+    roda idêntico ao de sempre). Ligado: exige sessão válida para tudo que não
+    seja asset público da SPA, /healthz ou o fluxo de auth (/api/auth/*, que
+    entra na PR 3.2). Rotas de API e /uploads/* (buscadas via XHR/img pela SPA)
+    respondem 401 JSON quando não há sessão."""
+    if not _auth_enabled():
+        return None
+    if request.method == 'OPTIONS':
+        return None
+    if request.endpoint in _AUTH_PUBLIC_ENDPOINTS:
+        return None
+    path = request.path or ''
+    if any(path.startswith(prefix) for prefix in _AUTH_PUBLIC_PREFIXES):
+        return None
+    if current_user() is not None:
+        return None
+    # Não autenticado: bloqueia tudo que não é asset público / fluxo de auth.
+    # A PR 3.2 (já com a rota de login) pode trocar o 401 por um redirect para
+    # a tela de login em navegações de página (Accept: text/html); por ora, como
+    # a casca da SPA é pública e o resto é buscado via XHR, o 401 basta.
+    return jsonify({'error': 'Autenticação necessária.', 'error_type': 'auth_required'}), 401
 
 
 def _load_app_settings_map(keys):
@@ -7258,7 +7426,9 @@ def _outlook_sync_stream_graph():
     days = max(1, min(int(request.args.get('days', default_days)), 365))
     page_size = max(1, min(int(request.args.get('page_size', 50)), 200))
     max_pages = max(1, min(int(request.args.get('max_pages', 10)), 50))
-    user_id = max(1, int(request.args.get('user_id', 1)))
+    # Escopo do mailbox = usuário da sessão (não um user_id vindo do cliente,
+    # que seria um IDOR). Com login desligado, current_user_id() == fundador.
+    user_id = current_user_id()
     graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
     return _build_outlook_stream_response(days=days, source='graph', page_size=page_size, max_pages=max_pages, user_id=user_id, graph_settings=graph_settings)
 
@@ -7657,7 +7827,7 @@ def _outlook_send_mail(to, subject, body_html, attachments=None):
     graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
     conn = get_db()
     try:
-        access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=1, settings=graph_settings)
+        access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=current_user_id(), settings=graph_settings)
     finally:
         conn.close()
     recipient = (to or '').strip() or _graph_get_me_email(access_token)
