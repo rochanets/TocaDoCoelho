@@ -9,7 +9,7 @@ def get_status_config():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT key, value FROM app_settings WHERE key IN ("status_green_days", "status_yellow_days", "target_green_days", "target_yellow_days", "cold_green_days", "cold_yellow_days")')
+        c.execute("SELECT key, value FROM app_settings WHERE key IN ('status_green_days', 'status_yellow_days', 'target_green_days', 'target_yellow_days', 'cold_green_days', 'cold_yellow_days')")
         settings = {row['key']: row['value'] for row in c.fetchall()}
         c.execute('SELECT id, position, green_days, yellow_days FROM status_rules ORDER BY position')
         rules = [dict_from_row(row) for row in c.fetchall()]
@@ -218,7 +218,7 @@ def get_profile_config():
 def get_ui_config():
     try:
         conn = get_db(); c = conn.cursor()
-        c.execute('SELECT key, value FROM app_settings WHERE key IN ("iata_video_path")')
+        c.execute("SELECT key, value FROM app_settings WHERE key IN ('iata_video_path')")
         settings = {row['key']: row['value'] for row in c.fetchall()}
         conn.close()
         return jsonify({'iata_video_path': settings.get('iata_video_path', '/videos/TocaVideo.mp4')})
@@ -667,7 +667,7 @@ def snooze_update():
     try:
         snooze_until = (datetime.now() + timedelta(days=5)).isoformat()
         db = get_db()
-        db.execute("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('update_snooze_until', ?, CURRENT_TIMESTAMP)", (snooze_until,))
+        db.execute("INSERT INTO app_settings (key, value, updated_at) VALUES ('update_snooze_until', ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP", (snooze_until,))
         db.commit()
         return jsonify({'ok': True, 'snooze_until': snooze_until})
     except Exception as e:

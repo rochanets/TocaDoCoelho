@@ -336,14 +336,14 @@ def home_cobertura_detail():
                 (
                     SELECT COUNT(DISTINCT aa.id) FROM account_activities aa
                     WHERE aa.account_id = acc.id
-                    AND aa.activity_date >= date('now', '-30 days')
+                    AND date(aa.activity_date) >= date('now', '-30 days')
                 ) AS aa_count,
                 -- Atividades de contatos ligados à conta (via account_main_contacts OU nome da empresa)
                 -- UNION garante que a mesma activity.id não seja contada duas vezes
                 (
                     SELECT COUNT(*) FROM (
                         SELECT DISTINCT a.id FROM activities a
-                        WHERE a.activity_date >= date('now', '-30 days')
+                        WHERE date(a.activity_date) >= date('now', '-30 days')
                         AND (
                             a.client_id IN (
                                 SELECT amc.client_id FROM account_main_contacts amc
@@ -363,10 +363,10 @@ def home_cobertura_detail():
                     SELECT MAX(last_dt) FROM (
                         SELECT activity_date AS last_dt FROM account_activities
                         WHERE account_id = acc.id
-                        AND activity_date >= date('now', '-30 days')
+                        AND date(activity_date) >= date('now', '-30 days')
                         UNION ALL
                         SELECT a2.activity_date AS last_dt FROM activities a2
-                        WHERE a2.activity_date >= date('now', '-30 days')
+                        WHERE date(a2.activity_date) >= date('now', '-30 days')
                         AND (
                             a2.client_id IN (
                                 SELECT amc2.client_id FROM account_main_contacts amc2
@@ -516,19 +516,19 @@ def home_overview():
             SELECT COUNT(DISTINCT acc_id) AS n FROM (
                 SELECT aa.account_id AS acc_id
                 FROM account_activities aa
-                WHERE aa.activity_date >= date('now', '-30 days')
+                WHERE date(aa.activity_date) >= date('now', '-30 days')
                 UNION
                 SELECT amc.account_id AS acc_id
                 FROM account_main_contacts amc
                 JOIN activities a ON a.client_id = amc.client_id
-                WHERE a.activity_date >= date('now', '-30 days')
+                WHERE date(a.activity_date) >= date('now', '-30 days')
                 UNION
                 SELECT acc2.id AS acc_id
                 FROM accounts acc2
                 JOIN clients cl2 ON LOWER(TRIM(cl2.company)) = LOWER(TRIM(acc2.name))
                 JOIN activities a2 ON a2.client_id = cl2.id
                 WHERE cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
-                AND a2.activity_date >= date('now', '-30 days')
+                AND date(a2.activity_date) >= date('now', '-30 days')
             )
         """)
         covered_accounts = c.fetchone()['n'] or 0
@@ -550,7 +550,7 @@ def home_overview():
                 AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
                 {fat_contract_clause}
             GROUP BY a.id, a.name
-            HAVING receita > 0
+            HAVING COALESCE(SUM(p.current_revenue_cents), 0) > 0
             ORDER BY receita DESC
             LIMIT 10
         """, fat_params)
@@ -563,7 +563,7 @@ def home_overview():
                 AND p.billing_type = 'Unico'
                 {fat_contract_clause}
             GROUP BY a.id, a.name
-            HAVING receita > 0
+            HAVING COALESCE(SUM(p.current_revenue_cents), 0) > 0
             ORDER BY receita DESC
             LIMIT 10
         """, fat_params)
@@ -694,7 +694,7 @@ def home_overview():
         c.execute(f"""
             SELECT COUNT(DISTINCT a.client_id) AS n
             FROM activities a JOIN clients cl ON cl.id = a.client_id
-            WHERE a.activity_date >= date('now', '-30 day'){client_filter('cl')}
+            WHERE date(a.activity_date) >= date('now', '-30 day'){client_filter('cl')}
         """)
         com_contato_mes = c.fetchone()['n'] or 0
         c.execute(f"""
@@ -708,7 +708,7 @@ def home_overview():
             FROM activities a JOIN clients cl ON cl.id = a.client_id
             WHERE 1=1{client_filter('cl')}
             GROUP BY a.client_id
-            HAVING n >= 3
+            HAVING COUNT(*) >= 3
         """)
         engajadas = len(c.fetchall())
         alta_proximidade = em_dia
@@ -809,12 +809,13 @@ def home_overview():
                     SELECT acc.name AS acc, strftime('%Y-%m', aa.activity_date) AS ym
                     FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
                 )
-                SELECT acc,
-                       SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS atual,
-                       SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS anterior
-                FROM acts
-                GROUP BY acc
-                HAVING atual > 0 OR anterior > 0
+                SELECT * FROM (
+                    SELECT acc,
+                           SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS atual,
+                           SUM(CASE WHEN ym = ? THEN 1 ELSE 0 END) AS anterior
+                    FROM acts
+                    GROUP BY acc
+                ) t WHERE atual > 0 OR anterior > 0
             """, (ym_atual, ym_anterior))
             for r in c.fetchall():
                 atual = int(r['atual'] or 0)

@@ -200,8 +200,8 @@ def get_agenda():
             query += ' WHERE DATE(cm.due_date) >= ? AND DATE(cm.due_date) <= ?'
             params.extend([start_date, end_date])
 
-        query += ''' UNION ALL SELECT "acc-" || CAST(ev.id AS TEXT) as id, NULL as client_id, NULL as activity_id, ev.title, ev.title as notes, ev.due_date, ev.due_time, "account_presence" as source_type,
-                          ac.name as client_name, ac.name as client_company, "Conta" as client_position, NULL as client_email, ac.logo_url as client_photo
+        query += ''' UNION ALL SELECT 'acc-' || CAST(ev.id AS TEXT) as id, NULL as client_id, NULL as activity_id, ev.title, ev.title as notes, ev.due_date, ev.due_time, 'account_presence' as source_type,
+                          ac.name as client_name, ac.name as client_company, 'Conta' as client_position, NULL as client_email, ac.logo_url as client_photo
                    FROM account_renewal_events ev
                    JOIN accounts ac ON ev.account_id = ac.id'''
         if start_date and end_date:
