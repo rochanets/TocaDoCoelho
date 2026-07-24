@@ -55,6 +55,10 @@ from integrations.outlook_graph import (
     fetch_messages as outlook_graph_fetch_messages,
     get_valid_access_token as outlook_graph_get_valid_access_token,
     send_mail as outlook_graph_send_mail,
+    new_pkce_pair as outlook_graph_new_pkce_pair,
+    build_login_authorize_url as outlook_graph_build_login_authorize_url,
+    exchange_login_code as outlook_graph_exchange_login_code,
+    fetch_user_claims as outlook_graph_fetch_user_claims,
 )
 try:
     import openpyxl
@@ -2048,36 +2052,111 @@ def current_user_id():
     return 1
 
 
-# Endpoints públicos = a casca do SPA e seus assets (pasta public/), servidos
-# por `index`/`serve_static` (e o `static` embutido do Flask), mais o /healthz.
-# NÃO inclui as rotas de /uploads/* (arquivos de negócio: logos, docs, anexos),
-# que têm endpoints próprios e portanto ficam atrás do login.
-_AUTH_PUBLIC_ENDPOINTS = {'static', 'index', 'serve_static', 'healthz'}
+def _reset_request_user_cache():
+    """Invalida o cache de current_user() em `g` — usado após login/logout para
+    que uma leitura posterior na MESMA request reflita a nova sessão."""
+    for attr in ('_toca_user', '_toca_user_loaded'):
+        if hasattr(g, attr):
+            delattr(g, attr)
+
+
+def _safe_next(raw):
+    """Sanitiza o parâmetro `next` (destino pós-login) para evitar open redirect:
+    só aceita caminhos locais absolutos (começam com '/', mas não '//' nem
+    '/\\'). Qualquer outra coisa cai para a raiz."""
+    p = (raw or '').strip()
+    if p.startswith('/') and not p.startswith('//') and not p.startswith('/\\'):
+        return p
+    return '/'
+
+
+# ── Login SSO: settings e resolução/vínculo do usuário (Fase 3, PR 3.2) ──────
+def _graph_login_redirect_uri():
+    configured = (_resolve_setting('outlook_graph_login_redirect_uri', 'OUTLOOK_GRAPH_LOGIN_REDIRECT_URI') or '').strip()
+    return configured or f"{request.scheme}://{request.host}/api/auth/callback"
+
+
+def _graph_make_login_settings():
+    """Settings do fluxo de LOGIN: mesmo app registration do mailbox, porém com
+    escopo de identidade (openid/profile/email/User.Read) e o redirect de login."""
+    return {
+        'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
+        'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
+        'redirect_uri': _graph_login_redirect_uri(),
+        'scope': (_resolve_setting('outlook_graph_login_scope', 'OUTLOOK_GRAPH_LOGIN_SCOPE') or 'openid profile email User.Read').strip(),
+    }
+
+
+def _find_user_for_login(conn, oid, email):
+    """Casa o usuário do Entra com uma linha de `users`: primeiro pelo
+    entra_object_id (estável), depois pelo email (case-insensitive). Retorna
+    dict ou None — None significa fora da allowlist (nega o login)."""
+    c = conn.cursor()
+    if oid:
+        c.execute('SELECT * FROM users WHERE entra_object_id = ? LIMIT 1', (oid,))
+        row = c.fetchone()
+        if row:
+            return dict_from_row(row)
+    if email:
+        c.execute('SELECT * FROM users WHERE LOWER(email) = LOWER(?) ORDER BY id LIMIT 1', (email,))
+        row = c.fetchone()
+        if row:
+            return dict_from_row(row)
+    return None
+
+
+def _apply_login_to_user(conn, user, oid, name):
+    """No 1º login, vincula o entra_object_id à linha casada por email (o
+    fundador tem entra_object_id NULL) e preenche o nome se estiver vazio."""
+    sets, params = [], []
+    if oid and not (user.get('entra_object_id') or '').strip():
+        sets.append('entra_object_id = ?')
+        params.append(oid)
+    if name and not (user.get('full_name') or '').strip():
+        sets.append('full_name = ?')
+        params.append(name)
+    if not sets:
+        return
+    sets.append('updated_at = CURRENT_TIMESTAMP')
+    params.append(user['id'])
+    c = conn.cursor()
+    c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", params)
+    conn.commit()
+
+
+# Endpoints sempre públicos (sem redirect): /healthz e o próprio fluxo de auth.
+_AUTH_PUBLIC_ENDPOINTS = {'healthz'}
+# Assets estáticos da SPA (pasta public/): js/css/img podem carregar sem sessão
+# (não expõem dados). NÃO inclui /uploads/* (arquivos de negócio, endpoints
+# próprios), que ficam atrás do login.
+_AUTH_PUBLIC_ASSET_ENDPOINTS = {'static', 'serve_static', 'index'}
 _AUTH_PUBLIC_PREFIXES = ('/api/auth/',)
 
 
 @app.before_request
 def _enforce_login_required():
     """Gate de autenticação. No-op quando o login está desligado (desktop/SQLite
-    roda idêntico ao de sempre). Ligado: exige sessão válida para tudo que não
-    seja asset público da SPA, /healthz ou o fluxo de auth (/api/auth/*, que
-    entra na PR 3.2). Rotas de API e /uploads/* (buscadas via XHR/img pela SPA)
-    respondem 401 JSON quando não há sessão."""
+    roda idêntico ao de sempre). Ligado: navegações de página (Accept text/html)
+    sem sessão são levadas ao handshake SSO (/api/auth/login); requisições de
+    API/uploads sem sessão recebem 401 JSON; assets estáticos da SPA e /healthz
+    e /api/auth/* seguem públicos."""
     if not _auth_enabled():
         return None
     if request.method == 'OPTIONS':
         return None
-    if request.endpoint in _AUTH_PUBLIC_ENDPOINTS:
-        return None
     path = request.path or ''
     if any(path.startswith(prefix) for prefix in _AUTH_PUBLIC_PREFIXES):
         return None
+    if request.endpoint in _AUTH_PUBLIC_ENDPOINTS:
+        return None
     if current_user() is not None:
         return None
-    # Não autenticado: bloqueia tudo que não é asset público / fluxo de auth.
-    # A PR 3.2 (já com a rota de login) pode trocar o 401 por um redirect para
-    # a tela de login em navegações de página (Accept: text/html); por ora, como
-    # a casca da SPA é pública e o resto é buscado via XHR, o 401 basta.
+    # Não autenticado:
+    wants_html = request.method == 'GET' and 'text/html' in (request.headers.get('Accept') or '')
+    if wants_html:
+        return redirect(f'/api/auth/login?next={urllib.parse.quote(path)}', 302)
+    if request.endpoint in _AUTH_PUBLIC_ASSET_ENDPOINTS:
+        return None
     return jsonify({'error': 'Autenticação necessária.', 'error_type': 'auth_required'}), 401
 
 
@@ -12551,7 +12630,7 @@ def handle_unexpected_exception(error):
 # apenas organizado por assunto. Novas rotas devem ir no arquivo do domínio.
 # No build PyInstaller, incluir --add-data "routes;routes".
 # ---------------------------------------------------------------------------
-ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
+ROUTE_MODULES = ['auth', 'clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
                  'portfolio', 'config', 'home']
 
