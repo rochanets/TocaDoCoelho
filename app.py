@@ -2067,6 +2067,17 @@ _ACL_ROOT_TABLES = {
     'account_planning_runs',
 }
 
+# Tabelas-FILHAS: não têm owner_id próprio — herdam a dona da RAIZ ancestral via
+# FK. Mapeadas para (tabela_pai, coluna_fk_no_filho). A visibilidade é resolvida
+# por EXISTS ao pai, recursivamente (ex.: kanban_card_activities → kanban_cards
+# → kanban_columns). record_type de filha também é validado contra este conjunto
+# antes de ir para o SQL.
+_ACL_PARENTS = {
+    'kanban_cards': ('kanban_columns', 'column_id'),
+    'kanban_card_activities': ('kanban_cards', 'card_id'),
+    # (agenda: meeting_briefings/account_renewal_events entram na PR 4.3)
+}
+
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
 # Subquery NÃO correlacionada → o planejador (SQLite/PG) avalia uma única vez.
 def _acl_effective_owner_expr(q):
@@ -2074,7 +2085,8 @@ def _acl_effective_owner_expr(q):
 
 
 def visible_where(record_type, user=None, alias=None, mode='read'):
-    """Cláusula de visibilidade para injetar numa query sobre uma TABELA-RAIZ.
+    """Cláusula de visibilidade para injetar numa query sobre uma tabela-raiz OU
+    filha (filha herda a visibilidade da raiz ancestral via EXISTS ao pai).
 
     Devolve (sql, params). `alias` é o alias da tabela na query (obrigatório
     quando a query usa alias, ex.: `FROM clients c` → alias='c'); sem alias,
@@ -2083,7 +2095,7 @@ def visible_where(record_type, user=None, alias=None, mode='read'):
 
     Login desligado → ('1=1', []). Sem usuário resolvido (login ligado) →
     ('1=0', []) (nada visível, fecha por padrão)."""
-    if record_type not in _ACL_ROOT_TABLES:
+    if record_type not in _ACL_ROOT_TABLES and record_type not in _ACL_PARENTS:
         raise ValueError(f'record_type desconhecido para ACL: {record_type!r}')
     if not _auth_enabled():
         return '1=1', []
@@ -2092,6 +2104,15 @@ def visible_where(record_type, user=None, alias=None, mode='read'):
     if not user:
         return '1=0', []
     q = alias or record_type
+    # Tabela-filha: visível sse a linha-pai correspondente é visível. Resolve
+    # recursivamente até a raiz (que tem owner_id/shares).
+    if record_type in _ACL_PARENTS:
+        parent_type, fk = _ACL_PARENTS[record_type]
+        palias = f'_acl_{parent_type}'
+        pwhere, pparams = visible_where(parent_type, user=user, alias=palias, mode=mode)
+        where = (f"EXISTS (SELECT 1 FROM {parent_type} {palias} "
+                 f"WHERE {palias}.id = {q}.{fk} AND {pwhere})")
+        return where, pparams
     owner = _acl_effective_owner_expr(q)
     role = (user.get('role') or '').strip().lower()
     if role == 'admin':
@@ -2110,12 +2131,34 @@ def visible_where(record_type, user=None, alias=None, mode='read'):
     return where, [me, record_type, me]
 
 
-def _acl_can(record_type, record_id, mode, cur=None):
-    """Reusa visible_where como fonte ÚNICA de verdade: a linha é acessível se
-    existe e casa a mesma cláusula de visibilidade. Login off → True."""
+def owned_where(record_type, alias=None):
+    """Cláusula 'linhas cujo dono efetivo é o usuário atual'. Diferente de
+    visible_where: NÃO inclui shares nem a visão-org do admin — é estritamente o
+    que PERTENCE ao usuário. Usada em espaços PESSOAIS (ex.: o quadro Kanban
+    por-usuário, onde 'cada um vê só o seu'). Herança de filha idêntica à de
+    visible_where (resolve o dono via o pai). Login off → ('1=1', []); sem
+    usuário → ('1=0', [])."""
+    if record_type not in _ACL_ROOT_TABLES and record_type not in _ACL_PARENTS:
+        raise ValueError(f'record_type desconhecido para ACL: {record_type!r}')
     if not _auth_enabled():
-        return True
-    where, params = visible_where(record_type, mode=mode)
+        return '1=1', []
+    user = current_user()
+    if not user:
+        return '1=0', []
+    q = alias or record_type
+    if record_type in _ACL_PARENTS:
+        parent_type, fk = _ACL_PARENTS[record_type]
+        palias = f'_own_{parent_type}'
+        pwhere, pparams = owned_where(parent_type, alias=palias)
+        return (f"EXISTS (SELECT 1 FROM {parent_type} {palias} "
+                f"WHERE {palias}.id = {q}.{fk} AND {pwhere})", pparams)
+    return f"{_acl_effective_owner_expr(q)} = ?", [user['id']]
+
+
+def _acl_row_matches(record_type, record_id, where, params, cur=None):
+    """Roda `SELECT 1 FROM {record_type} WHERE id=? AND (where)` — o núcleo comum
+    dos checks pontuais de acesso. record_type já validado pelo builder da
+    cláusula (visible_where/owned_where)."""
     close = False
     if cur is None:
         conn = get_db()
@@ -2132,15 +2175,35 @@ def _acl_can(record_type, record_id, mode, cur=None):
             conn.close()
 
 
+def _acl_can(record_type, record_id, mode, cur=None):
+    """Reusa visible_where como fonte ÚNICA de verdade: a linha é acessível se
+    existe e casa a mesma cláusula de visibilidade. Login off → True."""
+    if not _auth_enabled():
+        return True
+    where, params = visible_where(record_type, mode=mode)
+    return _acl_row_matches(record_type, record_id, where, params, cur)
+
+
 def can_read(record_type, record_id, cur=None):
-    """True se o usuário atual pode LER a linha-raiz dada. Login off → True."""
+    """True se o usuário atual pode LER a linha (raiz ou filha) dada. Filha herda
+    a permissão da raiz ancestral. Login off → True."""
     return _acl_can(record_type, record_id, 'read', cur)
 
 
 def can_write(record_type, record_id, cur=None):
-    """True se o usuário atual pode ESCREVER (editar/excluir) a linha-raiz dada.
-    Login off → True."""
+    """True se o usuário atual pode ESCREVER (editar/excluir) a linha (raiz ou
+    filha) dada. Filha herda a permissão da raiz ancestral. Login off → True."""
     return _acl_can(record_type, record_id, 'write', cur)
+
+
+def owns(record_type, record_id, cur=None):
+    """True se a linha (raiz ou filha) PERTENCE ao usuário atual — guarda de
+    espaços pessoais (Kanban por-usuário). Mais estrito que can_read/can_write:
+    ignora shares e a visão-org do admin. Login off → True."""
+    if not _auth_enabled():
+        return True
+    where, params = owned_where(record_type)
+    return _acl_row_matches(record_type, record_id, where, params, cur)
 
 
 def _acl_owner_for_insert():

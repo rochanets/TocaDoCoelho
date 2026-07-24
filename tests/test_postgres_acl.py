@@ -121,3 +121,44 @@ def test_pg_create_sets_owner(client, monkeypatch):
     c.execute('SELECT owner_id FROM clients WHERE id = ?', (r.get_json()['id'],))
     owner = c.fetchone()['owner_id']; conn.close()
     assert owner == a_id
+
+
+# ── Kanban por-usuário: exercita owned_where + EXISTS(pai) no Postgres ───────
+
+def test_pg_kanban_board_isolated(client, monkeypatch):
+    """Quadro por-usuário no PG: A e B têm quadros distintos; B não vê/mexe no
+    card de A (valida owned_where raiz + filha traduzidos)."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    assert client.get('/api/kanban/columns').status_code == 200   # semeia quadro de A
+    r = client.post('/api/kanban/cards', json={'title': f'A-{tag}', 'description': 'd'})
+    assert r.status_code == 201, r.get_data(as_text=True)[:300]
+    card_a = r.get_json()['id']
+    assert f'A-{tag}' in {c['title'] for c in client.get('/api/kanban/cards').get_json()}
+
+    with client.session_transaction() as s:
+        s['user_id'] = b_id
+    assert client.get('/api/kanban/columns').status_code == 200   # quadro próprio de B
+    assert all(c['title'] != f'A-{tag}' for c in client.get('/api/kanban/cards').get_json())
+    assert client.delete(f'/api/kanban/cards/{card_a}').status_code == 404
+
+
+def test_pg_kanban_child_activity_recursion(client, monkeypatch):
+    """kanban_card_activities → kanban_cards → kanban_columns (EXISTS aninhado
+    em 2 níveis) traduzido e executado no Postgres."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    client.get('/api/kanban/columns')
+    card = client.post('/api/kanban/cards', json={'title': f'AC-{tag}', 'description': 'd'}).get_json()['id']
+    assert client.post(f'/api/kanban/cards/{card}/activities', json={'content': 'oi'}).status_code == 201
+
+    with client.session_transaction() as s:
+        s['user_id'] = b_id
+    client.get('/api/kanban/columns')
+    assert client.post(f'/api/kanban/cards/{card}/activities', json={'content': 'x'}).status_code == 404
