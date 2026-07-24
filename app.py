@@ -523,7 +523,9 @@ logger.info(f'[Database] Caminho: {DB_PATH}')
 
 # Inicializar banco de dados
 def init_db():
-    conn = sqlite3.connect(str(DB_PATH))
+    # Baseline do schema (migração 1). Passa pela fábrica para ser traduzido ao
+    # PostgreSQL quando for o backend ativo; no SQLite, comportamento inalterado.
+    conn = _open_main_db()
     c = conn.cursor()
     
     # Tabela de clientes
@@ -1461,13 +1463,142 @@ def _open_sqlite(path, *, timeout=15.0, row_factory=False, foreign_keys=False):
     return conn
 
 
-def _open_postgres(*, row_factory=False):
-    """Abre uma conexão PostgreSQL via psycopg (Fase 2 sub-PR 2a).
+# ---------------------------------------------------------------------------
+# Tradução de SQL SQLite → PostgreSQL (Fase 2 sub-PR 2b).
+#
+# Estratégia decidida: transpilar cada statement em tempo de execução via
+# sqlglot (dialeto sqlite → postgres). Assim as ~12k linhas de SQL do app
+# seguem escritas em "SQLite" e são traduzidas na borda, dentro do wrapper de
+# conexão abaixo — nenhuma rota precisa ser reescrita. O sqlglot já cuida do
+# grosso (AUTOINCREMENT→IDENTITY, placeholders ?→%s, tipos, FKs, ON CONFLICT).
+# Casos de borda que ele erra são corrigidos pontualmente (mapa de overrides)
+# conforme aparecem no CI-Postgres.
+# ---------------------------------------------------------------------------
+_TRANSPILE_CACHE = {}
 
-    Só o TRANSPORTE entra aqui. A tradução do SQL dialetal SQLite→PostgreSQL
-    (placeholders, RETURNING, funções de data, DDL) chega nas sub-PRs 2b/2c —
-    por isso migrations e queries de runtime ainda não rodam neste backend.
-    """
+
+def _transpile_to_postgres(sql):
+    """Traduz um statement SQLite → PostgreSQL. Resultado cacheado por string."""
+    hit = _TRANSPILE_CACHE.get(sql)
+    if hit is not None:
+        return hit
+    import sqlglot
+    try:
+        parts = [s for s in sqlglot.transpile(sql, read='sqlite', write='postgres') if s.strip()]
+    except Exception as e:
+        raise RuntimeError(
+            f"Falha ao transpilar SQL para PostgreSQL via sqlglot: {e}\n--- SQL ---\n{sql}"
+        ) from e
+    out = ';\n'.join(parts)
+    _TRANSPILE_CACHE[sql] = out
+    return out
+
+
+class _PgCursor:
+    """Cursor que transpila o SQL SQLite→PostgreSQL antes de executar.
+
+    Expõe a interface que o código do app espera de um cursor sqlite3
+    (execute/executemany/fetch*/rowcount/description/iteração)."""
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, sql, params=None):
+        pg = _transpile_to_postgres(sql)
+        if params is None:
+            self._cur.execute(pg)
+        else:
+            self._cur.execute(pg, params)
+        return self
+
+    def executemany(self, sql, seq_of_params):
+        self._cur.executemany(_transpile_to_postgres(sql), seq_of_params)
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def fetchmany(self, size=None):
+        return self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
+
+    @property
+    def lastrowid(self):
+        return getattr(self._cur, 'lastrowid', None)
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    @property
+    def description(self):
+        return self._cur.description
+
+    def close(self):
+        self._cur.close()
+
+    def __iter__(self):
+        return iter(self._cur)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._cur.close()
+        return False
+
+
+class _PgConnection:
+    """Wrapper sobre a conexão psycopg que entrega _PgCursor e emula a
+    semântica de conexão do sqlite3 (context manager = commit/rollback, sem
+    fechar)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self, *args, **kwargs):
+        return _PgCursor(self._conn.cursor(*args, **kwargs))
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    # row_factory: definido no connect (dict_row). Ignora atribuição de
+    # sqlite3.Row, que não se aplica ao psycopg.
+    @property
+    def row_factory(self):
+        return getattr(self._conn, 'row_factory', None)
+
+    @row_factory.setter
+    def row_factory(self, value):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self._conn.commit()
+        else:
+            self._conn.rollback()
+        return False
+
+
+def _open_postgres(*, row_factory=False):
+    """Abre uma conexão PostgreSQL via psycopg, embrulhada no wrapper que
+    transpila o SQL SQLite→PostgreSQL na borda (Fase 2 sub-PR 2b)."""
     url = os.getenv('DATABASE_URL') or DATABASE_URL
     if not url:
         raise RuntimeError('DATABASE_URL não definida para o backend PostgreSQL.')
@@ -1479,7 +1610,8 @@ def _open_postgres(*, row_factory=False):
             "Backend PostgreSQL requer o pacote 'psycopg'. "
             "Instale com: pip install \"psycopg[binary]\"."
         ) from e
-    return psycopg.connect(url, row_factory=dict_row if row_factory else None)
+    conn = psycopg.connect(url, row_factory=dict_row if row_factory else None)
+    return _PgConnection(conn)
 
 
 def _open_main_db(*, timeout=15.0, row_factory=False, foreign_keys=False):
@@ -1498,14 +1630,9 @@ def _open_main_db(*, timeout=15.0, row_factory=False, foreign_keys=False):
 
 
 def _run_schema_migrations():
-    if DB_BACKEND != 'sqlite':
-        # As migrations em SCHEMA_MIGRATIONS são DDL SQLite. A execução no
-        # PostgreSQL (com tradução de dialeto) chega na sub-PR 2b da Fase 2.
-        logger.warning(
-            f"[Database] Migrations no backend '{DB_BACKEND}' ainda não "
-            "implementadas (sub-PR 2b da Fase 2). Pulando."
-        )
-        return
+    # As migrations em SCHEMA_MIGRATIONS são escritas em SQLite e traduzidas
+    # para PostgreSQL na borda pelo wrapper de conexão (sub-PR 2b). Backends
+    # não suportados são recusados por _open_main_db.
     conn = _open_main_db(timeout=5.0)
     try:
         c = conn.cursor()

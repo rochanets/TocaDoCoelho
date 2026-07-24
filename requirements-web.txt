@@ -17,3 +17,6 @@ gunicorn>=21.2.0
 # Driver PostgreSQL (Fase 2 — backend web). Só é usado quando DATABASE_URL
 # aponta para postgresql://; no modo SQLite (desktop/local) fica ocioso.
 psycopg[binary]>=3.1
+# Tradução de SQL SQLite→PostgreSQL na borda do wrapper de conexão. Só é
+# invocado no backend PostgreSQL.
+sqlglot>=25.0
