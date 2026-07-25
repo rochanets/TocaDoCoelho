@@ -2080,6 +2080,7 @@ _ACL_PARENTS = {
     'campaign_accounts': ('campaigns', 'campaign_id'),
     'campaign_actions': ('campaign_accounts', 'campaign_account_id'),
     'campaign_action_logs': ('campaign_actions', 'action_id'),
+    'portfolio_offer_items': ('portfolio_offers', 'offer_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
@@ -10070,7 +10071,7 @@ def _portfolio_task_cleanup(task_id, delay=300):
     threading.Thread(target=_do, daemon=True).start()
 
 
-def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, filename):
+def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, filename, owner_id=None):
     try:
         raw_input = input_text
         image_data, image_mime = None, None
@@ -10113,8 +10114,8 @@ def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, f
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-            (parsed['title'], parsed['summary'], raw_input or '')
+            'INSERT INTO portfolio_offers (title, summary, raw_input, owner_id, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
+            (parsed['title'], parsed['summary'], raw_input or '', owner_id)
         )
         offer_id = c.lastrowid
         for idx, item in enumerate(parsed.get('items') or []):
@@ -10492,7 +10493,7 @@ def _iata_extract_bytes(file_bytes, filename):
     return _iata_extract_file_text(_BytesFS(file_bytes, filename))
 
 
-def _iata_process_async(task_id, file_bytes, filename, raw_text_input):
+def _iata_process_async(task_id, file_bytes, filename, raw_text_input, owner_id=None):
     try:
         raw_text = raw_text_input or ''
         if file_bytes and filename:
@@ -10532,8 +10533,8 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input):
 
         _iata_task_set(task_id, {'step': 'Salvando ata...', 'progress': 92})
         c.execute(
-            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text, owner_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (
                 ata_data['title'],
                 ata_data.get('meeting_date'),
@@ -10542,7 +10543,8 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input):
                 json.dumps([p['name'] if isinstance(p, dict) else str(p) for p in (ata_data.get('participants') or [])], ensure_ascii=False),
                 json.dumps(ata_data, ensure_ascii=False),
                 json.dumps(insights_data, ensure_ascii=False),
-                raw_text[:50000]
+                raw_text[:50000],
+                owner_id
             )
         )
         record_id = c.lastrowid

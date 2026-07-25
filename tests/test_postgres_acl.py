@@ -258,3 +258,49 @@ def test_pg_campaign_child_chain(client, monkeypatch):
     # ação própria (via cadeia) editável; a de outro dono → 404
     assert client.patch(f'/api/campaigns/actions/{action_a}', json={'status': 'done'}).status_code == 200
     assert client.patch(f'/api/campaigns/actions/{action_b}', json={'status': 'done'}).status_code == 404
+
+
+# ── Portfolio: oferta (raiz) + item (filha) + iata (raiz) no Postgres ────────
+
+def test_pg_portfolio_offer_item_and_iata(client, monkeypatch):
+    """portfolio_offers (raiz, visible_where) + portfolio_offer_items → offers
+    (EXISTS filha) + iata_records (raiz) traduzidos e executados no Postgres."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+
+    def _offer(owner):
+        c.execute("INSERT INTO portfolio_offers (title, summary, owner_id) VALUES (?, 's', ?)",
+                  (f'off-{owner}-{tag}', owner))
+        oid = c.lastrowid
+        c.execute("INSERT INTO portfolio_offer_items (offer_id, pain, solution, sort_order) "
+                  "VALUES (?, 'p', 's', 0)", (oid,))
+        return oid, c.lastrowid
+
+    off_a, item_a = _offer(a_id)
+    off_b, item_b = _offer(b_id)
+    c.execute("INSERT INTO iata_records (title, owner_id) VALUES (?, ?)", (f'ata-a-{tag}', a_id))
+    c.execute("INSERT INTO iata_records (title, owner_id) VALUES (?, ?)", (f'ata-b-{tag}', b_id))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    # oferta raiz filtrada
+    otitles = {o['title'] for o in client.get('/api/portfolio/offers').get_json()}
+    assert f'off-{a_id}-{tag}' in otitles and f'off-{b_id}-{tag}' not in otitles
+    # item filha via EXISTS(offer): edição da própria ok, da de outro dono → 404
+    assert client.put(f'/api/portfolio/offers/{off_a}/items/{item_a}',
+                      json={'pain': 'p2'}).status_code == 200
+    assert client.put(f'/api/portfolio/offers/{off_b}/items/{item_b}',
+                      json={'pain': 'p2'}).status_code == 404
+    # herança filha (portfolio_offer_items → portfolio_offers) direto no helper:
+    # exercita o EXISTS(pai) traduzido no Postgres
+    with toca.app.test_request_context('/'):
+        from flask import session
+        session['user_id'] = a_id; toca._reset_request_user_cache()
+        assert toca.can_write('portfolio_offer_items', item_a) is True
+        assert toca.can_read('portfolio_offer_items', item_b) is False
+    # iata raiz filtrada
+    ititles = {r['title'] for r in client.get('/api/portfolio/iata').get_json()}
+    assert f'ata-a-{tag}' in ititles and f'ata-b-{tag}' not in ititles

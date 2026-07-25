@@ -9,7 +9,8 @@ def list_portfolio_offers():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM portfolio_offers ORDER BY datetime(created_at) DESC, id DESC')
+        _vw, _vp = visible_where('portfolio_offers')
+        c.execute(f'SELECT * FROM portfolio_offers WHERE {_vw} ORDER BY datetime(created_at) DESC, id DESC', _vp)
         offers = [dict_from_row(row) for row in c.fetchall()]
         for offer in offers:
             c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer['id'],))
@@ -26,6 +27,9 @@ def get_portfolio_offer(offer_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
         offer = _portfolio_fetch_offer(c, offer_id)
         conn.close()
         if not offer:
@@ -55,7 +59,7 @@ def create_portfolio_offer():
         _portfolio_task_set(task_id, {'status': 'processing', 'step': 'Iniciando análise...', 'progress': 10})
         threading.Thread(
             target=_portfolio_process_offer_async,
-            args=(task_id, input_text, file_bytes, file_mime, filename),
+            args=(task_id, input_text, file_bytes, file_mime, filename, _acl_owner_for_insert()),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
@@ -84,9 +88,12 @@ def update_portfolio_offer(offer_id):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('portfolio_offers', offer_id, c):
             conn.close()
             return jsonify({'error': 'Oferta não encontrada.'}), 404
+        if not can_write('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta oferta.', 'error_type': 'forbidden'}), 403
         c.execute(
             'UPDATE portfolio_offers SET title = ?, summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
             (title, summary, offer_id)
@@ -105,6 +112,12 @@ def delete_portfolio_offer(offer_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Oferta não encontrada.'}), 404
+        if not can_write('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir esta oferta.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
         c.execute('DELETE FROM portfolio_offers WHERE id = ?', (offer_id,))
         if c.rowcount == 0:
@@ -123,7 +136,8 @@ def export_portfolio_offers():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM portfolio_offers ORDER BY id')
+        _vw, _vp = visible_where('portfolio_offers')
+        c.execute(f'SELECT * FROM portfolio_offers WHERE {_vw} ORDER BY id', _vp)
         offers = [dict_from_row(r) for r in c.fetchall()]
         for offer in offers:
             c.execute('SELECT * FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC, id ASC', (offer['id'],))
@@ -171,6 +185,7 @@ def import_portfolio_offers():
         conn = get_db()
         c = conn.cursor()
         imported = 0
+        _import_owner_id = _acl_owner_for_insert()
         for offer in offers:
             if not isinstance(offer, dict):
                 continue
@@ -180,8 +195,8 @@ def import_portfolio_offers():
             summary = offer.get('summary') or ''
             raw_input = offer.get('raw_input') or ''
             c.execute(
-                'INSERT INTO portfolio_offers (title, summary, raw_input, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                (title, summary, raw_input)
+                'INSERT INTO portfolio_offers (title, summary, raw_input, owner_id, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
+                (title, summary, raw_input, _import_owner_id)
             )
             offer_id = c.lastrowid
             for idx, item in enumerate(offer.get('items') or []):
@@ -214,9 +229,12 @@ def update_portfolio_offer_item(offer_id, item_id):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('portfolio_offers', offer_id, c):
             conn.close()
             return jsonify({'error': 'Item não encontrado.'}), 404
+        if not can_write('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta oferta.', 'error_type': 'forbidden'}), 403
 
         if sort_order is None:
             c.execute(
@@ -259,9 +277,12 @@ def create_portfolio_offer_item(offer_id):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM portfolio_offers WHERE id = ?', (offer_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('portfolio_offers', offer_id, c):
             conn.close()
             return jsonify({'error': 'Oferta não encontrada.'}), 404
+        if not can_write('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta oferta.', 'error_type': 'forbidden'}), 403
         c.execute('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM portfolio_offer_items WHERE offer_id = ?', (offer_id,))
         max_sort = (dict_from_row(c.fetchone()) or {}).get('max_sort', -1)
         next_sort = int(max_sort) + 1
@@ -286,6 +307,12 @@ def delete_portfolio_offer_item(offer_id, item_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Item não encontrado.'}), 404
+        if not can_write('portfolio_offers', offer_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta oferta.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM portfolio_offer_items WHERE id = ? AND offer_id = ?', (item_id, offer_id))
         if c.rowcount == 0:
             conn.close()
@@ -303,7 +330,8 @@ def list_iata_records():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM iata_records ORDER BY datetime(created_at) DESC, id DESC')
+        _vw, _vp = visible_where('iata_records')
+        c.execute(f'SELECT * FROM iata_records WHERE {_vw} ORDER BY datetime(created_at) DESC, id DESC', _vp)
         records = [_iata_record_to_dict(row) for row in c.fetchall()]
         conn.close()
         return jsonify(records)
@@ -319,6 +347,8 @@ def get_iata_record(record_id):
         c = conn.cursor()
         c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
         row = c.fetchone()
+        if row and not can_read('iata_records', record_id, c):
+            row = None
         conn.close()
         if not row:
             return jsonify({'error': 'Registro não encontrado.'}), 404
@@ -346,7 +376,7 @@ def create_iata_record():
         _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
         threading.Thread(
             target=_iata_process_async,
-            args=(task_id, file_bytes, filename, raw_text_input),
+            args=(task_id, file_bytes, filename, raw_text_input, _acl_owner_for_insert()),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
@@ -368,6 +398,12 @@ def delete_iata_record(record_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('iata_records', record_id, c):
+            conn.close()
+            return jsonify({'error': 'Registro não encontrado.'}), 404
+        if not can_write('iata_records', record_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir este registro.', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM iata_records WHERE id = ?', (record_id,))
         if c.rowcount == 0:
             conn.close()
@@ -391,7 +427,8 @@ def _ws_normalize(s):
 def _account_whitespace(c, account_id):
     """Cruza portfolio_offers com account_presences da conta (por nome):
     ofertas presentes vs. nunca entregues/mencionadas."""
-    c.execute('SELECT id, title FROM portfolio_offers ORDER BY title COLLATE NOCASE')
+    _vw, _vp = visible_where('portfolio_offers')
+    c.execute(f'SELECT id, title FROM portfolio_offers WHERE {_vw} ORDER BY title COLLATE NOCASE', _vp)
     offers = c.fetchall()
     c.execute("""SELECT delivery_name FROM account_presences
                  WHERE account_id = ? AND COALESCE(early_terminated, 0) = 0""", (account_id,))
@@ -412,7 +449,7 @@ def account_whitespace(account_id):
         c = conn.cursor()
         c.execute('SELECT id, name FROM accounts WHERE id = ?', (account_id,))
         acc = c.fetchone()
-        if not acc:
+        if not acc or not can_read('accounts', account_id, c):
             conn.close()
             return jsonify({'error': 'Conta não encontrada'}), 404
         result = _account_whitespace(c, account_id)
@@ -431,9 +468,11 @@ def portfolio_whitespace_matrix():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id, title FROM portfolio_offers ORDER BY title COLLATE NOCASE')
+        _vw, _vp = visible_where('portfolio_offers')
+        c.execute(f'SELECT id, title FROM portfolio_offers WHERE {_vw} ORDER BY title COLLATE NOCASE', _vp)
         offers = [dict(r) for r in c.fetchall()]
-        c.execute("SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1 ORDER BY name COLLATE NOCASE")
+        _avw, _avp = visible_where('accounts')
+        c.execute(f"SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1 AND {_avw} ORDER BY name COLLATE NOCASE", _avp)
         rows = []
         for acc in c.fetchall():
             ws = _account_whitespace(c, acc['id'])
