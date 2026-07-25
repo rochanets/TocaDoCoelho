@@ -509,8 +509,10 @@ def _briefing_header_info(c, commitment):
     }
 
 
-def _briefing_gather_context(c, commitment):
-    """Agrega todo o contexto conhecido do contato/conta para o briefing."""
+def _briefing_gather_context(c, commitment, acl_user=None):
+    """Agrega todo o contexto conhecido do contato/conta para o briefing. Os
+    dados por-dono (atividades, cards de Kanban) são escopados ao `acl_user`
+    autorizado — o briefing nunca resume dado privado de outro usuário."""
     client_id = commitment['client_id']
     c.execute('SELECT * FROM clients WHERE id = ?', (client_id,))
     client = dict_from_row(c.fetchone()) or {}
@@ -519,25 +521,29 @@ def _briefing_gather_context(c, commitment):
         + (f" às {commitment['due_time']}" if commitment.get('due_time') else ''),
         f"Contato: {client.get('name')} — {client.get('position') or ''} na {client.get('company') or ''}",
     ]
-    c.execute("""SELECT contact_type, information, activity_date FROM activities
-                 WHERE client_id = ? ORDER BY activity_date DESC LIMIT 5""", (client_id,))
+    _avw, _avp = visible_where('activities', user=acl_user)
+    c.execute(f"""SELECT contact_type, information, activity_date FROM activities
+                 WHERE client_id = ? AND {_avw} ORDER BY activity_date DESC LIMIT 5""",
+              [client_id] + _avp)
     acts = c.fetchall()
     if acts:
         parts.append('Últimas atividades:\n' + '\n'.join(
             f"- {(a['activity_date'] or '')[:10]} ({a['contact_type']}): {(a['information'] or '')[:250]}"
             for a in acts))
-    c.execute("""SELECT information FROM activities
-                 WHERE client_id = ? AND contact_type = 'WhatsApp'
-                 ORDER BY activity_date DESC LIMIT 1""", (client_id,))
+    c.execute(f"""SELECT information FROM activities
+                 WHERE client_id = ? AND contact_type = 'WhatsApp' AND {_avw}
+                 ORDER BY activity_date DESC LIMIT 1""", [client_id] + _avp)
     wa = c.fetchone()
     if wa:
         parts.append(f"Último resumo de WhatsApp:\n{(wa['information'] or '')[:400]}")
-    c.execute("""SELECT k.title, k.description, k.urgency FROM kanban_cards k
+    _kow, _kop = owned_where('kanban_cards', alias='k', user=acl_user)
+    c.execute(f"""SELECT k.title, k.description, k.urgency FROM kanban_cards k
                  LEFT JOIN kanban_columns col ON col.id = k.column_id
                  WHERE (k.contact_id = ? OR k.account_id IN (
                         SELECT id FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))))
                    AND LOWER(COALESCE(col.title, '')) NOT LIKE '%conclu%'
-                 LIMIT 5""", (client_id, client.get('company') or ''))
+                   AND {_kow}
+                 LIMIT 5""", [client_id, client.get('company') or ''] + _kop)
     cards = c.fetchall()
     if cards:
         parts.append('Cards de Kanban abertos:\n' + '\n'.join(
@@ -568,7 +574,7 @@ def _briefing_gather_context(c, commitment):
     return '\n\n'.join(parts), client
 
 
-def _generate_briefing(c, commitment, force=False):
+def _generate_briefing(c, commitment, force=False, acl_user=None):
     """Gera (ou retorna do cache) o briefing estruturado de um compromisso."""
     if not force:
         c.execute('SELECT content_md, generated_at FROM meeting_briefings WHERE commitment_id = ?',
@@ -576,7 +582,7 @@ def _generate_briefing(c, commitment, force=False):
         cached = c.fetchone()
         if cached:
             return {'content': cached['content_md'], 'generated_at': cached['generated_at'], 'cached': True}
-    context, client = _briefing_gather_context(c, commitment)
+    context, client = _briefing_gather_context(c, commitment, acl_user=acl_user)
     raw = _llm_prompt(
         'Você é um assistente de vendas B2B. Com base no contexto abaixo, escreva um briefing '
         'pré-reunião em português do Brasil, em markdown, com EXATAMENTE estas seções '
@@ -602,6 +608,9 @@ def commitment_briefing_get(commitment_id):
     """Retorna o briefing do cache (rápido); 404 se ainda não gerado."""
     conn = get_db()
     c = conn.cursor()
+    if not can_read('commitments', commitment_id, c):
+        conn.close()
+        return jsonify({'error': 'Briefing ainda não gerado'}), 404
     c.execute('SELECT content_md, generated_at FROM meeting_briefings WHERE commitment_id = ?', (commitment_id,))
     row = c.fetchone()
     if not row:
@@ -615,7 +624,7 @@ def commitment_briefing_get(commitment_id):
                     'cached': True, **header})
 
 
-def _briefing_task_async(task_id, commitment_id, force):
+def _briefing_task_async(task_id, commitment_id, force, acl_user=None):
     try:
         conn = get_db()
         c = conn.cursor()
@@ -624,7 +633,7 @@ def _briefing_task_async(task_id, commitment_id, force):
         if not commitment:
             raise RuntimeError('Compromisso não encontrado.')
         _bg_task_set(task_id, {'step': '🧠 Reunindo contexto e gerando briefing...', 'progress': 30})
-        result = _generate_briefing(c, commitment, force=force)
+        result = _generate_briefing(c, commitment, force=force, acl_user=acl_user)
         result.update(_briefing_header_info(c, commitment))
         conn.commit()
         conn.close()
@@ -639,11 +648,14 @@ def _briefing_task_async(task_id, commitment_id, force):
 @app.route('/api/commitments/<int:commitment_id>/briefing', methods=['POST'])
 def commitment_briefing_generate(commitment_id):
     """Gera o briefing (task assíncrona). ?refresh=1 força regeração."""
+    if not can_read('commitments', commitment_id):
+        return jsonify({'error': 'Compromisso não encontrado'}), 404
     force = request.args.get('refresh') == '1' or (request.get_json(silent=True) or {}).get('refresh')
     task_id = uuid.uuid4().hex
+    acl_user = current_user()  # capturado no request p/ a thread aplicar visibilidade
     _bg_task_register_persistent(task_id, 'briefing')
     _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-    threading.Thread(target=_briefing_task_async, args=(task_id, commitment_id, bool(force)), daemon=True).start()
+    threading.Thread(target=_briefing_task_async, args=(task_id, commitment_id, bool(force), acl_user), daemon=True).start()
     return jsonify({'task_id': task_id}), 202
 
 
@@ -694,10 +706,15 @@ def _morning_briefing_job():
     today = datetime.now().strftime('%Y-%m-%d')
     conn = get_db()
     c = conn.cursor()
-    c.execute("""SELECT co.*, cl.name AS client_name, cl.company
+    # No disparo manual (rota) roda em request → escopa aos compromissos visíveis
+    # do solicitante. No job agendado (sem request, login on) não há usuário →
+    # '1=0' e nenhum e-mail cross-user; login off (desktop) → '1=1' como sempre.
+    acl_user = current_user()
+    _vw, _vp = visible_where('commitments', alias='co', user=acl_user)
+    c.execute(f"""SELECT co.*, cl.name AS client_name, cl.company
                  FROM commitments co JOIN clients cl ON cl.id = co.client_id
-                 WHERE co.due_date = ? AND COALESCE(cl.is_archived, 0) = 0
-                 ORDER BY co.due_time ASC""", (today,))
+                 WHERE co.due_date = ? AND COALESCE(cl.is_archived, 0) = 0 AND {_vw}
+                 ORDER BY co.due_time ASC""", [today] + _vp)
     meetings = [dict_from_row(r) for r in c.fetchall()]
     if not meetings:
         conn.close()
@@ -706,7 +723,7 @@ def _morning_briefing_job():
     sections = []
     for m in meetings:
         try:
-            result = _generate_briefing(c, m)  # usa cache se o briefing do dia já existir
+            result = _generate_briefing(c, m, acl_user=acl_user)  # usa cache se já existir
             conn.commit()
             head = f'{m["client_name"]} ({m["company"]})' + (f' — {m["due_time"]}' if m.get('due_time') else '')
             sections.append((head, result['content']))

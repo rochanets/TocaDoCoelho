@@ -197,3 +197,29 @@ def test_pg_agenda_union_filtered(client, monkeypatch):
     companies = {i.get('client_company') for i in items}
     assert f'CA-{tag}' in titles and f'CB-{tag}' not in titles    # commitments filtrados
     assert f'accR-{tag}' in companies                              # renovação (filha) do A visível
+
+
+def test_pg_briefing_child_of_commitment(client, monkeypatch):
+    """meeting_briefings → commitments (EXISTS filha) traduzido no Postgres, via
+    a rota de briefing e via can_read direto."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    ca = _new_client(a_id, f'bca-{tag}'); cb = _new_client(b_id, f'bcb-{tag}')
+    c.execute("INSERT INTO commitments (client_id, title, notes, due_date, source_type, owner_id) "
+              "VALUES (?, 'R', 'R', '2026-08-01', 'manual', ?)", (ca, a_id))
+    comm_a = c.lastrowid
+    c.execute("INSERT INTO commitments (client_id, title, notes, due_date, source_type, owner_id) "
+              "VALUES (?, 'R', 'R', '2026-08-01', 'manual', ?)", (cb, b_id))
+    comm_b = c.lastrowid
+    c.execute("INSERT INTO meeting_briefings (commitment_id, content_md, generated_at) "
+              "VALUES (?, 'brief', CURRENT_TIMESTAMP)", (comm_a,))
+    c.execute("INSERT INTO meeting_briefings (commitment_id, content_md, generated_at) "
+              "VALUES (?, 'brief', CURRENT_TIMESTAMP)", (comm_b,))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    assert client.get(f'/api/commitments/{comm_a}/briefing').status_code == 200
+    assert client.get(f'/api/commitments/{comm_b}/briefing').status_code == 404

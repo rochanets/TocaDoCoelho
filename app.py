@@ -2076,7 +2076,7 @@ _ACL_PARENTS = {
     'kanban_cards': ('kanban_columns', 'column_id'),
     'kanban_card_activities': ('kanban_cards', 'card_id'),
     'account_renewal_events': ('accounts', 'account_id'),
-    # (briefings: meeting_briefings entra na PR 4.4)
+    'meeting_briefings': ('commitments', 'commitment_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
@@ -2132,25 +2132,27 @@ def visible_where(record_type, user=None, alias=None, mode='read'):
     return where, [me, record_type, me]
 
 
-def owned_where(record_type, alias=None):
+def owned_where(record_type, alias=None, user=None):
     """Cláusula 'linhas cujo dono efetivo é o usuário atual'. Diferente de
     visible_where: NÃO inclui shares nem a visão-org do admin — é estritamente o
     que PERTENCE ao usuário. Usada em espaços PESSOAIS (ex.: o quadro Kanban
     por-usuário, onde 'cada um vê só o seu'). Herança de filha idêntica à de
-    visible_where (resolve o dono via o pai). Login off → ('1=1', []); sem
-    usuário → ('1=0', [])."""
+    visible_where (resolve o dono via o pai). `user` explícito permite resolver
+    em thread de background (sem request) — igual ao de visible_where. Login off
+    → ('1=1', []); sem usuário → ('1=0', [])."""
     if record_type not in _ACL_ROOT_TABLES and record_type not in _ACL_PARENTS:
         raise ValueError(f'record_type desconhecido para ACL: {record_type!r}')
     if not _auth_enabled():
         return '1=1', []
-    user = current_user()
+    if user is None:
+        user = current_user()
     if not user:
         return '1=0', []
     q = alias or record_type
     if record_type in _ACL_PARENTS:
         parent_type, fk = _ACL_PARENTS[record_type]
         palias = f'_own_{parent_type}'
-        pwhere, pparams = owned_where(parent_type, alias=palias)
+        pwhere, pparams = owned_where(parent_type, alias=palias, user=user)
         return (f"EXISTS (SELECT 1 FROM {parent_type} {palias} "
                 f"WHERE {palias}.id = {q}.{fk} AND {pwhere})", pparams)
     return f"{_acl_effective_owner_expr(q)} = ?", [user['id']]
