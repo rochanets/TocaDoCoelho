@@ -2077,6 +2077,9 @@ _ACL_PARENTS = {
     'kanban_card_activities': ('kanban_cards', 'card_id'),
     'account_renewal_events': ('accounts', 'account_id'),
     'meeting_briefings': ('commitments', 'commitment_id'),
+    'campaign_accounts': ('campaigns', 'campaign_id'),
+    'campaign_actions': ('campaign_accounts', 'campaign_account_id'),
+    'campaign_action_logs': ('campaign_actions', 'action_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
@@ -12168,18 +12171,18 @@ def _campaign_account_contacts(c, account_name):
 
 def _campaign_has_mapping(c, account_name):
     c.execute(
-        """SELECT COUNT(*) FROM environment_responses er
+        """SELECT COUNT(*) AS n FROM environment_responses er
            JOIN clients cl ON cl.id = er.client_id
            WHERE er.response IS NOT NULL AND trim(er.response) <> ''
              AND lower(trim(cl.company)) = lower(trim(?))""",
         (account_name,)
     )
-    return (c.fetchone()[0] or 0) > 0
+    return (c.fetchone()['n'] or 0) > 0
 
 
 def _campaign_has_kanban(c, account_id):
-    c.execute('SELECT COUNT(*) FROM kanban_cards WHERE account_id = ?', (account_id,))
-    return (c.fetchone()[0] or 0) > 0
+    c.execute('SELECT COUNT(*) AS n FROM kanban_cards WHERE account_id = ?', (account_id,))
+    return (c.fetchone()['n'] or 0) > 0
 
 
 def _campaign_classify(contacts, areas_lower, has_mapping, has_kanban, has_solution):
@@ -12513,16 +12516,16 @@ def _campaign_generate_core(payload, progress_cb=None):
         has_kan = _campaign_has_kanban(c, acc['id'])
         block, score, primary = _campaign_classify(contacts, areas_lower, has_map, has_kan, has_solution)
         c.execute(
-            "SELECT COUNT(*) FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
+            "SELECT COUNT(*) AS n FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
             (acc['name'],)
         )
-        act_count = c.fetchone()[0] or 0
+        act_count = c.fetchone()['n'] or 0
         c.execute(
             "SELECT a.description FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?)) AND (a.description IS NOT NULL AND trim(a.description)<>'') ORDER BY a.activity_date DESC LIMIT 1",
             (acc['name'],)
         )
         _row = c.fetchone()
-        last_act_desc = (_row[0] if _row else '') or ''
+        last_act_desc = (_row['description'] if _row else '') or ''
 
         offer_title = primary_offer['title'] if (block == 'A' and primary_offer) else None
         _emit(40 + int(45 * i / max(1, n_accs)), f"Pesquisando mercado: {acc['name']} ({i + 1}/{n_accs})")
@@ -12540,11 +12543,12 @@ def _campaign_generate_core(payload, progress_cb=None):
     c.execute(
         '''INSERT INTO campaigns
            (title, objective_text, llm_summary, areas_json, decision_levels_json, offer_ids_json,
-            has_solution, portfolio_note, start_date, weekly_capacity, llm_source, status, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
+            has_solution, portfolio_note, start_date, weekly_capacity, llm_source, status, owner_id, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',
         (title, challenge, payload.get('summary', ''),
          json.dumps(areas, ensure_ascii=False), json.dumps(decisores, ensure_ascii=False), json.dumps(offer_ids),
-         1 if has_solution else 0, payload.get('portfolio_note', ''), start_date, capacity, llm_source, 'Ativo')
+         1 if has_solution else 0, payload.get('portfolio_note', ''), start_date, capacity, llm_source, 'Ativo',
+         payload.get('owner_id'))
     )
     campaign_id = c.lastrowid
 
@@ -12631,16 +12635,16 @@ def _campaign_regenerate_core(cid, progress_cb=None):
         has_kan = _campaign_has_kanban(c, ca['account_id'])
         new_block, score, primary = _campaign_classify(contacts, areas_lower, has_map, has_kan, has_solution)
         c.execute(
-            "SELECT COUNT(*) FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
+            "SELECT COUNT(*) AS n FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?))",
             (ca['account_name'],)
         )
-        act_count = c.fetchone()[0] or 0
+        act_count = c.fetchone()['n'] or 0
         c.execute(
             "SELECT a.description FROM activities a JOIN clients cl ON cl.id=a.client_id WHERE lower(trim(cl.company))=lower(trim(?)) AND (a.description IS NOT NULL AND trim(a.description)<>'') ORDER BY a.activity_date DESC LIMIT 1",
             (ca['account_name'],)
         )
         _row = c.fetchone()
-        last_act_desc = (_row[0] if _row else '') or ''
+        last_act_desc = (_row['description'] if _row else '') or ''
         old_block = ca['block_type']
         offer_title = primary_offer['title'] if (new_block == 'A' and primary_offer) else None
         offer_id = primary_offer['id'] if (new_block == 'A' and primary_offer) else None
@@ -12706,8 +12710,8 @@ def _campaign_regenerate_core(cid, progress_cb=None):
         for a in existing:
             if a['id'] in used_existing:
                 continue
-            c.execute('SELECT COUNT(*) FROM campaign_action_logs WHERE action_id=? AND log_type=?', (a['id'], 'user'))
-            has_user_log = (c.fetchone()[0] or 0) > 0
+            c.execute('SELECT COUNT(*) AS n FROM campaign_action_logs WHERE action_id=? AND log_type=?', (a['id'], 'user'))
+            has_user_log = (c.fetchone()['n'] or 0) > 0
             if has_user_log or a.get('status') != 'pending':
                 c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'system')",
                           (a['id'], "A IA não priorizou mais esta frente nesta atualização, mas ela foi mantida por já ter execução registrada."))
