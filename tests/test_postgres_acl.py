@@ -223,3 +223,38 @@ def test_pg_briefing_child_of_commitment(client, monkeypatch):
         s['user_id'] = a_id
     assert client.get(f'/api/commitments/{comm_a}/briefing').status_code == 200
     assert client.get(f'/api/commitments/{comm_b}/briefing').status_code == 404
+
+
+# ── Campaigns: cadeia de filhas de 4 níveis (EXISTS aninhado) no Postgres ────
+
+def test_pg_campaign_child_chain(client, monkeypatch):
+    """campaign_action_logs → campaign_actions → campaign_accounts → campaigns:
+    EXISTS aninhado em 3 níveis traduzido e executado no Postgres."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+
+    def _chain(owner):
+        c.execute("INSERT INTO campaigns (title, objective_text, status, owner_id) "
+                  "VALUES (?, 'o', 'Ativo', ?)", (f'camp-{owner}-{tag}', owner))
+        camp = c.lastrowid
+        c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'acc-{owner}-{tag}', owner))
+        acc = c.lastrowid
+        c.execute("INSERT INTO campaign_accounts (campaign_id, account_id, account_name) VALUES (?, ?, 'X')",
+                  (camp, acc))
+        ca = c.lastrowid
+        c.execute("INSERT INTO campaign_actions (campaign_account_id, title) VALUES (?, 'A')", (ca,))
+        return camp, c.lastrowid
+
+    camp_a, action_a = _chain(a_id)
+    camp_b, action_b = _chain(b_id)
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    titles = {c['title'] for c in client.get('/api/campaigns').get_json()}
+    assert f'camp-{a_id}-{tag}' in titles and f'camp-{b_id}-{tag}' not in titles
+    # ação própria (via cadeia) editável; a de outro dono → 404
+    assert client.patch(f'/api/campaigns/actions/{action_a}', json={'status': 'done'}).status_code == 200
+    assert client.patch(f'/api/campaigns/actions/{action_b}', json={'status': 'done'}).status_code == 404

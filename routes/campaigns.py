@@ -9,11 +9,12 @@ def campaign_selectable_accounts():
     try:
         conn = get_db()
         c = conn.cursor()
+        _vw, _vp = visible_where('accounts', alias='a')
         c.execute(
-            """SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
+            f"""SELECT a.id, a.name, a.logo_url, a.is_target, a.sector,
                       (SELECT COUNT(*) FROM clients cl
                         WHERE lower(trim(cl.company)) = lower(trim(a.name)) AND COALESCE(cl.is_archived,0)=0) AS contact_count
-               FROM accounts a ORDER BY a.is_target DESC, a.name"""
+               FROM accounts a WHERE {_vw} ORDER BY a.is_target DESC, a.name""", _vp
         )
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
@@ -67,8 +68,14 @@ def campaign_generate():
         c = conn.cursor()
         if mode == 'manual' and raw_account_ids:
             ids = [int(i) for i in raw_account_ids if str(i).isdigit()]
+            if ids:  # só contas que o usuário enxerga
+                _vw, _vp = visible_where('accounts', alias='a')
+                _qs = ','.join('?' * len(ids))
+                c.execute(f'SELECT a.id FROM accounts a WHERE a.id IN ({_qs}) AND {_vw}', ids + _vp)
+                ids = [r['id'] for r in c.fetchall()]
         else:
-            c.execute('SELECT id FROM accounts WHERE is_target = 1')
+            _vw, _vp = visible_where('accounts', alias='a')
+            c.execute(f'SELECT a.id FROM accounts a WHERE a.is_target = 1 AND {_vw}', _vp)
             ids = [r['id'] for r in c.fetchall()]
         conn.close()
         if not ids:
@@ -86,6 +93,7 @@ def campaign_generate():
             'llm_source': data.get('llm_source', ''),
             'summary': data.get('summary', '') or data.get('entendimento', ''),
             'portfolio_note': data.get('portfolio_note', ''),
+            'owner_id': _acl_owner_for_insert(),  # capturado no request p/ a thread
         }
         task_id = uuid.uuid4().hex
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Montando plano de ação...', 'progress': 15})
@@ -117,11 +125,12 @@ def campaign_list():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM campaigns ORDER BY datetime(created_at) DESC, id DESC')
+        _vw, _vp = visible_where('campaigns')
+        c.execute(f'SELECT * FROM campaigns WHERE {_vw} ORDER BY datetime(created_at) DESC, id DESC', _vp)
         camps = [dict_from_row(r) for r in c.fetchall()]
         for camp in camps:
-            c.execute('SELECT COUNT(*) FROM campaign_accounts WHERE campaign_id = ?', (camp['id'],))
-            camp['accounts_count'] = c.fetchone()[0] or 0
+            c.execute('SELECT COUNT(*) AS n FROM campaign_accounts WHERE campaign_id = ?', (camp['id'],))
+            camp['accounts_count'] = c.fetchone()['n'] or 0
             c.execute(
                 """SELECT COUNT(*) total, SUM(CASE WHEN ca.status='done' THEN 1 ELSE 0 END) done
                    FROM campaign_actions ca
@@ -146,6 +155,9 @@ def campaign_detail(cid):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('campaigns', cid, c):
+            conn.close()
+            return jsonify({'error': 'Campanha não encontrada.'}), 404
         data = _campaign_serialize(c, cid)
         conn.close()
         if not data:
@@ -176,9 +188,12 @@ def campaign_update(cid):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM campaigns WHERE id = ?', (cid,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('campaigns', cid, c):
             conn.close()
             return jsonify({'error': 'Campanha não encontrada.'}), 404
+        if not can_write('campaigns', cid, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta campanha.', 'error_type': 'forbidden'}), 403
         c.execute(f"UPDATE campaigns SET {', '.join(fields)} WHERE id = ?", (*vals, cid))
         conn.commit()
         data = _campaign_serialize(c, cid)
@@ -194,6 +209,12 @@ def campaign_delete(cid):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('campaigns', cid, c):
+            conn.close()
+            return jsonify({'error': 'Campanha não encontrada.'}), 404
+        if not can_write('campaigns', cid, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir esta campanha.', 'error_type': 'forbidden'}), 403
         c.execute('SELECT id FROM campaign_accounts WHERE campaign_id = ?', (cid,))
         ca_ids = [r['id'] for r in c.fetchall()]
         if ca_ids:
@@ -224,9 +245,13 @@ def campaign_regenerate(cid):
         c = conn.cursor()
         c.execute('SELECT id FROM campaigns WHERE id = ?', (cid,))
         exists = c.fetchone()
+        _ok_read = can_read('campaigns', cid, c)
+        _ok_write = can_write('campaigns', cid, c)
         conn.close()
-        if not exists:
+        if not exists or not _ok_read:
             return jsonify({'error': 'Campanha não encontrada.'}), 404
+        if not _ok_write:
+            return jsonify({'error': 'Sem permissão para regenerar esta campanha.', 'error_type': 'forbidden'}), 403
         task_id = uuid.uuid4().hex
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Reanalisando portfólio e mapeamento...', 'progress': 25})
 
@@ -262,9 +287,12 @@ def campaign_action_update(aid):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM campaign_actions WHERE id = ?', (aid,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('campaign_actions', aid, c):
             conn.close()
             return jsonify({'error': 'Ação não encontrada.'}), 404
+        if not can_write('campaign_actions', aid, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta ação.', 'error_type': 'forbidden'}), 403
         if status == 'done':
             c.execute('UPDATE campaign_actions SET status=?, completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?', (status, aid))
         else:
@@ -287,9 +315,12 @@ def campaign_action_log(aid):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM campaign_actions WHERE id = ?', (aid,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('campaign_actions', aid, c):
             conn.close()
             return jsonify({'error': 'Ação não encontrada.'}), 404
+        if not can_write('campaign_actions', aid, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar esta ação.', 'error_type': 'forbidden'}), 403
         c.execute("INSERT INTO campaign_action_logs (action_id, log_text, log_type) VALUES (?,?, 'user')", (aid, text))
         log_id = c.lastrowid
         c.execute('UPDATE campaign_actions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (aid,))
@@ -314,9 +345,12 @@ def campaign_log_update(lid):
         c = conn.cursor()
         c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
         log = dict_from_row(c.fetchone())
-        if not log:
+        if not log or not can_read('campaign_action_logs', lid, c):
             conn.close()
             return jsonify({'error': 'Update não encontrado.'}), 404
+        if not can_write('campaign_action_logs', lid, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar este update.', 'error_type': 'forbidden'}), 403
         if (log.get('log_type') or 'user') != 'user':
             conn.close()
             return jsonify({'error': 'Apenas updates manuais podem ser editados.'}), 400
@@ -339,9 +373,12 @@ def campaign_log_delete(lid):
         c = conn.cursor()
         c.execute('SELECT * FROM campaign_action_logs WHERE id = ?', (lid,))
         log = dict_from_row(c.fetchone())
-        if not log:
+        if not log or not can_read('campaign_action_logs', lid, c):
             conn.close()
             return jsonify({'error': 'Update não encontrado.'}), 404
+        if not can_write('campaign_action_logs', lid, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir este update.', 'error_type': 'forbidden'}), 403
         if (log.get('log_type') or 'user') != 'user':
             conn.close()
             return jsonify({'error': 'Apenas updates manuais podem ser excluídos.'}), 400
