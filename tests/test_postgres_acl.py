@@ -304,3 +304,45 @@ def test_pg_portfolio_offer_item_and_iata(client, monkeypatch):
     # iata raiz filtrada
     ititles = {r['title'] for r in client.get('/api/portfolio/iata').get_json()}
     assert f'ata-a-{tag}' in ititles and f'ata-b-{tag}' not in ititles
+
+
+# ── Wikitoca: entries + documents (raízes, visible_where) no Postgres ────────
+
+def test_pg_wiki_entries_and_documents(client, monkeypatch):
+    """wiki_entries e wiki_documents (raízes, privadas-por-dono) filtradas por
+    visible_where traduzido no Postgres; guard de escrita (404) e o filtro do
+    ramo de busca `q` (OR parentetizada + AND visible) também exercitados."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO wiki_entries (title, content, owner_id) VALUES (?, ?, ?)",
+              (f'we-a-{tag}', 'texto termo comum', a_id))
+    ea = c.lastrowid
+    c.execute("INSERT INTO wiki_entries (title, content, owner_id) VALUES (?, ?, ?)",
+              (f'we-b-{tag}', 'texto termo comum', b_id))
+    eb = c.lastrowid
+    c.execute("INSERT INTO wiki_documents (title, file_name, original_name, file_url, owner_id) "
+              "VALUES (?, ?, ?, ?, ?)",
+              (f'wd-a-{tag}', f'fa-{tag}.pdf', 'a.pdf', f'/uploads/wikitoca/fa-{tag}.pdf', a_id))
+    c.execute("INSERT INTO wiki_documents (title, file_name, original_name, file_url, owner_id) "
+              "VALUES (?, ?, ?, ?, ?)",
+              (f'wd-b-{tag}', f'fb-{tag}.pdf', 'b.pdf', f'/uploads/wikitoca/fb-{tag}.pdf', b_id))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    # lista de entries filtrada
+    etitles = {e['title'] for e in client.get('/api/wikitoca/entries').get_json()}
+    assert f'we-a-{tag}' in etitles and f'we-b-{tag}' not in etitles
+    # ramo de busca `q` (OR + AND visible) também filtrado
+    qrows = client.get('/api/wikitoca/entries?q=comum').get_json()
+    assert {r['title'] for r in qrows} == {f'we-a-{tag}'}
+    # guard de escrita: entry de outro dono → 404
+    assert client.put(f'/api/wikitoca/entries/{eb}',
+                      json={'title': 'X', 'content': 'y'}).status_code == 404
+    assert client.put(f'/api/wikitoca/entries/{ea}',
+                      json={'title': 'ok', 'content': 'y'}).status_code == 200
+    # lista de documents filtrada
+    dtitles = {d['title'] for d in client.get('/api/wikitoca/documents').get_json()}
+    assert f'wd-a-{tag}' in dtitles and f'wd-b-{tag}' not in dtitles

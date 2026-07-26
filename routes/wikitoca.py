@@ -11,16 +11,17 @@ def list_wiki_entries():
         q = (request.args.get('q') or '').strip()
         conn = get_db()
         c = conn.cursor()
+        _vw, _vp = visible_where('wiki_entries')
         if q:
             like = f'%{q}%'
             c.execute(
-                '''SELECT * FROM wiki_entries
-                   WHERE title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?
+                f'''SELECT * FROM wiki_entries
+                   WHERE (title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?) AND {_vw}
                    ORDER BY updated_at DESC''',
-                (like, like, like, like)
+                (like, like, like, like, *_vp)
             )
         else:
-            c.execute('SELECT * FROM wiki_entries ORDER BY updated_at DESC')
+            c.execute(f'SELECT * FROM wiki_entries WHERE {_vw} ORDER BY updated_at DESC', _vp)
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
         logger.debug(f'[DEBUG] GET /api/wikitoca/entries retornando {len(rows)} registros')
@@ -48,9 +49,9 @@ def create_wiki_entry():
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            '''INSERT INTO wiki_entries (title, category, content, tags, created_at, updated_at)
-               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-            (title, category, content, tags)
+            '''INSERT INTO wiki_entries (title, category, content, tags, owner_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+            (title, category, content, tags, _acl_owner_for_insert())
         )
         conn.commit()
         entry_id = c.lastrowid
@@ -79,10 +80,13 @@ def update_wiki_entry(entry_id):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM wiki_entries WHERE id = ?', (entry_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('wiki_entries', entry_id, c):
             conn.close()
             logger.warning(f'[WARN] PUT /api/wikitoca/entries/{entry_id}: nao encontrado')
             return api_error(404, 'WIKI_ENTRY_NOT_FOUND', 'Conhecimento não encontrado.')
+        if not can_write('wiki_entries', entry_id, c):
+            conn.close()
+            return api_error(403, 'WIKI_ENTRY_FORBIDDEN', 'Sem permissão para editar este conhecimento.')
         c.execute(
             '''UPDATE wiki_entries
                SET title = ?, category = ?, content = ?, tags = ?, updated_at = CURRENT_TIMESTAMP
@@ -108,9 +112,12 @@ def delete_wiki_entry(entry_id):
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT id FROM wiki_entries WHERE id = ?', (entry_id,))
-        if not c.fetchone():
+        if not c.fetchone() or not can_read('wiki_entries', entry_id, c):
             conn.close()
             return api_error(404, 'WIKI_ENTRY_NOT_FOUND', 'Conhecimento não encontrado.')
+        if not can_write('wiki_entries', entry_id, c):
+            conn.close()
+            return api_error(403, 'WIKI_ENTRY_FORBIDDEN', 'Sem permissão para excluir este conhecimento.')
         c.execute('DELETE FROM wiki_entries WHERE id = ?', (entry_id,))
         conn.commit()
         conn.close()
@@ -129,16 +136,17 @@ def list_wiki_documents():
         q = (request.args.get('q') or '').strip()
         conn = get_db()
         c = conn.cursor()
+        _vw, _vp = visible_where('wiki_documents')
         if q:
             like = f'%{q}%'
             c.execute(
-                '''SELECT * FROM wiki_documents
-                   WHERE title LIKE ? OR original_name LIKE ?
+                f'''SELECT * FROM wiki_documents
+                   WHERE (title LIKE ? OR original_name LIKE ?) AND {_vw}
                    ORDER BY updated_at DESC''',
-                (like, like)
+                (like, like, *_vp)
             )
         else:
-            c.execute('SELECT * FROM wiki_documents ORDER BY updated_at DESC')
+            c.execute(f'SELECT * FROM wiki_documents WHERE {_vw} ORDER BY updated_at DESC', _vp)
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
         logger.debug(f'[DEBUG] GET /api/wikitoca/documents retornando {len(rows)} documentos')
@@ -160,6 +168,7 @@ def upload_wiki_documents():
         title = (request.form.get('title') or '').strip()
         conn = get_db()
         c = conn.cursor()
+        _owner_id = _acl_owner_for_insert()
         created = []
         for f in files:
             if not f.filename:
@@ -177,9 +186,9 @@ def upload_wiki_documents():
             doc_title = title or original_name
             c.execute(
                 '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
-                                              created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                (doc_title, safe_name, original_name, file_url, ext, file_size)
+                                              owner_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                (doc_title, safe_name, original_name, file_url, ext, file_size, _owner_id)
             )
             conn.commit()
             doc_id = c.lastrowid
@@ -205,9 +214,12 @@ def delete_wiki_document(document_id):
         c = conn.cursor()
         c.execute('SELECT * FROM wiki_documents WHERE id = ?', (document_id,))
         row = dict_from_row(c.fetchone())
-        if not row:
+        if not row or not can_read('wiki_documents', document_id, c):
             conn.close()
             return api_error(404, 'WIKI_DOC_NOT_FOUND', 'Documento não encontrado.')
+        if not can_write('wiki_documents', document_id, c):
+            conn.close()
+            return api_error(403, 'WIKI_DOC_FORBIDDEN', 'Sem permissão para remover este documento.')
         file_path = WIKI_UPLOAD_DIR / row['file_name']
         if file_path.exists():
             file_path.unlink()
@@ -229,7 +241,8 @@ def export_wiki_documents():
         import tempfile
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM wiki_documents ORDER BY id')
+        _vw, _vp = visible_where('wiki_documents')
+        c.execute(f'SELECT * FROM wiki_documents WHERE {_vw} ORDER BY id', _vp)
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
 
@@ -284,6 +297,7 @@ def import_wiki_documents():
 
             conn = get_db()
             c = conn.cursor()
+            _owner_id = _acl_owner_for_insert()
             for entry in manifest:
                 original_name = entry.get('original_name') or entry.get('file_name') or 'documento'
                 ext = (entry.get('file_ext') or Path(original_name).suffix.lower())
@@ -301,9 +315,9 @@ def import_wiki_documents():
                 doc_title = entry.get('title') or original_name
                 c.execute(
                     '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
-                                                  created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                    (doc_title, safe_name, original_name, file_url, ext, file_size)
+                                                  owner_id, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                    (doc_title, safe_name, original_name, file_url, ext, file_size, _owner_id)
                 )
                 conn.commit()
                 doc_id = c.lastrowid
@@ -328,7 +342,8 @@ def export_wikitoca_xlsx():
             return jsonify({'error': 'Exportação XLSX requer openpyxl instalado'}), 500
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT title, category, tags, content FROM wiki_entries ORDER BY updated_at DESC')
+        _vw, _vp = visible_where('wiki_entries')
+        c.execute(f'SELECT title, category, tags, content FROM wiki_entries WHERE {_vw} ORDER BY updated_at DESC', _vp)
         rows = c.fetchall()
         conn.close()
         import openpyxl
@@ -461,6 +476,7 @@ def import_wikitoca_xlsx():
             return ', '.join(w for w, _ in sorted_words[:6])
         conn = get_db()
         c = conn.cursor()
+        _owner_id = _acl_owner_for_insert()
         ok = 0
         fail = 0
         errors = []
@@ -476,8 +492,8 @@ def import_wikitoca_xlsx():
                 tags = generate_tags(title, content)
                 now = datetime.utcnow().isoformat() + 'Z'
                 c.execute(
-                    'INSERT INTO wiki_entries (title, category, tags, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-                    (title, category, tags, content, now, now)
+                    'INSERT INTO wiki_entries (title, category, tags, content, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (title, category, tags, content, _owner_id, now, now)
                 )
                 ok += 1
             except Exception as row_err:
@@ -494,4 +510,15 @@ def import_wikitoca_xlsx():
 
 @app.route('/uploads/wikitoca/<filename>')
 def serve_wikitoca_upload(filename):
+    # Documento privado: se houver linha em wiki_documents para este arquivo,
+    # só serve a quem pode lê-la (dono/share/admin). Login off → can_read=True
+    # (desktop serve igual). Arquivo órfão (sem linha) é servido como antes.
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT id FROM wiki_documents WHERE file_name = ?', (filename,))
+    row = c.fetchone()
+    if row and not can_read('wiki_documents', dict_from_row(row)['id'], c):
+        conn.close()
+        return api_error(404, 'WIKI_DOC_NOT_FOUND', 'Documento não encontrado.')
+    conn.close()
     return send_from_directory(str(WIKI_UPLOAD_DIR), filename)
