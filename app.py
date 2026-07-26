@@ -1520,6 +1520,16 @@ SCHEMA_MIGRATIONS = [
         'UPDATE account_archives SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
         'UPDATE account_planning_runs SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
     ]),
+
+    # Fase 4 — owner_id no histórico de chat do iToca. Antes só havia session_id
+    # (UUID gerado no cliente): a LISTA de sessões varria a tabela inteira e
+    # vazava as conversas de todos os usuários. Chat é PESSOAL (por-usuário,
+    # como o Kanban) — sem shares, sem visão-org de admin. Backfill = fundador.
+    (16, 'multiusuario_fase_4_owner_id_itoca_chat_history', [
+        'ALTER TABLE itoca_chat_history ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_itoca_chat_history_owner ON itoca_chat_history(owner_id)',
+        'UPDATE itoca_chat_history SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
 ]
 
 
@@ -2064,7 +2074,7 @@ _ACL_ROOT_TABLES = {
     'clients', 'accounts', 'campaigns', 'commitments', 'activities',
     'kanban_columns', 'wiki_entries', 'wiki_documents', 'portfolio_offers',
     'iata_records', 'environment_cards', 'account_archives',
-    'account_planning_runs',
+    'account_planning_runs', 'itoca_chat_history',
 }
 
 # Tabelas-FILHAS: não têm owner_id próprio — herdam a dona da RAIZ ancestral via
@@ -8582,7 +8592,7 @@ def _itoca_base_update_async(task_id, incremental):
         _bg_task_cleanup(task_id)
 
 
-def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, history_rows):
+def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, history_rows, owner_id=None):
     """Processa a pergunta do iToca em background. Atualiza _bg_tasks com progresso em tempo real."""
     try:
         _q_lower = question.lower()
@@ -8705,8 +8715,8 @@ def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, 
                 conn_h = get_db()
                 c_h = conn_h.cursor()
                 c_h.execute(
-                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, ?, ?, ?)',
-                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint)
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (session_id, 'assistant', answer, confidence, 1 if needs_ref else 0, ref_hint, owner_id)
                 )
                 conn_h.commit()
                 conn_h.close()
