@@ -346,3 +346,27 @@ def test_pg_wiki_entries_and_documents(client, monkeypatch):
     # lista de documents filtrada
     dtitles = {d['title'] for d in client.get('/api/wikitoca/documents').get_json()}
     assert f'wd-a-{tag}' in dtitles and f'wd-b-{tag}' not in dtitles
+
+
+# ── iToca: histórico de chat por-usuário (owned_where) no Postgres ───────────
+
+def test_pg_itoca_history_owned(client, monkeypatch):
+    """itoca_chat_history é por-usuário (owned_where, sem shares/admin): a lista
+    de sessões (alias h + subquery correlata + purge DELETE com datetime()) e o
+    get por sessão traduzidos e executados no Postgres, escopados ao dono."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO itoca_chat_history (session_id, role, content, owner_id) "
+              "VALUES (?, 'user', 'qa', ?)", (f'sa-{tag}', a_id))
+    c.execute("INSERT INTO itoca_chat_history (session_id, role, content, owner_id) "
+              "VALUES (?, 'user', 'qb', ?)", (f'sb-{tag}', b_id))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    ids = {r['session_id'] for r in client.get('/api/itoca/history').get_json()}
+    assert f'sa-{tag}' in ids and f'sb-{tag}' not in ids
+    # get da sessão de outro dono → vazio (escopado por owned_where)
+    assert client.get(f'/api/itoca/history/sb-{tag}').get_json() == []

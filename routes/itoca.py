@@ -51,15 +51,21 @@ def itoca_ask():
                 'base_ready': False
             }), 409
 
+        # Dono da conversa (usuário atual; fundador no desktop). Capturado aqui,
+        # no contexto de request, para repassar à thread de background (que perde
+        # o request e não resolve current_user sozinha).
+        _owner_id = _acl_owner_for_insert()
+
         # Busca histórico ANTES de salvar a mensagem do usuário (para não incluir a pergunta atual no contexto)
         history_rows = []
         if session_id:
             try:
                 conn_h = get_db()
                 c_h = conn_h.cursor()
+                _ow, _op = owned_where('itoca_chat_history')
                 c_h.execute(
-                    'SELECT role, content FROM itoca_chat_history WHERE session_id = ? ORDER BY created_at ASC LIMIT 12',
-                    (session_id,)
+                    f'SELECT role, content FROM itoca_chat_history WHERE session_id = ? AND {_ow} ORDER BY created_at ASC LIMIT 12',
+                    (session_id, *_op)
                 )
                 history_rows = [dict_from_row(r) for r in c_h.fetchall()]
                 conn_h.close()
@@ -73,8 +79,8 @@ def itoca_ask():
                 conn_h = get_db()
                 c_h = conn_h.cursor()
                 c_h.execute(
-                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint) VALUES (?, ?, ?, NULL, 0, ?)',
-                    (session_id, 'user', question, '')
+                    'INSERT INTO itoca_chat_history (session_id, role, content, confidence_percent, needs_refinement, refinement_hint, owner_id) VALUES (?, ?, ?, NULL, 0, ?, ?)',
+                    (session_id, 'user', question, '', _owner_id)
                 )
                 conn_h.commit()
                 conn_h.close()
@@ -86,7 +92,7 @@ def itoca_ask():
         _bg_task_set(task_id, {'status': 'processing', 'step': '🔍 Iniciando busca...', 'progress': 5})
         threading.Thread(
             target=_itoca_ask_async,
-            args=(task_id, question, session_id, snapshot_items, updated_at, history_rows),
+            args=(task_id, question, session_id, snapshot_items, updated_at, history_rows, _owner_id),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id, 'base_ready': True}), 202
@@ -402,11 +408,14 @@ def itoca_history_list():
     try:
         conn = get_db()
         c = conn.cursor()
-        # Purga registros com mais de 30 dias
-        c.execute("DELETE FROM itoca_chat_history WHERE created_at < datetime('now', '-30 days')")
+        # Purga registros com mais de 30 dias (só os do próprio usuário — retenção
+        # por-dono; no desktop owned_where é '1=1' e purga tudo como antes).
+        _pw, _pp = owned_where('itoca_chat_history')
+        c.execute(f"DELETE FROM itoca_chat_history WHERE created_at < datetime('now', '-30 days') AND {_pw}", _pp)
         conn.commit()
-        # Retorna sessões distintas com data e primeira pergunta
-        c.execute('''
+        # Retorna sessões distintas do usuário atual, com data e primeira pergunta
+        _ow, _op = owned_where('itoca_chat_history', 'h')
+        c.execute(f'''
             SELECT session_id,
                    MIN(created_at) AS started_at,
                    MAX(created_at) AS last_at,
@@ -415,10 +424,11 @@ def itoca_history_list():
                     WHERE h2.session_id = h.session_id AND h2.role = 'user'
                     ORDER BY h2.created_at ASC LIMIT 1) AS first_question
             FROM itoca_chat_history h
+            WHERE {_ow}
             GROUP BY session_id
             ORDER BY last_at DESC
             LIMIT 60
-        ''')
+        ''', _op)
         sessions = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
         return jsonify(sessions)
@@ -433,9 +443,10 @@ def itoca_history_session(session_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        _ow, _op = owned_where('itoca_chat_history')
         c.execute(
-            'SELECT id, role, content, confidence_percent, needs_refinement, refinement_hint, created_at FROM itoca_chat_history WHERE session_id = ? ORDER BY created_at ASC',
-            (session_id,)
+            f'SELECT id, role, content, confidence_percent, needs_refinement, refinement_hint, created_at FROM itoca_chat_history WHERE session_id = ? AND {_ow} ORDER BY created_at ASC',
+            (session_id, *_op)
         )
         messages = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
@@ -451,7 +462,8 @@ def itoca_history_delete(session_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('DELETE FROM itoca_chat_history WHERE session_id = ?', (session_id,))
+        _ow, _op = owned_where('itoca_chat_history')
+        c.execute(f'DELETE FROM itoca_chat_history WHERE session_id = ? AND {_ow}', (session_id, *_op))
         conn.commit()
         conn.close()
         return jsonify({'message': 'Sessão removida do histórico.'})

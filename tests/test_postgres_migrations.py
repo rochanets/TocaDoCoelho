@@ -17,13 +17,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_schema_version_reaches_15():
+def test_schema_version_reaches_16():
     toca._run_schema_migrations()  # idempotente (version gate)
     conn = toca._open_main_db()
     try:
         cur = conn.cursor()
         cur.execute('SELECT MAX(version) FROM schema_version')
-        assert cur.fetchone()[0] == 15
+        assert cur.fetchone()[0] == 16
     finally:
         conn.close()
 
