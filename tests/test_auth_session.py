@@ -107,7 +107,7 @@ def test_gate_on_allows_healthz(client, monkeypatch):
 def test_gate_on_allows_spa_shell(client, monkeypatch):
     monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
     # Página (não-API) carrega mesmo sem sessão — o SPA decide via /api/auth/me.
-    r = client.get('/')
+    r = client.get('/', headers={'Accept': 'text/html'})
     assert r.status_code == 200
 
 

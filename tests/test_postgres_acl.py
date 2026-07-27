@@ -146,6 +146,60 @@ def test_pg_admin_org_scope(client, monkeypatch):
     assert f'adm-a-{tag}' in names and f'adm-b-{tag}' in names
 
 
+def test_pg_fase6_user_lifecycle_and_active_session(client, monkeypatch):
+    """F6 no PostgreSQL: RBAC administrativo, soft-delete e reativação."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, member_id, _ = _seed_org_and_users()
+    preserved_id = _new_client(member_id, f'preserved-{uuid.uuid4().hex[:8]}')
+
+    with client.session_transaction() as session:
+        session['user_id'] = admin_id
+    listed = client.get('/api/admin/users')
+    assert listed.status_code == 200, listed.get_data(as_text=True)
+    listed_ids = {user['id'] for user in listed.get_json()['users']}
+    assert {admin_id, member_id}.issubset(listed_ids)
+
+    promoted = client.patch(
+        f'/api/admin/users/{member_id}',
+        json={'role': 'admin'},
+    )
+    assert promoted.status_code == 200, promoted.get_data(as_text=True)
+    assert promoted.get_json()['role'] == 'admin'
+
+    deactivated = client.delete(f'/api/admin/users/{member_id}', json={})
+    assert deactivated.status_code == 204, deactivated.get_data(as_text=True)
+
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute('SELECT is_active FROM users WHERE id = ?', (member_id,))
+    assert c.fetchone()['is_active'] == 0
+    c.execute('SELECT owner_id FROM clients WHERE id = ?', (preserved_id,))
+    assert c.fetchone()['owner_id'] == member_id
+    conn.close()
+
+    with client.session_transaction() as session:
+        session['user_id'] = member_id
+    assert client.get('/api/clients').status_code == 401
+
+    with client.session_transaction() as session:
+        session['user_id'] = admin_id
+    email = f'reactivated-{uuid.uuid4().hex[:8]}@ex.com'
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute(
+        '''UPDATE users
+           SET email = ?, full_name = ?, role = 'member'
+           WHERE id = ? AND org_id = ?''',
+        (email, 'Reativado PG', member_id, org_id),
+    )
+    conn.commit(); conn.close()
+    reactivated = client.post(
+        '/api/admin/users',
+        json={'email': email.upper(), 'full_name': 'Reativado PG', 'role': 'member'},
+    )
+    assert reactivated.status_code == 201, reactivated.get_data(as_text=True)
+    assert reactivated.get_json()['id'] == member_id
+    assert reactivated.get_json()['reactivated'] is True
+
+
 def test_pg_write_guard(client, monkeypatch):
     """can_write no Postgres: escrita em registro de outro dono é negada."""
     monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')

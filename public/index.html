@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" class="session-pending">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,6 +13,50 @@
     <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
+    <div id="sessionGate" class="session-gate" role="status" aria-live="polite">
+        <div class="session-gate-shell">
+            <section class="session-gate-panel">
+                <div class="session-gate-brand" aria-label="Toca Sales Engagement">
+                    <img src="/images/favicon-toca.png" alt="" class="session-gate-logo">
+                    <span class="session-gate-wordmark">
+                        <strong>TOCA</strong>
+                        <small>Sales Engagement</small>
+                    </span>
+                </div>
+                <div class="session-gate-card">
+                    <div id="sessionGateLoading" class="session-gate-loading">
+                        <span class="session-spinner" aria-hidden="true"></span>
+                        <h1>Preparando sua Toca</h1>
+                        <p>Verificando a sessão com segurança…</p>
+                    </div>
+                    <div id="sessionGateLogin" hidden>
+                        <p class="multiuser-eyebrow">Acesso corporativo seguro</p>
+                        <h1 id="sessionGateTitle">Bem-vindo de volta!</h1>
+                        <p id="sessionGateMessage">Use sua conta corporativa Microsoft para continuar.</p>
+                        <button type="button" class="session-login-btn"
+                                onclick="TocaSession.login()">
+                            <i class="fab fa-microsoft"></i>
+                            <span>Entrar com a Microsoft</span>
+                            <i class="fas fa-arrow-right" aria-hidden="true"></i>
+                        </button>
+                        <p class="session-security-note">
+                            <i class="fas fa-shield-halved" aria-hidden="true"></i>
+                            Acesso protegido pela Microsoft Entra ID
+                        </p>
+                    </div>
+                </div>
+                <p class="session-gate-footer">Toca do Coelho · Ambiente corporativo</p>
+            </section>
+            <div class="session-gate-visual" aria-hidden="true">
+                <span class="session-visual-caption">
+                    Relacionamentos mais inteligentes.<br>
+                    Resultados mais próximos.
+                </span>
+            </div>
+        </div>
+    </div>
+    <div id="sessionNotice" class="session-notice" role="alert" hidden></div>
+
     <!-- Sidebar -->
     <aside class="sidebar">
         <div class="sidebar-logo">
@@ -89,6 +133,17 @@
                 <button id="topbarSettingsButton" class="topbar-settings-btn" onclick="switchTab(event, 'configuracoes')" title="Configurações">
                     <i class="fas fa-cog"></i>
                 </button>
+                <div id="sessionUserBlock" class="session-user-block" hidden>
+                    <span class="session-user-avatar" data-session-avatar aria-hidden="true"></span>
+                    <span class="session-user-copy">
+                        <strong data-session-name></strong>
+                        <small data-session-role></small>
+                    </span>
+                    <button id="sessionLogoutButton" type="button" class="session-logout-btn"
+                            onclick="TocaSession.logout()" title="Sair" aria-label="Sair da Toca">
+                        <i class="fas fa-arrow-right-from-bracket"></i>
+                    </button>
+                </div>
                 <div id="dashboardGreeting" style="display:flex; align-items:center; gap:10px;"></div>
             </div>
         </div>
@@ -421,7 +476,7 @@
 
             <!-- Base controls -->
             <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-auto-mapping btn-small" id="itocaBaseUpdateBtn" onclick="updateITocaBase(true)" title="Atualiza a base de conhecimento do iToca (indexa apenas o que mudou)"><span class="ai-star-icon">✶</span> Base Update</button>
+                <button type="button" class="btn btn-auto-mapping btn-small" id="itocaBaseUpdateBtn" data-admin-only onclick="updateITocaBase(true)" title="Atualiza a base de conhecimento do iToca (indexa apenas o que mudou)"><span class="ai-star-icon">✶</span> Base Update</button>
                 <button type="button" class="btn btn-small" id="itocaClearChatBtn" onclick="clearITocaChat()" title="Limpar histórico do chat" style="background:#fb923c; color:#fff; border:1px solid #ea580c;"><i class="fas fa-trash-alt"></i> Limpar chat</button>
                 <small id="itocaBaseUpdatedAt" style="color:#4b5563; font-size:12px;">Base não atualizada.</small>
             </div>
@@ -640,7 +695,7 @@
             <div id="gestaoContaSubPanel_environment" data-subtab="environment" style="display:none;">
                 <div class="page-header" style="margin-top:6px;">
                     <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                        <button class="btn btn-primary" onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
+                        <button class="btn btn-primary" data-admin-only onclick="openCreateCardModal()"><i class="fas fa-plus"></i> Novo Card</button>
                         <button class="btn btn-auto-mapping" onclick="openAutoMappingModal()"><span class="ai-star-icon">✦</span> AutoMapping</button>
                         <button id="envAutoFillBtn" class="btn btn-auto-mapping btn-small" style="display:none;" onclick="openEnvAutoFillModal()"><span class="ai-star-icon">✦</span> Auto-preencher via Web</button>
                     </div>
@@ -1116,7 +1171,7 @@
             <div class="settings-grid">
 
                 <!-- 1. Cadastro do Usuário -->
-                <section class="settings-card">
+                <section class="settings-card" id="personalProfileSettingsCard">
                     <h3><i class="fas fa-id-card" style="margin-right:8px; color:#059669;"></i>Cadastro do Usuário</h3>
                     <form id="userProfileForm" onsubmit="saveUserProfile(event)">
                         <div class="form-group"><label>Nome Completo *</label><input type="text" name="full_name" required></div>
@@ -1136,6 +1191,42 @@
                             <button type="button" class="btn btn-danger" id="deleteUserBtn" onclick="deleteUserProfile()" style="display: none;"><i class="fas fa-trash"></i> Excluir Usuário</button>
                         </div>
                     </form>
+                </section>
+
+                <!-- Administração de usuários (somente web + admin) -->
+                <section class="settings-card admin-users-card" data-auth-only data-admin-only>
+                    <div class="settings-card-title-row">
+                        <h3><i class="fas fa-users-gear"></i> Usuários e acessos</h3>
+                        <span class="admin-chip">Admin</span>
+                    </div>
+                    <p class="settings-card-intro">Provisione quem pode entrar com a conta Microsoft e defina o papel inicial.</p>
+                    <form id="adminUserCreateForm" class="admin-user-create-form"
+                          onsubmit="createAdminUser(event)">
+                        <div class="form-group">
+                            <label for="adminUserName">Nome</label>
+                            <input id="adminUserName" name="full_name" type="text"
+                                   autocomplete="off" placeholder="Nome completo">
+                        </div>
+                        <div class="form-group">
+                            <label for="adminUserEmail">E-mail corporativo *</label>
+                            <input id="adminUserEmail" name="email" type="email" required
+                                   autocomplete="off" placeholder="nome@empresa.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="adminUserRole">Papel inicial</label>
+                            <select id="adminUserRole" name="role">
+                                <option value="member">Membro</option>
+                                <option value="admin">Administrador</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-user-plus"></i> Provisionar
+                        </button>
+                    </form>
+                    <div id="adminUsersStatus" class="multiuser-status" role="status" hidden></div>
+                    <div id="adminUsersList" class="admin-users-list">
+                        <div class="multiuser-empty"><span>Abra Configurações para carregar os usuários.</span></div>
+                    </div>
                 </section>
 
                 <!-- 2. MSG Padrão -->
@@ -1198,7 +1289,7 @@
                 </section>
 
                 <!-- 4. Agrupamento de Cargos -->
-                <section class="settings-card">
+                <section class="settings-card" data-admin-only>
                     <h3><i class="fas fa-layer-group" style="margin-right:8px; color:#059669;"></i>Agrupamento de Cargos</h3>
                     <div class="form-group"><label>Nome do agrupamento</label><input type="text" id="groupingName" placeholder="Ex.: Diretoria"></div>
                     <div class="form-group"><label>Cargos (separados por vírgula)</label><input type="text" id="groupingPositions" placeholder="Diretor, Head, Gerente Executivo"></div>
@@ -1207,7 +1298,7 @@
                 </section>
 
                 <!-- 5. Ajuda e Atualizações -->
-                <section class="settings-card">
+                <section class="settings-card" data-admin-only>
                     <h3><i class="fas fa-rotate" style="margin-right:8px; color:#059669;"></i>Ajuda e Atualizações</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Configure o repositório de releases e use o botão para verificar novas versões publicadas no GitHub.</p>
                     <form id="updateSourceForm" onsubmit="saveUpdateSourceConfig(event)">
@@ -1234,7 +1325,7 @@
                 </section>
 
                 <!-- 6. Backup do Banco de Dados -->
-                <section class="settings-card">
+                <section class="settings-card" data-admin-only>
                     <h3><i class="fas fa-database" style="margin-right:8px; color:#059669;"></i>Backup do Banco de Dados</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Faça backup completo ou restaure o banco de dados.</p>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
@@ -1269,7 +1360,7 @@
                 </section>
 
                 <!-- 9. Faixa de Status -->
-                <section class="settings-card">
+                <section class="settings-card" data-admin-only>
                     <h3><i class="fas fa-gauge-high" style="margin-right:8px; color:#059669;"></i>Faixa de Status</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Regra A (universal) será aplicada quando não houver regra específica por cargo (Regra B).</p>
                     <form id="universalStatusForm" onsubmit="saveUniversalStatus(event)">
@@ -1311,7 +1402,7 @@
                 </section>
 
                 <!-- 10. Integrações de API -->
-                <section class="settings-card">
+                <section class="settings-card" data-admin-only>
                     <h3><i class="fas fa-plug" style="margin-right:8px; color:#059669;"></i>Integrações de API</h3>
                     <p style="margin-bottom:12px; color:#4b5563;">Configure as chaves do usuário final para busca (Tavily), LLM (OpenRouter) e o assistente iToca (SAI).</p>
                     <form id="integrationConfigForm" onsubmit="saveIntegrationConfig(event)">
@@ -1789,6 +1880,7 @@
     <div id="kanbanUrgencyEditor" class="kanban-urgency-editor"></div>
 
     <script src="/vendor/sortablejs/Sortable.min.js" onerror="if(!window.__sortableFallbackLoading){window.__sortableFallbackLoading=true;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js';document.head.appendChild(s);}"></script>
+    <script src="/js/multiuser.js"></script>
     <script src="/js/core.js"></script>
     <script src="/js/home-clientes.js"></script>
     <script src="/js/itoca-autotoca.js"></script>
@@ -2092,7 +2184,7 @@
           </div>
 
           <!-- Área: Configuração -->
-          <div id="waSyncConfigArea" style="display:none;">
+          <div id="waSyncConfigArea" data-admin-only style="display:none;">
             <div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:14px 16px; margin-bottom:16px; font-size:13px; color:#9a3412;">
               <i class="fas fa-info-circle" style="margin-right:6px;"></i>
               Configure a conexão com o WhatsApp. O mini-servidor <strong>WAHA-lite</strong> é iniciado automaticamente pelo app — ou rode <code>scripts\testar_whatsapp_update.bat</code> em modo de desenvolvimento. URL padrão: <strong>http://localhost:3001</strong>.
@@ -2124,7 +2216,7 @@
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
               <button onclick="_waCheckStatus()" class="btn btn-secondary btn-small"><i class="fas fa-rotate-right"></i> Tentar novamente</button>
-              <button onclick="_waShowConfig()" class="btn btn-secondary btn-small"><i class="fas fa-cog"></i> Reconfigurar</button>
+              <button onclick="_waShowConfig()" data-admin-only class="btn btn-secondary btn-small"><i class="fas fa-cog"></i> Reconfigurar</button>
             </div>
           </div>
 

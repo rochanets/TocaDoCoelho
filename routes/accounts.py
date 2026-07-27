@@ -759,6 +759,7 @@ def _account_planning_search_async(task_id, company, segment, country='', acl_us
             'segment': segment,
             'country': country,
             'candidates': results,
+            'owner_id': (acl_user or {}).get('id'),
         }
         # Reabre a conexão só para a escrita final — mantê-la aberta durante
         # toda a busca (Tavily/LLM/fotos, potencialmente minutos) prendia o
@@ -814,7 +815,7 @@ def account_planning_runs():
     conn = get_db()
     c = conn.cursor()
     _vw, _vp = visible_where('account_planning_runs')
-    c.execute(f'SELECT id, company, segment, created_at FROM account_planning_runs WHERE {_vw} ORDER BY id DESC LIMIT 20', _vp)
+    c.execute(f'SELECT id, company, segment, owner_id, created_at FROM account_planning_runs WHERE {_vw} ORDER BY id DESC LIMIT 20', _vp)
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return jsonify(rows)
@@ -824,7 +825,7 @@ def account_planning_runs():
 def account_planning_run_detail(run_id):
     conn = get_db()
     c = conn.cursor()
-    c.execute('SELECT id, company, segment, result_json, created_at FROM account_planning_runs WHERE id = ?', (run_id,))
+    c.execute('SELECT id, company, segment, result_json, owner_id, created_at FROM account_planning_runs WHERE id = ?', (run_id,))
     row = c.fetchone()
     if row and not can_read('account_planning_runs', run_id, c):
         row = None
@@ -833,6 +834,7 @@ def account_planning_run_detail(run_id):
         return jsonify({'error': 'Busca não encontrada'}), 404
     payload = json.loads(row['result_json'])
     payload['run_id'] = row['id']
+    payload['owner_id'] = row['owner_id']
     payload['created_at'] = row['created_at']
     return jsonify(payload)
 

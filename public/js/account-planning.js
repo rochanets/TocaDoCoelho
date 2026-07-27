@@ -117,7 +117,9 @@
                 candidates: (payload && payload.candidates) || [],
                 company: (payload && payload.company) || '',
                 segment: (payload && payload.segment) || '',
-                country: (payload && payload.country) || ''
+                country: (payload && payload.country) || '',
+                run_id: (payload && (payload.run_id || payload.id)) || null,
+                owner_id: payload && payload.owner_id
             };
             const el = document.getElementById('apResultsContent');
             if (!el) return;
@@ -130,7 +132,10 @@
                 <div class="card" style="padding:14px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
                         <h3 class="toca-text-strong" style="margin:0; font-size:15px;">Decisores encontrados — ${escapeHtml(_apState.company)}</h3>
-                        <small class="toca-text-muted">Fotos são aproximadas (busca por nome+empresa) — confirme antes de salvar.</small>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            ${_apState.run_id ? (window.TocaSession?.shareActionButton('account_planning_runs', { id: _apState.run_id, owner_id: _apState.owner_id }, `Account Planning — ${_apState.company}`) || '') : ''}
+                            <small class="toca-text-muted">Fotos são aproximadas (busca por nome+empresa) — confirme antes de salvar.</small>
+                        </div>
                     </div>
                     <div id="apRowsContainer">${rows}</div>
                 </div>`;

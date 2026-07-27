@@ -100,6 +100,40 @@ def _share_public_dict(row):
     }
 
 
+@app.route('/api/shares/users', methods=['GET'])
+def list_share_recipients():
+    """Diretório mínimo para o seletor de compartilhamento.
+
+    Não expõe papéis, vínculos Entra ou dados de outra organização.
+    """
+    user = current_user()
+    if not user or user.get('org_id') is None:
+        return jsonify({'users': []})
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''SELECT id, email, full_name, photo_url
+               FROM users
+               WHERE org_id = ? AND id <> ? AND COALESCE(is_active, 1) = 1
+               ORDER BY LOWER(COALESCE(full_name, '')),
+                        LOWER(COALESCE(email, '')), id''',
+            (user['org_id'], user['id']),
+        )
+        users = []
+        for row in cur.fetchall():
+            item = dict_from_row(row)
+            users.append({
+                'id': item['id'],
+                'email': item.get('email'),
+                'full_name': item.get('full_name'),
+                'photo_url': item.get('photo_url'),
+            })
+        return jsonify({'users': users})
+    finally:
+        conn.close()
+
+
 def _list_record_shares(record_type, record_id):
     conn = get_db()
     try:
