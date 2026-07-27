@@ -285,7 +285,12 @@ def confirm_import_outlook():
 
         task_id = uuid.uuid4().hex
         _outlook_confirm_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(target=_outlook_confirm_async, args=(task_id, activities), daemon=True).start()
+        # Carrega dono e usuário do request AGORA — a thread perde o contexto e
+        # precisa deles para atribuir o dono e escopar o contato.
+        owner_id = _acl_owner_for_insert()
+        user = current_user()
+        threading.Thread(target=_outlook_confirm_async,
+                         args=(task_id, activities, owner_id, user), daemon=True).start()
         return jsonify({'task_id': task_id}), 202
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/outlook/confirm-import: {e}')
