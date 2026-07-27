@@ -580,3 +580,28 @@ def test_pg_message_templates_scoped(client, monkeypatch):
         s['user_id'] = a_id
     titles = {t['title'] for t in client.get('/api/config/templates').get_json()}
     assert f'ta-{tag}' in titles and f'ts-{tag}' in titles and f'tb-{tag}' not in titles
+
+
+# ── whatsapp inbound: filha de clients no Postgres ──────────────────────────
+
+def test_pg_whatsapp_inbound_scoped(client, monkeypatch):
+    """/api/inbound/pending no Postgres: inbound_messages herda a visibilidade
+    do contato (EXISTS(clients) via JOIN + visible_where) — traduzido."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ca = _new_client(a_id, f'CliA-{tag}')
+    cb = _new_client(b_id, f'CliB-{tag}')
+    conn = toca.get_db(); c = conn.cursor()
+    from datetime import datetime as _dt
+    now = _dt.now().isoformat(timespec='seconds')
+    c.execute("INSERT INTO inbound_messages (client_id, channel, received_at, preview, source_msg_id) "
+              "VALUES (?, 'whatsapp', ?, 'oi', ?)", (ca, now, f'sa-{tag}'))
+    c.execute("INSERT INTO inbound_messages (client_id, channel, received_at, preview, source_msg_id) "
+              "VALUES (?, 'whatsapp', ?, 'oi', ?)", (cb, now, f'sb-{tag}'))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    names = {r['name'] for r in client.get('/api/inbound/pending').get_json()}
+    assert f'CliA-{tag}' in names and f'CliB-{tag}' not in names

@@ -190,6 +190,7 @@ def whatsapp_approve():
 
     db = get_db()
     c = db.cursor()
+    _owner_id = _acl_owner_for_insert()
     inserted = 0
     commitments_created = 0
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -211,14 +212,18 @@ def whatsapp_approve():
         if not client_id or not summary or not content_hash:
             continue
 
+        # Só registra atividade em contato VISÍVEL ao usuário.
+        if not can_read('clients', client_id, c):
+            continue
+
         c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
                   (client_id, content_hash))
         if c.fetchone():
             continue
 
         c.execute(
-            "INSERT INTO activities (client_id, contact_type, information, activity_date) VALUES (?, 'WhatsApp', ?, ?)",
-            (client_id, summary, activity_date)
+            "INSERT INTO activities (client_id, contact_type, information, activity_date, owner_id) VALUES (?, 'WhatsApp', ?, ?, ?)",
+            (client_id, summary, activity_date, _owner_id)
         )
         activity_id = c.lastrowid
         c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
@@ -234,9 +239,9 @@ def whatsapp_approve():
             if len(title) > 120:
                 title = title[:117] + '...'
             c.execute(
-                '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (client_id, activity_id, title, summary, followup_date, None, 'whatsapp')
+                '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type, owner_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (client_id, activity_id, title, summary, followup_date, None, 'whatsapp', _owner_id)
             )
             commitments_created += 1
 
@@ -306,15 +311,16 @@ def inbound_pending():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("""
+        _cw, _cp = visible_where('clients', alias='cl')
+        c.execute(f"""
             SELECT im.id, im.client_id, im.channel, im.received_at, im.preview,
                    cl.name, cl.company,
                    CAST((julianday('now', 'localtime') - julianday(im.received_at)) * 24 AS INTEGER) AS waiting_hours
             FROM inbound_messages im
             JOIN clients cl ON cl.id = im.client_id
-            WHERE im.responded_at IS NULL AND COALESCE(cl.is_archived, 0) = 0
+            WHERE im.responded_at IS NULL AND COALESCE(cl.is_archived, 0) = 0 AND {_cw}
             ORDER BY im.received_at ASC
-        """)
+        """, _cp)
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
         return jsonify(rows)
@@ -328,6 +334,9 @@ def inbound_mark_responded_manual(item_id):
     try:
         conn = get_db()
         c = conn.cursor()
+        if not can_read('inbound_messages', item_id, c):
+            conn.close()
+            return jsonify({'error': 'Pendência não encontrada (ou já respondida)'}), 404
         c.execute('UPDATE inbound_messages SET responded_at = ? WHERE id = ? AND responded_at IS NULL',
                   (datetime.now().isoformat(timespec='seconds'), item_id))
         if c.rowcount == 0:
@@ -347,13 +356,15 @@ def inbound_metrics():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("""
+        _iw, _ip = visible_where('inbound_messages')
+        c.execute(f"""
             SELECT (julianday(responded_at) - julianday(received_at)) * 24 AS hours
             FROM inbound_messages
             WHERE responded_at IS NOT NULL
               AND datetime(received_at) >= datetime('now', 'localtime', '-30 days')
+              AND {_iw}
             ORDER BY hours
-        """)
+        """, _ip)
         hours = [r['hours'] for r in c.fetchall() if r['hours'] is not None and r['hours'] >= 0]
         conn.close()
         median = None
