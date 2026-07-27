@@ -422,9 +422,11 @@ def _waha_send_text(chat_id, text):
         return False, str(e)
 
 
-def _waha_send_and_register(c, client_id, phone, message, register_activity=True):
+def _waha_send_and_register(c, client_id, phone, message, register_activity=True, owner_id=None):
     """Valida, respeita o limite diário, envia e registra atividade.
-    Retorna dict {ok, error, activity_id, limit_reached}."""
+    Retorna dict {ok, error, activity_id, limit_reached}. `owner_id` é o dono a
+    gravar na atividade gerada — passado pelo chamador (contexto de request ou
+    thread de background), já que a atividade herda a visibilidade do envio."""
     limit, used = _waha_daily_quota(c)
     if used >= limit:
         return {'ok': False, 'limit_reached': True,
@@ -441,8 +443,8 @@ def _waha_send_and_register(c, client_id, phone, message, register_activity=True
     activity_id = None
     if register_activity and client_id:
         info = f'Mensagem enviada via WhatsApp (WAHA):\n{message[:400]}'
-        c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, 'WhatsApp', ?)",
-                  (client_id, info))
+        c.execute("INSERT INTO activities (client_id, contact_type, information, owner_id) VALUES (?, 'WhatsApp', ?, ?)",
+                  (client_id, info, owner_id))
         activity_id = c.lastrowid
         c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (client_id,))
         _inbound_mark_responded(c, client_id, 'whatsapp')
@@ -468,8 +470,14 @@ def whatsapp_send_single():
             return jsonify({'error': 'Telefone e mensagem são obrigatórios.'}), 400
         conn = get_db()
         c = conn.cursor()
+        # Só envia/registra em contato VISÍVEL ao usuário (envio avulso, sem
+        # client_id, segue liberado). Login off → can_read True (desktop).
+        if client_id and not can_read('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Contato não encontrado.'}), 404
         result = _waha_send_and_register(c, client_id, phone, message,
-                                         register_activity=data.get('register_activity', True))
+                                         register_activity=data.get('register_activity', True),
+                                         owner_id=_acl_owner_for_insert())
         conn.commit()
         conn.close()
         status = 200 if result.get('ok') else (429 if result.get('limit_reached') else 502)
@@ -479,7 +487,7 @@ def whatsapp_send_single():
         return jsonify({'error': str(e)}), 500
 
 
-def _whatsapp_batch_send_async(task_id, items, interval_min, interval_max):
+def _whatsapp_batch_send_async(task_id, items, interval_min, interval_max, owner_id=None):
     import random as _random
     try:
         conn = get_db()
@@ -494,7 +502,7 @@ def _whatsapp_batch_send_async(task_id, items, interval_min, interval_max):
                 'progress': 5 + int((i / max(total, 1)) * 90)
             })
             result = _waha_send_and_register(c, item.get('client_id'), item.get('phone') or '',
-                                             (item.get('message') or '').strip())
+                                             (item.get('message') or '').strip(), owner_id=owner_id)
             conn.commit()
             if result.get('limit_reached'):
                 blocked = total - i
@@ -532,6 +540,18 @@ def whatsapp_send_batch():
         items = data.get('items') or []
         if not items:
             return jsonify({'error': 'Nenhum contato na fila.'}), 400
+        # Escopo ACL: só despacha para contatos VISÍVEIS ao usuário — itens sem
+        # client_id (telefone avulso) passam. Capturamos o dono aqui (contexto de
+        # request) para as activities criadas na thread de background. Login off →
+        # can_read True (desktop): nada é filtrado.
+        owner_id = _acl_owner_for_insert()
+        conn = get_db()
+        c = conn.cursor()
+        items = [it for it in items
+                 if not it.get('client_id') or can_read('clients', it.get('client_id'), c)]
+        conn.close()
+        if not items:
+            return jsonify({'error': 'Nenhum contato visível na fila.'}), 400
         try:
             interval_min = float(_resolve_setting('waha_send_interval_min', 'WAHA_SEND_INTERVAL_MIN') or 8)
             interval_max = float(_resolve_setting('waha_send_interval_max', 'WAHA_SEND_INTERVAL_MAX') or 15)
@@ -543,7 +563,7 @@ def whatsapp_send_batch():
         _bg_task_register_persistent(task_id, 'whatsapp_batch_send')
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando despacho...', 'progress': 3})
         threading.Thread(target=_whatsapp_batch_send_async,
-                         args=(task_id, items, interval_min, interval_max), daemon=True).start()
+                         args=(task_id, items, interval_min, interval_max, owner_id), daemon=True).start()
         return jsonify({'task_id': task_id}), 202
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/whatsapp/send-batch: {e}')
@@ -568,14 +588,15 @@ def _scheduled_placeholder_info(channel, scheduled_for, message):
     return f'⏰ [AGENDADO para {dd}/{m}/{y} às {h}] {label}:\n{message[:400]}'
 
 
-def _scheduled_send_create_placeholder(c, channel, client_id, scheduled_for, message):
+def _scheduled_send_create_placeholder(c, channel, client_id, scheduled_for, message, owner_id=None):
     """Registra a atividade provisória do agendamento — SEM atualizar o status
-    (last_activity_date) do contato; isso só acontece no envio efetivo."""
+    (last_activity_date) do contato; isso só acontece no envio efetivo. `owner_id`
+    é o dono do agendamento, herdado pela atividade provisória."""
     if not client_id:
         return None
-    c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, ?, ?)",
+    c.execute("INSERT INTO activities (client_id, contact_type, information, owner_id) VALUES (?, ?, ?, ?)",
               (client_id, 'WhatsApp' if channel == 'whatsapp' else 'Email',
-               _scheduled_placeholder_info(channel, scheduled_for, message)))
+               _scheduled_placeholder_info(channel, scheduled_for, message), owner_id))
     return c.lastrowid
 
 
@@ -587,15 +608,18 @@ def _scheduled_send_promote_activity(c, row):
     label = 'Mensagem enviada via WhatsApp (agendada)' if row['channel'] == 'whatsapp' \
         else f"E-mail enviado (agendado): {row.get('subject') or ''}"
     info = f'{label}\n{(row.get("message") or "")[:400]}'
+    # Dono da atividade = dono do agendamento (funciona no worker de background e
+    # no send-now); a atividade provisória, se existir, já foi criada com ele.
+    owner_id = row.get('owner_id')
     if row.get('activity_id'):
         c.execute("""UPDATE activities SET information = ?, activity_date = CURRENT_TIMESTAMP,
                      created_at = CURRENT_TIMESTAMP WHERE id = ?""", (info, row['activity_id']))
         if c.rowcount == 0:
-            c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, ?, ?)",
-                      (row['client_id'], 'WhatsApp' if row['channel'] == 'whatsapp' else 'Email', info))
+            c.execute("INSERT INTO activities (client_id, contact_type, information, owner_id) VALUES (?, ?, ?, ?)",
+                      (row['client_id'], 'WhatsApp' if row['channel'] == 'whatsapp' else 'Email', info, owner_id))
     else:
-        c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, ?, ?)",
-                  (row['client_id'], 'WhatsApp' if row['channel'] == 'whatsapp' else 'Email', info))
+        c.execute("INSERT INTO activities (client_id, contact_type, information, owner_id) VALUES (?, ?, ?, ?)",
+                  (row['client_id'], 'WhatsApp' if row['channel'] == 'whatsapp' else 'Email', info, owner_id))
     c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (row['client_id'],))
     _inbound_mark_responded(c, row['client_id'], row['channel'])
 
@@ -689,6 +713,7 @@ def scheduled_sends_create():
             return jsonify({'error': 'A data/hora do agendamento precisa estar no futuro.'}), 400
         conn = get_db()
         c = conn.cursor()
+        owner_id = _acl_owner_for_insert()
         created = []
         for item in items:
             channel = (item.get('channel') or 'whatsapp').strip()
@@ -699,14 +724,19 @@ def scheduled_sends_create():
                 continue
             if channel == 'email' and not (item.get('email_to') or '').strip():
                 continue
+            item_client = item.get('client_id')
+            # Não agenda envio para contato que o usuário não enxerga. Login off →
+            # can_read True (desktop): nada é filtrado.
+            if item_client and not can_read('clients', item_client, c):
+                continue
             activity_id = _scheduled_send_create_placeholder(
-                c, channel, item.get('client_id'), scheduled_for, message)
+                c, channel, item_client, scheduled_for, message, owner_id=owner_id)
             c.execute("""INSERT INTO scheduled_sends
-                         (channel, client_id, phone, email_to, subject, message, scheduled_for, activity_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                      (channel, item.get('client_id'), (item.get('phone') or '').strip() or None,
+                         (channel, client_id, phone, email_to, subject, message, scheduled_for, activity_id, owner_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (channel, item_client, (item.get('phone') or '').strip() or None,
                        (item.get('email_to') or '').strip() or None,
-                       (item.get('subject') or '').strip() or None, message, scheduled_for, activity_id))
+                       (item.get('subject') or '').strip() or None, message, scheduled_for, activity_id, owner_id))
             created.append(c.lastrowid)
         conn.commit()
         conn.close()
@@ -723,11 +753,13 @@ def scheduled_sends_list():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("""SELECT ss.*, cl.name AS client_name FROM scheduled_sends ss
+        # Fila PESSOAL: cada usuário vê só os SEUS agendamentos. Login off → 1=1.
+        _ow, _op = owned_where('scheduled_sends', alias='ss')
+        c.execute(f"""SELECT ss.*, cl.name AS client_name FROM scheduled_sends ss
                      LEFT JOIN clients cl ON cl.id = ss.client_id
-                     WHERE ss.status = 'pending'
-                     ORDER BY ss.scheduled_for ASC""")
-        rows = [dict(r) for r in c.fetchall()]
+                     WHERE ss.status = 'pending' AND {_ow}
+                     ORDER BY ss.scheduled_for ASC""", _op)
+        rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
         return jsonify(rows)
     except Exception as e:
@@ -743,11 +775,13 @@ def scheduled_sends_missed():
         cutoff = (datetime.now() - timedelta(minutes=_SCHEDULED_SEND_GRACE_MINUTES)).strftime('%Y-%m-%d %H:%M')
         conn = get_db()
         c = conn.cursor()
-        c.execute("""SELECT ss.*, cl.name AS client_name FROM scheduled_sends ss
+        # Fila PESSOAL: cada usuário vê só os SEUS perdidos. Login off → 1=1.
+        _ow, _op = owned_where('scheduled_sends', alias='ss')
+        c.execute(f"""SELECT ss.*, cl.name AS client_name FROM scheduled_sends ss
                      LEFT JOIN clients cl ON cl.id = ss.client_id
-                     WHERE ss.status = 'pending' AND ss.scheduled_for < ?
-                     ORDER BY ss.scheduled_for ASC""", (cutoff,))
-        rows = [dict(r) for r in c.fetchall()]
+                     WHERE ss.status = 'pending' AND ss.scheduled_for < ? AND {_ow}
+                     ORDER BY ss.scheduled_for ASC""", [cutoff] + _op)
+        rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
         return jsonify(rows)
     except Exception as e:
@@ -760,7 +794,10 @@ def scheduled_send_now(send_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT * FROM scheduled_sends WHERE id = ? AND status = 'pending'", (send_id,))
+        # Só o dono do agendamento pode disparar. Login off → 1=1 (desktop).
+        _ow, _op = owned_where('scheduled_sends')
+        c.execute(f"SELECT * FROM scheduled_sends WHERE id = ? AND status = 'pending' AND {_ow}",
+                  [send_id] + _op)
         row = dict_from_row(c.fetchone())
         if not row:
             conn.close()
@@ -782,7 +819,10 @@ def scheduled_send_cancel(send_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT activity_id FROM scheduled_sends WHERE id = ? AND status = 'pending'", (send_id,))
+        # Só o dono do agendamento pode cancelar. Login off → 1=1 (desktop).
+        _ow, _op = owned_where('scheduled_sends')
+        c.execute(f"SELECT activity_id FROM scheduled_sends WHERE id = ? AND status = 'pending' AND {_ow}",
+                  [send_id] + _op)
         row = c.fetchone()
         if not row:
             conn.close()
