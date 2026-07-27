@@ -722,6 +722,9 @@
         // Verifica se a base do iToca está desatualizada (> 1 dia). Se sim, faz update
         // incremental silencioso antes de prosseguir com a pergunta.
         async function _itocaCheckAndAutoUpdate() {
+            if (window.TocaSession?.state.authEnabled && !window.TocaSession.isAdmin()) {
+                return;
+            }
             try {
                 const statusResp = await fetch(`${API_BASE}/itoca/base-status`);
                 if (!statusResp.ok) return;
@@ -1589,7 +1592,7 @@
             const el = document.getElementById('templateList');
             if (!el) return;
             if (!messageTemplates.length) { el.innerHTML = '<div style="color:#6b7280;">Nenhuma MSG padrão cadastrada.</div>'; return; }
-            el.innerHTML = messageTemplates.map(t => `<div class="rule-item"><div><strong>${escapeHtml(t.title)}</strong><div style="font-size:12px;color:#6b7280;">${t.available_whatsapp?'<i class="fab fa-whatsapp"></i>':''} ${t.available_email?'<i class="fas fa-envelope"></i>':''}</div></div><div><button class="btn btn-secondary btn-small" onclick="editTemplate(${t.id})"><i class="fas fa-edit"></i></button><button class="btn btn-danger btn-small" onclick="deleteTemplate(${t.id})"><i class="fas fa-trash"></i></button></div></div>`).join('');
+            el.innerHTML = messageTemplates.map(t => `<div class="rule-item"><div><strong>${escapeHtml(t.title)}</strong><div style="font-size:12px;color:#6b7280;">${t.available_whatsapp?'<i class="fab fa-whatsapp"></i>':''} ${t.available_email?'<i class="fas fa-envelope"></i>':''}</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;">${window.TocaSession?.shareActionButton('message_templates', t, t.title) || ''}<button class="btn btn-secondary btn-small" onclick="editTemplate(${t.id})"><i class="fas fa-edit"></i></button><button class="btn btn-danger btn-small" onclick="deleteTemplate(${t.id})"><i class="fas fa-trash"></i></button></div></div>`).join('');
         }
 
         async function saveMessageTemplate(event) {
@@ -1812,7 +1815,7 @@
             if (!account || account.error) return showError('Conta não encontrada');
             const sortedContacts = sortAccountContactsByRole(account.contacts || []);
             let html = `<div class="modal active" id="accountViewModal" onclick="if(event.target===this) closeAccountViewModal()"><div class="modal-content" style="max-width:860px;">`;
-            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;"><button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-danger btn-small" onclick="deleteAccount(${account.id}, ${escapeHtml(JSON.stringify(account.name))})"><i class="fas fa-trash"></i> Excluir</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;"><div><h2 style="color:#047857; margin-bottom:4px;">${escapeHtml(account.name)}</h2><div style="color:#6b7280; font-size:13px;">${Number(account.is_target)===1?'Target':'Não target'} • ${escapeHtml(account.sector || 'Sem setor')}</div></div><div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;"><img src="${account.logo_url || '/logo-coelho.png'}" style="width:120px; height:88px; object-fit:contain; background:#fff; border-radius:10px; border:1px solid rgba(16,185,129,.25);"><div style="display:flex; gap:8px;flex-wrap:wrap;">${window.TocaSession?.shareActionButton('accounts', account, account.name) || ''}<button class="btn btn-primary btn-small" onclick="openAccountModal(${account.id})"><i class="fas fa-edit"></i> Editar Conta</button><button class="btn btn-danger btn-small" onclick="deleteAccount(${account.id}, ${escapeHtml(JSON.stringify(account.name))})"><i class="fas fa-trash"></i> Excluir</button><button class="btn btn-secondary btn-small" onclick="closeAccountViewModal()">Fechar</button></div></div></div>`;
             html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px;"><div class="profile-field"><div class="profile-field-label">Nome da conta</div><div class="profile-field-value">${escapeHtml(account.name || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Setor</div><div class="profile-field-value">${escapeHtml(account.sector || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Faturamento Médio Anual</div><div class="profile-field-value">${account.average_revenue_cents?formatCompactCurrencyFromCents(account.average_revenue_cents):'-'}</div></div><div class="profile-field"><div class="profile-field-label">Quantidade de Profissionais</div><div class="profile-field-value">${formatIntegerPtBr(account.professionals_count)}</div></div><div class="profile-field"><div class="profile-field-label">Presença Global</div><div class="profile-field-value">${escapeHtml(account.global_presence || '-')}</div></div><div class="profile-field"><div class="profile-field-label">Ponto Focal Principal</div><div class="profile-field-value">${sortedContacts.filter(c => (account.main_contact_ids||[]).includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '-'}</div></div></div>`;
             const mensalPresences = (account.presences || []).filter(p => (p.billing_type || 'Mensal') === 'Mensal' && !isPresenceTerminated(p));
             const unicoPresences = (account.presences || []).filter(p => p.billing_type === 'Unico' && !isPresenceTerminated(p));
@@ -1947,7 +1950,7 @@
             if (!archives.length) {
                 html += `<div style="color:#6b7280;">Nenhuma conta arquivada.</div>`;
             } else {
-                html += archives.map(a => `<div class='history-item' style='display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;'><div><div class='history-meta'>${escapeHtml(a.account_name)}</div><div style='font-size:12px; color:#6b7280;'>Arquivada em ${formatDateBr((a.archived_at||'').slice(0,10))} • ${a.contacts_count||0} contato(s) • ${a.activities_count||0} atividade(s)</div></div><div style='display:flex; gap:6px;'><button class='btn btn-primary btn-small' onclick='restoreAccountArchive(${a.id})'><i class="fas fa-rotate-left"></i> Restaurar</button><button class='btn btn-danger btn-small' onclick='deleteAccountArchive(${a.id})'><i class="fas fa-trash"></i></button></div></div>`).join('');
+                html += archives.map(a => `<div class='history-item' style='display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;'><div><div class='history-meta'>${escapeHtml(a.account_name)}</div><div style='font-size:12px; color:#6b7280;'>Arquivada em ${formatDateBr((a.archived_at||'').slice(0,10))} • ${a.contacts_count||0} contato(s) • ${a.activities_count||0} atividade(s)</div></div><div style='display:flex; gap:6px;flex-wrap:wrap;'>${window.TocaSession?.shareActionButton('account_archives', a, a.account_name) || ''}<button class='btn btn-primary btn-small' onclick='restoreAccountArchive(${a.id})'><i class="fas fa-rotate-left"></i> Restaurar</button><button class='btn btn-danger btn-small' onclick='deleteAccountArchive(${a.id})'><i class="fas fa-trash"></i></button></div></div>`).join('');
             }
             html += `</div></div>`;
             document.body.insertAdjacentHTML('beforeend', html);
@@ -3038,6 +3041,7 @@
                     </div>
                     <div class="camp-no-print" style="display:flex;gap:8px;align-items:center;">
                         <button class="btn btn-secondary btn-small" onclick="backToCampaignList()"><i class="fas fa-arrow-left"></i></button>
+                        ${window.TocaSession?.shareActionButton('campaigns', data, data.title || 'Campanha') || ''}
                         <button class="btn btn-auto-mapping btn-small" onclick="regenerateCampaign(${data.id})"><span class="ai-star-icon">✦</span> Atualizar com IA</button>
                         <button class="btn btn-secondary btn-small" onclick="exportCampaignPDF()"><i class="fas fa-file-pdf"></i> PDF</button>
                         <button class="btn btn-secondary btn-small" onclick="deleteCampaign(${data.id})" title="Excluir campanha"><i class="fas fa-trash"></i></button>
@@ -3613,6 +3617,7 @@
                                 <p style="margin:6px 0 0; color:#4b5563; ${isExpanded ? '' : 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'}">${escapeHtml(summary || 'Sem resumo.')}</p>
                             </div>
                             <div style="display:flex; gap:6px;">
+                                ${window.TocaSession?.shareActionButton('portfolio_offers', offer, offer.title) || ''}
                                 <button class="btn btn-secondary btn-small" onclick="toggleOfferExpand(${offerId})" title="Expandir/Colapsar">${isExpanded ? '▲' : '▼'}</button>
                                 <button class="btn btn-secondary btn-small" onclick="openEditOfferModal(${offerId})" title="Editar"><i class="fas fa-edit"></i></button>
                                 <button class="btn btn-danger btn-small" onclick="deleteOffer(${offerId})" title="Excluir"><i class="fas fa-trash"></i></button>
@@ -3956,6 +3961,7 @@
                                 </p>` : ''}
                             </div>
                             <div style="display:flex; gap:6px; flex-shrink:0;">
+                                ${window.TocaSession?.shareActionButton('iata_records', record, record.title || 'Ata') || ''}
                                 <button class="btn btn-secondary btn-small" onclick="toggleIAtaExpand(${rid})" title="Expandir/Colapsar">${isExpanded ? '▲' : '▼'}</button>
                                 <button class="btn btn-secondary btn-small" onclick="viewIAtaFull(${rid})" title="Ver ata completa"><i class="fas fa-eye"></i></button>
                                 <button class="btn btn-danger btn-small" onclick="deleteIAtaRecord(${rid})" title="Excluir"><i class="fas fa-trash"></i></button>
@@ -4533,6 +4539,7 @@
                     <div class="wiki-meta" style="margin-top:4px;">${escapeHtml(item.category || 'Sem categoria')} • Atualizado em ${formatDateBr(item.updated_at)}${item.tags ? ` • Tags: ${escapeHtml(item.tags)}` : ''}</div>
                     <div class="wiki-entry-body" id="wiki-body-${item.id}">${escapeHtml(item.content || '')}</div>
                     <div class="wiki-entry-actions" id="wiki-actions-${item.id}">
+                        ${window.TocaSession?.shareActionButton('wiki_entries', item, item.title) || ''}
                         <button class="btn-wiki-edit" onclick="event.stopPropagation(); openWikiEntryModal(${item.id})"><i class="fas fa-edit"></i> Editar</button>
                         <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteWikiEntry(${item.id})"><i class="fas fa-trash"></i> Excluir</button>
                     </div>
@@ -4565,6 +4572,7 @@
                     <h4>${escapeHtml(doc.title || doc.original_name || 'Documento')}</h4>
                     <div class="wiki-meta">${formatFileSize(doc.file_size)} • ${formatDateBr(doc.updated_at)}</div>
                     <div style="display:flex; gap:8px;">
+                        ${window.TocaSession?.shareActionButton('wiki_documents', doc, doc.title || doc.original_name || 'Documento') || ''}
                         <a class="btn btn-primary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
                         <a class="btn btn-primary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
                         <button class="btn btn-danger btn-small" onclick="deleteWikiDocument(${doc.id})"><i class="fas fa-trash"></i></button>
@@ -4892,6 +4900,8 @@
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
+            const canBoot = window.TocaSession ? await window.TocaSession.ready : true;
+            if (!canBoot) return;
             ensureAutoTocaPresence();
             await loadSystemConfig();
             loadThemeConfig();
@@ -4913,6 +4923,7 @@
             if (wikiContent) wikiContent.addEventListener('blur', autoFillWikiTags);
             loadDashboard();
             loadHome();
+            if (window.TocaSession) window.TocaSession.restoreResumeTab();
             setTimeout(checkForUpdatesOnStartup, 3000);
         });
 

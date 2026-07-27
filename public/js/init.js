@@ -70,6 +70,11 @@
     }
 
     function _waShowConfig() {
+      if (window.TocaSession?.state.authEnabled && !window.TocaSession.isAdmin()) {
+        document.getElementById('waSyncOfflineMsg').textContent = 'A conexão do WhatsApp precisa ser configurada por um administrador.';
+        _waShowSection('offline');
+        return;
+      }
       fetch('/api/whatsapp/config').then(r=>r.json()).then(d=>{
         document.getElementById('waConfigUrl').value = d.waha_api_url || 'http://localhost:3001';
         document.getElementById('waConfigKey').value = '';
@@ -96,6 +101,11 @@
           return;
         }
         if (d.connected) { _waShowSection('form'); return; }
+        if (window.TocaSession?.state.authEnabled && !window.TocaSession.isAdmin()) {
+          document.getElementById('waSyncOfflineMsg').textContent = 'A sessão do WhatsApp precisa ser conectada por um administrador.';
+          _waShowSection('offline');
+          return;
+        }
         // not connected but configured → get QR
         _waGetQrCode();
       }).catch(()=>{ _waShowSection('offline'); document.getElementById('waSyncOfflineMsg').textContent = 'Não foi possível contatar o servidor.'; });
@@ -105,13 +115,13 @@
       const url = document.getElementById('waConfigUrl').value.trim();
       const key = document.getElementById('waConfigKey').value.trim();
       const inst = document.getElementById('waConfigInstance').value.trim();
-      if (!url) { alert('A URL do WAHA é obrigatória.'); return; }
+      if (!url) { showError('A URL do WAHA é obrigatória.'); return; }
       fetch('/api/whatsapp/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({waha_api_url:url, waha_api_key:key, waha_session_name:inst||'default'})})
         .then(r=>r.json()).then(d=>{
-          if (!d.ok) { alert('Erro ao salvar: ' + (d.error || 'Erro desconhecido.')); return; }
+          if (!d.ok) { showError('Erro ao salvar: ' + (d.error || 'Erro desconhecido.')); return; }
           _waShowSection('loading'); _waCheckStatus();
         })
-        .catch(e=>alert('Erro ao salvar: '+e));
+        .catch(e=>showError('Erro ao salvar: '+e));
     }
 
     function _waGetQrCode() {

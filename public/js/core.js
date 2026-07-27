@@ -454,6 +454,7 @@
 
             targetTab.classList.add('active');
             _currentTab = tabName;
+            window._tocaCurrentTab = tabName;
             updateTopbarModuleHeader(tabName);
             updateTopbarSettingsState(tabName);
 
@@ -534,6 +535,9 @@
         async function loadSettings() {
             setupSettingsCards();
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig(), loadStartupConfig(), loadThemeConfig()]);
+            if (window.TocaSession?.state.authEnabled && window.TocaSession.isAdmin()) {
+                await window.loadAdminUsers();
+            }
             loadDebugLogsConfig();
             renderSettings();
         }

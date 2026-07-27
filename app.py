@@ -1597,6 +1597,13 @@ SCHEMA_MIGRATIONS = [
                )
            WHERE id = (SELECT MIN(id) FROM users)''',
     ]),
+    # Fase 6 — remoção segura no painel administrativo. Usuários são
+    # desativados, não apagados: registros de negócio e autoria permanecem
+    # íntegros, enquanto login e sessões deixam de funcionar imediatamente.
+    (28, 'multiusuario_fase_6_user_activation', [
+        'ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1',
+        'CREATE INDEX IF NOT EXISTS idx_users_org_active ON users(org_id, is_active)',
+    ]),
 ]
 
 
@@ -2433,6 +2440,8 @@ def current_user():
             if uid:
                 conn = get_db()
                 user = dict_from_row(_fetch_user_row(conn, uid))
+                if user and not bool(user.get('is_active', 1)):
+                    user = None
         else:
             conn = get_db()
             fid = _founder_user_id(conn)
@@ -2472,6 +2481,7 @@ def _job_delivery_users():
             c.execute(
                 """SELECT * FROM users
                    WHERE email IS NOT NULL AND TRIM(email) <> ''
+                     AND COALESCE(is_active, 1) = 1
                    ORDER BY id"""
             )
         else:
@@ -2522,12 +2532,20 @@ def _find_user_for_login(conn, oid, email):
     dict ou None — None significa fora da allowlist (nega o login)."""
     c = conn.cursor()
     if oid:
-        c.execute('SELECT * FROM users WHERE entra_object_id = ? LIMIT 1', (oid,))
+        c.execute(
+            'SELECT * FROM users WHERE entra_object_id = ? '
+            'AND COALESCE(is_active, 1) = 1 LIMIT 1',
+            (oid,),
+        )
         row = c.fetchone()
         if row:
             return dict_from_row(row)
     if email:
-        c.execute('SELECT * FROM users WHERE LOWER(email) = LOWER(?) ORDER BY id LIMIT 1', (email,))
+        c.execute(
+            'SELECT * FROM users WHERE LOWER(email) = LOWER(?) '
+            'AND COALESCE(is_active, 1) = 1 ORDER BY id LIMIT 1',
+            (email,),
+        )
         row = c.fetchone()
         if row:
             return dict_from_row(row)
@@ -2629,6 +2647,11 @@ def _enforce_login_required():
     if request.endpoint in _AUTH_PUBLIC_ENDPOINTS:
         return None
     if current_user() is not None:
+        return None
+    # A raiz entrega apenas o shell público da SPA. Ele contém a tela visual de
+    # entrada da Fase 6 e consulta /api/auth/me; APIs, uploads e demais páginas
+    # continuam protegidos. O SSO começa somente quando a pessoa aciona o botão.
+    if request.endpoint == 'index':
         return None
     # Não autenticado:
     wants_html = request.method == 'GET' and 'text/html' in (request.headers.get('Accept') or '')

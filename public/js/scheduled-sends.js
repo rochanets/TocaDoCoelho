@@ -260,4 +260,7 @@
             } catch (e) { showError('Erro ao registrar.'); }
         }
 
-        document.addEventListener('DOMContentLoaded', () => setTimeout(checkStartupNotices, 1500));
+        document.addEventListener('DOMContentLoaded', async () => {
+            const canBoot = window.TocaSession ? await window.TocaSession.ready : true;
+            if (canBoot) setTimeout(checkStartupNotices, 1500);
+        });

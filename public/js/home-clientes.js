@@ -1339,6 +1339,7 @@
                             <td class="small-col-text">${client.area_of_activity || '-'}</td>
                             <td class="small-col-text">${formatPhone(client.phone) || '-'}</td>
                             <td><div class="actions">
+                                ${window.TocaSession?.shareActionButton('clients', client, client.name) || ''}
                                 <button class="btn btn-edit-accent btn-small" onclick="editClient(${client.id})"><i class="fas fa-edit"></i> Editar</button>
                                 <button class="btn btn-danger btn-small" onclick="deleteClient(${client.id})"><i class="fas fa-trash"></i> Deletar</button>
                             </div></td>
@@ -1378,6 +1379,7 @@
                             <td class='small-col-text'>${information}</td>
                             <td class='small-col-text'>${date}</td>
                             <td><div class="actions">
+                                ${window.TocaSession?.shareActionButton('activities', activity, activity.name || 'Atividade') || ''}
                                 <button class="btn btn-secondary btn-small" onclick="editActivity(${activity.id})"><i class="fas fa-edit"></i> Editar</button>
                                 <button class="btn btn-danger btn-small" onclick="deleteActivity(${activity.id})"><i class="fas fa-trash"></i> Deletar</button>
                             </div></td>
@@ -3466,8 +3468,8 @@
 
             for (const card of mappingCards) {
                 html += `<div class="mapping-card" onclick="openMappingCardModal(${card.id})">`;
-                html += `<button class="mapping-card-edit-btn" onclick="event.stopPropagation(); editMappingCard(${card.id})" title="Editar Card"><i class="fas fa-edit"></i></button>`;
-                html += `<button class="mapping-card-delete-btn" onclick="event.stopPropagation(); deleteMappingCard(${card.id})" title="Deletar Card"><i class="fas fa-trash"></i></button>`;
+                html += `<button class="mapping-card-edit-btn" data-admin-only onclick="event.stopPropagation(); editMappingCard(${card.id})" title="Editar Card"><i class="fas fa-edit"></i></button>`;
+                html += `<button class="mapping-card-delete-btn" data-admin-only onclick="event.stopPropagation(); deleteMappingCard(${card.id})" title="Deletar Card"><i class="fas fa-trash"></i></button>`;
                 html += `<div class="mapping-card-title">${escapeHtml(card.title)}</div>`;
                 html += `<div class="mapping-card-description">${escapeHtml(card.description || 'Sem descrição')}</div>`;
 
@@ -3598,13 +3600,22 @@
                 let html = `<div class="modal active" id="mappingCardModal" onclick="if(event.target === this) closeMappingCardModal()">`;
                 html += '<div class="modal-content" style="max-width: 800px;">';
                 
-                // Cabeçalho com botão de editar
+                const canAdministerCatalog = !window.TocaSession?.state.authEnabled || window.TocaSession.isAdmin();
+
+                // Cabeçalho: catálogo global editável somente por administrador.
                 html += '<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px;">';
                 html += '<div style="flex: 1;">';
-                html += `<input type="text" id="cardTitleEdit" value="${escapeHtml(card.title)}" style="width: 100%; font-size: 24px; font-weight: 700; color: #047857; border: 2px solid transparent; border-radius: 6px; padding: 4px 8px; margin-bottom: 10px;" onfocus="this.style.borderColor='#34D399'" onblur="this.style.borderColor='transparent'">`;
-                html += `<textarea id="cardDescriptionEdit" style="width: 100%; color: #6b7280; border: 2px solid transparent; border-radius: 6px; padding: 4px 8px; resize: vertical; min-height: 50px;" onfocus="this.style.borderColor='#34D399'" onblur="this.style.borderColor='transparent'">${escapeHtml(card.description || '')}</textarea>`;
+                if (canAdministerCatalog) {
+                    html += `<input type="text" id="cardTitleEdit" value="${escapeHtml(card.title)}" style="width: 100%; font-size: 24px; font-weight: 700; color: #047857; border: 2px solid transparent; border-radius: 6px; padding: 4px 8px; margin-bottom: 10px;" onfocus="this.style.borderColor='#34D399'" onblur="this.style.borderColor='transparent'">`;
+                    html += `<textarea id="cardDescriptionEdit" style="width: 100%; color: #6b7280; border: 2px solid transparent; border-radius: 6px; padding: 4px 8px; resize: vertical; min-height: 50px;" onfocus="this.style.borderColor='#34D399'" onblur="this.style.borderColor='transparent'">${escapeHtml(card.description || '')}</textarea>`;
+                } else {
+                    html += `<h2 style="margin:0 0 8px; color:#047857;">${escapeHtml(card.title)}</h2>`;
+                    html += `<p style="margin:0; color:#6b7280;">${escapeHtml(card.description || 'Sem descrição')}</p>`;
+                }
                 html += '</div>';
-                html += `<button class="btn btn-small btn-primary" onclick="saveCardEdit(${card.id})" style="margin-left: 10px;"><i class="fas fa-save"></i> Salvar Card</button>`;
+                if (canAdministerCatalog) {
+                    html += `<button class="btn btn-small btn-primary" onclick="saveCardEdit(${card.id})" style="margin-left: 10px;"><i class="fas fa-save"></i> Salvar Card</button>`;
+                }
                 html += '</div>';
 
                 if (responses.length === 0) {
@@ -4145,7 +4156,7 @@
                 html += '<div class="agenda-list">';
                 if (!items.length) html += '<div class="empty-state" style="padding:20px 8px;"><p>Nenhum compromisso neste mês.</p></div>';
                 items.forEach(item => {
-                    html += `<div class=\"history-item\"><div class=\"history-meta\">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company?` (${escapeHtml(item.client_company)})`:''}</div><div style=\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\"><span>${escapeHtml(item.title || item.notes || '-')}</span><button class=\"btn btn-auto-mapping btn-small\" onclick=\"openBriefingModal(${item.id}, '${escapeHtml((item.client_name || '').replace(/'/g, ''))}')\" title=\"Briefing pré-reunião gerado por IA\"><span class=\"ai-star-icon\">✦</span> Briefing</button></div><div id=\"briefingArea_${item.id}\"></div></div>`;
+                    html += `<div class=\"history-item\"><div class=\"history-meta\">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company?` (${escapeHtml(item.client_company)})`:''}</div><div style=\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\"><span>${escapeHtml(item.title || item.notes || '-')}</span><div style=\"display:flex;gap:6px;flex-wrap:wrap;\">${window.TocaSession?.shareActionButton('commitments', item, item.title || 'Compromisso') || ''}<button class=\"btn btn-auto-mapping btn-small\" onclick=\"openBriefingModal(${item.id}, '${escapeHtml((item.client_name || '').replace(/'/g, ''))}')\" title=\"Briefing pré-reunião gerado por IA\"><span class=\"ai-star-icon\">✦</span> Briefing</button></div></div><div id=\"briefingArea_${item.id}\"></div></div>`;
                 });
                 html += '</div></div>';
 
@@ -4188,7 +4199,9 @@
                 html += '<div style="flex: 1;">';
                 html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})</div>`;
                 html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.title || activity.notes || '-')}</div>`;
-                if ((activity.source_type || '') !== 'account_presence') { html += `<div style=\"margin-top: 8px;\"><button class=\"btn btn-danger btn-small\" onclick=\"deleteAgendaItem('${activity.id}')\"><i class=\"fas fa-trash\"></i> Excluir evento</button></div>`; }
+                if ((activity.source_type || '') !== 'account_presence') {
+                    html += `<div style=\"margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;\">${window.TocaSession?.shareActionButton('commitments', activity, activity.title || 'Compromisso') || ''}<button class=\"btn btn-danger btn-small\" onclick=\"deleteAgendaItem('${activity.id}')\"><i class=\"fas fa-trash\"></i> Excluir evento</button></div>`;
+                }
                 html += '</div>';
                 html += '</div>';
             });
@@ -4971,6 +4984,7 @@
 
                 const modalBody = `
                     <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+                        ${window.TocaSession?.shareActionButton('clients', client, client.name) || ''}
                         <button class="btn btn-primary btn-small" onclick="openQuickActivityModal(${client.id}, '${escapeHtml(client.name)}', '${escapeHtml(client.company || '')}')"><i class="fas fa-plus-circle"></i> Registrar Atividade</button>
                         <button class="btn btn-auto-mapping btn-small" onclick="openQuickContactModal(${client.id})" title="Enviar mensagem rápida usando um template"><i class="fab fa-whatsapp"></i> Contato rápido</button>
                         <button class="btn btn-edit-accent btn-small" onclick="openEditFromProfile(${client.id})"><i class="fas fa-edit"></i> Editar cliente</button>
