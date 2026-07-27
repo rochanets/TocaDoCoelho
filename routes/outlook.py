@@ -207,6 +207,7 @@ def outlook_oauth_callback():
 
 
 @app.route('/api/outlook/graph-config', methods=['GET', 'POST'])
+@admin_write_required
 def outlook_graph_config():
     """Lê ou salva credenciais do Microsoft Graph nas configurações do app."""
     if request.method == 'GET':

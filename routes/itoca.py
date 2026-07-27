@@ -19,6 +19,7 @@ def itoca_base_status():
 
 
 @app.route('/api/itoca/base-update', methods=['POST'])
+@admin_required
 def itoca_base_update():
     """Inicia a atualização da base iToca de forma assíncrona (polling via /api/tasks/<task_id>).
     Aceita parâmetro JSON: { "incremental": true } para indexação incremental (só o que mudou).
@@ -394,6 +395,13 @@ def itoca_execute_action():
                     card_id = dict_from_row(row)['id']
 
             if not card_id:
+                # O catálogo de cards é compartilhado pela organização. A ação
+                # pessoal do iToca pode responder cards existentes, mas criar
+                # uma nova pergunta global continua sendo operação de admin.
+                denied = _admin_access_denied()
+                if denied is not None:
+                    conn.close()
+                    return denied
                 # Cria um card genérico para a resposta
                 c.execute(
                     '''INSERT INTO environment_cards (title, description, owner_id, created_at, updated_at)

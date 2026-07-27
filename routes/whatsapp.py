@@ -17,6 +17,7 @@ def whatsapp_get_config():
 
 
 @app.route('/api/whatsapp/config', methods=['PUT'])
+@admin_required
 def whatsapp_save_config():
     data = request.get_json(force=True) or {}
     waha_url = (data.get('waha_api_url') or '').strip()
@@ -92,6 +93,7 @@ def whatsapp_status():
 
 
 @app.route('/api/whatsapp/connect', methods=['POST'])
+@admin_required
 def whatsapp_connect():
     api_url, api_key, session = _waha_settings()
     if not api_url:

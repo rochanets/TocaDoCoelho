@@ -2212,6 +2212,17 @@ _ACL_ROOT_TABLES = {
     'chamado_juridico_history',
 }
 
+# Entidades-raiz cujo modelo de produto permite compartilhamento seletivo.
+# Espaços pessoais continuam deliberadamente fora desta lista, ainda que tenham
+# owner_id para isolamento: Kanban, histórico iToca, Radar, envios agendados e
+# os históricos pessoais da Fase 4.5. `environment_cards` é um catálogo comum,
+# portanto também não usa shares.
+_SHAREABLE_RECORD_TYPES = frozenset({
+    'clients', 'accounts', 'campaigns', 'commitments', 'activities',
+    'wiki_entries', 'wiki_documents', 'portfolio_offers', 'iata_records',
+    'account_archives', 'account_planning_runs', 'message_templates',
+})
+
 # Tabelas-FILHAS: não têm owner_id próprio — herdam a dona da RAIZ ancestral via
 # FK. Mapeadas para (tabela_pai, coluna_fk_no_filho). A visibilidade é resolvida
 # por EXISTS ao pai, recursivamente (ex.: kanban_card_activities → kanban_cards
@@ -2549,17 +2560,45 @@ def _valid_email(email):
     return bool(_EMAIL_RE.match((email or '').strip()))
 
 
+def _admin_access_denied():
+    """Resposta padronizada de autorização administrativa, ou None."""
+    # Regra de ouro: no desktop/SQLite sem autenticação não existe papel de
+    # usuário a validar; as rotas mantêm exatamente o comportamento legado.
+    if not _auth_enabled():
+        return None
+    user = current_user()
+    if not user:
+        return jsonify({'error': 'Autenticação necessária.', 'error_type': 'auth_required'}), 401
+    if (user.get('role') or '').strip().lower() != 'admin':
+        return jsonify({'error': 'Acesso restrito a administradores.', 'error_type': 'forbidden'}), 403
+    return None
+
+
 def admin_required(fn):
     """Restringe uma rota a usuários com role='admin'. Com o login ligado, exige
     sessão de admin; com o login desligado (desktop), current_user() é o fundador
     (admin), então o dono da instância continua podendo administrar."""
     @functools.wraps(fn)
     def _wrapper(*args, **kwargs):
-        user = current_user()
-        if not user:
-            return jsonify({'error': 'Autenticação necessária.', 'error_type': 'auth_required'}), 401
-        if (user.get('role') or '').strip().lower() != 'admin':
-            return jsonify({'error': 'Acesso restrito a administradores.', 'error_type': 'forbidden'}), 403
+        denied = _admin_access_denied()
+        if denied is not None:
+            return denied
+        return fn(*args, **kwargs)
+    return _wrapper
+
+
+def admin_write_required(fn):
+    """Protege apenas métodos de escrita de uma rota que também oferece leitura.
+
+    Útil para endpoints legados GET+POST: membros continuam consultando a
+    configuração mascarada, mas somente administradores podem alterá-la.
+    """
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+            denied = _admin_access_denied()
+            if denied is not None:
+                return denied
         return fn(*args, **kwargs)
     return _wrapper
 
@@ -9276,6 +9315,7 @@ def get_environment_cards():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards', methods=['POST'])
+@admin_required
 def create_environment_card():
     try:
         title = request.json.get('title', '').strip()
@@ -9304,6 +9344,7 @@ def create_environment_card():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards/<int:card_id>', methods=['PUT'])
+@admin_required
 def update_environment_card(card_id):
     try:
         title = request.json.get('title', '').strip()
@@ -9325,6 +9366,7 @@ def update_environment_card(card_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/environment/cards/<int:card_id>', methods=['DELETE'])
+@admin_required
 def delete_environment_card(card_id):
     try:
         conn = get_db()
@@ -9842,6 +9884,7 @@ def _merge_clients_from_db(temp_db_path):
 
 
 @app.route('/api/backup/database', methods=['GET'])
+@admin_required
 def backup_database():
     try:
         if DB_BACKEND != 'sqlite':
@@ -9887,6 +9930,7 @@ def backup_database():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/restore/database', methods=['POST'])
+@admin_required
 def restore_database():
     try:
         if DB_BACKEND != 'sqlite':
@@ -13247,7 +13291,7 @@ def handle_unexpected_exception(error):
 # apenas organizado por assunto. Novas rotas devem ir no arquivo do domínio.
 # No build PyInstaller, incluir --add-data "routes;routes".
 # ---------------------------------------------------------------------------
-ROUTE_MODULES = ['auth', 'admin', 'clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
+ROUTE_MODULES = ['auth', 'admin', 'shares', 'clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
                  'portfolio', 'config', 'home']
 
