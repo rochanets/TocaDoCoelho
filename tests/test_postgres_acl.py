@@ -672,3 +672,41 @@ def test_pg_outlook_diagnose_scoped(client, monkeypatch):
         s['user_id'] = a_id
     data = client.get('/api/outlook/diagnose').get_json()
     assert data['total_clients'] == 1 and data['clients_with_email'] == 1        # só o de A
+
+
+# ── outlook: import casa só visíveis e grava owner no Postgres ──────────────
+
+def test_pg_outlook_import_owner_scoped(client, monkeypatch):
+    """/api/outlook/import no Postgres: _outlook_import_emails casa só contra
+    contatos visíveis (visible_where) e grava owner_id na atividade — valida a
+    escrita com owner + o match escopado traduzidos."""
+    import io as _io, json as _json
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    monkeypatch.setattr(toca, '_sai_simple_prompt', lambda *a, **k: None)
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: None)
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ea, eb = f'a-{tag}@acme.com', f'b-{tag}@beta.com'
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO clients (name, company, position, email, owner_id) "
+              "VALUES (?, 'Co', 'C', ?, ?)", (f'CliA-{tag}', ea, a_id))
+    ca = c.lastrowid
+    c.execute("INSERT INTO clients (name, company, position, email, owner_id) "
+              "VALUES (?, 'Co', 'C', ?, ?)", (f'CliB-{tag}', eb, b_id))
+    conn.commit(); conn.close()
+
+    def _mail(sender):
+        return {'subject': f'Assunto-{tag}', 'date': '2026-01-15T10:00', 'direction': 'received',
+                'sender': {'email': sender, 'name': 'C'}, 'recipients': [], 'body_preview': 'x'}
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    payload = _json.dumps({'emails': [_mail(ea), _mail(eb)]}).encode('utf-8')
+    r = client.post('/api/outlook/import',
+                    data={'file': (_io.BytesIO(payload), 'e.json')},
+                    content_type='multipart/form-data')
+    assert r.get_json()['imported'] == 1                            # só casa o contato de A
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("SELECT client_id, owner_id FROM activities WHERE owner_id = ? AND contact_type = 'Email'", (a_id,))
+    rows = [toca.dict_from_row(x) for x in c.fetchall()]; conn.close()
+    assert len(rows) == 1 and rows[0]['client_id'] == ca            # atividade do contato de A, dele

@@ -7208,7 +7208,7 @@ def extract_future_commitment_dates(text):
     return ordered
 
 
-def create_commitments_from_activity(cursor, client_id, activity_id, text):
+def create_commitments_from_activity(cursor, client_id, activity_id, text, owner_id=None):
     dates = extract_future_commitment_dates(text)
     if not dates:
         return []
@@ -7218,12 +7218,15 @@ def create_commitments_from_activity(cursor, client_id, activity_id, text):
         safe_title = safe_title[:117] + '...'
 
     parsed_time = extract_time_from_text(text)
+    # `owner_id` explícito permite atribuir o dono correto em thread de background
+    # (import do Outlook); sem ele, cai no usuário do request (comportamento atual).
+    owner = owner_id if owner_id is not None else _acl_owner_for_insert()
     created = []
     for due_date in dates:
         cursor.execute(
             '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type, owner_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity', _acl_owner_for_insert())
+            (client_id, activity_id, safe_title or 'Retorno com cliente', text, due_date, parsed_time, 'activity', owner)
         )
         created.append({
             'id': cursor.lastrowid,
@@ -7687,7 +7690,13 @@ def _outlook_import_emails(emails_data, conn):
     Retorna (imported, skipped_duplicates, skipped_no_match).
     """
     c = conn.cursor()
-    c.execute("SELECT id, email FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
+    # Só casa contra contatos VISÍVEIS ao usuário; a atividade importada herda o
+    # dono. Roda em contexto de request (rotas /outlook/sync e /outlook/import),
+    # então visible_where / _acl_owner_for_insert resolvem o usuário atual. Login
+    # off → 1=1 / fundador (desktop).
+    owner_id = _acl_owner_for_insert()
+    _vw, _vp = visible_where('clients')
+    c.execute(f"SELECT id, email FROM clients WHERE email IS NOT NULL AND TRIM(email) != '' AND {_vw}", _vp)
     email_to_client = {}
     for row in c.fetchall():
         normalized = (row['email'] or '').strip().lower()
@@ -7762,9 +7771,9 @@ def _outlook_import_emails(emails_data, conn):
             information = '\n'.join(info_parts)
 
             c.execute(
-                '''INSERT INTO activities (client_id, contact_type, information, activity_date)
-                   VALUES (?, 'Email', ?, ?)''',
-                (client_id, information, email_date)
+                '''INSERT INTO activities (client_id, contact_type, information, activity_date, owner_id)
+                   VALUES (?, 'Email', ?, ?, ?)''',
+                (client_id, information, email_date, owner_id)
             )
             _addin_activity_id = c.lastrowid
             c.execute(
@@ -7775,7 +7784,7 @@ def _outlook_import_emails(emails_data, conn):
             # Follow-up combinado detectado via LLM (Bloco 7 — ingest do add-in)
             try:
                 _detect_followup_from_text(c, client_id, _addin_activity_id, candidate_name,
-                                           f'{subject}\n{body_preview}')
+                                           f'{subject}\n{body_preview}', owner_id=owner_id)
             except Exception as e:
                 logger.debug(f'[FollowupDetect] falha no ingest do add-in: {e}')
             imported += 1
@@ -8179,10 +8188,11 @@ def _outlook_confirm_task_cleanup(task_id, delay=300):
     threading.Thread(target=_do, daemon=True).start()
 
 
-def _detect_followup_from_text(c, client_id, activity_id, client_name, text):
+def _detect_followup_from_text(c, client_id, activity_id, client_name, text, owner_id=None):
     """Detecta follow-up combinado via LLM no mesmo formato JSON do sync WhatsApp
     ({"followup": {"data", "titulo"}}) e cria o compromisso na agenda (Bloco 7).
-    Retorna 1 se criou compromisso, 0 caso contrário."""
+    Retorna 1 se criou compromisso, 0 caso contrário. `owner_id` explícito atribui
+    o dono em thread de background; sem ele, cai no usuário do request."""
     if not text:
         return 0
     today_str = datetime.now().strftime('%Y-%m-%d')
@@ -8213,10 +8223,11 @@ def _detect_followup_from_text(c, client_id, activity_id, client_name, text):
     c.execute('SELECT id FROM commitments WHERE activity_id = ? AND due_date = ?', (activity_id, due_date))
     if c.fetchone():
         return 0
+    owner = owner_id if owner_id is not None else _acl_owner_for_insert()
     c.execute(
-        '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, source_type)
-           VALUES (?, ?, ?, ?, ?, ?)''',
-        (client_id, activity_id, title, (text or '')[:500], due_date, 'outlook')
+        '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, source_type, owner_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        (client_id, activity_id, title, (text or '')[:500], due_date, 'outlook', owner)
     )
     return 1
 
@@ -8239,7 +8250,7 @@ def _outlook_send_mail(to, subject, body_html, attachments=None):
     return recipient
 
 
-def _outlook_confirm_async(task_id, activities_to_import):
+def _outlook_confirm_async(task_id, activities_to_import, owner_id=None, user=None):
     try:
         total = len(activities_to_import)
         imported = 0
@@ -8271,6 +8282,12 @@ def _outlook_confirm_async(task_id, activities_to_import):
             conv_id = (act.get('conversation_id') or '').strip()
 
             if not client_id or not email_date:
+                continue
+
+            # Defensivo: só importa em contato VISÍVEL ao usuário. O match que gerou
+            # estas atividades já é escopado (4.14a); isto protege contra payload
+            # adulterado. `user` veio do request (thread não tem contexto). Off → True.
+            if not can_read('clients', client_id, c, user=user):
                 continue
 
             # Dedup persistente: se todas as mensagens da thread já foram processadas, pula
@@ -8346,9 +8363,9 @@ def _outlook_confirm_async(task_id, activities_to_import):
             analysis_text = (summary or body_preview or subject or '')[:600]
 
             c.execute(
-                '''INSERT INTO activities (client_id, contact_type, information, activity_date)
-                   VALUES (?, 'Email', ?, ?)''',
-                (client_id, information, email_date)
+                '''INSERT INTO activities (client_id, contact_type, information, activity_date, owner_id)
+                   VALUES (?, 'Email', ?, ?, ?)''',
+                (client_id, information, email_date, owner_id)
             )
             activity_id = c.lastrowid
             c.execute(
@@ -8372,11 +8389,11 @@ def _outlook_confirm_async(task_id, activities_to_import):
                 except Exception as e:
                     logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
 
-            new_commitments = create_commitments_from_activity(c, client_id, activity_id, information)
+            new_commitments = create_commitments_from_activity(c, client_id, activity_id, information, owner_id=owner_id)
             commitments_created += len(new_commitments)
             # Follow-up combinado detectado via LLM (mesmo formato do sync WhatsApp)
             try:
-                commitments_created += _detect_followup_from_text(c, client_id, activity_id, cname, thread_text)
+                commitments_created += _detect_followup_from_text(c, client_id, activity_id, cname, thread_text, owner_id=owner_id)
             except Exception as e:
                 logger.debug(f'[FollowupDetect] falha na thread de {cname}: {e}')
 
