@@ -23,7 +23,9 @@ def _radar_generate_ranked(c):
     suggestions = []
 
     # ---- 1. Contatos atrasados (threshold por cargo) + nunca contatados ----
-    c.execute("""
+    # Radar é por-usuário: só gera sobre os contatos VISÍVEIS (owner/share/admin).
+    _clw, _clp = visible_where('clients', alias='cl')
+    c.execute(f"""
         SELECT cl.id, cl.name, cl.company, cl.position, cl.last_activity_date,
                COALESCE(cl.is_target, 0) AS is_target,
                (SELECT COUNT(*) FROM commitments co
@@ -32,8 +34,8 @@ def _radar_generate_ranked(c):
                                   WHERE a.client_id = co.client_id
                                     AND date(a.activity_date) >= co.due_date)) AS overdue_fups
         FROM clients cl
-        WHERE COALESCE(cl.is_archived, 0) = 0 AND COALESCE(cl.is_cold_contact, 0) = 0
-    """, (today,))
+        WHERE COALESCE(cl.is_archived, 0) = 0 AND COALESCE(cl.is_cold_contact, 0) = 0 AND {_clw}
+    """, (today, *_clp))
     for row in c.fetchall():
         green, yellow = get_thresholds(row['position'])
         status, days = _home_status_for(row['last_activity_date'], green, yellow, now_dt)
@@ -57,7 +59,8 @@ def _radar_generate_ranked(c):
         })
 
     # ---- 2. Follow-ups vencidos sem atividade posterior (fecha o loop) ----
-    c.execute("""
+    _cow, _cop = visible_where('commitments', alias='co')
+    c.execute(f"""
         SELECT co.id AS commitment_id, co.title, co.due_date,
                cl.id AS client_id, cl.name, cl.company,
                COALESCE(cl.is_target, 0) AS is_target,
@@ -66,10 +69,11 @@ def _radar_generate_ranked(c):
         JOIN clients cl ON cl.id = co.client_id
         WHERE co.due_date < ?
           AND COALESCE(cl.is_archived, 0) = 0 AND COALESCE(cl.is_cold_contact, 0) = 0
+          AND {_cow}
           AND NOT EXISTS (SELECT 1 FROM activities a
                           WHERE a.client_id = co.client_id
                             AND date(a.activity_date) >= co.due_date)
-    """, (today, today))
+    """, (today, today, *_cop))
     for row in c.fetchall():
         suggestions.append({
             'type': 'followup_overdue',
@@ -82,7 +86,9 @@ def _radar_generate_ranked(c):
         })
 
     # ---- 3. Cards de Kanban com urgência Alta parados há mais de N dias ----
-    c.execute("""
+    # Kanban é por-usuário → owned_where (card herda a dona da coluna).
+    _kow, _kop = owned_where('kanban_cards', 'k')
+    c.execute(f"""
         SELECT k.id, k.title, k.updated_at,
                CAST(julianday('now', 'localtime') - julianday(k.updated_at) AS INTEGER) AS stalled_days,
                a.name AS account_name
@@ -93,7 +99,8 @@ def _radar_generate_ranked(c):
           AND LOWER(COALESCE(col.title, '')) NOT LIKE '%conclu%'
           AND LOWER(COALESCE(col.title, '')) NOT LIKE '%finaliz%'
           AND julianday('now', 'localtime') - julianday(k.updated_at) > ?
-    """, (RADAR_KANBAN_STALL_DAYS,))
+          AND {_kow}
+    """, (RADAR_KANBAN_STALL_DAYS, *_kop))
     for row in c.fetchall():
         extra = f' — {row["account_name"]}' if row['account_name'] else ''
         suggestions.append({
@@ -106,13 +113,15 @@ def _radar_generate_ranked(c):
         })
 
     # ---- 3a. Mudança de emprego detectada pela extensão (Bloco 11) ----
-    c.execute("""
+    # job_change_events é filha de clients → só as do contato visível.
+    _jcw, _jcp = visible_where('clients', alias='cl')
+    c.execute(f"""
         SELECT ev.id, ev.empresa_antiga, ev.empresa_nova, ev.cargo_novo,
                ev.potential_new_account, cl.id AS client_id, cl.name
         FROM job_change_events ev
         JOIN clients cl ON cl.id = ev.client_id
-        WHERE ev.status = 'pendente'
-    """)
+        WHERE ev.status = 'pendente' AND {_jcw}
+    """, _jcp)
     for row in c.fetchall():
         extra = ' — conta nova em potencial' if row['potential_new_account'] else ''
         cargo = f' como {row["cargo_novo"]}' if row['cargo_novo'] else ''
@@ -131,7 +140,8 @@ def _radar_generate_ranked(c):
     # ---- 3b. Multithreading: contas target single-threaded (Bloco 10) ----
     try:
         grouping_map = _thread_grouping_map(c)
-        c.execute("SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1")
+        _acw, _acp = visible_where('accounts')
+        c.execute(f"SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1 AND {_acw}", _acp)
         for acc in c.fetchall():
             score = _account_thread_score(c, acc['id'], acc['name'], 1, grouping_map, get_thresholds)
             if not score['single_threaded']:
@@ -152,13 +162,15 @@ def _radar_generate_ranked(c):
 
     # ---- 3c. Whitespace de ofertas em contas target (Bloco 12) ----
     try:
-        c.execute("SELECT COUNT(*) FROM portfolio_offers")
-        if c.fetchone()[0] > 0:
-            c.execute("""SELECT a.id, a.name FROM accounts a
-                         WHERE COALESCE(a.is_target, 0) = 1
+        _ofw, _ofp = visible_where('portfolio_offers')
+        c.execute(f"SELECT COUNT(*) AS n FROM portfolio_offers WHERE {_ofw}", _ofp)
+        if (dict_from_row(c.fetchone()) or {}).get('n', 0) > 0:
+            _waw, _wap = visible_where('accounts', alias='a')
+            c.execute(f"""SELECT a.id, a.name FROM accounts a
+                         WHERE COALESCE(a.is_target, 0) = 1 AND {_waw}
                            AND EXISTS (SELECT 1 FROM account_presences p
                                        WHERE p.account_id = a.id
-                                         AND COALESCE(p.early_terminated, 0) = 0)""")
+                                         AND COALESCE(p.early_terminated, 0) = 0)""", _wap)
             for acc in c.fetchall():
                 ws = _account_whitespace(c, acc['id'])
                 if not ws['missing']:
@@ -180,13 +192,15 @@ def _radar_generate_ranked(c):
         logger.debug(f'[Radar] whitespace indisponível: {e}')
 
     # ---- 4. Cadastros incompletos (baixa prioridade, consulta agregada) ----
-    c.execute("""
+    _icw, _icp = visible_where('clients')
+    c.execute(f"""
         SELECT id, name, company, email, phone, photo_url,
                COALESCE(is_target, 0) AS is_target
         FROM clients
         WHERE COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
           AND (email IS NULL OR email = '' OR phone IS NULL OR phone = '')
-    """)
+          AND {_icw}
+    """, _icp)
     for row in c.fetchall():
         missing = []
         if not row['email']:
@@ -219,15 +233,19 @@ def _radar_generate_ranked(c):
 def _radar_fill_today(c, today, limit=RADAR_MAX_ACTIVE):
     """Completa as sugestões do dia até `limit` ativas, usando o ranking.
     Retorna quantas foram inseridas."""
-    c.execute("""SELECT suggestion_type, target_data FROM daily_suggestions
-                 WHERE date = ?""", (today,))
+    # daily_suggestions é por-usuário (owned_where): existentes/ativas/inserção
+    # do dia são do dono atual. Login off → '1=1' (desktop: radar único).
+    _dw, _dp = owned_where('daily_suggestions')
+    c.execute(f"""SELECT suggestion_type, target_data FROM daily_suggestions
+                 WHERE date = ? AND {_dw}""", (today, *_dp))
     existing_keys = {(r['suggestion_type'], r['target_data']) for r in c.fetchall()}
-    c.execute("""SELECT COUNT(*) FROM daily_suggestions
+    c.execute(f"""SELECT COUNT(*) AS n FROM daily_suggestions
                  WHERE date = ? AND completed = 0
-                   AND (snoozed_until IS NULL OR snoozed_until <= ?)""", (today, today))
-    active = c.fetchone()[0]
+                   AND (snoozed_until IS NULL OR snoozed_until <= ?) AND {_dw}""", (today, today, *_dp))
+    active = (dict_from_row(c.fetchone()) or {}).get('n', 0)
     if active >= limit:
         return 0
+    _owner_id = _acl_owner_for_insert()
     inserted = 0
     for sug in _radar_generate_ranked(c):
         if active + inserted >= limit:
@@ -235,10 +253,10 @@ def _radar_fill_today(c, today, limit=RADAR_MAX_ACTIVE):
         if (sug['type'], sug['target_data']) in existing_keys:
             continue
         c.execute("""INSERT INTO daily_suggestions
-                     (date, suggestion_type, title, description, target_id, target_data, score)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                     (date, suggestion_type, title, description, target_id, target_data, score, owner_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                   (today, sug['type'], sug['title'], sug['description'],
-                   sug['target_id'], sug['target_data'], sug['score']))
+                   sug['target_id'], sug['target_data'], sug['score'], _owner_id))
         existing_keys.add((sug['type'], sug['target_data']))
         inserted += 1
     return inserted
@@ -252,9 +270,10 @@ def get_today_suggestions():
         c = conn.cursor()
         _radar_fill_today(c, today)
         conn.commit()
-        c.execute("""SELECT * FROM daily_suggestions
-                     WHERE date = ? AND (snoozed_until IS NULL OR snoozed_until <= ?)
-                     ORDER BY completed ASC, score DESC, id ASC""", (today, today))
+        _dw, _dp = owned_where('daily_suggestions')
+        c.execute(f"""SELECT * FROM daily_suggestions
+                     WHERE date = ? AND (snoozed_until IS NULL OR snoozed_until <= ?) AND {_dw}
+                     ORDER BY completed ASC, score DESC, id ASC""", (today, today, *_dp))
         result = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
         return jsonify(result)
@@ -269,9 +288,8 @@ def complete_suggestion(suggestion_id):
         conn = get_db()
         c = conn.cursor()
 
-        c.execute('SELECT * FROM daily_suggestions WHERE id = ?', (suggestion_id,))
-        suggestion = c.fetchone()
-        if not suggestion:
+        c.execute('SELECT id FROM daily_suggestions WHERE id = ?', (suggestion_id,))
+        if not c.fetchone() or not owns('daily_suggestions', suggestion_id, c):
             conn.close()
             return jsonify({'error': 'Sugestão não encontrada'}), 404
 
@@ -299,7 +317,9 @@ def snooze_suggestion(suggestion_id):
         until = (datetime.now() + timedelta(days=max(days, 1))).strftime('%Y-%m-%d')
         conn = get_db()
         c = conn.cursor()
-        c.execute('UPDATE daily_suggestions SET snoozed_until = ? WHERE id = ?', (until, suggestion_id))
+        _dw, _dp = owned_where('daily_suggestions')
+        c.execute(f'UPDATE daily_suggestions SET snoozed_until = ? WHERE id = ? AND {_dw}',
+                  (until, suggestion_id, *_dp))
         if c.rowcount == 0:
             conn.close()
             return jsonify({'error': 'Sugestão não encontrada'}), 404

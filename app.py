@@ -1530,6 +1530,16 @@ SCHEMA_MIGRATIONS = [
         'CREATE INDEX IF NOT EXISTS idx_itoca_chat_history_owner ON itoca_chat_history(owner_id)',
         'UPDATE itoca_chat_history SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
     ]),
+
+    # Fase 4 — owner_id nas sugestões do Radar do Dia (Home). O radar é PESSOAL
+    # (por-usuário, como o Kanban): cada um vê sugestões geradas a partir do que
+    # ELE vê. Sem owner_id, a lista de sugestões era única e global. Backfill =
+    # fundador.
+    (17, 'multiusuario_fase_4_owner_id_daily_suggestions', [
+        'ALTER TABLE daily_suggestions ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_daily_suggestions_owner ON daily_suggestions(owner_id)',
+        'UPDATE daily_suggestions SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
 ]
 
 
@@ -2074,7 +2084,7 @@ _ACL_ROOT_TABLES = {
     'clients', 'accounts', 'campaigns', 'commitments', 'activities',
     'kanban_columns', 'wiki_entries', 'wiki_documents', 'portfolio_offers',
     'iata_records', 'environment_cards', 'account_archives',
-    'account_planning_runs', 'itoca_chat_history',
+    'account_planning_runs', 'itoca_chat_history', 'daily_suggestions',
 }
 
 # Tabelas-FILHAS: não têm owner_id próprio — herdam a dona da RAIZ ancestral via
@@ -2091,6 +2101,7 @@ _ACL_PARENTS = {
     'campaign_actions': ('campaign_accounts', 'campaign_account_id'),
     'campaign_action_logs': ('campaign_actions', 'action_id'),
     'portfolio_offer_items': ('portfolio_offers', 'offer_id'),
+    'job_change_events': ('clients', 'client_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
