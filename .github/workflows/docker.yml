@@ -27,9 +27,9 @@ jobs:
           done
           echo "healthz não respondeu a tempo"; exit 1
 
-      - name: Smoke test — documentos web
+      - name: Smoke test — documentos e transcrição web
         run: |
-          docker exec toca-web python -c "import app; assert app.PDFPLUMBER_AVAILABLE and app.PYTHON_DOCX_AVAILABLE; pdf = app._briefings_to_pdf('Smoke PDF', [('Seção', 'Conteúdo')]); assert pdf and pdf.startswith(b'%PDF-')"
+          docker exec toca-web python -c "import importlib.util; import app, transcription_service; assert app.PDFPLUMBER_AVAILABLE and app.PYTHON_DOCX_AVAILABLE; assert importlib.util.find_spec('faster_whisper') is None; assert transcription_service.MAX_AUDIO_SECONDS == 55; pdf = app._briefings_to_pdf('Smoke PDF', [('Seção', 'Conteúdo')]); assert pdf and pdf.startswith(b'%PDF-')"
 
       - name: Logs do container
         if: always()

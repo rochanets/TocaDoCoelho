@@ -912,19 +912,107 @@
         let activeAudioChunks = [];
         let activeVoiceTargetElement = null;
         let activeVoiceInitialValue = '';
+        let activeVoiceStopTimer = null;
 
-        const VOICE_DEBUG = true;
+        const VOICE_DEBUG = false;
+        const VOICE_MAX_RECORDING_MS = 55 * 1000;
+        const VOICE_SAMPLE_RATE = 16000;
 
         function setVoiceButtonState(btn, state) {
             if (!btn) return;
             btn.classList.remove('active', 'transcribing');
             if (state === 'recording') btn.classList.add('active');
             if (state === 'transcribing') btn.classList.add('transcribing');
+            if (state === 'recording') {
+                btn.title = 'Gravando — máximo de 55 segundos. Clique para parar.';
+            } else if (state === 'transcribing') {
+                btn.title = 'Transcrevendo com Azure Speech...';
+            } else {
+                btn.title = 'Gravar áudio — máximo de 55 segundos';
+            }
+            btn.setAttribute('aria-label', btn.title);
+            btn.setAttribute('aria-pressed', state === 'recording' ? 'true' : 'false');
         }
 
-        async function transcribeRecordedAudio(audioBlob) {
+        function clearVoiceStopTimer() {
+            if (activeVoiceStopTimer !== null) {
+                window.clearTimeout(activeVoiceStopTimer);
+                activeVoiceStopTimer = null;
+            }
+        }
+
+        function encodePcm16Wav(samples, sampleRate) {
+            const buffer = new ArrayBuffer(44 + samples.length * 2);
+            const view = new DataView(buffer);
+            const writeAscii = (offset, text) => {
+                for (let index = 0; index < text.length; index += 1) {
+                    view.setUint8(offset + index, text.charCodeAt(index));
+                }
+            };
+            writeAscii(0, 'RIFF');
+            view.setUint32(4, 36 + samples.length * 2, true);
+            writeAscii(8, 'WAVE');
+            writeAscii(12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeAscii(36, 'data');
+            view.setUint32(40, samples.length * 2, true);
+            for (let index = 0; index < samples.length; index += 1) {
+                const sample = Math.max(-1, Math.min(1, samples[index]));
+                view.setInt16(
+                    44 + index * 2,
+                    sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+                    true
+                );
+            }
+            return new Blob([buffer], { type: 'audio/wav' });
+        }
+
+        async function convertRecordedAudioToWav(audioBlob) {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            const OfflineAudioContextClass = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            if (!AudioContextClass || !OfflineAudioContextClass) {
+                throw new Error('Conversão de áudio não suportada neste navegador.');
+            }
+
+            const context = new AudioContextClass();
+            try {
+                const encodedAudio = await audioBlob.arrayBuffer();
+                const decodedAudio = await context.decodeAudioData(encodedAudio.slice(0));
+                const maxFrames = VOICE_SAMPLE_RATE * (VOICE_MAX_RECORDING_MS / 1000);
+                const outputFrames = Math.min(
+                    maxFrames,
+                    Math.ceil(decodedAudio.duration * VOICE_SAMPLE_RATE)
+                );
+                if (!outputFrames) throw new Error('A gravação não contém áudio.');
+
+                const offlineContext = new OfflineAudioContextClass(
+                    1,
+                    outputFrames,
+                    VOICE_SAMPLE_RATE
+                );
+                const source = offlineContext.createBufferSource();
+                source.buffer = decodedAudio;
+                source.connect(offlineContext.destination);
+                source.start(0);
+                const renderedAudio = await offlineContext.startRendering();
+                return encodePcm16Wav(
+                    renderedAudio.getChannelData(0),
+                    VOICE_SAMPLE_RATE
+                );
+            } finally {
+                await context.close().catch(() => {});
+            }
+        }
+
+        async function transcribeRecordedAudio(wavBlob) {
             const formData = new FormData();
-            formData.append('audio', audioBlob, 'gravacao.webm');
+            formData.append('audio', wavBlob, 'gravacao.wav');
             const response = await fetch(`${API_BASE}/transcribe-audio`, {
                 method: 'POST',
                 body: formData,
@@ -976,7 +1064,15 @@
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const mediaRecorder = new MediaRecorder(stream);
+                const preferredMime = (
+                    typeof MediaRecorder.isTypeSupported === 'function'
+                    && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                )
+                    ? 'audio/webm;codecs=opus'
+                    : '';
+                const mediaRecorder = preferredMime
+                    ? new MediaRecorder(stream, { mimeType: preferredMime })
+                    : new MediaRecorder(stream);
                 activeAudioChunks = [];
                 activeMediaRecorder = mediaRecorder;
                 activeVoiceBtnId = buttonId;
@@ -990,18 +1086,24 @@
                 };
 
                 mediaRecorder.onerror = () => {
+                    clearVoiceStopTimer();
+                    stream.getTracks().forEach(track => track.stop());
                     setVoiceButtonState(btn, 'idle');
                     showError('Erro durante gravação de áudio.');
                 };
 
                 mediaRecorder.onstop = async () => {
+                    clearVoiceStopTimer();
                     stream.getTracks().forEach(track => track.stop());
                     setVoiceButtonState(btn, 'transcribing');
 
                     try {
                         if (!activeAudioChunks.length) return;
-                        const audioBlob = new Blob(activeAudioChunks, { type: 'audio/webm' });
-                        const transcribedText = await transcribeRecordedAudio(audioBlob);
+                        const recordedBlob = new Blob(activeAudioChunks, {
+                            type: mediaRecorder.mimeType || 'audio/webm'
+                        });
+                        const wavBlob = await convertRecordedAudioToWav(recordedBlob);
+                        const transcribedText = await transcribeRecordedAudio(wavBlob);
                         const currentTarget = activeVoiceTargetElement || target;
                         if (!transcribedText || !currentTarget) return;
                         const currentValue = String(currentTarget.value || '').trim();
@@ -1020,7 +1122,16 @@
                 };
 
                 mediaRecorder.start();
+                activeVoiceStopTimer = window.setTimeout(() => {
+                    if (
+                        activeMediaRecorder === mediaRecorder
+                        && mediaRecorder.state === 'recording'
+                    ) {
+                        mediaRecorder.stop();
+                    }
+                }, VOICE_MAX_RECORDING_MS);
             } catch (error) {
+                clearVoiceStopTimer();
                 setVoiceButtonState(btn, 'idle');
                 showError('Não foi possível acessar o microfone.');
             }

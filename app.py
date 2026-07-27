@@ -28,7 +28,7 @@ import uuid
 import hashlib
 import secrets
 import functools
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
@@ -42,6 +42,13 @@ from document_processing import (
     extract_document_text,
     read_document_upload,
     read_text_upload,
+)
+from transcription_service import (
+    TranscriptionError,
+    azure_speech_config_from_env,
+    read_wav_upload,
+    transcription_monthly_limit_ms,
+    transcribe_azure_short_wav,
 )
 try:
     from selenium import webdriver
@@ -167,8 +174,6 @@ WHISPER_IMPORT_ERROR = None
 WHISPER_IMPORT_ATTEMPTED = False
 WhisperModel = None
 WHISPER_AVAILABLE = True
-
-TRANSCRIPTION_BACKEND = 'faster-whisper'
 
 try:
     import imageio_ffmpeg
@@ -390,7 +395,10 @@ DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').s
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
 DEFAULT_GITHUB_BRANCH = os.environ.get('TOCA_UPDATE_GITHUB_BRANCH', 'version5').strip()
 
-logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
+logger.info(
+    '[Transcription] Desktop usa faster-whisper lazy; web usa Azure Speech F0 '
+    'quando configurado.'
+)
 
 AUTOMAPPING_CANCELLED_REQUESTS = set()
 AUTOMAPPING_CANCELLED_LOCK = threading.Lock()
@@ -1616,6 +1624,16 @@ SCHEMA_MIGRATIONS = [
     (28, 'multiusuario_fase_6_user_activation', [
         'ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1',
         'CREATE INDEX IF NOT EXISTS idx_users_org_active ON users(org_id, is_active)',
+    ]),
+    # Fase 7.3 — medição global da franquia mensal Azure Speech F0. O áudio e
+    # a transcrição não são persistidos; somente o total de milissegundos
+    # reservados/processados no mês.
+    (29, 'fase_7_3_transcription_monthly_usage', [
+        '''CREATE TABLE IF NOT EXISTS transcription_monthly_usage (
+            period_key TEXT PRIMARY KEY,
+            used_ms INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
     ]),
 ]
 
@@ -7651,6 +7669,98 @@ def parse_xlsx_without_openpyxl(file_storage):
     return rows
 
 
+def _transcription_period_key():
+    return datetime.now(timezone.utc).strftime('%Y-%m')
+
+
+def _transcription_monthly_usage():
+    period_key = _transcription_period_key()
+    conn = get_db()
+    row = conn.execute(
+        'SELECT used_ms FROM transcription_monthly_usage WHERE period_key = ?',
+        (period_key,),
+    ).fetchone()
+    conn.close()
+    return int(row['used_ms'] or 0) if row else 0
+
+
+def _transcription_reserve_monthly_quota(duration_ms):
+    """Reserva cota de forma atômica em SQLite e PostgreSQL.
+
+    A reserva acontece antes da chamada externa para impedir que workers
+    concorrentes ultrapassem silenciosamente as cinco horas do recurso F0.
+    """
+    duration_ms = max(1, int(duration_ms))
+    limit_ms = transcription_monthly_limit_ms()
+    period_key = _transcription_period_key()
+    conn = get_db()
+    try:
+        conn.execute(
+            '''INSERT INTO transcription_monthly_usage
+               (period_key, used_ms, updated_at)
+               VALUES (?, 0, CURRENT_TIMESTAMP)
+               ON CONFLICT(period_key) DO NOTHING''',
+            (period_key,),
+        )
+        cursor = conn.execute(
+            '''UPDATE transcription_monthly_usage
+               SET used_ms = used_ms + ?, updated_at = CURRENT_TIMESTAMP
+               WHERE period_key = ? AND used_ms + ? <= ?''',
+            (duration_ms, period_key, duration_ms, limit_ms),
+        )
+        if cursor.rowcount != 1:
+            row = conn.execute(
+                'SELECT used_ms FROM transcription_monthly_usage WHERE period_key = ?',
+                (period_key,),
+            ).fetchone()
+            conn.commit()
+            used_ms = int(row['used_ms'] or 0) if row else 0
+            raise TranscriptionError(
+                'A franquia mensal de transcrição foi atingida.',
+                code='TRANSCRIPTION_MONTHLY_QUOTA_REACHED',
+                status=429,
+                hint='A franquia gratuita será renovada no próximo mês.',
+            )
+        row = conn.execute(
+            'SELECT used_ms FROM transcription_monthly_usage WHERE period_key = ?',
+            (period_key,),
+        ).fetchone()
+        conn.commit()
+        used_ms = int(row['used_ms'] or 0) if row else 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {
+        'used_seconds': round(used_ms / 1000),
+        'limit_seconds': round(limit_ms / 1000),
+    }
+
+
+def _transcription_release_monthly_quota(duration_ms):
+    """Libera reserva quando o Azure rejeita a requisição antes de processá-la."""
+    duration_ms = max(1, int(duration_ms))
+    conn = get_db()
+    try:
+        conn.execute(
+            '''UPDATE transcription_monthly_usage
+               SET used_ms = CASE
+                   WHEN used_ms >= ? THEN used_ms - ?
+                   ELSE 0
+               END,
+               updated_at = CURRENT_TIMESTAMP
+               WHERE period_key = ?''',
+            (duration_ms, duration_ms, _transcription_period_key()),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception('[Transcription] Falha ao liberar reserva mensal.')
+    finally:
+        conn.close()
+
+
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @app.route('/api/transcribe-audio/', methods=['POST', 'OPTIONS'])
 def transcribe_audio():
@@ -7662,14 +7772,46 @@ def transcribe_audio():
         logger.debug(f"[Transcription][DEBUG] Content-Type: {request.content_type}")
         logger.debug(f"[Transcription][DEBUG] Content-Length: {request.content_length}")
 
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({'error': 'Arquivo de áudio não enviado.'}), 400
+
+    if _auth_enabled():
+        reserved_duration_ms = 0
+        try:
+            validated_wav = read_wav_upload(audio_file)
+            azure_config = azure_speech_config_from_env()
+            quota = _transcription_reserve_monthly_quota(
+                validated_wav.duration_ms
+            )
+            reserved_duration_ms = validated_wav.duration_ms
+            text = transcribe_azure_short_wav(validated_wav, azure_config)
+            return jsonify({
+                'text': text,
+                'provider': 'azure-speech-f0',
+                'duration_ms': validated_wav.duration_ms,
+                'quota': quota,
+            })
+        except TranscriptionError as exc:
+            if reserved_duration_ms and not exc.quota_consumed:
+                _transcription_release_monthly_quota(reserved_duration_ms)
+            logger.warning(
+                f'[Transcription][Web] Falha controlada ({exc.code}): {exc}'
+            )
+            return jsonify(exc.to_payload()), exc.status
+        except Exception:
+            logger.exception('[Transcription][Web] Falha inesperada.')
+            return jsonify({
+                'error': 'Falha inesperada ao transcrever o áudio.',
+                'code': 'TRANSCRIPTION_INTERNAL_ERROR',
+            }), 500
+
+    # Compatibilidade desktop: mantém o faster-whisper local e os formatos
+    # históricos quando TOCA_AUTH_ENABLED está desligado.
     if not WHISPER_AVAILABLE:
         details = f' ({WHISPER_IMPORT_ERROR})' if WHISPER_IMPORT_ERROR else ''
         logger.error(f'[Transcription][ERROR] Biblioteca faster-whisper indisponível neste ambiente{details}.')
         return jsonify({'error': 'Biblioteca faster-whisper não está disponível neste ambiente.'}), 503
-
-    audio_file = request.files.get('audio')
-    if not audio_file:
-        return jsonify({'error': 'Arquivo de áudio não enviado.'}), 400
 
     ffmpeg_path = configure_ffmpeg_for_whisper()
     if TRANSCRIPTION_DEBUG and not ffmpeg_path:

@@ -2,7 +2,7 @@
 # migração para web multiusuário.
 #
 # É o conjunto necessário para BOOTAR o app e servir a SPA + o CRUD sobre
-# SQLite. As dependências pesadas/opcionais (PDF, OCR, docx, áudio/ML) NÃO
+# SQLite. As dependências pesadas/opcionais (OCR e áudio/ML local) NÃO
 # entram aqui e serão adicionadas conforme cada feature for portada para a
 # web; as desktop-only (pywin32, Playwright, Selenium) vão para o "Toca
 # Companion". O app importa todas essas de forma guardada (try/except), então
@@ -31,3 +31,6 @@ Pillow>=10.0.0,<13.0.0
 # formato legado .doc continuam fora da imagem web.
 pdfplumber>=0.11.0,<1.0.0
 python-docx>=1.1.0,<2.0.0
+
+# Fase 7.3 usa a API REST do Azure Speech F0 por meio de `requests`, já
+# declarado no núcleo. faster-whisper/ONNX/FFmpeg continuam fora da imagem.
