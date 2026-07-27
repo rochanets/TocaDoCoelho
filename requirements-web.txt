@@ -20,3 +20,9 @@ psycopg[binary]>=3.1
 # Tradução de SQL SQLite→PostgreSQL na borda do wrapper de conexão. Só é
 # invocado no backend PostgreSQL.
 sqlglot>=25.0
+
+# Fase 7.1 — geração server-side de PDFs core (relatório de relacionamento,
+# briefings matinais e revisão semanal). Pillow é dependência explícita porque
+# os relatórios podem incorporar logos/fotos locais já autorizados pela ACL.
+reportlab>=4.0.0,<5.0.0
+Pillow>=10.0.0,<13.0.0
