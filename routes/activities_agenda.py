@@ -694,22 +694,13 @@ def _briefings_to_pdf(title, sections):
     return buf.getvalue()
 
 
-def _morning_briefing_job():
-    """Job diário matinal (hora configurável, default 7h): compila os briefings
-    de todas as reuniões do dia em um PDF e envia ao próprio usuário por e-mail."""
-    try:
-        hour = int(_resolve_setting('briefing_email_hour', 'BRIEFING_EMAIL_HOUR') or 7)
-    except Exception:
-        hour = 7
-    if datetime.now().hour < hour:
-        return 'skip'
+def _morning_briefing_for_user(acl_user):
+    """Compila e envia o briefing matinal de um único usuário."""
+    if not acl_user or not (acl_user.get('email') or '').strip():
+        return False
     today = datetime.now().strftime('%Y-%m-%d')
     conn = get_db()
     c = conn.cursor()
-    # No disparo manual (rota) roda em request → escopa aos compromissos visíveis
-    # do solicitante. No job agendado (sem request, login on) não há usuário →
-    # '1=0' e nenhum e-mail cross-user; login off (desktop) → '1=1' como sempre.
-    acl_user = current_user()
     _vw, _vp = visible_where('commitments', alias='co', user=acl_user)
     c.execute(f"""SELECT co.*, cl.name AS client_name, cl.company
                  FROM commitments co JOIN clients cl ON cl.id = co.client_id
@@ -718,20 +709,20 @@ def _morning_briefing_job():
     meetings = [dict_from_row(r) for r in c.fetchall()]
     if not meetings:
         conn.close()
-        logger.info('[Briefing] Sem reuniões hoje — e-mail matinal não enviado')
-        return
+        logger.info(f'[Briefing] Sem reuniões hoje para user_id={acl_user["id"]}')
+        return False
     sections = []
     for m in meetings:
         try:
-            result = _generate_briefing(c, m, acl_user=acl_user)  # usa cache se já existir
+            result = _generate_briefing(c, m, acl_user=acl_user)
             conn.commit()
             head = f'{m["client_name"]} ({m["company"]})' + (f' — {m["due_time"]}' if m.get('due_time') else '')
             sections.append((head, result['content']))
         except Exception as e:
-            logger.warning(f'[Briefing] Falha ao gerar briefing do compromisso {m["id"]}: {e}')
+            logger.warning(f'[Briefing] Falha no compromisso {m["id"]} do user_id={acl_user["id"]}: {e}')
     conn.close()
     if not sections:
-        return
+        return False
     date_label = datetime.now().strftime('%d/%m/%Y')
     pdf_bytes = _briefings_to_pdf(f'Briefings de reuniões — {date_label}', sections)
     attachments = []
@@ -743,7 +734,30 @@ def _morning_briefing_job():
             + (' (PDF em anexo)' if attachments else '') + ':</p>'
             + ''.join(f'<h3>{html.escape(s[0])}</h3><pre style="white-space:pre-wrap; font-family:inherit;">{html.escape(s[1])}</pre>'
                       for s in sections))
-    _outlook_send_mail(None, f'🐇 Briefings do dia — {date_label}', body, attachments)
+    _outlook_send_mail(
+        acl_user['email'], f'🐇 Briefings do dia — {date_label}', body, attachments,
+        user_id=acl_user['id']
+    )
+    return True
+
+
+def _morning_briefing_job():
+    """Job diário: uma execução e um e-mail por usuário provisionado."""
+    try:
+        hour = int(_resolve_setting('briefing_email_hour', 'BRIEFING_EMAIL_HOUR') or 7)
+    except Exception:
+        hour = 7
+    if datetime.now().hour < hour:
+        return 'skip'
+    users = [current_user()] if has_request_context() else _job_delivery_users()
+    sent = 0
+    for acl_user in users:
+        try:
+            sent += int(_morning_briefing_for_user(acl_user))
+        except Exception as e:
+            uid = (acl_user or {}).get('id')
+            logger.exception(f'[Briefing] Falha no job do user_id={uid}: {e}')
+    return {'sent': sent, 'users': len(users)}
 
 
 _register_scheduled_job('morning_briefing_last_run', 1, _morning_briefing_job)

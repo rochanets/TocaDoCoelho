@@ -205,7 +205,15 @@ def get_profile_config():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM user_profile WHERE id = 1')
+        if _auth_enabled():
+            c.execute(
+                '''SELECT id, full_name, nickname, position, email, phone,
+                          photo_url, boss_name, boss_email, role, ui_theme
+                   FROM users WHERE id = ?''',
+                (current_user_id(),)
+            )
+        else:
+            c.execute('SELECT * FROM user_profile WHERE id = 1')
         profile = dict_from_row(c.fetchone())
         conn.close()
         return jsonify(profile or {})
@@ -231,10 +239,13 @@ def get_ui_config():
 def get_theme_config():
     try:
         conn = get_db(); c = conn.cursor()
-        c.execute('SELECT value FROM app_settings WHERE key = "ui_color_theme"')
-        row = c.fetchone()
+        if _auth_enabled():
+            c.execute('SELECT ui_theme AS value FROM users WHERE id = ?', (current_user_id(),))
+        else:
+            c.execute('SELECT value FROM app_settings WHERE key = "ui_color_theme"')
+        row = dict_from_row(c.fetchone())
         conn.close()
-        theme = row['value'] if row and row['value'] in _VALID_THEMES else 'verde-classico'
+        theme = row['value'] if row and row.get('value') in _VALID_THEMES else 'verde-classico'
         return jsonify({'theme': theme})
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/theme: {e}')
@@ -249,11 +260,17 @@ def put_theme_config():
         if theme not in _VALID_THEMES:
             return jsonify({'error': 'Tema inválido'}), 400
         conn = get_db(); c = conn.cursor()
-        c.execute(
-            'INSERT INTO app_settings (key, value) VALUES ("ui_color_theme", ?) '
-            'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP',
-            (theme,)
-        )
+        if _auth_enabled():
+            c.execute(
+                'UPDATE users SET ui_theme = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                (theme, current_user_id())
+            )
+        else:
+            c.execute(
+                'INSERT INTO app_settings (key, value) VALUES ("ui_color_theme", ?) '
+                'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP',
+                (theme,)
+            )
         conn.commit()
         conn.close()
         return jsonify({'theme': theme})
@@ -813,14 +830,24 @@ def save_profile_config():
         boss_name = request.form.get('boss_name', '').strip() or None
         boss_email = request.form.get('boss_email', '').strip() or None
 
-        if not full_name or not nickname or not position or not email or not phone:
+        if (not full_name or not nickname or not position or not phone
+                or (not _auth_enabled() and not email)):
             return jsonify({'error': 'Nome completo, apelido, cargo, email e telefone são obrigatórios'}), 400
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT photo_url FROM user_profile WHERE id = 1')
-        row = c.fetchone()
-        photo_url = row['photo_url'] if row else None
+        if _auth_enabled():
+            c.execute('SELECT email, photo_url FROM users WHERE id = ?', (current_user_id(),))
+        else:
+            c.execute('SELECT email, photo_url FROM user_profile WHERE id = 1')
+        row = dict_from_row(c.fetchone())
+        photo_url = row.get('photo_url') if row else None
+        # Na web o e-mail é a identidade SSO e não pode ser alterado pelo
+        # formulário de preferências.
+        identity_email = (row or {}).get('email') if _auth_enabled() else email
+        if _auth_enabled() and not identity_email:
+            conn.close()
+            return jsonify({'error': 'O usuário autenticado não possui e-mail SSO.'}), 409
 
         if 'photo' in request.files:
             file = request.files['photo']
@@ -833,19 +860,30 @@ def save_profile_config():
         if not photo_url:
             return jsonify({'error': 'Foto é obrigatória'}), 400
 
-        c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, email, phone, photo_url, boss_name, boss_email, updated_at)
-                     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                     ON CONFLICT(id) DO UPDATE SET
-                        full_name = excluded.full_name,
-                        nickname = excluded.nickname,
-                        position = excluded.position,
-                        email = excluded.email,
-                        phone = excluded.phone,
-                        photo_url = excluded.photo_url,
-                        boss_name = excluded.boss_name,
-                        boss_email = excluded.boss_email,
-                        updated_at = CURRENT_TIMESTAMP''',
-                  (full_name, nickname, position, email, phone, photo_url, boss_name, boss_email))
+        if _auth_enabled():
+            c.execute(
+                '''UPDATE users
+                   SET full_name = ?, nickname = ?, position = ?, phone = ?,
+                       photo_url = ?, boss_name = ?, boss_email = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?''',
+                (full_name, nickname, position, phone, photo_url,
+                 boss_name, boss_email, current_user_id())
+            )
+        else:
+            c.execute('''INSERT INTO user_profile (id, full_name, nickname, position, email, phone, photo_url, boss_name, boss_email, updated_at)
+                         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                         ON CONFLICT(id) DO UPDATE SET
+                            full_name = excluded.full_name,
+                            nickname = excluded.nickname,
+                            position = excluded.position,
+                            email = excluded.email,
+                            phone = excluded.phone,
+                            photo_url = excluded.photo_url,
+                            boss_name = excluded.boss_name,
+                            boss_email = excluded.boss_email,
+                            updated_at = CURRENT_TIMESTAMP''',
+                      (full_name, nickname, position, email, phone, photo_url, boss_name, boss_email))
         conn.commit()
         conn.close()
 
@@ -860,7 +898,20 @@ def delete_profile_config():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('DELETE FROM user_profile WHERE id = 1')
+        if _auth_enabled():
+            # A identidade/allowlist permanece; apaga somente preferências
+            # pessoais editáveis.
+            c.execute(
+                '''UPDATE users
+                   SET full_name = NULL, nickname = NULL, position = NULL,
+                       phone = NULL, photo_url = NULL, boss_name = NULL,
+                       boss_email = NULL, ui_theme = NULL,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?''',
+                (current_user_id(),)
+            )
+        else:
+            c.execute('DELETE FROM user_profile WHERE id = 1')
         conn.commit()
         conn.close()
         return jsonify({'message': 'Usuário excluído com sucesso'})
