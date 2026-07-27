@@ -1683,7 +1683,7 @@ def _transpile_to_postgres(sql):
         raise RuntimeError(
             f"Falha ao transpilar SQL para PostgreSQL via sqlglot: {e}\n--- SQL ---\n{sql}"
         ) from e
-    out = ';\n'.join(parts)
+    out = ';\n'.join(_strip_pg_conflict_target_null_ordering(part) for part in parts)
     # sqlglot mapeia %H/%Y etc., mas não %w (dia da semana). Corrige o
     # TO_CHAR(..., '%w') resultante para EXTRACT(DOW ...) — mesmo intervalo
     # 0=Dom..6=Sáb do SQLite.
@@ -1691,6 +1691,34 @@ def _transpile_to_postgres(sql):
         out = _PG_STRFTIME_DOW_RE.sub(r'EXTRACT(DOW FROM \1)', out)
     _TRANSPILE_CACHE[sql] = out
     return out
+
+
+def _strip_pg_conflict_target_null_ordering(pg_sql):
+    """Remove NULLS FIRST/LAST gerado pelo sqlglot só no alvo de ON CONFLICT.
+
+    O dialeto SQLite do sqlglot representa as chaves do conflict target como
+    ``Ordered(nulls_first=True)`` e o gerador PostgreSQL serializa esse detalhe,
+    embora PostgreSQL não aceite ordenação de nulos nesse contexto. Ordenações
+    explícitas em ORDER BY permanecem intocadas.
+    """
+    import sqlglot
+    from sqlglot import exp
+
+    try:
+        tree = sqlglot.parse_one(pg_sql, read='postgres')
+    except Exception:
+        # O statement acabou de ser gerado pelo próprio sqlglot. Se uma versão
+        # futura não conseguir relê-lo, preserve a saída original em vez de
+        # transformar SQL fora do contexto correto.
+        return pg_sql
+
+    changed = False
+    for conflict in tree.find_all(exp.OnConflict):
+        for key in conflict.args.get('conflict_keys') or ():
+            if isinstance(key, exp.Ordered) and key.args.get('nulls_first') is not None:
+                key.set('nulls_first', None)
+                changed = True
+    return tree.sql(dialect='postgres') if changed else pg_sql
 
 
 _PG_STRFTIME_DOW_RE = re.compile(r"TO_CHAR\(\s*(.+?)\s*,\s*'%w'\s*\)", re.I)

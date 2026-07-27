@@ -79,6 +79,21 @@ def test_shares_upsert_transpiles_to_postgres():
     ).upper()
     assert 'ON CONFLICT' in out
     assert 'DO UPDATE SET' in out
+    conflict_target = out.split('ON CONFLICT', 1)[1].split('DO UPDATE', 1)[0]
+    assert 'NULLS FIRST' not in conflict_target
+    assert 'NULLS LAST' not in conflict_target
     assert 'EXCLUDED.PERMISSION' in out
     assert 'COALESCE(SHARES.CREATED_BY, EXCLUDED.CREATED_BY)' in out
     assert '?' not in out
+
+
+def test_order_by_null_ordering_is_preserved_outside_conflict_target():
+    out = toca._transpile_to_postgres(
+        '''SELECT id
+             FROM shares
+            ORDER BY shared_with_user_id ASC NULLS FIRST,
+                     created_at DESC NULLS LAST'''
+    ).upper()
+    assert 'ORDER BY' in out
+    assert 'SHARED_WITH_USER_ID ASC NULLS FIRST' in out
+    assert 'CREATED_AT DESC NULLS LAST' in out
