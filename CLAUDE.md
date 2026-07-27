@@ -196,11 +196,15 @@ texto = format_currency_br(150000)              # → "R$ 1.500,00"
 
 ## Robô de preenchimento de formulário externo (Playwright) — estratégia validada
 
-Padrão usado no robô do Chamado Jurídico (`integrations/forms_robot.py`, acionado
-por `POST /api/autotoca/chamado-juridico/robot`) para preencher um Microsoft
-Forms de produção sem nenhuma integração/API do lado do formulário. **Use este
-padrão como ponto de partida para qualquer nova automação de formulário externo**
-(outro Forms, Google Forms, SharePoint list, portal de terceiro sem API etc.).
+Padrão usado no robô do Chamado Jurídico (`integrations/forms_robot.py`,
+solicitado por `POST /api/autotoca/chamado-juridico/robot`) para preencher um
+Microsoft Forms de produção sem integração/API do lado do formulário. Com
+autenticação desligada, o desktop executa diretamente; no web, a rota cria uma
+tarefa do Toca Companion conforme
+`docs/toca-companion-contract-v1.md`, e a execução local entra na F7.5. **Use
+este padrão como ponto de partida para qualquer nova automação de formulário
+externo** (outro Forms, Google Forms, SharePoint list, portal de terceiro sem
+API etc.).
 
 ### Princípio central: navegador visível, submissão genuína, humano no controle
 

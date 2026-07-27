@@ -17,13 +17,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_schema_version_reaches_29():
+def test_schema_version_reaches_30():
     toca._run_schema_migrations()  # idempotente (version gate)
     conn = toca._open_main_db()
     try:
         cur = conn.cursor()
         cur.execute('SELECT MAX(version) FROM schema_version')
-        assert cur.fetchone()[0] == 29
+        assert cur.fetchone()[0] == 30
     finally:
         conn.close()
 
@@ -49,6 +49,10 @@ def test_core_tables_queryable_on_postgres():
             'SELECT owner_id FROM clients LIMIT 1',
             'SELECT owner_id FROM accounts LIMIT 1',
             'SELECT used_ms FROM transcription_monthly_usage LIMIT 1',
+            'SELECT owner_id FROM companion_devices LIMIT 1',
+            'SELECT status FROM companion_tasks LIMIT 1',
+            'SELECT task_id FROM companion_task_files LIMIT 1',
+            'SELECT task_id FROM companion_task_events LIMIT 1',
         ):
             cur.execute(stmt)
             cur.fetchall()

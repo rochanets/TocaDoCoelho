@@ -92,6 +92,17 @@ sem persistir o áudio ou o texto transcrito. O teto nunca ultrapassa as cinco
 horas mensais do F0. Com `TOCA_AUTH_ENABLED` desligado, o desktop continua
 usando `faster-whisper` localmente.
 
+## 🐇 Toca Companion
+
+No modo web, automações que dependem de navegador visível e sessão local são
+entregues ao Toca Companion por uma fila persistente e auditável. A Fase 7.4
+inclui vínculo de dispositivo, autenticação por token, leases, idempotência,
+cancelamento, download privado de anexos e manifesto de atualização. O executor
+Playwright do Chamado Jurídico será conectado na Fase 7.5.
+
+O protocolo está documentado em
+[`docs/toca-companion-contract-v1.md`](docs/toca-companion-contract-v1.md).
+
 ## 💽 Backup automático
 
 - O SQLite é copiado automaticamente para `%AppData%\toca-do-coelho\backups\`

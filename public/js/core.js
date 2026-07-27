@@ -2963,6 +2963,17 @@
 
         let _cjReuseHistoryId = '';
         let _cjReuseSelectedFields = new Set();
+        let _cjRobotIdempotencyKey = '';
+
+        function _cjGetRobotIdempotencyKey() {
+            if (_cjRobotIdempotencyKey) return _cjRobotIdempotencyKey;
+            _cjRobotIdempotencyKey = (
+                window.crypto && typeof window.crypto.randomUUID === 'function'
+            )
+                ? window.crypto.randomUUID()
+                : `cj-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            return _cjRobotIdempotencyKey;
+        }
 
         // Limpa todos os campos do Chamado Jurídico — chamado ao sair do módulo/aba,
         // para que o usuário sempre encontre o formulário em branco na próxima visita.
@@ -2992,6 +3003,7 @@
             });
 
             _cjReuseHistoryId = '';
+            _cjRobotIdempotencyKey = '';
             const historySelect = document.getElementById('cjHistorySelect');
             if (historySelect) historySelect.value = '';
         }
@@ -3134,20 +3146,46 @@
             _chamadoRobotEnsureStyles();
             _chamadoRobotToggleRunning(true);
             _chamadoRobotSetProgress(5, 'Iniciando o robô...');
-            _autoTocaAppendLog('Robô do Chamado Jurídico iniciado. Uma janela do navegador será aberta.', 'info');
+            _autoTocaAppendLog('Solicitação do Robô do Chamado Jurídico iniciada.', 'info');
 
             try {
-                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/robot`, { method: 'POST', body: fd });
+                const response = await fetch(`${API_BASE}/autotoca/chamado-juridico/robot`, {
+                    method: 'POST',
+                    body: fd,
+                    headers: { 'Idempotency-Key': _cjGetRobotIdempotencyKey() }
+                });
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
                 const taskId = data.task_id;
                 if (!taskId) throw new Error('Resposta inesperada do servidor.');
+                _cjRobotIdempotencyKey = '';
+                if (data.execution === 'companion') {
+                    _chamadoRobotSetProgress(0, 'Aguardando um Toca Companion vinculado...');
+                    _autoTocaAppendLog('Tarefa enviada com segurança ao Toca Companion.', 'info');
+                } else {
+                    _autoTocaAppendLog('Robô desktop iniciado. Uma janela do navegador será aberta.', 'info');
+                }
 
                 const progressEl = document.getElementById('autotocaRobotProgress');
                 _attachBgTaskControls(
                     progressEl, taskId,
                     () => _chamadoRobotToggleRunning(false),
-                    () => { _chamadoRobotToggleRunning(false); showError('Acompanhamento do robô cancelado — a janela dele pode continuar aberta.'); }
+                    async () => {
+                        _chamadoRobotToggleRunning(false);
+                        if (data.execution === 'companion') {
+                            try {
+                                await fetch(`${API_BASE}/companion/tasks/${taskId}/cancel`, {
+                                    method: 'POST',
+                                    headers: { Accept: 'application/json' }
+                                });
+                                showInfo('Cancelamento solicitado ao Toca Companion.');
+                            } catch (error) {
+                                showError('Não foi possível solicitar o cancelamento.');
+                            }
+                        } else {
+                            showError('Acompanhamento cancelado — a janela do robô pode continuar aberta.');
+                        }
+                    }
                 );
 
                 const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
