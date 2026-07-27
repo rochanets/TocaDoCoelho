@@ -36,6 +36,13 @@ from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect, session, g, has_request_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from document_processing import (
+    DocumentProcessingError,
+    extract_document_path,
+    extract_document_text,
+    read_document_upload,
+    read_text_upload,
+)
 try:
     from selenium import webdriver
     from selenium.webdriver.common.by import By
@@ -5524,6 +5531,25 @@ def _itoca_extract_text_from_file(file_path_str):
         return ''
     ext = path.suffix.lower()
     text_parts = []
+    if _auth_enabled():
+        if ext not in ('.pdf', '.docx'):
+            logger.info(
+                f'[iToca] Leitura web não habilitada para {ext or "arquivo sem extensão"}: '
+                f'{path.name}'
+            )
+            return ''
+        try:
+            return extract_document_path(
+                path,
+                allowed_kinds=('pdf', 'docx'),
+                require_text=True,
+            )
+        except DocumentProcessingError as exc:
+            logger.warning(
+                f'[iToca] Documento rejeitado ({exc.code}) em {path.name}: {exc}'
+            )
+            return ''
+
     try:
         if ext == '.pdf':
             extracted = False
@@ -10315,21 +10341,16 @@ def _account_autofill_via_sai(account_name):
 def _portfolio_extract_pdf_text(file_storage):
     if not file_storage:
         return ''
-    if not PDFPLUMBER_AVAILABLE:
-        raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
-
-    file_bytes = file_storage.read()
-    if not file_bytes:
-        return ''
-
-    text_parts = []
-    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for page in (pdf.pages or []):
-            try:
-                text_parts.append(page.extract_text() or '')
-            except Exception:
-                continue
-    return '\n'.join(part.strip() for part in text_parts if part and part.strip()).strip()
+    file_bytes, _ = read_document_upload(
+        file_storage,
+        allowed_kinds=('pdf',),
+    )
+    return extract_document_text(
+        file_bytes,
+        filename=file_storage.filename,
+        declared_mime=file_storage.mimetype,
+        allowed_kinds=('pdf',),
+    )
 
 
 def _portfolio_read_image_data(file_storage):
@@ -10581,16 +10602,24 @@ def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, f
             mime = (file_mime or '').lower()
             if 'pdf' in mime or fname.endswith('.pdf'):
                 _portfolio_task_set(task_id, {'step': 'Extraindo texto do PDF...', 'progress': 30})
-                if not PDFPLUMBER_AVAILABLE:
-                    raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
-                text_parts = []
-                with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-                    for page in (pdf.pages or []):
-                        try:
-                            text_parts.append(page.extract_text() or '')
-                        except Exception:
-                            continue
-                pdf_text = '\n'.join(p.strip() for p in text_parts if p and p.strip()).strip()
+                if _auth_enabled():
+                    pdf_text = extract_document_text(
+                        file_bytes,
+                        filename=filename,
+                        declared_mime=file_mime,
+                        allowed_kinds=('pdf',),
+                    )
+                else:
+                    if not PDFPLUMBER_AVAILABLE:
+                        raise RuntimeError('Leitura de PDF indisponível no servidor (pdfplumber não instalado).')
+                    text_parts = []
+                    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+                        for page in (pdf.pages or []):
+                            try:
+                                text_parts.append(page.extract_text() or '')
+                            except Exception:
+                                continue
+                    pdf_text = '\n'.join(p.strip() for p in text_parts if p and p.strip()).strip()
                 raw_input = (input_text + '\n\n' + pdf_text).strip() if input_text and pdf_text else (input_text or pdf_text)
             elif mime.startswith('image/') or fname.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
                 _portfolio_task_set(task_id, {'step': 'Preparando imagem...', 'progress': 30})
@@ -10631,6 +10660,17 @@ def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, f
             raise RuntimeError('Falha ao carregar oferta criada.')
         offer['llm_source'] = source
         _portfolio_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': offer})
+    except DocumentProcessingError as e:
+        logger.warning(f'[Portfolio][Task:{task_id}] Documento rejeitado ({e.code}): {e}')
+        _portfolio_task_set(
+            task_id,
+            {
+                'status': 'error',
+                'error': str(e),
+                'code': e.code,
+                'hint': e.hint,
+            },
+        )
     except Exception as e:
         logger.exception(f'[Portfolio][Task:{task_id}] Erro: {e}')
         _portfolio_task_set(task_id, {'status': 'error', 'error': str(e)})
@@ -10689,6 +10729,28 @@ def _iata_extract_file_text(file_storage):
     file_bytes = file_storage.read()
     if not file_bytes:
         return ''
+
+    if _auth_enabled():
+        ext = Path(filename).suffix.lower()
+        if ext in ('.pdf', '.docx'):
+            return extract_document_text(
+                file_bytes,
+                filename=filename,
+                declared_mime='',
+                allowed_kinds=('pdf', 'docx'),
+            )
+        if ext == '.doc':
+            raise DocumentProcessingError(
+                'O formato legado .doc não é suportado na versão web. Converta para DOCX.',
+                code='DOCUMENT_LEGACY_DOC_UNSUPPORTED',
+                status=415,
+            )
+        if ext not in ('.txt', '.vtt', '.srt', '.csv'):
+            raise DocumentProcessingError(
+                'Formato de arquivo não suportado.',
+                code='DOCUMENT_UNSUPPORTED_TYPE',
+                status=415,
+            )
 
     if filename.endswith('.pdf'):
         if not PDFPLUMBER_AVAILABLE:
@@ -11053,6 +11115,17 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input, owner_id=
         record = _iata_record_to_dict(c.fetchone())
         conn.close()
         _iata_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': record})
+    except DocumentProcessingError as e:
+        logger.warning(f'[iAta][Task:{task_id}] Documento rejeitado ({e.code}): {e}')
+        _iata_task_set(
+            task_id,
+            {
+                'status': 'error',
+                'error': str(e),
+                'code': e.code,
+                'hint': e.hint,
+            },
+        )
     except Exception as e:
         logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')
         _iata_task_set(task_id, {'status': 'error', 'error': str(e)})

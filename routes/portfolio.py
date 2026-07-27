@@ -48,9 +48,27 @@ def create_portfolio_offer():
 
         file_bytes, file_mime, filename = None, None, None
         if file_obj and file_obj.filename:
-            file_bytes = file_obj.read()
             file_mime = file_obj.mimetype or ''
             filename = file_obj.filename
+            ext = Path(filename).suffix.lower()
+            if _auth_enabled() and (
+                ext == '.pdf' or file_mime.split(';', 1)[0].strip().lower() == 'application/pdf'
+            ):
+                file_bytes, _ = read_document_upload(
+                    file_obj,
+                    allowed_kinds=('pdf',),
+                )
+            elif _auth_enabled() and (
+                ext not in ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+                or not file_mime.lower().startswith('image/')
+            ):
+                raise DocumentProcessingError(
+                    'Formato de arquivo não suportado. Envie PDF ou imagem.',
+                    code='DOCUMENT_UNSUPPORTED_TYPE',
+                    status=415,
+                )
+            else:
+                file_bytes = file_obj.read()
 
         if not input_text and not file_bytes:
             return jsonify({'error': 'Informe um texto ou envie um PDF/imagem para análise.'}), 400
@@ -63,6 +81,8 @@ def create_portfolio_offer():
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
+    except DocumentProcessingError as e:
+        return jsonify(e.to_payload()), e.status
     except Exception as e:
         logger.exception(f'[Portfolio] Erro ao iniciar tarefa: {e}')
         return jsonify({'error': str(e)}), 500
@@ -369,8 +389,17 @@ def create_iata_record():
 
         file_bytes, filename = None, None
         if file_obj and file_obj.filename:
-            file_bytes = file_obj.read()
             filename = file_obj.filename
+            ext = Path(filename).suffix.lower()
+            if _auth_enabled() and ext in ('.pdf', '.docx', '.doc'):
+                file_bytes, _ = read_document_upload(
+                    file_obj,
+                    allowed_kinds=('pdf', 'docx'),
+                )
+            elif _auth_enabled():
+                file_bytes = read_text_upload(file_obj)
+            else:
+                file_bytes = file_obj.read()
 
         task_id = uuid.uuid4().hex
         _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
@@ -380,6 +409,8 @@ def create_iata_record():
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
+    except DocumentProcessingError as e:
+        return jsonify(e.to_payload()), e.status
     except Exception as e:
         logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
         return jsonify({'error': str(e)}), 500

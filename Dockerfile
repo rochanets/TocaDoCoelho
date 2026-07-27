@@ -1,9 +1,9 @@
 # Imagem WEB do TocaDoCoelho — Fase 0 da migração desktop → web multiusuário.
 # Empacota o app Flask servido por Gunicorn. NÃO inclui as dependências
 # desktop-only (robô Playwright/Selenium, pywin32, bandeja) nem a stack pesada
-# de áudio/ML. A imagem inclui apenas o núcleo server-side de documentos já
-# portado (ReportLab/Pillow); leitura de uploads, OCR e transcrição entram em
-# recortes próprios depois dos respectivos limites de segurança e recursos.
+# de áudio/ML. A imagem inclui geração server-side (ReportLab/Pillow) e leitura
+# digital segura (pdfplumber/python-docx); OCR, formatos legados e transcrição
+# entram em recortes próprios depois dos respectivos limites de recursos.
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
