@@ -858,7 +858,9 @@ def import_clients():
             return jsonify({'error': error_msg}), 400
         
         # IMPORTACAO: Usar transacao para garantir consistencia
-        conn = sqlite3.connect(str(DB_PATH))
+        # O adaptador mantém o fluxo desktop em SQLite e traduz as consultas
+        # para PostgreSQL na imagem web.
+        conn = get_db()
         c = conn.cursor()
         
         try:

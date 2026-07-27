@@ -70,10 +70,12 @@ def run_automapping():
             return jsonify({'cancelled': True, 'message': 'AutoMapping cancelado pelo usuário.'}), 409
 
         task_id = uuid.uuid4().hex
+        owner_id = _acl_owner_for_insert()
+        acl_user = current_user()
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
         threading.Thread(
             target=_automapping_process_async,
-            args=(task_id, company, country, industry, force, request_id),
+            args=(task_id, company, country, industry, force, request_id, owner_id, acl_user),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id}), 202
@@ -86,6 +88,8 @@ def run_automapping():
 @app.route('/api/automapping/runs/<int:run_id>', methods=['GET'])
 def get_automapping_run(run_id):
     try:
+        if not can_read('automapping_runs', run_id):
+            return jsonify({'error': 'Execução não encontrada'}), 404
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT * FROM automapping_runs WHERE id = ?', (run_id,))
@@ -104,6 +108,8 @@ def get_automapping_run(run_id):
 @app.route('/api/automapping/runs/<int:run_id>', methods=['DELETE'])
 def delete_automapping_run(run_id):
     try:
+        if not can_write('automapping_runs', run_id):
+            return jsonify({'error': 'Execução não encontrada'}), 404
         conn = get_db()
         c = conn.cursor()
         c.execute('DELETE FROM automapping_runs WHERE id = ?', (run_id,))
@@ -129,10 +135,12 @@ def list_automapping_runs():
 
         conn = get_db()
         c = conn.cursor()
-        c.execute('''SELECT id, company, country, industry, result_json, created_at
+        _vw, _vp = visible_where('automapping_runs')
+        c.execute(f'''SELECT id, company, country, industry, result_json, created_at
                      FROM automapping_runs
                      WHERE datetime(created_at) >= datetime('now', ?)
-                     ORDER BY datetime(created_at) DESC''', (f'-{days} days',))
+                       AND {_vw}
+                     ORDER BY datetime(created_at) DESC''', [f'-{days} days'] + _vp)
         rows = c.fetchall()
         conn.close()
 
@@ -605,11 +613,17 @@ def autotoca_chamado_juridico_robot():
         if reuse_history_id:
             conn = get_db()
             c = conn.cursor()
-            c.execute('SELECT * FROM chamado_juridico_history WHERE id = ?', (reuse_history_id,))
+            _vw, _vp = visible_where('chamado_juridico_history')
+            c.execute(
+                f'SELECT * FROM chamado_juridico_history WHERE id = ? AND {_vw}',
+                [reuse_history_id] + _vp
+            )
             row = c.fetchone()
             conn.close()
             if row:
                 reuse_row = dict_from_row(row)
+            else:
+                return jsonify({'error': 'Histórico não encontrado.'}), 404
 
         reuse_files = json.loads(reuse_row['files_json']) if reuse_row else {}
         # Reaproveitar um arquivo do histórico é opt-in por campo — o usuário
@@ -634,8 +648,10 @@ def autotoca_chamado_juridico_robot():
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            'INSERT INTO chamado_juridico_history (conta, payload_json, files_json) VALUES (?, ?, ?)',
-            (payload['conta'], json.dumps(payload, ensure_ascii=False), '{}')
+            '''INSERT INTO chamado_juridico_history
+               (conta, payload_json, files_json, owner_id) VALUES (?, ?, ?, ?)''',
+            (payload['conta'], json.dumps(payload, ensure_ascii=False), '{}',
+             _acl_owner_for_insert())
         )
         conn.commit()
         history_id = c.lastrowid
@@ -697,9 +713,11 @@ def _chamado_juridico_upload_url(stored_path):
 def autotoca_chamado_juridico_history_list():
     conn = get_db()
     c = conn.cursor()
+    _vw, _vp = visible_where('chamado_juridico_history')
     c.execute(
         'SELECT id, conta, proposta_original_name, created_at FROM chamado_juridico_history '
-        'ORDER BY created_at DESC LIMIT 50'
+        f'WHERE {_vw} ORDER BY created_at DESC LIMIT 50',
+        _vp
     )
     rows = [dict_from_row(r) for r in c.fetchall()]
     conn.close()
@@ -708,6 +726,8 @@ def autotoca_chamado_juridico_history_list():
 
 @app.route('/api/autotoca/chamado-juridico/history/<int:history_id>', methods=['GET'])
 def autotoca_chamado_juridico_history_get(history_id):
+    if not can_read('chamado_juridico_history', history_id):
+        return jsonify({'error': 'Histórico não encontrado.'}), 404
     conn = get_db()
     c = conn.cursor()
     c.execute('SELECT * FROM chamado_juridico_history WHERE id = ?', (history_id,))
@@ -745,4 +765,10 @@ def autotoca_teste_linkedin():
 
 @app.route('/uploads/autotoca/<path:filename>')
 def serve_autotoca_upload(filename):
+    parts = Path(filename.replace('\\', '/')).parts
+    if parts and parts[0] == 'chamado-juridico':
+        if len(parts) < 2 or not str(parts[1]).isdigit():
+            return jsonify({'error': 'Arquivo não encontrado.'}), 404
+        if not can_read('chamado_juridico_history', int(parts[1])):
+            return jsonify({'error': 'Arquivo não encontrado.'}), 404
     return send_from_directory(str(AUTOTOCA_UPLOAD_DIR), filename)

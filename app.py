@@ -1397,7 +1397,14 @@ SCHEMA_MIGRATIONS = [
         "DELETE FROM inbound_messages WHERE preview = '(mensagem sem texto)' AND responded_at IS NULL",
     ]),
     # -----------------------------------------------------------------------
-    # Migração 14 — Fundação multiusuário (Fase A do plano de migração web).
+    # Migração 20 — Fundação multiusuário (Fase A do plano de migração web).
+    #
+    # A faixa 20+ é intencional. Uma branch desktop experimental chegou a usar
+    # a versão 14 para outro schema; reutilizar o mesmo número fazia o runner
+    # pular users/organizations/shares e aplicar as etapas seguintes pela
+    # metade. O runner abaixo também reconhece o nome antigo nas versões 14–19
+    # para bancos de desenvolvimento que já haviam executado a primeira versão
+    # da Live.
     #
     # 100% ADITIVA E REVERSÍVEL: só cria tabelas novas e colunas `owner_id`
     # NULLABLE. Nenhum código existente é obrigado a conhecer `owner_id` — como
@@ -1414,7 +1421,7 @@ SCHEMA_MIGRATIONS = [
     #   - `users.entra_object_id` fica NULL; será preenchido no 1º login SSO
     #     (Fase 3), casando pelo e-mail. Nada do Azure é necessário agora.
     # -----------------------------------------------------------------------
-    (14, 'multiusuario_fase_a_users_orgs_shares_owner_id', [
+    (20, 'multiusuario_fase_a_users_orgs_shares_owner_id', [
         # --- Tabelas de identidade e compartilhamento ---
         '''CREATE TABLE IF NOT EXISTS organizations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1507,12 +1514,12 @@ SCHEMA_MIGRATIONS = [
     ]),
 
     # Fase 4 — owner_id nas duas tabelas "raiz-like" do domínio de contas que a
-    # migração 14 não cobriu: `account_archives` (lixeira de contas excluídas —
+    # migração 20 não cobriu: `account_archives` (lixeira de contas excluídas —
     # não tem pai vivo para herdar) e `account_planning_runs` (histórico de
     # planejamento por IA). Mesmo padrão aditivo/reversível da 14: coluna
     # NULLABLE + índice + backfill para o fundador. Sem elas, as rotas de
     # arquivo/planejamento não teriam como aplicar a visibilidade da Fase 4.
-    (15, 'multiusuario_fase_4_owner_id_account_side_tables', [
+    (21, 'multiusuario_fase_4_owner_id_account_side_tables', [
         'ALTER TABLE account_archives ADD COLUMN owner_id INTEGER REFERENCES users(id)',
         'ALTER TABLE account_planning_runs ADD COLUMN owner_id INTEGER REFERENCES users(id)',
         'CREATE INDEX IF NOT EXISTS idx_account_archives_owner ON account_archives(owner_id)',
@@ -1525,7 +1532,7 @@ SCHEMA_MIGRATIONS = [
     # (UUID gerado no cliente): a LISTA de sessões varria a tabela inteira e
     # vazava as conversas de todos os usuários. Chat é PESSOAL (por-usuário,
     # como o Kanban) — sem shares, sem visão-org de admin. Backfill = fundador.
-    (16, 'multiusuario_fase_4_owner_id_itoca_chat_history', [
+    (22, 'multiusuario_fase_4_owner_id_itoca_chat_history', [
         'ALTER TABLE itoca_chat_history ADD COLUMN owner_id INTEGER REFERENCES users(id)',
         'CREATE INDEX IF NOT EXISTS idx_itoca_chat_history_owner ON itoca_chat_history(owner_id)',
         'UPDATE itoca_chat_history SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
@@ -1535,7 +1542,7 @@ SCHEMA_MIGRATIONS = [
     # (por-usuário, como o Kanban): cada um vê sugestões geradas a partir do que
     # ELE vê. Sem owner_id, a lista de sugestões era única e global. Backfill =
     # fundador.
-    (17, 'multiusuario_fase_4_owner_id_daily_suggestions', [
+    (23, 'multiusuario_fase_4_owner_id_daily_suggestions', [
         'ALTER TABLE daily_suggestions ADD COLUMN owner_id INTEGER REFERENCES users(id)',
         'CREATE INDEX IF NOT EXISTS idx_daily_suggestions_owner ON daily_suggestions(owner_id)',
         'UPDATE daily_suggestions SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
@@ -1543,7 +1550,7 @@ SCHEMA_MIGRATIONS = [
 
     # Fase 4 — owner_id nos templates de mensagem. Decisão: privados por-dono,
     # com opção de compartilhar (shares), como wiki/portfolio. Backfill = fundador.
-    (18, 'multiusuario_fase_4_owner_id_message_templates', [
+    (24, 'multiusuario_fase_4_owner_id_message_templates', [
         'ALTER TABLE message_templates ADD COLUMN owner_id INTEGER REFERENCES users(id)',
         'CREATE INDEX IF NOT EXISTS idx_message_templates_owner ON message_templates(owner_id)',
         'UPDATE message_templates SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
@@ -1553,10 +1560,42 @@ SCHEMA_MIGRATIONS = [
     # agendamentos é PESSOAL (por-usuário) — cada um vê/gerencia só os SEUS envios
     # pendentes, como o Radar/Kanban. As activities/commitments que o envio gera já
     # herdam o owner via os helpers. Backfill = fundador.
-    (19, 'multiusuario_fase_4_owner_id_scheduled_sends', [
+    (25, 'multiusuario_fase_4_owner_id_scheduled_sends', [
         'ALTER TABLE scheduled_sends ADD COLUMN owner_id INTEGER REFERENCES users(id)',
         'CREATE INDEX IF NOT EXISTS idx_scheduled_sends_owner ON scheduled_sends(owner_id)',
         'UPDATE scheduled_sends SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
+    # Fase 4.5 — históricos pessoais que haviam ficado globais na primeira
+    # passagem da ACL. background_tasks recebe owner_id para que o endpoint de
+    # polling também possa validar o solicitante.
+    (26, 'multiusuario_fase_4_5_personal_histories_and_tasks', [
+        'ALTER TABLE automapping_runs ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE chamado_juridico_history ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE background_tasks ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_automapping_runs_owner ON automapping_runs(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_chamado_juridico_history_owner ON chamado_juridico_history(owner_id)',
+        'CREATE INDEX IF NOT EXISTS idx_background_tasks_owner ON background_tasks(owner_id)',
+        'UPDATE automapping_runs SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE chamado_juridico_history SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+        'UPDATE background_tasks SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
+    # Perfil e preferências deixam de ser singleton na web. O desktop continua
+    # lendo user_profile; com auth ligado, estes campos em users são a fonte.
+    (27, 'multiusuario_fase_4_5_user_profile_preferences', [
+        'ALTER TABLE users ADD COLUMN phone TEXT',
+        'ALTER TABLE users ADD COLUMN boss_name TEXT',
+        'ALTER TABLE users ADD COLUMN boss_email TEXT',
+        'ALTER TABLE users ADD COLUMN ui_theme TEXT',
+        '''UPDATE users
+           SET phone = COALESCE(phone, (SELECT phone FROM user_profile WHERE id = 1)),
+               boss_name = COALESCE(boss_name, (SELECT boss_name FROM user_profile WHERE id = 1)),
+               boss_email = COALESCE(boss_email, (SELECT boss_email FROM user_profile WHERE id = 1)),
+               ui_theme = COALESCE(
+                   ui_theme,
+                   (SELECT value FROM app_settings WHERE key = 'ui_color_theme'),
+                   'verde-classico'
+               )
+           WHERE id = (SELECT MIN(id) FROM users)''',
     ]),
 ]
 
@@ -1961,6 +2000,39 @@ def _open_main_db(*, timeout=15.0, row_factory=False, foreign_keys=False):
     )
 
 
+_MIGRATION_ADD_COLUMN_RE = re.compile(
+    r'^\s*ALTER\s+TABLE\s+(?P<table>[A-Za-z_]\w*)\s+ADD\s+COLUMN\s+'
+    r'(?P<column>[A-Za-z_]\w*)\b',
+    re.I | re.S,
+)
+
+
+def _migration_execute_statement(cursor, statement):
+    """Executa um statement de migration com ADD COLUMN idempotente.
+
+    SQLite não possui ADD COLUMN IF NOT EXISTS em todas as versões suportadas.
+    A checagem via PRAGMA funciona nos dois backends porque o wrapper PostgreSQL
+    traduz PRAGMA table_info para information_schema.
+    """
+    match = _MIGRATION_ADD_COLUMN_RE.match(statement or '')
+    if match:
+        table = match.group('table')
+        column = match.group('column')
+        cursor.execute(f'PRAGMA table_info({table})')
+        columns = {
+            (row.get('name') if isinstance(row, dict) else row[1])
+            for row in cursor.fetchall()
+        }
+        if column in columns:
+            logger.info(
+                '[Database] Coluna %s.%s já existe; statement idempotente ignorado.',
+                table,
+                column,
+            )
+            return
+    cursor.execute(statement)
+
+
 def _run_schema_migrations():
     # As migrations em SCHEMA_MIGRATIONS são escritas em SQLite e traduzidas
     # para PostgreSQL na borda pelo wrapper de conexão (sub-PR 2b). Backends
@@ -1974,24 +2046,57 @@ def _run_schema_migrations():
             applied_at TEXT
         )''')
         conn.commit()
-        c.execute('SELECT MAX(version) FROM schema_version')
-        row = c.fetchone()
-        current = row[0] if row and row[0] else 0
+        c.execute('SELECT version, name FROM schema_version ORDER BY version')
+        rows = c.fetchall()
+        # O psycopg abre transação até para SELECT. Encerra essa leitura antes
+        # do BEGIN explícito de cada migration.
+        conn.commit()
+        applied_by_version = {
+            (row.get('version') if isinstance(row, dict) else row[0]):
+            (row.get('name') if isinstance(row, dict) else row[1])
+            for row in rows
+        }
+        applied_by_name = {
+            name: version for version, name in applied_by_version.items() if name
+        }
         for version, name, statements in SCHEMA_MIGRATIONS:
-            if version <= current:
+            recorded_name = applied_by_version.get(version)
+            if recorded_name is not None:
+                if recorded_name != name:
+                    raise RuntimeError(
+                        f'Conflito de migration: versão {version} está registrada '
+                        f'como {recorded_name!r}, mas o código espera {name!r}.'
+                    )
                 continue
-            if statements is None:
-                # Baseline legada: init_db() usa a própria conexão.
-                init_db()
+            previous_version = applied_by_name.get(name)
+            try:
+                conn.execute('BEGIN')
+                if previous_version is None:
+                    if statements is None:
+                        # Baseline legada: init_db() usa a própria conexão.
+                        init_db()
+                    else:
+                        for stmt in statements:
+                            _migration_execute_statement(c, stmt)
+                c.execute(
+                    'INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)',
+                    (version, name, datetime.now().isoformat(timespec='seconds'))
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            applied_by_version[version] = name
+            applied_by_name[name] = version
+            if previous_version is not None:
+                logger.info(
+                    '[Database] Migração %s (%s) reconciliada da versão antiga %s.',
+                    version,
+                    name,
+                    previous_version,
+                )
             else:
-                for stmt in statements:
-                    c.execute(stmt)
-            c.execute(
-                'INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)',
-                (version, name, datetime.now().isoformat(timespec='seconds'))
-            )
-            conn.commit()
-            logger.info(f'[Database] Migração {version} ({name}) aplicada')
+                logger.info(f'[Database] Migração {version} ({name}) aplicada')
         # No PostgreSQL, aplica as FKs adiadas agora que todas as tabelas
         # (baseline + incrementais) já existem, e cria os objetos de emulação
         # (collation nocase + funções de data) usados pelas queries de runtime.
@@ -2001,7 +2106,7 @@ def _run_schema_migrations():
             # Invalida o cache de tabelas-com-id (emulação de lastrowid): ele
             # pode ter sido montado no MEIO das migrations, antes de tabelas de
             # migrations posteriores existirem (ex.: users/organizations/shares
-            # na 14). Sem isso, um INSERT de runtime nessas tabelas não recebe
+            # na 20). Sem isso, um INSERT de runtime nessas tabelas não recebe
             # RETURNING id e cursor.lastrowid vem None. O 1º INSERT de runtime
             # reconstrói o cache já com o schema completo.
             global _PG_ID_TABLES
@@ -2062,7 +2167,7 @@ def _fetch_user_row(conn, user_id):
 
 
 def _founder_user_id(conn):
-    """Fundador da org = menor id em `users` (semeado na migração 14 a partir do
+    """Fundador da org = menor id em `users` (semeado na migração 20 a partir do
     user_profile id=1). É o dono padrão quando o login está desligado."""
     c = conn.cursor()
     c.execute('SELECT id FROM users ORDER BY id LIMIT 1')
@@ -2103,7 +2208,8 @@ _ACL_ROOT_TABLES = {
     'kanban_columns', 'wiki_entries', 'wiki_documents', 'portfolio_offers',
     'iata_records', 'environment_cards', 'account_archives',
     'account_planning_runs', 'itoca_chat_history', 'daily_suggestions',
-    'message_templates', 'scheduled_sends',
+    'message_templates', 'scheduled_sends', 'automapping_runs',
+    'chamado_juridico_history',
 }
 
 # Tabelas-FILHAS: não têm owner_id próprio — herdam a dona da RAIZ ancestral via
@@ -2207,7 +2313,7 @@ def owned_where(record_type, alias=None, user=None):
     return f"{_acl_effective_owner_expr(q)} = ?", [user['id']]
 
 
-def _acl_visible_sql(record_type, alias=None, mode='read'):
+def _acl_visible_sql(record_type, alias=None, mode='read', user=None):
     """Versão SEM parâmetros de visible_where — devolve só a string SQL, com os
     placeholders `?` já substituídos por literais. Existe para embutir a cláusula
     de visibilidade em agregados do Home que são montados por f-string sem lista
@@ -2217,7 +2323,7 @@ def _acl_visible_sql(record_type, alias=None, mode='read'):
     Seguro: os params de visible_where são sempre inteiros do nosso banco
     (ids/org_id) ou o próprio record_type (literal validado do nosso código,
     [a-z_]). Um assert garante isso antes de inlinar."""
-    sql, params = visible_where(record_type, alias=alias, mode=mode)
+    sql, params = visible_where(record_type, alias=alias, mode=mode, user=user)
     out, pi = [], 0
     for ch in sql:
         if ch == '?':
@@ -2340,6 +2446,28 @@ def current_user_id():
     if user and user.get('id'):
         return user['id']
     return 1
+
+
+def _job_delivery_users():
+    """Usuários destinatários dos jobs pessoais.
+
+    Na web retorna todos os usuários provisionados com e-mail SSO; no desktop,
+    apenas o fundador, preservando o comportamento mono-usuário.
+    """
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        if _auth_enabled():
+            c.execute(
+                """SELECT * FROM users
+                   WHERE email IS NOT NULL AND TRIM(email) <> ''
+                   ORDER BY id"""
+            )
+        else:
+            c.execute('SELECT * FROM users ORDER BY id LIMIT 1')
+        return [dict_from_row(row) for row in c.fetchall()]
+    finally:
+        conn.close()
 
 
 def _reset_request_user_cache():
@@ -4656,13 +4784,45 @@ def preview_relation_report_data():
 
 ITOCA_EXCLUDED_TABLES = {
     'sqlite_sequence',
+    'schema_version',
     'app_settings',
+    'organizations',
+    'users',
+    'user_profile',
+    'shares',
+    'user_integrations',
+    'background_tasks',
+    'outlook_processed_emails',
+    'whatsapp_sync_log',
     'itoca_chat_history',
     'automapping_runs',
     'status_rules',
     'job_groupings',
     'job_grouping_positions',
 }
+
+
+def _database_table_names(cursor):
+    """Lista tabelas do schema atual sem depender do catálogo do SQLite."""
+    if DB_BACKEND == 'postgresql':
+        cursor.execute(
+            """SELECT table_name AS name
+               FROM information_schema.tables
+               WHERE table_schema = current_schema()
+                 AND table_type = 'BASE TABLE'
+               ORDER BY table_name"""
+        )
+    else:
+        cursor.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    names = []
+    for row in cursor.fetchall():
+        parsed = dict_from_row(row) or {}
+        if parsed.get('name'):
+            names.append(parsed['name'])
+    return names
 
 
 # Mapa de sinônimos para expansão semântica nas buscas do RAG
@@ -4765,8 +4925,7 @@ def _itoca_search_context(question, limit=18):
         return []
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-    tables = [row['name'] for row in cursor.fetchall() if row['name'] not in ITOCA_EXCLUDED_TABLES]
+    tables = [name for name in _database_table_names(cursor) if name not in ITOCA_EXCLUDED_TABLES]
     results = []
     seen = set()
     like_values = [f'%{token}%' for token in tokens[:6]]
@@ -5714,6 +5873,11 @@ def _itoca_build_environment_items(conn):
 
 def _itoca_build_user_profile_item(conn):
     """Gera item fixo com o perfil do usuário para sempre estar no contexto."""
+    # O snapshot RAG é compartilhado entre processos. Na web, inserir aqui um
+    # perfil pessoal faria o perfil de quem gerou o índice vazar aos demais.
+    # O frontend poderá injetar o perfil corrente por request na F6.
+    if _auth_enabled():
+        return None
     cursor = conn.cursor()
     try:
         cursor.execute('SELECT full_name, nickname, position, email, phone, boss_name, boss_email FROM user_profile WHERE id = 1')
@@ -5780,10 +5944,9 @@ def _itoca_build_base_snapshot(max_tables=120, max_rows_per_table=250, max_items
 
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     tables = [
-        row['name'] for row in cursor.fetchall()
-        if row['name'] not in ITOCA_EXCLUDED_TABLES and row['name'] not in _SPECIALIZED_TABLES
+        name for name in _database_table_names(cursor)
+        if name not in ITOCA_EXCLUDED_TABLES and name not in _SPECIALIZED_TABLES
     ][:max_tables]
 
     _progress(5, f'Lendo {len(tables)} tabelas genéricas do banco de dados...')
@@ -8245,14 +8408,17 @@ def _detect_followup_from_text(c, client_id, activity_id, client_name, text, own
     return 1
 
 
-def _outlook_send_mail(to, subject, body_html, attachments=None):
+def _outlook_send_mail(to, subject, body_html, attachments=None, user_id=None):
     """Envia e-mail pelo Outlook do próprio usuário via Microsoft Graph
     (Bloco 13). Se `to` for vazio, envia para o e-mail do próprio usuário.
     attachments: [{'name', 'content_bytes' (base64), 'content_type'}]."""
     graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+    resolved_user_id = user_id if user_id is not None else current_user_id()
     conn = get_db()
     try:
-        access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=current_user_id(), settings=graph_settings)
+        access_token = outlook_graph_get_valid_access_token(
+            conn=conn, user_id=resolved_user_id, settings=graph_settings
+        )
     finally:
         conn.close()
     recipient = (to or '').strip() or _graph_get_me_email(access_token)
@@ -8277,6 +8443,7 @@ def _outlook_confirm_async(task_id, activities_to_import, owner_id=None, user=No
         conn = get_db()
         c = conn.cursor()
 
+        processed_user_id = owner_id or 1
         for i, act in enumerate(activities_to_import):
             _outlook_confirm_task_set(task_id, {
                 'step': f'Processando thread {i + 1}/{total}...',
@@ -8307,8 +8474,9 @@ def _outlook_confirm_async(task_id, activities_to_import, owner_id=None, user=No
             if message_ids:
                 placeholders = ','.join('?' * len(message_ids))
                 c.execute(
-                    f'SELECT COUNT(*) AS n FROM outlook_processed_emails WHERE message_id IN ({placeholders})',
-                    tuple(message_ids)
+                    f'''SELECT COUNT(*) AS n FROM outlook_processed_emails
+                        WHERE user_id = ? AND message_id IN ({placeholders})''',
+                    (processed_user_id, *message_ids)
                 )
                 row_n = c.fetchone()
                 if row_n and row_n['n'] >= len(message_ids):
@@ -8330,8 +8498,8 @@ def _outlook_confirm_async(task_id, activities_to_import, owner_id=None, user=No
                 for mid in message_ids:
                     try:
                         c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
-                                  '(user_id, message_id, conversation_id, client_id) VALUES (1, ?, ?, ?)',
-                                  (mid, conv_id, client_id))
+                                  '(user_id, message_id, conversation_id, client_id) VALUES (?, ?, ?, ?)',
+                                  (processed_user_id, mid, conv_id, client_id))
                     except Exception as e:
                         logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
                 continue
@@ -8397,8 +8565,8 @@ def _outlook_confirm_async(task_id, activities_to_import, owner_id=None, user=No
             for mid in message_ids:
                 try:
                     c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
-                              '(user_id, message_id, conversation_id, client_id, activity_id) VALUES (1, ?, ?, ?, ?)',
-                              (mid, conv_id, client_id, activity_id))
+                              '(user_id, message_id, conversation_id, client_id, activity_id) VALUES (?, ?, ?, ?, ?)',
+                              (processed_user_id, mid, conv_id, client_id, activity_id))
                 except Exception as e:
                     logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
 
@@ -9676,6 +9844,11 @@ def _merge_clients_from_db(temp_db_path):
 @app.route('/api/backup/database', methods=['GET'])
 def backup_database():
     try:
+        if DB_BACKEND != 'sqlite':
+            return jsonify({
+                'error': 'O backup por arquivo .db existe apenas no modo desktop/SQLite. '
+                         'No ambiente web use o backup gerenciado do PostgreSQL.'
+            }), 409
         from flask import send_file
         import tempfile
         import shutil
@@ -9716,6 +9889,11 @@ def backup_database():
 @app.route('/api/restore/database', methods=['POST'])
 def restore_database():
     try:
+        if DB_BACKEND != 'sqlite':
+            return jsonify({
+                'error': 'A restauração de arquivo .db existe apenas no modo desktop/SQLite. '
+                         'No ambiente web use uma restauração ou ETL administrada do PostgreSQL.'
+            }), 409
         if 'file' not in request.files:
             return jsonify({'error': 'Nenhum arquivo enviado'}), 400
         
@@ -10168,22 +10346,26 @@ _bg_tasks_lock = threading.Lock()
 # Tasks registradas aqui têm estado mínimo espelhado na tabela background_tasks
 # (sobrevive a restart — ao subir, 'processing' antigas viram 'interrupted').
 _bg_persistent_kinds: dict = {}
+_bg_task_owners: dict = {}
 
 
 def _bg_task_register_persistent(task_id, kind):
     _bg_persistent_kinds[task_id] = kind
+    if has_request_context() and _auth_enabled():
+        _bg_task_owners[task_id] = current_user_id()
 
 
 def _bg_task_persist(task_id, kind, task):
     try:
         conn = get_db()
         conn.execute(
-            'INSERT INTO background_tasks (task_id, kind, status, step, progress, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) '
+            'INSERT INTO background_tasks (task_id, kind, status, step, progress, owner_id, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) '
             'ON CONFLICT(task_id) DO UPDATE SET status = excluded.status, step = excluded.step, '
             'progress = excluded.progress, updated_at = CURRENT_TIMESTAMP',
             (task_id, kind, task.get('status') or 'processing',
-             task.get('step'), int(task.get('progress') or 0))
+             task.get('step'), int(task.get('progress') or 0),
+             _bg_task_owners.get(task_id))
         )
         conn.commit()
         conn.close()
@@ -10193,6 +10375,8 @@ def _bg_task_persist(task_id, kind, task):
 
 def _bg_task_set(task_id, updates):
     with _bg_tasks_lock:
+        if task_id not in _bg_task_owners and has_request_context() and _auth_enabled():
+            _bg_task_owners[task_id] = current_user_id()
         task = _bg_tasks.get(task_id, {})
         task.update(updates)
         _bg_tasks[task_id] = task
@@ -10204,6 +10388,10 @@ def _bg_task_set(task_id, updates):
 
 def _bg_task_get(task_id):
     with _bg_tasks_lock:
+        if _auth_enabled() and has_request_context():
+            owner_id = _bg_task_owners.get(task_id)
+            if owner_id is not None and owner_id != current_user_id():
+                return {}
         return dict(_bg_tasks.get(task_id) or {})
 
 
@@ -10213,6 +10401,7 @@ def _bg_task_cleanup(task_id, delay=300):
         _time.sleep(delay)
         with _bg_tasks_lock:
             _bg_tasks.pop(task_id, None)
+            _bg_task_owners.pop(task_id, None)
     threading.Thread(target=_do, daemon=True).start()
 
 
@@ -11317,17 +11506,20 @@ def linkedin_summarize():
 # ---------------------------------------------------------------------------
 
 
-def _automapping_process_async(task_id, company, country, industry, force, request_id):
+def _automapping_process_async(task_id, company, country, industry, force, request_id,
+                               owner_id=None, acl_user=None):
     try:
         _bg_task_set(task_id, {'step': 'Verificando cache...', 'progress': 10})
         query_key = _normalize_automapping_key(company, country, industry)
         conn = get_db()
         c = conn.cursor()
-        c.execute('''SELECT id, result_json, created_at FROM automapping_runs
+        _vw, _vp = visible_where('automapping_runs', user=acl_user)
+        c.execute(f'''SELECT id, result_json, created_at FROM automapping_runs
                      WHERE query_key = ?
                        AND datetime(created_at) >= datetime('now', '-20 days')
+                       AND {_vw}
                      ORDER BY datetime(created_at) DESC
-                     LIMIT 1''', (query_key,))
+                     LIMIT 1''', [query_key] + _vp)
         cached = c.fetchone()
 
         if cached and not force:
@@ -11394,8 +11586,13 @@ def _automapping_process_async(task_id, company, country, industry, force, reque
             return
 
         _bg_task_set(task_id, {'step': 'Salvando resultado...', 'progress': 90})
-        c.execute('INSERT INTO automapping_runs (company, country, industry, query_key, result_json) VALUES (?, ?, ?, ?, ?)',
-                  (company, country, industry, query_key, json.dumps(result_payload, ensure_ascii=False)))
+        c.execute(
+            '''INSERT INTO automapping_runs
+               (company, country, industry, query_key, result_json, owner_id)
+               VALUES (?, ?, ?, ?, ?, ?)''',
+            (company, country, industry, query_key,
+             json.dumps(result_payload, ensure_ascii=False), owner_id)
+        )
         run_id = c.lastrowid
         conn.commit()
         conn.close()

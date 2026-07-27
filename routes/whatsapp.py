@@ -638,7 +638,10 @@ def _scheduled_send_execute(c, row):
     if channel == 'email':
         body_html = '<p>' + html.escape(row['message']).replace('\n', '<br>') + '</p>'
         try:
-            _outlook_send_mail(row['email_to'], row['subject'] or 'Mensagem', body_html)
+            _outlook_send_mail(
+                row['email_to'], row['subject'] or 'Mensagem', body_html,
+                user_id=row.get('owner_id')
+            )
         except Exception as e:
             return False, str(e)
         _scheduled_send_promote_activity(c, row)

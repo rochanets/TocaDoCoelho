@@ -14,7 +14,7 @@ RADAR_MAX_ACTIVE = 8            # sugestões ativas exibidas por dia
 RADAR_KANBAN_STALL_DAYS = 5     # dias parado para card de urgência Alta
 
 
-def _radar_generate_ranked(c):
+def _radar_generate_ranked(c, acl_user=None):
     """Gera a lista completa de sugestões candidatas, ordenada por score
     (maior primeiro). Consultas agregadas — sem N+1 por cliente."""
     now_dt = datetime.now()
@@ -24,7 +24,7 @@ def _radar_generate_ranked(c):
 
     # ---- 1. Contatos atrasados (threshold por cargo) + nunca contatados ----
     # Radar é por-usuário: só gera sobre os contatos VISÍVEIS (owner/share/admin).
-    _clw, _clp = visible_where('clients', alias='cl')
+    _clw, _clp = visible_where('clients', alias='cl', user=acl_user)
     c.execute(f"""
         SELECT cl.id, cl.name, cl.company, cl.position, cl.last_activity_date,
                COALESCE(cl.is_target, 0) AS is_target,
@@ -59,7 +59,7 @@ def _radar_generate_ranked(c):
         })
 
     # ---- 2. Follow-ups vencidos sem atividade posterior (fecha o loop) ----
-    _cow, _cop = visible_where('commitments', alias='co')
+    _cow, _cop = visible_where('commitments', alias='co', user=acl_user)
     c.execute(f"""
         SELECT co.id AS commitment_id, co.title, co.due_date,
                cl.id AS client_id, cl.name, cl.company,
@@ -87,7 +87,7 @@ def _radar_generate_ranked(c):
 
     # ---- 3. Cards de Kanban com urgência Alta parados há mais de N dias ----
     # Kanban é por-usuário → owned_where (card herda a dona da coluna).
-    _kow, _kop = owned_where('kanban_cards', 'k')
+    _kow, _kop = owned_where('kanban_cards', 'k', user=acl_user)
     c.execute(f"""
         SELECT k.id, k.title, k.updated_at,
                CAST(julianday('now', 'localtime') - julianday(k.updated_at) AS INTEGER) AS stalled_days,
@@ -114,7 +114,7 @@ def _radar_generate_ranked(c):
 
     # ---- 3a. Mudança de emprego detectada pela extensão (Bloco 11) ----
     # job_change_events é filha de clients → só as do contato visível.
-    _jcw, _jcp = visible_where('clients', alias='cl')
+    _jcw, _jcp = visible_where('clients', alias='cl', user=acl_user)
     c.execute(f"""
         SELECT ev.id, ev.empresa_antiga, ev.empresa_nova, ev.cargo_novo,
                ev.potential_new_account, cl.id AS client_id, cl.name
@@ -140,7 +140,7 @@ def _radar_generate_ranked(c):
     # ---- 3b. Multithreading: contas target single-threaded (Bloco 10) ----
     try:
         grouping_map = _thread_grouping_map(c)
-        _acw, _acp = visible_where('accounts')
+        _acw, _acp = visible_where('accounts', user=acl_user)
         c.execute(f"SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1 AND {_acw}", _acp)
         for acc in c.fetchall():
             score = _account_thread_score(c, acc['id'], acc['name'], 1, grouping_map, get_thresholds)
@@ -162,10 +162,10 @@ def _radar_generate_ranked(c):
 
     # ---- 3c. Whitespace de ofertas em contas target (Bloco 12) ----
     try:
-        _ofw, _ofp = visible_where('portfolio_offers')
+        _ofw, _ofp = visible_where('portfolio_offers', user=acl_user)
         c.execute(f"SELECT COUNT(*) AS n FROM portfolio_offers WHERE {_ofw}", _ofp)
         if (dict_from_row(c.fetchone()) or {}).get('n', 0) > 0:
-            _waw, _wap = visible_where('accounts', alias='a')
+            _waw, _wap = visible_where('accounts', alias='a', user=acl_user)
             c.execute(f"""SELECT a.id, a.name FROM accounts a
                          WHERE COALESCE(a.is_target, 0) = 1 AND {_waw}
                            AND EXISTS (SELECT 1 FROM account_presences p
@@ -192,7 +192,7 @@ def _radar_generate_ranked(c):
         logger.debug(f'[Radar] whitespace indisponível: {e}')
 
     # ---- 4. Cadastros incompletos (baixa prioridade, consulta agregada) ----
-    _icw, _icp = visible_where('clients')
+    _icw, _icp = visible_where('clients', user=acl_user)
     c.execute(f"""
         SELECT id, name, company, email, phone, photo_url,
                COALESCE(is_target, 0) AS is_target
@@ -1318,7 +1318,7 @@ def _context_trigger_scan():
     conn = get_db()
     c = conn.cursor()
     # Job de fundo (sem request): processa todas as contas target e atribui cada
-    # sugestão ao DONO da conta (daily_suggestions é por-usuário desde a migr. 17).
+    # sugestão ao DONO da conta (daily_suggestions é por-usuário desde a migr. 23).
     c.execute("SELECT id, name, owner_id FROM accounts WHERE COALESCE(is_target, 0) = 1 ORDER BY name LIMIT 12")
     target_accounts = c.fetchall()
     today = datetime.now().strftime('%Y-%m-%d')
@@ -1457,7 +1457,7 @@ def suggestion_generate_draft(suggestion_id):
 # Revisão de sexta + plano de segunda (Bloco 14)
 # ===========================================================================
 
-def _weekly_review_data(c):
+def _weekly_review_data(c, acl_user=None):
     """Compila os dados reais da semana: toques, contatos que esfriaram,
     follow-ups criados vs. cumpridos e sugestões pendentes do Radar."""
     now_dt = datetime.now()
@@ -1465,7 +1465,7 @@ def _weekly_review_data(c):
     get_thresholds = _home_status_thresholds(c)
 
     # Semana por-usuário: atividades/contatos/compromissos/sugestões escopados.
-    c.execute(f"SELECT COUNT(*) AS n FROM activities WHERE activity_date >= ? AND {_acl_visible_sql('activities', 'activities')}",
+    c.execute(f"SELECT COUNT(*) AS n FROM activities WHERE activity_date >= ? AND {_acl_visible_sql('activities', 'activities', user=acl_user)}",
               (week_ago.strftime('%Y-%m-%d %H:%M:%S'),))
     touches = (dict_from_row(c.fetchone()) or {}).get('n', 0)
 
@@ -1473,7 +1473,7 @@ def _weekly_review_data(c):
     cooled = []
     c.execute(f"""SELECT id, name, company, position, last_activity_date FROM clients
                  WHERE COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
-                   AND last_activity_date IS NOT NULL AND {_acl_visible_sql('clients', 'clients')}""")
+                   AND last_activity_date IS NOT NULL AND {_acl_visible_sql('clients', 'clients', user=acl_user)}""")
     for row in c.fetchall():
         green, yellow = get_thresholds(row['position'])
         status_now, _ = _home_status_for(row['last_activity_date'], green, yellow, now_dt)
@@ -1482,19 +1482,19 @@ def _weekly_review_data(c):
             cooled.append({'id': row['id'], 'name': row['name'], 'company': row['company'],
                            'status': status_now})
 
-    c.execute(f"SELECT COUNT(*) AS n FROM commitments co WHERE created_at >= ? AND {_acl_visible_sql('commitments', 'co')}",
+    c.execute(f"SELECT COUNT(*) AS n FROM commitments co WHERE created_at >= ? AND {_acl_visible_sql('commitments', 'co', user=acl_user)}",
               (week_ago.strftime('%Y-%m-%d %H:%M:%S'),))
     fups_created = (dict_from_row(c.fetchone()) or {}).get('n', 0)
     c.execute(f"""SELECT COUNT(*) AS n FROM commitments co
                  WHERE co.due_date >= ? AND co.due_date <= ?
-                   AND {_acl_visible_sql('commitments', 'co')}
+                   AND {_acl_visible_sql('commitments', 'co', user=acl_user)}
                    AND EXISTS (SELECT 1 FROM activities a
                                WHERE a.client_id = co.client_id
                                  AND date(a.activity_date) >= co.due_date)""",
               (week_ago.strftime('%Y-%m-%d'), now_dt.strftime('%Y-%m-%d')))
     fups_done = (dict_from_row(c.fetchone()) or {}).get('n', 0)
 
-    _dw, _dp = owned_where('daily_suggestions')   # radar é pessoal (owned, como na 4.9a)
+    _dw, _dp = owned_where('daily_suggestions', user=acl_user)   # radar é pessoal
     c.execute(f"""SELECT title, suggestion_type FROM daily_suggestions
                  WHERE date = ? AND completed = 0
                    AND (snoozed_until IS NULL OR snoozed_until <= ?)
@@ -1504,7 +1504,7 @@ def _weekly_review_data(c):
     pending = [dict(r) for r in c.fetchall()]
 
     # Plano da próxima semana: ranking do Radar distribuído pelos dias úteis
-    ranked = _radar_generate_ranked(c)[:10]
+    ranked = _radar_generate_ranked(c, acl_user=acl_user)[:10]
     weekdays = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta']
     plan = []
     for i, sug in enumerate(ranked):
@@ -1563,21 +1563,14 @@ def _weekly_plan_text(data):
     return '\n'.join(lines)
 
 
-def _friday_review_job():
-    """Sexta-feira após o meio-dia (hora configurável): compila revisão da
-    semana + plano da próxima e envia por e-mail (mecanismo do Bloco 13)."""
-    now = datetime.now()
-    if now.weekday() != 4:  # 4 = sexta
-        return 'skip'
-    try:
-        hour = int(_resolve_setting('weekly_review_hour', 'WEEKLY_REVIEW_HOUR') or 12)
-    except Exception:
-        hour = 12
-    if now.hour < hour:
-        return 'skip'
+def _send_weekly_review_for_user(acl_user, subject_prefix='Revisão de sexta + plano de segunda'):
+    """Gera e envia a revisão semanal de um único usuário."""
+    if not acl_user or not (acl_user.get('email') or '').strip():
+        return False
     conn = get_db()
-    data = _weekly_review_data(conn.cursor())
+    data = _weekly_review_data(conn.cursor(), acl_user=acl_user)
     conn.close()
+    now = datetime.now()
     date_label = now.strftime('%d/%m/%Y')
     sections = [
         ('Revisão da semana', _weekly_review_text(data)),
@@ -1593,7 +1586,34 @@ def _friday_review_job():
             + (' (PDF em anexo)' if attachments else '') + ':</p>'
             + ''.join(f'<h3>{html.escape(s[0])}</h3><pre style="white-space:pre-wrap; font-family:inherit;">{html.escape(s[1])}</pre>'
                       for s in sections))
-    _outlook_send_mail(None, f'🐇 Revisão de sexta + plano de segunda — {date_label}', body, attachments)
+    _outlook_send_mail(
+        acl_user['email'], f'🐇 {subject_prefix} — {date_label}', body, attachments,
+        user_id=acl_user['id']
+    )
+    return True
+
+
+def _friday_review_job():
+    """Sexta-feira após o meio-dia (hora configurável): compila revisão da
+    semana + plano da próxima e envia por e-mail (mecanismo do Bloco 13)."""
+    now = datetime.now()
+    if now.weekday() != 4:  # 4 = sexta
+        return 'skip'
+    try:
+        hour = int(_resolve_setting('weekly_review_hour', 'WEEKLY_REVIEW_HOUR') or 12)
+    except Exception:
+        hour = 12
+    if now.hour < hour:
+        return 'skip'
+    users = [current_user()] if has_request_context() else _job_delivery_users()
+    sent = 0
+    for acl_user in users:
+        try:
+            sent += int(_send_weekly_review_for_user(acl_user))
+        except Exception as e:
+            uid = (acl_user or {}).get('id')
+            logger.exception(f'[WeeklyReview] Falha no job do user_id={uid}: {e}')
+    return {'sent': sent, 'users': len(users)}
 
 
 _register_scheduled_job('weekly_review_last_run', 1, _friday_review_job)
@@ -1603,25 +1623,9 @@ _register_scheduled_job('weekly_review_last_run', 1, _friday_review_job)
 def week_review_send_now():
     """Dispara manualmente o e-mail de revisão (ignora dia/hora)."""
     try:
-        conn = get_db()
-        data = _weekly_review_data(conn.cursor())
-        conn.close()
-        now = datetime.now()
-        date_label = now.strftime('%d/%m/%Y')
-        sections = [
-            ('Revisão da semana', _weekly_review_text(data)),
-            ('Plano da próxima semana (pré-priorizado pelo Radar do Dia)', _weekly_plan_text(data)),
-        ]
-        pdf_bytes = _briefings_to_pdf(f'Revisão de sexta — {date_label}', sections)
-        attachments = []
-        if pdf_bytes:
-            attachments.append({'name': f'revisao-semana-{now.strftime("%Y-%m-%d")}.pdf',
-                                'content_bytes': base64.b64encode(pdf_bytes).decode('ascii'),
-                                'content_type': 'application/pdf'})
-        body = ('<p>Segue a revisão da semana e o plano de segunda:</p>'
-                + ''.join(f'<h3>{html.escape(s[0])}</h3><pre style="white-space:pre-wrap; font-family:inherit;">{html.escape(s[1])}</pre>'
-                          for s in sections))
-        _outlook_send_mail(None, f'🐇 Revisão da semana — {date_label}', body, attachments)
+        if not _send_weekly_review_for_user(
+                current_user(), subject_prefix='Revisão da semana'):
+            return jsonify({'ok': False, 'error': 'Usuário sem e-mail SSO.'}), 409
         return jsonify({'ok': True})
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/week-review/send-email: {e}')

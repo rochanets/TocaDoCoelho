@@ -1,4 +1,4 @@
-"""Testes da migração 14 — fundação multiusuário (Fase A).
+"""Testes da migração 20 — fundação multiusuário (Fase A).
 
 Cobre dois cenários:
   1. Estrutura: tabelas users/organizations/shares criadas, coluna owner_id
@@ -135,8 +135,8 @@ def test_backfill_founder_and_owner_id(tmp_path, monkeypatch):
     assert 'owner_id' not in _columns(conn, 'clients')
     conn.close()
 
-    # 3. Aplica a migração 14.
-    _apply_migrations_up_to(path, 14)
+    # 3. Aplica a migração 20.
+    _apply_migrations_up_to(path, 20)
 
     # 4. Valida fundador + org + backfill.
     conn = sqlite3.connect(str(path))
@@ -170,11 +170,54 @@ def test_migration_idempotent_on_empty_db(tmp_path, monkeypatch):
     """Banco novo sem user_profile: migração roda sem erro, sem fundador."""
     path = tmp_path / 'fresh.db'
     monkeypatch.setattr(toca, 'DB_PATH', path)
-    _apply_migrations_up_to(path, 14)
+    _apply_migrations_up_to(path, 20)
     conn = sqlite3.connect(str(path))
     try:
         # Org é sempre semeada; usuário só existe se houver user_profile.
         assert conn.execute('SELECT COUNT(*) FROM organizations').fetchone()[0] == 1
         assert conn.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_reconciles_foreign_v14_and_partial_old_live(tmp_path, monkeypatch):
+    """Banco que rodou a PR experimental v14 e iniciou a antiga v15 é reparado.
+
+    A migration experimental permanece registrada; a fundação multiusuário
+    entra na faixa 20+ e ADD COLUMN já aplicado é ignorado com segurança.
+    """
+    path = tmp_path / 'foreign-v14.db'
+    monkeypatch.setattr(toca, 'DB_PATH', path)
+    _apply_migrations_up_to(path, 13)
+
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        "INSERT INTO user_profile (id, full_name, nickname, position, email) "
+        "VALUES (1, 'Fundador', 'Fund', 'Sócio', 'fund@corp.com')"
+    )
+    conn.execute(
+        "INSERT INTO schema_version (version, name, applied_at) "
+        "VALUES (14, 'reembolsos_schema', '2026-07-14T00:00:00')"
+    )
+    # Estado parcial observado no banco real: DDLs da antiga migration 15
+    # persistiram antes de o UPDATE que dependia de users falhar.
+    conn.execute('ALTER TABLE account_archives ADD COLUMN owner_id INTEGER')
+    conn.execute('ALTER TABLE account_planning_runs ADD COLUMN owner_id INTEGER')
+    conn.execute('CREATE INDEX idx_account_archives_owner ON account_archives(owner_id)')
+    conn.execute('CREATE INDEX idx_account_planning_runs_owner ON account_planning_runs(owner_id)')
+    conn.commit()
+    conn.close()
+
+    _apply_migrations_up_to(path, 27)
+
+    conn = sqlite3.connect(str(path))
+    try:
+        versions = dict(conn.execute('SELECT version, name FROM schema_version'))
+        assert versions[14] == 'reembolsos_schema'
+        assert versions[20] == 'multiusuario_fase_a_users_orgs_shares_owner_id'
+        assert versions[27] == 'multiusuario_fase_4_5_user_profile_preferences'
+        assert conn.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 1
+        assert 'owner_id' in _columns(conn, 'account_archives')
+        assert 'owner_id' in _columns(conn, 'account_planning_runs')
     finally:
         conn.close()
