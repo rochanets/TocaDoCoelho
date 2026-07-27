@@ -874,7 +874,8 @@ def list_message_templates():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM message_templates ORDER BY title COLLATE NOCASE')
+        _vw, _vp = visible_where('message_templates')
+        c.execute(f'SELECT * FROM message_templates WHERE {_vw} ORDER BY title COLLATE NOCASE', _vp)
         items = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
         return jsonify(items)
@@ -894,8 +895,9 @@ def create_message_template():
         if not title or not description:
             return jsonify({'error': 'Título e descritivo são obrigatórios'}), 400
         conn = get_db(); c = conn.cursor()
-        c.execute('''INSERT INTO message_templates (title, description, available_whatsapp, available_email, updated_at)
-                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''', (title, description, available_whatsapp, available_email))
+        c.execute('''INSERT INTO message_templates (title, description, available_whatsapp, available_email, owner_id, updated_at)
+                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                  (title, description, available_whatsapp, available_email, _acl_owner_for_insert()))
         template_id = c.lastrowid
         conn.commit()
         c.execute('SELECT * FROM message_templates WHERE id = ?', (template_id,))
@@ -918,6 +920,12 @@ def update_message_template(template_id):
         if not title or not description:
             return jsonify({'error': 'Título e descritivo são obrigatórios'}), 400
         conn = get_db(); c = conn.cursor()
+        if not can_read('message_templates', template_id, c):
+            conn.close()
+            return jsonify({'error': 'Modelo não encontrado'}), 404
+        if not can_write('message_templates', template_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para editar este modelo', 'error_type': 'forbidden'}), 403
         c.execute('''UPDATE message_templates
                      SET title = ?, description = ?, available_whatsapp = ?, available_email = ?, updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?''', (title, description, available_whatsapp, available_email, template_id))
@@ -935,6 +943,12 @@ def update_message_template(template_id):
 def delete_message_template(template_id):
     try:
         conn = get_db(); c = conn.cursor()
+        if not can_read('message_templates', template_id, c):
+            conn.close()
+            return jsonify({'error': 'Modelo não encontrado'}), 404
+        if not can_write('message_templates', template_id, c):
+            conn.close()
+            return jsonify({'error': 'Sem permissão para excluir este modelo', 'error_type': 'forbidden'}), 403
         c.execute('DELETE FROM message_templates WHERE id = ?', (template_id,))
         conn.commit(); conn.close()
         return jsonify({'message': 'Modelo removido'})

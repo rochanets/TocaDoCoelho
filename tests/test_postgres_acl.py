@@ -557,3 +557,26 @@ def test_pg_environment_scoped(client, monkeypatch):
     assert f'CliA-{tag}' in names and f'CliB-{tag}' not in names   # só o contato visível
     ctitles = {x['title'] for x in client.get('/api/environment/cards').get_json()}
     assert f'Q-{tag}' in ctitles                                   # cards compartilhados
+
+
+# ── message_templates: privado + shares (raiz) no Postgres ──────────────────
+
+def test_pg_message_templates_scoped(client, monkeypatch):
+    """/api/config/templates no Postgres: visible_where('message_templates')
+    (owner + shares) traduzido — membro vê só os seus + os compartilhados."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO message_templates (title, description, owner_id) VALUES (?, 'd', ?)", (f'ta-{tag}', a_id))
+    c.execute("INSERT INTO message_templates (title, description, owner_id) VALUES (?, 'd', ?)", (f'tb-{tag}', b_id))
+    tb = c.lastrowid
+    c.execute("INSERT INTO message_templates (title, description, owner_id) VALUES (?, 'd', ?)", (f'ts-{tag}', b_id))
+    ts = c.lastrowid
+    _share('message_templates', ts, a_id, 'read')
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    titles = {t['title'] for t in client.get('/api/config/templates').get_json()}
+    assert f'ta-{tag}' in titles and f'ts-{tag}' in titles and f'tb-{tag}' not in titles

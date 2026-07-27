@@ -1540,6 +1540,14 @@ SCHEMA_MIGRATIONS = [
         'CREATE INDEX IF NOT EXISTS idx_daily_suggestions_owner ON daily_suggestions(owner_id)',
         'UPDATE daily_suggestions SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
     ]),
+
+    # Fase 4 — owner_id nos templates de mensagem. Decisão: privados por-dono,
+    # com opção de compartilhar (shares), como wiki/portfolio. Backfill = fundador.
+    (18, 'multiusuario_fase_4_owner_id_message_templates', [
+        'ALTER TABLE message_templates ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_message_templates_owner ON message_templates(owner_id)',
+        'UPDATE message_templates SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
 ]
 
 
@@ -2085,6 +2093,7 @@ _ACL_ROOT_TABLES = {
     'kanban_columns', 'wiki_entries', 'wiki_documents', 'portfolio_offers',
     'iata_records', 'environment_cards', 'account_archives',
     'account_planning_runs', 'itoca_chat_history', 'daily_suggestions',
+    'message_templates',
 }
 
 # Tabelas-FILHAS: não têm owner_id próprio — herdam a dona da RAIZ ancestral via
