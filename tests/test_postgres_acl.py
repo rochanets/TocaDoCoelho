@@ -752,3 +752,26 @@ def test_pg_outlook_stream_scoped(client, monkeypatch):
                 done = d
     names = {cl['name'] for cl in (done or {}).get('all_clients', [])}
     assert f'CliA-{tag}' in names and f'CliB-{tag}' not in names    # seleção só com visíveis
+
+
+# ── relatório de relacionamento: gate por conta visível no Postgres ─────────
+
+def test_pg_relation_report_account_gate(client, monkeypatch):
+    """/api/report/relation/preview no Postgres: o gate é visible_where('accounts')
+    no SELECT inicial do coletor — conta de outro dono → None → 404 (traduzido)."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    monkeypatch.setattr(toca, '_relation_report_generate_narrative',
+                        lambda data: {'highlights': [], 'narrative': ''})
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AcctA-{tag}', a_id))
+    aca = c.lastrowid
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AcctB-{tag}', b_id))
+    acb = c.lastrowid
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    assert client.get(f'/api/report/relation/preview?account_id={acb}&full_period=true').status_code == 404  # de B
+    assert client.get(f'/api/report/relation/preview?account_id={aca}&full_period=true').status_code == 200   # dele
