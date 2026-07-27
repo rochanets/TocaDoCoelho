@@ -2102,6 +2102,9 @@ _ACL_PARENTS = {
     'campaign_action_logs': ('campaign_actions', 'action_id'),
     'portfolio_offer_items': ('portfolio_offers', 'offer_id'),
     'job_change_events': ('clients', 'client_id'),
+    'account_activities': ('accounts', 'account_id'),
+    'account_main_contacts': ('accounts', 'account_id'),
+    'account_presences': ('accounts', 'account_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
@@ -2181,6 +2184,34 @@ def owned_where(record_type, alias=None, user=None):
         return (f"EXISTS (SELECT 1 FROM {parent_type} {palias} "
                 f"WHERE {palias}.id = {q}.{fk} AND {pwhere})", pparams)
     return f"{_acl_effective_owner_expr(q)} = ?", [user['id']]
+
+
+def _acl_visible_sql(record_type, alias=None, mode='read'):
+    """Versão SEM parâmetros de visible_where — devolve só a string SQL, com os
+    placeholders `?` já substituídos por literais. Existe para embutir a cláusula
+    de visibilidade em agregados do Home que são montados por f-string sem lista
+    de params (o `client_filter()` e afins). NÃO é uma segunda implementação de
+    ACL: delega a visible_where (fonte única de verdade) e só inlina os params.
+
+    Seguro: os params de visible_where são sempre inteiros do nosso banco
+    (ids/org_id) ou o próprio record_type (literal validado do nosso código,
+    [a-z_]). Um assert garante isso antes de inlinar."""
+    sql, params = visible_where(record_type, alias=alias, mode=mode)
+    out, pi = [], 0
+    for ch in sql:
+        if ch == '?':
+            v = params[pi]; pi += 1
+            if isinstance(v, bool) or not isinstance(v, (int, str)):
+                raise ValueError(f'_acl_visible_sql: param não-inlinável: {v!r}')
+            if isinstance(v, int):
+                out.append(str(v))
+            else:
+                if not v.replace('_', '').isalnum():
+                    raise ValueError(f'_acl_visible_sql: string não-segura: {v!r}')
+                out.append(f"'{v}'")
+        else:
+            out.append(ch)
+    return ''.join(out)
 
 
 def _acl_row_matches(record_type, record_id, where, params, cur=None):
