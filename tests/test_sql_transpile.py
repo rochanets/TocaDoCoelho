@@ -65,3 +65,20 @@ def test_pragma_table_info_maps_to_information_schema():
     out = toca._pragma_table_info_to_pg('clients')
     assert 'information_schema.columns' in out
     assert "column_name::text AS name" in out
+
+
+def test_shares_upsert_transpiles_to_postgres():
+    out = toca._transpile_to_postgres(
+        '''INSERT INTO shares
+              (record_type, record_id, shared_with_user_id, permission, created_by)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(record_type, record_id, shared_with_user_id)
+           DO UPDATE SET
+              permission = excluded.permission,
+              created_by = COALESCE(shares.created_by, excluded.created_by)'''
+    ).upper()
+    assert 'ON CONFLICT' in out
+    assert 'DO UPDATE SET' in out
+    assert 'EXCLUDED.PERMISSION' in out
+    assert 'COALESCE(SHARES.CREATED_BY, EXCLUDED.CREATED_BY)' in out
+    assert '?' not in out

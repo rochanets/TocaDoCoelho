@@ -80,6 +80,56 @@ def test_pg_member_visibility_and_shares(client, monkeypatch):
     assert f'hidden-{tag}' not in names     # de outro dono, sem share
 
 
+def test_pg_share_endpoints_crud_and_write_semantics(client, monkeypatch):
+    """O CRUD da F5 usa SQL aceito por PostgreSQL e alimenta a ACL existente."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, owner_id, recipient_id = _seed_org_and_users()
+    record_id = _new_client(owner_id, f'share-api-{uuid.uuid4().hex[:8]}')
+
+    with client.session_transaction() as session:
+        session['user_id'] = owner_id
+    created = client.post(
+        '/api/shares',
+        json={
+            'record_type': 'clients',
+            'record_id': record_id,
+            'shared_with_user_id': recipient_id,
+            'permission': 'read',
+        },
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+    share_id = created.get_json()['id']
+    assert created.get_json()['created_by'] == owner_id
+
+    duplicate = client.post(
+        '/api/shares',
+        json={
+            'record_type': 'clients',
+            'record_id': record_id,
+            'shared_with_user_id': recipient_id,
+            'permission': 'write',
+        },
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.get_json()['created'] is False
+
+    with client.session_transaction() as session:
+        session['user_id'] = recipient_id
+    write = client.put(
+        f'/api/clients/{record_id}',
+        data={'name': 'PG share edit', 'company': 'CoACL', 'position': 'Cargo'},
+    )
+    assert write.status_code == 200, write.get_data(as_text=True)
+
+    with client.session_transaction() as session:
+        session['user_id'] = owner_id
+    assert client.delete(f'/api/shares/{share_id}').status_code == 204
+
+    with client.session_transaction() as session:
+        session['user_id'] = recipient_id
+    assert client.get(f'/api/clients/{record_id}').status_code == 404
+
+
 def test_pg_admin_org_scope(client, monkeypatch):
     """Exercita o IN-subquery org-scoped do admin no Postgres."""
     monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')

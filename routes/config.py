@@ -36,6 +36,7 @@ def get_status_config():
 
 
 @app.route('/api/config/status/universal', methods=['PUT'])
+@admin_required
 def update_universal_status_config():
     try:
         data = request.get_json() or {}
@@ -58,6 +59,7 @@ def update_universal_status_config():
 
 
 @app.route('/api/config/status/target', methods=['PUT'])
+@admin_required
 def update_target_status_config():
     try:
         data = request.get_json() or {}
@@ -80,6 +82,7 @@ def update_target_status_config():
 
 
 @app.route('/api/config/status/cold', methods=['PUT'])
+@admin_required
 def update_cold_status_config():
     try:
         data = request.get_json() or {}
@@ -119,6 +122,7 @@ def list_position_groupings():
 
 
 @app.route('/api/config/position-groupings', methods=['POST'])
+@admin_required
 def create_position_grouping():
     try:
         data = request.get_json() or {}
@@ -143,6 +147,7 @@ def create_position_grouping():
 
 
 @app.route('/api/config/position-groupings/<int:grouping_id>', methods=['DELETE'])
+@admin_required
 def delete_position_grouping(grouping_id):
     try:
         conn = get_db()
@@ -157,6 +162,7 @@ def delete_position_grouping(grouping_id):
 
 
 @app.route('/api/config/status/rules', methods=['POST'])
+@admin_required
 def create_or_update_status_rule():
     try:
         data = request.get_json() or {}
@@ -187,6 +193,7 @@ def create_or_update_status_rule():
 
 
 @app.route('/api/config/status/rules/<int:rule_id>', methods=['DELETE'])
+@admin_required
 def delete_status_rule(rule_id):
     try:
         conn = get_db()
@@ -392,6 +399,7 @@ def get_integrations_config():
 
 
 @app.route('/api/config/integrations', methods=['PUT'])
+@admin_required
 def save_integrations_config():
     try:
         data = request.get_json() or {}
@@ -457,6 +465,7 @@ def get_update_source_config():
 
 
 @app.route('/api/config/update-source', methods=['PUT'])
+@admin_required
 def save_update_source_config():
     try:
         data = request.get_json() or {}
@@ -679,6 +688,7 @@ def startup_update_check():
 
 
 @app.route('/api/config/snooze-update', methods=['POST'])
+@admin_required
 def snooze_update():
     """Salva snooze de 5 dias para a notificação de update."""
     try:
@@ -693,6 +703,7 @@ def snooze_update():
 
 
 @app.route('/api/config/download-update', methods=['POST'])
+@admin_required
 def download_update():
     try:
         data = request.get_json() or {}
@@ -716,6 +727,7 @@ def get_update_task(task_id):
 
 
 @app.route('/api/config/install-update', methods=['POST'])
+@admin_required
 def install_update():
     try:
         import subprocess
