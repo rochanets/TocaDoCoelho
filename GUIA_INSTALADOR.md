@@ -15,7 +15,7 @@
 ### 1) Gerar executável (runtime embutido + FFmpeg + faster-whisper)
 
 ```bash
-pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --collect-all playwright --hidden-import win32com.client --hidden-import pywintypes --hidden-import app launcher.py
+pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "public;public" --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all playwright --hidden-import win32api --hidden-import win32con --hidden-import win32crypt --hidden-import win32gui --hidden-import app launcher.py
 ```
 
 Saída esperada:

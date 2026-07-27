@@ -124,6 +124,15 @@ class FormsRobotError(Exception):
     pass
 
 
+class FormsRobotCancelled(FormsRobotError):
+    """Cancelamento cooperativo solicitado pelo Toca/usuário."""
+
+
+def _raise_if_cancelled(should_cancel):
+    if should_cancel is not None and should_cancel():
+        raise FormsRobotCancelled('Execução cancelada pelo usuário.')
+
+
 def _normalize(value):
     text = unicodedata.normalize('NFD', str(value or ''))
     text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
@@ -505,21 +514,28 @@ def _is_form_ready(page, forms_host):
         return False
 
 
-def run_chamado_juridico_robot(forms_url, fields, on_progress):
+def run_chamado_juridico_robot(
+    forms_url,
+    fields,
+    on_progress,
+    should_cancel=None,
+):
     """Executa o robô. `fields` é uma lista ordenada de dicts:
       {'key', 'label', 'terms', 'q' (posição 1-based no formulário),
        'type': 'text'|'radio'|'radio_yes_no'|'date'|'file',
        'value': str (text/date/radio_yes_no),
        'option_terms': [str] (radio),
        'file_paths': [str] (file)}
-    `on_progress(pct, step)` alimenta a barra de progresso.
+    `on_progress(pct, step)` alimenta a barra de progresso. `should_cancel`,
+    quando informado pelo Companion, permite encerrar cooperativamente sem
+    enviar o formulário.
 
     Retorna {'submitted', 'filled', 'unmatched', 'errors', 'positional', 'questions_found'}.
     """
     if not _ROBOT_LOCK.acquire(blocking=False):
         raise FormsRobotError('Já existe um robô em execução. Aguarde ele terminar.')
     try:
-        return _run_locked(forms_url, fields, on_progress)
+        return _run_locked(forms_url, fields, on_progress, should_cancel)
     finally:
         _ROBOT_LOCK.release()
 
@@ -535,7 +551,7 @@ def _is_fillable(field):
     return False
 
 
-def _run_locked(forms_url, fields, on_progress):
+def _run_locked(forms_url, fields, on_progress, should_cancel=None):
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as e:
@@ -544,6 +560,7 @@ def _run_locked(forms_url, fields, on_progress):
         ) from e
 
     _close_leftover()
+    _raise_if_cancelled(should_cancel)
     on_progress(8, 'Abrindo o navegador do robô...')
     headless = os.environ.get('TOCA_ROBOT_HEADLESS') == '1'
 
@@ -560,6 +577,7 @@ def _run_locked(forms_url, fields, on_progress):
         deadline = time.time() + LOGIN_TIMEOUT_SECONDS
         notified_login = False
         while not _is_form_ready(page, forms_host):
+            _raise_if_cancelled(should_cancel)
             if page.is_closed():
                 raise FormsRobotError('A janela do robô foi fechada antes do preenchimento.')
             if time.time() > deadline:
@@ -578,6 +596,7 @@ def _run_locked(forms_url, fields, on_progress):
         # os handlers de evento; sem essa pausa, os primeiros campos às vezes não
         # respondem a clique/digitação mesmo já visíveis no DOM.
         page.wait_for_timeout(int(FORM_STABILIZE_SECONDS * 1000))
+        _raise_if_cancelled(should_cancel)
 
         on_progress(35, 'Iniciando preenchimento...')
         match = page.evaluate(_MATCH_JS, {
@@ -593,6 +612,7 @@ def _run_locked(forms_url, fields, on_progress):
         progress = 35.0
 
         for field in fillable:
+            _raise_if_cancelled(should_cancel)
             progress += step_span
             label = field.get('label') or field['key']
             idx = mapping.get(field['key'])
@@ -665,6 +685,7 @@ def _run_locked(forms_url, fields, on_progress):
 
         review_deadline = time.time() + REVIEW_TIMEOUT_SECONDS
         while time.time() < review_deadline:
+            _raise_if_cancelled(should_cancel)
             if page.is_closed():
                 break
             try:

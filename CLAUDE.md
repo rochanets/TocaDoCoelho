@@ -201,7 +201,8 @@ solicitado por `POST /api/autotoca/chamado-juridico/robot`) para preencher um
 Microsoft Forms de produção sem integração/API do lado do formulário. Com
 autenticação desligada, o desktop executa diretamente; no web, a rota cria uma
 tarefa do Toca Companion conforme
-`docs/toca-companion-contract-v1.md`, e a execução local entra na F7.5. **Use
+`docs/toca-companion-contract-v1.md`; desde a F7.5, `toca_companion.py`
+consome a fila, verifica os anexos e executa o Playwright localmente. **Use
 este padrão como ponto de partida para qualquer nova automação de formulário
 externo** (outro Forms, Google Forms, SharePoint list, portal de terceiro sem
 API etc.).

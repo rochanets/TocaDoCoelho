@@ -2,8 +2,8 @@
 
 Este contrato conecta o Toca web ao agente local que executará automações que
 dependem de navegador visível, perfil Microsoft e arquivos temporários. A F7.4
-implementa o protocolo e a fila; o executor Playwright do Chamado Jurídico será
-conectado na F7.5.
+implementou o protocolo e a fila; a F7.5 conectou o executor Playwright do
+Chamado Jurídico em `toca_companion.py`.
 
 ## Princípios
 
@@ -35,7 +35,8 @@ conectado na F7.5.
 ```
 
 4. A resposta entrega `device_id` e `device_token` uma única vez. O Companion
-   deve guardar o token no cofre de credenciais do sistema operacional.
+   protege o token com DPAPI no Windows ou Fernet com chave local restrita,
+   sempre em modo fail-closed e nunca em texto puro.
 5. Chamadas seguintes usam `Authorization: Bearer <device_token>`.
 6. O usuário pode listar e revogar seus dispositivos por
    `GET /api/companion/devices` e
@@ -124,7 +125,29 @@ o estado e os últimos eventos em `GET /api/companion/tasks/<task_id>`.
 - `TOCA_COMPANION_DOWNLOAD_SHA256`.
 
 Um download só é anunciado quando URL e SHA-256 válido estão presentes. O
-executável da F7.5 deverá verificar o hash antes de iniciar qualquer atualização.
+executor da F7.5 verifica o hash antes de disponibilizar qualquer atualização.
+
+## Executor local (F7.5)
+
+O runtime do Companion é independente da imagem web:
+
+```powershell
+python -m pip install -r requirements-companion.txt
+python toca_companion.py pair --server https://toca.exemplo.com --code CODIGO
+python toca_companion.py run
+```
+
+O executor:
+
+- aceita HTTP somente em `localhost` e não segue redirects autenticados;
+- mantém token do dispositivo e lease fora dos logs;
+- baixa cada anexo somente da mesma origem do servidor, em diretório temporário;
+- confirma tamanho e SHA-256 antes de entregar o caminho ao Playwright;
+- renova o lease a cada 25 segundos enquanto a janela aguarda o usuário;
+- reflete `awaiting_user`, cancelamento, sucesso e falha na auditoria;
+- remove os anexos temporários em qualquer estado terminal;
+- nunca clica no botão Enviar. `human_submission_detected` apenas registra que
+  o Microsoft Forms observou a ação manual do usuário.
 
 ## Limites configuráveis
 

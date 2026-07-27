@@ -95,10 +95,26 @@ usando `faster-whisper` localmente.
 ## 🐇 Toca Companion
 
 No modo web, automações que dependem de navegador visível e sessão local são
-entregues ao Toca Companion por uma fila persistente e auditável. A Fase 7.4
-inclui vínculo de dispositivo, autenticação por token, leases, idempotência,
-cancelamento, download privado de anexos e manifesto de atualização. O executor
-Playwright do Chamado Jurídico será conectado na Fase 7.5.
+entregues ao Toca Companion por uma fila persistente e auditável. A Fase 7.5
+inclui o executor Playwright do Chamado Jurídico, com token protegido no
+computador, lease renovável, anexos temporários verificados por SHA-256,
+cancelamento cooperativo e revisão humana obrigatória antes do envio.
+
+Instalação e vínculo do runtime local:
+
+```powershell
+python -m pip install -r requirements-companion.txt
+python toca_companion.py pair --server https://toca.exemplo.com --code CODIGO-EXIBIDO-NO-TOCA
+python toca_companion.py run
+```
+
+HTTP sem TLS só é aceito para `localhost`. O token não é exibido pelo comando
+`status` nem armazenado em texto puro. O Companion preenche o Forms, mas nunca
+clica em **Enviar**.
+
+No Windows, `BUILD_COMPANION.bat` gera `dist\TocaCompanion.exe`. O executor
+prefere Chrome ou Edge já instalado; para desenvolvimento sem esses canais,
+execute `python -m playwright install chromium`.
 
 O protocolo está documentado em
 [`docs/toca-companion-contract-v1.md`](docs/toca-companion-contract-v1.md).

@@ -41,7 +41,7 @@ GRAPH_CLIENT_SECRET = 'seu-client-secret'
 ## 4) Gerar o executável (PyInstaller) **sem abrir janela de terminal**
 
 ```cmd
-pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "routes;routes" --add-data "public;public" --add-data "integrations;integrations" --add-data "graph_credentials.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --collect-all playwright --hidden-import win32com.client --hidden-import pywintypes --hidden-import app --hidden-import graph_credentials launcher.py
+pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "routes;routes" --add-data "public;public" --add-data "integrations;integrations" --add-data "graph_credentials.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all playwright --hidden-import win32api --hidden-import win32con --hidden-import win32crypt --hidden-import win32gui --hidden-import app --hidden-import graph_credentials launcher.py
 ```
 
 > **Novo em relação à versão anterior:**
