@@ -408,3 +408,41 @@ def test_pg_itoca_executor_scoped(client, monkeypatch):
     c.execute('SELECT COALESCE(owner_id, (SELECT MIN(id) FROM users)) AS eo FROM kanban_columns WHERE id = ?', (col_id,))
     assert c.fetchone()['eo'] == a_id
     conn.close()
+
+
+# ── iToca busca RAG (/ask): filtro por visibilidade + painel escopado no PG ──
+
+def test_pg_itoca_search_scoped(client, monkeypatch):
+    """/ask no Postgres: o filtro de linhas por can_read(user) e o painel
+    analítico com COUNTs escopados por visible_where (+ EXISTS de
+    account_presences + date()) traduzidos — o usuário só 'conversa' sobre o que
+    vê. _itoca_ask_async é chamado direto (síncrono) com LLM/buscas stubadas."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ca = _new_client(a_id, f'ca-{tag}')
+    cb = _new_client(b_id, f'cb-{tag}')
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO accounts (name, is_target, owner_id) VALUES (?, 0, ?)", (f'acc-a-{tag}', a_id))
+    c.execute("INSERT INTO accounts (name, is_target, owner_id) VALUES (?, 0, ?)", (f'acc-b1-{tag}', b_id))
+    c.execute("INSERT INTO accounts (name, is_target, owner_id) VALUES (?, 0, ?)", (f'acc-b2-{tag}', b_id))
+    conn.commit(); conn.close()
+
+    captured = {}
+    def fake_llm(question, context_rows, history_rows=None):
+        captured['rows'] = context_rows
+        return {'answer': 'ok', 'confidence_percent': 50, 'needs_refinement': False,
+                'refinement_hint': '', 'llm_used': False}
+    monkeypatch.setattr(toca, '_itoca_call_sai_llm', fake_llm)
+    monkeypatch.setattr(toca, '_itoca_search_context', lambda q, limit=18: [
+        {'table': 'clients', 'id': ca, 'snippet': 'A', 'search_text': 'a'},
+        {'table': 'clients', 'id': cb, 'snippet': 'B', 'search_text': 'b'},
+    ])
+    monkeypatch.setattr(toca, '_itoca_search_in_cached_snapshot', lambda q, items, limit=18: [])
+    a_user = {'id': a_id, 'org_id': org_id, 'role': 'member'}
+    toca._itoca_ask_async('tpg', 'resumo geral', '', [], 'now', [], owner_id=a_id, user=a_user)
+
+    keys = {(r['table'], r.get('id')) for r in captured['rows']}
+    assert ('clients', ca) in keys and ('clients', cb) not in keys       # filtro por can_read
+    panel = next((r for r in captured['rows'] if str(r.get('snippet', '')).startswith('PAINEL_GERAL')), None)
+    assert panel is not None and 'total_contas: 1' in panel['snippet']   # só a conta de A

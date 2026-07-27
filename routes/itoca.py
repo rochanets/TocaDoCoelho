@@ -53,8 +53,10 @@ def itoca_ask():
 
         # Dono da conversa (usuário atual; fundador no desktop). Capturado aqui,
         # no contexto de request, para repassar à thread de background (que perde
-        # o request e não resolve current_user sozinha).
+        # o request e não resolve current_user sozinha). _req_user (dict completo)
+        # vai junto para escopar a busca RAG por visibilidade (owner/share/admin).
         _owner_id = _acl_owner_for_insert()
+        _req_user = current_user()
 
         # Busca histórico ANTES de salvar a mensagem do usuário (para não incluir a pergunta atual no contexto)
         history_rows = []
@@ -92,7 +94,7 @@ def itoca_ask():
         _bg_task_set(task_id, {'status': 'processing', 'step': '🔍 Iniciando busca...', 'progress': 5})
         threading.Thread(
             target=_itoca_ask_async,
-            args=(task_id, question, session_id, snapshot_items, updated_at, history_rows, _owner_id),
+            args=(task_id, question, session_id, snapshot_items, updated_at, history_rows, _owner_id, _req_user),
             daemon=True
         ).start()
         return jsonify({'task_id': task_id, 'base_ready': True}), 202
