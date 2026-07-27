@@ -61,8 +61,6 @@ def _reset_postgres_id_sequences(pg, tables, pg_cols):
     junto ao fallback inteiro do setval nessas tabelas causa DatatypeMismatch,
     mesmo quando pg_get_serial_sequence() é NULL.
     """
-    from psycopg import sql
-
     cur = pg.cursor()
     for table in tables:
         if 'id' not in pg_cols[table]:
@@ -74,14 +72,15 @@ def _reset_postgres_id_sequences(pg, tables, pg_cols):
         sequence_name = cur.fetchone()[0]
         if not sequence_name:
             continue
+        quoted_table = '"' + table.replace('"', '""') + '"'
         cur.execute(
-            sql.SQL(
+            (
                 "SELECT setval("
                 "  %s,"
-                "  COALESCE((SELECT MAX(id) FROM {}), 1),"
-                "  (SELECT COUNT(*) FROM {}) > 0"
+                f"  COALESCE((SELECT MAX(id) FROM {quoted_table}), 1),"
+                f"  (SELECT COUNT(*) FROM {quoted_table}) > 0"
                 ")"
-            ).format(sql.Identifier(table), sql.Identifier(table)),
+            ),
             (sequence_name,),
         )
 
