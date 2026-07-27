@@ -370,3 +370,41 @@ def test_pg_itoca_history_owned(client, monkeypatch):
     assert f'sa-{tag}' in ids and f'sb-{tag}' not in ids
     # get da sessão de outro dono → vazio (escopado por owned_where)
     assert client.get(f'/api/itoca/history/sb-{tag}').get_json() == []
+
+
+# ── iToca executor: owner nos inserts + lookups escopados no Postgres ────────
+
+def test_pg_itoca_executor_scoped(client, monkeypatch):
+    """/execute-action no Postgres: visible_where('clients') no lookup de contato,
+    owned_where('kanban_columns') na escolha da coluna e o acesso por dict
+    (dict_from_row) traduzidos — o antigo row[0] quebraria com as dict-rows do PG."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    _, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ca = _new_client(a_id, f'Maria-{tag}')
+    _new_client(b_id, f'Bruno-{tag}')
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    # activity: contato visível → 201 com owner = A
+    r = client.post('/api/itoca/execute-action',
+                    json={'action_type': 'activity',
+                          'fields': {'contact_name': f'Maria-{tag}', 'description': 'ligou'}})
+    assert r.status_code == 201, r.get_data(as_text=True)[:300]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute('SELECT owner_id FROM activities WHERE id = ?', (r.get_json()['created_id'],))
+    assert c.fetchone()['owner_id'] == a_id
+    # contato de outro dono → 404 (lookup escopado)
+    r404 = client.post('/api/itoca/execute-action',
+                       json={'action_type': 'activity',
+                             'fields': {'contact_name': f'Bruno-{tag}', 'description': 'x'}})
+    assert r404.status_code == 404
+    # kanban_card: cai numa coluna do quadro DE A (owned_where + dict access)
+    rk = client.post('/api/itoca/execute-action',
+                     json={'action_type': 'kanban_card', 'fields': {'title': f'Card-{tag}'}})
+    assert rk.status_code == 201, rk.get_data(as_text=True)[:300]
+    c.execute('SELECT column_id FROM kanban_cards WHERE id = ?', (rk.get_json()['created_id'],))
+    col_id = c.fetchone()['column_id']
+    c.execute('SELECT COALESCE(owner_id, (SELECT MIN(id) FROM users)) AS eo FROM kanban_columns WHERE id = ?', (col_id,))
+    assert c.fetchone()['eo'] == a_id
+    conn.close()

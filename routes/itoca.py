@@ -150,21 +150,30 @@ def itoca_execute_action():
 
             contact_id = None
             if contact_name:
-                c.execute('SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) LIMIT 1', (f'%{contact_name}%',))
+                # Só resolve contatos VISÍVEIS ao usuário — não anexa o card a um
+                # contato de outro dono.
+                _cvw, _cvp = visible_where('clients')
+                c.execute(f'SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) AND {_cvw} LIMIT 1',
+                          (f'%{contact_name}%', *_cvp))
                 row = c.fetchone()
                 if row:
-                    contact_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+                    contact_id = dict_from_row(row)['id']
 
             tag = infer_kanban_tag(description)
-            c.execute('SELECT id FROM kanban_columns ORDER BY display_order, id LIMIT 1')
+            # Quadro Kanban é por-usuário: garante o quadro do usuário e usa a
+            # primeira coluna DELE (não a primeira coluna global, que poderia ser
+            # de outro dono).
+            _ensure_kanban_board(c)
+            _kow, _kop = owned_where('kanban_columns')
+            c.execute(f'SELECT id FROM kanban_columns WHERE {_kow} ORDER BY display_order, id LIMIT 1', _kop)
             first_col = c.fetchone()
             if not first_col:
                 conn.close()
                 return jsonify({'error': 'Nenhuma coluna disponível no Kanban.'}), 400
-            col_id = first_col[0] if not isinstance(first_col, sqlite3.Row) else first_col['id']
+            col_id = dict_from_row(first_col)['id']
 
-            c.execute('SELECT COALESCE(MAX(display_order), 0) FROM kanban_cards WHERE column_id = ?', (col_id,))
-            next_order = (c.fetchone()[0] or 0) + 1
+            c.execute('SELECT COALESCE(MAX(display_order), 0) AS mx FROM kanban_cards WHERE column_id = ?', (col_id,))
+            next_order = (dict_from_row(c.fetchone())['mx'] or 0) + 1
             c.execute(
                 '''INSERT INTO kanban_cards (title, description, tag, account_id, contact_id, urgency, column_id, display_order)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
@@ -193,11 +202,13 @@ def itoca_execute_action():
                 conn.close()
                 return jsonify({'error': 'Descrição da atividade é obrigatória.'}), 400
 
-            # Tenta encontrar o contato pelo nome e/ou empresa
+            # Tenta encontrar o contato pelo nome e/ou empresa — só entre os
+            # VISÍVEIS ao usuário (não registra atividade no contato de outro).
             client_id = None
             if contact_name:
-                query = 'SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?))'
-                params = [f'%{contact_name}%']
+                _cvw, _cvp = visible_where('clients')
+                query = f'SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) AND {_cvw}'
+                params = [f'%{contact_name}%', *_cvp]
                 if company:
                     query += ' AND LOWER(TRIM(company)) LIKE LOWER(TRIM(?))'
                     params.append(f'%{company}%')
@@ -205,7 +216,7 @@ def itoca_execute_action():
                 c.execute(query, params)
                 row = c.fetchone()
                 if row:
-                    client_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+                    client_id = dict_from_row(row)['id']
 
             if not client_id:
                 conn.close()
@@ -215,13 +226,15 @@ def itoca_execute_action():
                 }), 404
 
             c.execute(
-                '''INSERT INTO activities (client_id, contact_type, information)
-                   VALUES (?, ?, ?)''',
-                (client_id, contact_type, description)
+                '''INSERT INTO activities (client_id, contact_type, information, owner_id)
+                   VALUES (?, ?, ?, ?)''',
+                (client_id, contact_type, description, _acl_owner_for_insert())
             )
+            # Captura o id ANTES do UPDATE seguinte: no wrapper PostgreSQL o
+            # lastrowid é resolvido por statement e o UPDATE (sem id) o zera.
+            created_id = c.lastrowid
             c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (client_id,))
             conn.commit()
-            created_id = c.lastrowid
             conn.close()
             return jsonify({
                 'success': True,
@@ -244,10 +257,13 @@ def itoca_execute_action():
                 conn.close()
                 return jsonify({'error': 'Nome, empresa e cargo são obrigatórios para criar um contato.'}), 400
 
-            # Verifica duplicidade simples
+            # Verifica duplicidade — só entre os contatos VISÍVEIS ao usuário
+            # (dois donos podem ter, cada um, o seu “João/Acme”; a duplicidade de
+            # um não bloqueia o outro).
+            _cvw, _cvp = visible_where('clients')
             c.execute(
-                'SELECT id FROM clients WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND LOWER(TRIM(company)) = LOWER(TRIM(?)) LIMIT 1',
-                (name, company)
+                f'SELECT id FROM clients WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND LOWER(TRIM(company)) = LOWER(TRIM(?)) AND {_cvw} LIMIT 1',
+                (name, company, *_cvp)
             )
             if c.fetchone():
                 conn.close()
@@ -257,9 +273,9 @@ def itoca_execute_action():
                 }), 409
 
             c.execute(
-                '''INSERT INTO clients (name, company, position, email, phone, updated_at)
-                   VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
-                (name, company, position, email or None, phone or None)
+                '''INSERT INTO clients (name, company, position, email, phone, owner_id, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (name, company, position, email or None, phone or None, _acl_owner_for_insert())
             )
             conn.commit()
             created_id = c.lastrowid
@@ -285,9 +301,9 @@ def itoca_execute_action():
                 return jsonify({'error': 'Título e conteúdo são obrigatórios para criar um conhecimento.'}), 400
 
             c.execute(
-                '''INSERT INTO wiki_entries (title, category, content, tags, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                (title, category, content, tags)
+                '''INSERT INTO wiki_entries (title, category, content, tags, owner_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                (title, category, content, tags, _acl_owner_for_insert())
             )
             conn.commit()
             created_id = c.lastrowid
@@ -313,13 +329,15 @@ def itoca_execute_action():
                 conn.close()
                 return jsonify({'error': 'Data do compromisso é obrigatória.'}), 400
 
-            # Tenta encontrar o contato
+            # Tenta encontrar o contato — só entre os VISÍVEIS ao usuário.
             client_id = None
             if contact_name:
-                c.execute('SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) LIMIT 1', (f'%{contact_name}%',))
+                _cvw, _cvp = visible_where('clients')
+                c.execute(f'SELECT id FROM clients WHERE LOWER(TRIM(name)) LIKE LOWER(TRIM(?)) AND {_cvw} LIMIT 1',
+                          (f'%{contact_name}%', *_cvp))
                 row = c.fetchone()
                 if row:
-                    client_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+                    client_id = dict_from_row(row)['id']
 
             if not client_id:
                 conn.close()
@@ -329,9 +347,9 @@ def itoca_execute_action():
                 }), 404
 
             c.execute(
-                '''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                (client_id, title or 'Compromisso via iToca', notes, due_date, due_time, 'itoca')
+                '''INSERT INTO commitments (client_id, title, notes, due_date, due_time, source_type, owner_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (client_id, title or 'Compromisso via iToca', notes, due_date, due_time, 'itoca', _acl_owner_for_insert())
             )
             conn.commit()
             created_id = c.lastrowid
@@ -358,7 +376,11 @@ def itoca_execute_action():
             # Encontra ou cria a conta
             account_id = ensure_account_for_company(c, company)
 
-            # Encontra o card de mapeamento pelo título (ou cria um genérico)
+            # Encontra o card de mapeamento pelo título (ou cria um genérico).
+            # OBS: o módulo environment ainda não é escopado por ACL (a decisão
+            # por-usuário vs. catálogo compartilhado fica para a PR dele); aqui só
+            # gravamos owner_id no card criado (forward-compat), sem escopar a
+            # busca.
             card_id = None
             if card_title:
                 c.execute(
@@ -367,14 +389,14 @@ def itoca_execute_action():
                 )
                 row = c.fetchone()
                 if row:
-                    card_id = row[0] if not isinstance(row, sqlite3.Row) else row['id']
+                    card_id = dict_from_row(row)['id']
 
             if not card_id:
                 # Cria um card genérico para a resposta
                 c.execute(
-                    '''INSERT INTO environment_cards (title, description, created_at, updated_at)
-                       VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                    (card_title or 'Informação via iToca', '')
+                    '''INSERT INTO environment_cards (title, description, owner_id, created_at, updated_at)
+                       VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                    (card_title or 'Informação via iToca', '', _acl_owner_for_insert())
                 )
                 conn.commit()
                 card_id = c.lastrowid
