@@ -50,14 +50,6 @@ from transcription_service import (
     transcription_monthly_limit_ms,
     transcribe_azure_short_wav,
 )
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.edge.options import Options as EdgeOptions
-    from selenium.webdriver.edge.service import Service as EdgeService
-    SELENIUM_AVAILABLE = True
-except Exception:
-    SELENIUM_AVAILABLE = False
 from werkzeug.exceptions import HTTPException
 from autotoca import AccountAddressService
 from integrations.outlook_graph import (
@@ -7996,247 +7988,6 @@ def _download_update_async(task_id, url, name):
         _bg_task_cleanup(task_id, delay=600)
 
 
-def _outlook_fetch_via_powershell(days=60):
-    """Desabilitado por recomendação de segurança SAST — use Microsoft Graph API."""
-    raise RuntimeError(
-        'Sincronização via PowerShell/COM foi desabilitada. Use "Sync Microsoft 365" (Graph API).'
-    )
-
-
-def _DISABLED_outlook_fetch_via_powershell_legacy(days=60):
-    """Mantido apenas como referência histórica — NÃO EXECUTAR."""
-    import subprocess, tempfile, json, os
-
-    ps_script = """\
-param([int]$Days = 60)
-$ErrorActionPreference = 'Continue'
-$cutoff = (Get-Date).AddDays(-$Days)
-
-function Get-SmtpAddress($r) {
-    $a = $null; try { $a = $r.Address } catch {}
-    if ($a -and $a -match '@' -and $a -notmatch '^/o=') { return $a.ToLower() }
-    try { return ($r.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x39FE001E')).ToLower() } catch {}
-    return ''
-}
-
-function Get-SenderSmtp($m) {
-    $a = $null; try { $a = $m.SenderEmailAddress } catch {}
-    if ($a -and $a -match '@' -and $a -notmatch '^/o=') { return $a.ToLower() }
-    try { return ($m.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x5D01001E')).ToLower() } catch {}
-    return ''
-}
-
-function Get-AllFolders($folder) {
-    $list = [System.Collections.Generic.List[object]]::new()
-    $list.Add($folder)
-    try { foreach ($s in $folder.Folders) { (Get-AllFolders $s) | ForEach-Object { $list.Add($_) } } } catch {}
-    return ,$list
-}
-
-function Make-Item($item, $dt, $dir) {
-    $rcpts = [System.Collections.Generic.List[hashtable]]::new()
-    try { foreach ($r in $item.Recipients) { try { $rcpts.Add(@{ name=($r.Name+''); email=(Get-SmtpAddress $r) }) } catch {} } } catch {}
-    $bp = ''
-    try { $bp = ($item.Body -replace '[\\r\\n\\t]+',' ').Trim(); if ($bp.Length -gt 1500) { $bp = $bp.Substring(0,1500) } } catch {}
-    return [PSCustomObject]@{
-        subject      = ($item.Subject+'')
-        date         = $dt.ToString('yyyy-MM-ddTHH:mm:ss')
-        direction    = $dir
-        sender       = @{ name=($item.SenderName+''); email=(Get-SenderSmtp $item) }
-        recipients   = @($rcpts)
-        body_preview = $bp
-    }
-}
-
-$ol = $null
-try {
-    $ol = [System.Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application')
-} catch {
-    try { $ol = New-Object -ComObject Outlook.Application } catch {
-        [Console]::Error.WriteLine("Nao foi possivel conectar ao Outlook: $_")
-        exit 1
-    }
-}
-$ns = $ol.GetNamespace('MAPI')
-$results = [System.Collections.Generic.List[object]]::new()
-
-try {
-    $inbox = $ns.GetDefaultFolder(6)
-    foreach ($folder in (Get-AllFolders $inbox)) {
-        try {
-            foreach ($item in $folder.Items) {
-                try {
-                    if ($item.Class -ne 43) { continue }
-                    $dt = $null; try { $dt = $item.ReceivedTime } catch { continue }
-                    if ($dt -lt $cutoff) { continue }
-                    $results.Add((Make-Item $item $dt 'received'))
-                } catch {}
-            }
-        } catch {}
-    }
-} catch { [Console]::Error.WriteLine("Erro inbox: $_") }
-
-try {
-    $sent = $ns.GetDefaultFolder(5)
-    foreach ($item in $sent.Items) {
-        try {
-            if ($item.Class -ne 43) { continue }
-            $dt = $null; try { $dt = $item.SentOn } catch { continue }
-            if ($dt -lt $cutoff) { continue }
-            $results.Add((Make-Item $item $dt 'sent'))
-        } catch {}
-    }
-} catch { [Console]::Error.WriteLine("Erro sent: $_") }
-
-if ($results.Count -eq 0) { '[]'; exit 0 }
-$results | ConvertTo-Json -Depth 5 -Compress
-"""
-
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.ps1', delete=False, encoding='utf-8', errors='replace'
-        ) as tmp:
-            tmp.write(ps_script)
-            tmp_path = tmp.name
-
-        timeout_s = int(_resolve_setting('outlook_sync_timeout_seconds', 'OUTLOOK_SYNC_TIMEOUT') or 120)
-        try:
-            proc = subprocess.run(
-                ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile',
-                 '-File', tmp_path, '-Days', str(int(days))],
-                capture_output=True, text=True, encoding='utf-8', errors='replace',
-                timeout=timeout_s
-            )
-        except subprocess.TimeoutExpired as timeout_err:
-            raise RuntimeError(
-                f'A leitura via Outlook COM excedeu {timeout_s}s. '
-                'Tente reduzir o período (ex.: 7 dias) ou configure o OAuth Graph para acesso sem limite de tempo.'
-            ) from timeout_err
-        stderr = (proc.stderr or '').strip()
-        stdout = (proc.stdout or '').strip()
-        if proc.returncode != 0 and not stdout:
-            raise RuntimeError(stderr or f'PowerShell retornou código {proc.returncode}')
-        if not stdout or stdout == '[]':
-            return []
-        data = json.loads(stdout)
-        if isinstance(data, dict):
-            data = [data]
-        for item in data:
-            rcpts = item.get('recipients') or []
-            if isinstance(rcpts, dict):
-                rcpts = [rcpts]
-            item['recipients'] = rcpts
-            if not isinstance(item.get('sender'), dict):
-                item['sender'] = {'name': '', 'email': ''}
-        return data
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception as e:
-                logger.debug(f'[_DISABLED_outlook_fetch_via_powershell_legacy] exceção ignorada: {e}')
-
-
-def _outlook_extract_smtp_from_recipient(recipient):
-    """Extrai endereço SMTP de um recipient do Outlook (trata Exchange/EX)."""
-    try:
-        addr = (recipient.Address or '').strip().lower()
-        if addr and '@' in addr and not addr.startswith('/o='):
-            return addr
-        return recipient.PropertyAccessor.GetProperty(
-            'http://schemas.microsoft.com/mapi/proptag/0x39FE001E'
-        ).strip().lower()
-    except Exception:
-        return ''
-
-
-def _outlook_extract_smtp_from_sender(mail_item):
-    """Extrai endereço SMTP do remetente (trata Exchange/EX)."""
-    try:
-        addr = (mail_item.SenderEmailAddress or '').strip().lower()
-        if addr and '@' in addr and not addr.startswith('/o='):
-            return addr
-        return mail_item.PropertyAccessor.GetProperty(
-            'http://schemas.microsoft.com/mapi/proptag/0x5D01001E'
-        ).strip().lower()
-    except Exception:
-        return ''
-
-
-def _outlook_get_all_subfolders(folder):
-    result = [folder]
-    try:
-        for sub in folder.Folders:
-            result.extend(_outlook_get_all_subfolders(sub))
-    except Exception as e:
-        logger.debug(f'[_outlook_get_all_subfolders] exceção ignorada: {e}')
-    return result
-
-
-def _outlook_extract_email(item, direction, cutoff_dt):
-    """Extrai metadados de um MailItem. Retorna dict ou None."""
-    try:
-        if item.Class != 43:  # 43 = olMail
-            return None
-        raw_dt = item.ReceivedTime if direction == 'received' else item.SentOn
-        dt = datetime(raw_dt.year, raw_dt.month, raw_dt.day,
-                      raw_dt.hour, raw_dt.minute, raw_dt.second)
-        if dt < cutoff_dt:
-            return None
-        recipients = []
-        try:
-            for r in item.Recipients:
-                try:
-                    email = _outlook_extract_smtp_from_recipient(r)
-                    recipients.append({'name': (r.Name or '').strip(), 'email': email})
-                except Exception as e:
-                    logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
-        except Exception as e:
-            logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
-        body_preview = ''
-        try:
-            body_preview = (item.Body or '')[:1500].strip()
-        except Exception as e:
-            logger.debug(f'[_outlook_extract_email] exceção ignorada: {e}')
-        return {
-            'subject': (item.Subject or '').strip(),
-            'date': dt.strftime('%Y-%m-%dT%H:%M:%S'),
-            'direction': direction,
-            'sender': {
-                'name': (item.SenderName or '').strip(),
-                'email': _outlook_extract_smtp_from_sender(item)
-            },
-            'recipients': recipients,
-            'body_preview': body_preview
-        }
-    except Exception:
-        return None
-
-
-def _outlook_process_folder(folder, direction, cutoff_dt, emails):
-    count = 0
-    try:
-        items = folder.Items
-        date_str = cutoff_dt.strftime('%m/%d/%Y %H:%M %p')
-        field = 'ReceivedTime' if direction == 'received' else 'SentOn'
-        try:
-            items = items.Restrict(f"[{field}] >= '{date_str}'")
-        except Exception as e:
-            logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
-        for item in items:
-            try:
-                data = _outlook_extract_email(item, direction, cutoff_dt)
-                if data:
-                    emails.append(data)
-                    count += 1
-            except Exception as e:
-                logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
-    except Exception as e:
-        logger.debug(f'[_outlook_process_folder] exceção ignorada: {e}')
-    return count
-
-
 def _outlook_import_emails(emails_data, conn):
     """
     Importa lista de emails já extraídos para o banco.
@@ -8356,12 +8107,6 @@ def _outlook_call_llm(prompt):
     return raw.strip() if raw else None
 
 
-def _outlook_sync_stream_com():
-    def _err():
-        yield f"data: {json.dumps({'phase': 'error', 'message': 'Sincronização via PowerShell/COM foi desabilitada. Use o botão Sync Microsoft 365 (Graph API).'})}\n\n"
-    return Response(stream_with_context(_err()), mimetype='text/event-stream')
-
-
 try:
     import graph_credentials as _gc
     _GRAPH_DEFAULT_TENANT = getattr(_gc, 'GRAPH_TENANT_ID', '')
@@ -8431,60 +8176,33 @@ def _graph_get_me_email(access_token):
         return ''
 
 
-def _build_outlook_stream_response(days=60, source='com', page_size=50, max_pages=10, user_id=1, graph_settings=None):
+def _build_outlook_stream_response(days=60, source='graph', page_size=50, max_pages=10, user_id=1, graph_settings=None):
     def generate():
         own_domain = ''
         def evt(d):
             return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
         try:
-            connecting_message = 'Conectando via Microsoft Graph...' if source == 'graph' else 'Lendo emails do Outlook via COM...'
-            yield evt({'phase': 'connecting', 'message': connecting_message})
+            yield evt({'phase': 'connecting', 'message': 'Conectando via Microsoft Graph...'})
 
             try:
-                if source == 'graph':
-                    end_date = datetime.utcnow()
-                    start_date = end_date - timedelta(days=days)
-                    conn = get_db()
-                    access_token = outlook_graph_get_valid_access_token(conn=conn, user_id=user_id, settings=graph_settings)
-                    own_email = _graph_get_me_email(access_token)
-                    own_domain = own_email.split('@', 1)[-1] if '@' in own_email else ''
-                    emails = outlook_graph_fetch_messages(
-                        access_token=access_token,
-                        start_date=start_date,
-                        end_date=end_date,
-                        page_size=page_size,
-                        max_pages=max_pages
-                    )
-                    conn.close()
-                else:
-                    yield evt({
-                        'phase': 'reading',
-                        'message': 'Consulta COM iniciada. Isso pode levar alguns minutos em caixas postais grandes.',
-                        'count': 0
-                    })
-                    result_holder = {'emails': None, 'error': None}
-
-                    def _run_com_fetch():
-                        try:
-                            result_holder['emails'] = _outlook_fetch_via_powershell(days)
-                        except Exception as run_err:
-                            result_holder['error'] = run_err
-
-                    worker = threading.Thread(target=_run_com_fetch, daemon=True)
-                    started_at = time.time()
-                    worker.start()
-                    while worker.is_alive():
-                        elapsed = int(time.time() - started_at)
-                        yield evt({
-                            'phase': 'reading',
-                            'message': f'Consulta COM em andamento... {elapsed}s decorridos.',
-                            'count': 0
-                        })
-                        worker.join(timeout=5)
-
-                    if result_holder.get('error') is not None:
-                        raise result_holder['error']
-                    emails = result_holder.get('emails') or []
+                end_date = datetime.now(timezone.utc).replace(tzinfo=None)
+                start_date = end_date - timedelta(days=days)
+                conn = get_db()
+                access_token = outlook_graph_get_valid_access_token(
+                    conn=conn,
+                    user_id=user_id,
+                    settings=graph_settings,
+                )
+                own_email = _graph_get_me_email(access_token)
+                own_domain = own_email.split('@', 1)[-1] if '@' in own_email else ''
+                emails = outlook_graph_fetch_messages(
+                    access_token=access_token,
+                    start_date=start_date,
+                    end_date=end_date,
+                    page_size=page_size,
+                    max_pages=max_pages,
+                )
+                conn.close()
             except OutlookOAuthError as e:
                 logger.error(f'[Outlook][OAuth] Falha de autenticação no sync-stream ({source}): {e}')
                 yield evt({'phase': 'error', 'error_type': 'oauth_authentication', 'message': str(e)})
@@ -8710,12 +8428,6 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
         except Exception as e:
             logger.exception(f'[ERROR] SSE /api/outlook/sync-stream ({source}): {e}')
             yield evt({'phase': 'error', 'error_type': 'sync_failure', 'message': f'Erro inesperado: {str(e)}'})
-        finally:
-            try:
-                pythoncom.CoUninitialize()
-            except Exception as e:
-                logger.debug(f'[_finalize] exceção ignorada: {e}')
-
     return Response(
         stream_with_context(generate()),
         mimetype='text/event-stream',

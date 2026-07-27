@@ -9,13 +9,6 @@ def outlook_diagnose():
     """Retorna diagnóstico de configuração e conectividade para o sync do Outlook."""
     checks = []
 
-    is_win = sys.platform == 'win32'
-    checks.append({
-        'label': 'Windows (COM)',
-        'ok': is_win,
-        'detail': 'ok' if is_win else 'Não é Windows — conector COM indisponível'
-    })
-
     has_graph_creds = bool(
         _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID')
     )
@@ -69,8 +62,8 @@ def outlook_diagnose():
     llm_detail = (('SAI' if has_sai else '') + (' + ' if has_sai and has_or else '') + ('OpenRouter' if has_or else '')) if has_llm else 'Nenhum LLM configurado — resumos desativados'
     checks.append({'label': 'LLM (resumos)', 'ok': has_llm, 'detail': llm_detail})
 
-    can_sync = is_win or has_graph_token
-    connector = 'graph' if has_graph_token else ('com' if is_win else 'none')
+    can_sync = has_graph_token
+    connector = 'graph' if has_graph_token else 'none'
 
     return jsonify({
         'can_sync': can_sync,
@@ -83,71 +76,21 @@ def outlook_diagnose():
 
 @app.route('/api/outlook/sync', methods=['POST'])
 def sync_outlook_emails():
-    """Lê o Outlook via PowerShell e importa os emails como atividades."""
-    if sys.platform != 'win32':
-        return jsonify({'error': 'Sincronização com Outlook disponível somente no Windows.'}), 400
-    try:
-        data = request.get_json() or {}
-        days = max(1, min(int(data.get('days', 60)), 365))
-        emails = _outlook_fetch_via_powershell(days)
-        if not emails:
-            return jsonify({
-                'imported': 0, 'skipped_duplicates': 0, 'skipped_no_match': 0,
-                'total_read': 0,
-                'message': f'Nenhum email encontrado nos últimos {days} dias.'
-            })
-        conn = get_db()
-        imported, skipped_duplicates, skipped_no_match = _outlook_import_emails(emails, conn)
-        conn.close()
-        msg = f'{imported} atividade(s) importada(s)'
-        if skipped_duplicates:
-            msg += f', {skipped_duplicates} duplicata(s) ignorada(s)'
-        msg += f'. ({len(emails)} emails lidos do Outlook)'
-        return jsonify({
-            'imported': imported,
-            'skipped_duplicates': skipped_duplicates,
-            'skipped_no_match': skipped_no_match,
-            'total_read': len(emails),
-            'message': msg
-        })
-    except Exception as e:
-        logger.exception(f'[ERROR] POST /api/outlook/sync: {e}')
-        return jsonify({'error': str(e)}), 500
+    """Compatibilidade explícita: o conector local COM foi encerrado."""
+    return jsonify({
+        'error': (
+            'O conector Outlook COM foi descontinuado. '
+            'Conecte o Microsoft 365 e use a sincronização pelo Microsoft Graph.'
+        ),
+        'error_type': 'connector_retired',
+        'connector': 'graph',
+    }), 410
 
 
 @app.route('/api/outlook/sync-stream', methods=['GET'])
 def sync_outlook_stream():
-    """SSE: roteia para COM legado ou Graph de acordo com OUTLOOK_CONNECTOR_MODE."""
-    mode = (os.environ.get('OUTLOOK_CONNECTOR_MODE') or 'auto').strip().lower()
-    if mode not in {'com', 'graph', 'auto'}:
-        mode = 'auto'
-
-    # comportamento legado explícito
-    if mode == 'com':
-        return _outlook_sync_stream_com()
-
-    # Graph explícito
-    if mode == 'graph':
-        return _outlook_sync_stream_graph()
-
-    # auto: prioriza Graph se houver integração conectada; fallback para COM em Windows
-    user_id = current_user_id()
-    has_graph_integration = False
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            "SELECT 1 FROM user_integrations WHERE user_id = ? AND provider = 'outlook_graph' LIMIT 1",
-            (user_id,)
-        )
-        has_graph_integration = c.fetchone() is not None
-        conn.close()
-    except Exception:
-        has_graph_integration = False
-
-    if has_graph_integration:
-        return _outlook_sync_stream_graph()
-    return _outlook_sync_stream_com()
+    """SSE oficial do Outlook; desde F7.5 usa exclusivamente Microsoft Graph."""
+    return _outlook_sync_stream_graph()
 
 
 @app.route('/api/outlook/sync-stream-graph', methods=['GET'])

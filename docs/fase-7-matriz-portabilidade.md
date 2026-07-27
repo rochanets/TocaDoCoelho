@@ -1,7 +1,7 @@
 # Fase 7 - matriz de portabilidade
 
 Inventário iniciado sobre a `Live` no commit `29520b9` e atualizado até a
-F7.4 sobre o commit `3816095`. A Fase 7 preserva o produto como CRM interno
+F7.5 sobre o merge `0b7bac9`. A Fase 7 preserva o produto como CRM interno
 single-org e não antecipa Redis, object storage, produção ou multi-org.
 
 | Área | Implementação atual | Destino | Estado nesta branch | Condições e riscos |
@@ -13,9 +13,9 @@ single-org e não antecipa Redis, object storage, produção ou multi-org.
 | Imagens | Pillow em avatars, logos de relatório e conversão AutoToca | Servidor web, por fluxo | Parcial | Pillow entra com ReportLab; conversões de uploads não são declaradas portadas até receberem validação própria |
 | OCR de PDF escaneado | pytesseract + pypdfium2/pdf2image + binário Tesseract | Worker dedicado, Companion ou serviço | Adiado | CPU/memória altas, timeout, limite de páginas e isolamento de parser ainda não definidos |
 | Transcrição de áudio | Azure Speech F0 para ditados web; faster-whisper lazy no desktop | API externa / desktop | Portado em F7.3 | Web limitado a WAV PCM mono 16 kHz, 55 s e 5 h/mês; reuniões longas continuam fora |
-| Robô do Chamado Jurídico | Playwright visível, perfil do navegador e arquivos locais | Toca Companion | Contrato portado em F7.4 | Vínculo, fila, leases, arquivos privados e auditoria prontos; executor local entra na F7.5 |
-| Outlook PowerShell/COM | Implementação histórica desabilitada; Graph ativo | Microsoft Graph | Mantido desativado | Companion somente se surgir lacuna comprovada do Graph |
-| Selenium legado | Imports opcionais sem uso ativo identificado | Descontinuar após confirmação | Candidato | Não adicionar Selenium à imagem web |
+| Robô do Chamado Jurídico | Playwright visível, perfil do navegador e arquivos locais | Toca Companion | Portado em F7.5 | Executor local com heartbeat, arquivos verificados, limpeza e revisão humana obrigatória |
+| Outlook PowerShell/COM | Implementação histórica desabilitada; Graph ativo | Microsoft Graph | Encerrado em F7.5 | Rotas usam somente Graph; endpoint antigo responde 410 sem executar código local |
+| Selenium legado | Imports opcionais sem uso ativo identificado | Removido | Encerrado em F7.5 | Dependência e imports eliminados; Playwright é o único runtime do robô |
 | XLSX/OpenPyXL | Exportações/importações e indexação de planilhas | Servidor web | Fora do F7.3 | Requer recorte próprio de validação de uploads e consumo de memória |
 
 ## Decisões do recorte F7.1
@@ -77,7 +77,26 @@ single-org e não antecipa Redis, object storage, produção ou multi-org.
 7. Manter o robô Playwright direto somente no desktop com autenticação
    desligada; o web passa a enfileirar para o Companion.
 
-## Próximos recortes recomendados
+## Decisões do recorte F7.5
 
-- F7.5: execução do robô jurídico no Companion e encerramento formal do COM
-  legado.
+1. Executar o Chamado Jurídico no runtime local `toca_companion.py`, sem
+   importar Flask ou incluir Playwright na imagem web.
+2. Proteger o token local com DPAPI/Fernet, exigir HTTPS fora de localhost e
+   nunca enviar credenciais a redirects ou origens de anexos diferentes.
+3. Verificar tamanho e SHA-256 dos anexos, usar diretório temporário por tarefa
+   e removê-lo inclusive em falha ou cancelamento.
+4. Renovar leases em background e transformar cancelamentos web em
+   cancelamento cooperativo do Playwright.
+5. Manter `allow_submit=false`: o executor preenche e aguarda; somente o usuário
+   pode clicar em Enviar.
+6. Encerrar o conector Outlook PowerShell/COM e manter o Microsoft Graph como
+   único caminho de sincronização.
+7. Remover Selenium do código, dependências e instruções de build.
+
+## Encerramento da Fase 7
+
+A sequência F7.1–F7.5 está concluída. Itens marcados como `Parcial`, `Adiado` ou
+fora do recorte — conversões arbitrárias de imagem, OCR de PDF escaneado e
+XLS/XLSX — são decisões explícitas de portabilidade, não subtarefas omitidas.
+Eles exigem worker/isolamento e limites próprios e seguem para planejamento da
+Fase 8, sem bloquear o fechamento deste ciclo.
