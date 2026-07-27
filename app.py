@@ -127,6 +127,12 @@ except ImportError:
     PIL_AVAILABLE = False
 
 REPORTLAB_IMPORT_ERROR = None
+
+
+class DocumentFeatureUnavailable(RuntimeError):
+    """Dependência opcional de documentos ausente no ambiente atual."""
+
+
 try:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT, TA_CENTER
@@ -2656,6 +2662,22 @@ _AUTH_PUBLIC_ENDPOINTS = {'healthz'}
 # próprios), que ficam atrás do login.
 _AUTH_PUBLIC_ASSET_ENDPOINTS = {'static', 'serve_static', 'index'}
 _AUTH_PUBLIC_PREFIXES = ('/api/auth/',)
+_DEFAULT_WEB_MULTIPART_LIMIT_BYTES = 25 * 1024 * 1024
+
+
+def _web_multipart_limit_bytes():
+    """Limite global de multipart apenas no modo web autenticado.
+
+    Fluxos de parsing de documentos ainda devem impor limites menores e
+    específicos (páginas, MIME e tempo) quando forem portados.
+    """
+    raw = (os.environ.get('TOCA_WEB_MAX_UPLOAD_BYTES') or '').strip()
+    if not raw:
+        return _DEFAULT_WEB_MULTIPART_LIMIT_BYTES
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_WEB_MULTIPART_LIMIT_BYTES
 
 
 @app.before_request
@@ -2675,6 +2697,18 @@ def _enforce_login_required():
     if request.endpoint in _AUTH_PUBLIC_ENDPOINTS:
         return None
     if current_user() is not None:
+        content_type = (request.content_type or '').lower()
+        if (
+            request.method in {'POST', 'PUT', 'PATCH'}
+            and content_type.startswith('multipart/form-data')
+            and request.content_length is not None
+            and request.content_length > _web_multipart_limit_bytes()
+        ):
+            return jsonify({
+                'error': 'Arquivo ou formulário excede o limite permitido.',
+                'code': 'WEB_UPLOAD_TOO_LARGE',
+                'max_bytes': _web_multipart_limit_bytes(),
+            }), 413
         return None
     # A raiz entrega apenas o shell público da SPA. Ele contém a tela visual de
     # entrada da Fase 6 e consulta /api/auth/me; APIs, uploads e demais páginas
@@ -4574,7 +4608,9 @@ def _relation_report_render_pdf(report_data):
             REPORTLAB_IMPORT_ERROR = None
         except Exception as e:
             REPORTLAB_IMPORT_ERROR = e
-            raise RuntimeError(f'ReportLab não está disponível para gerar o PDF. Detalhe: {e}')
+            raise DocumentFeatureUnavailable(
+                'Geração de PDF indisponível neste ambiente.'
+            ) from e
 
     from reportlab.pdfgen import canvas
     colors_map = _relation_report_pick_system_colors()
@@ -4711,6 +4747,7 @@ def _relation_report_render_pdf(report_data):
         txt = f"• [{card.get('column_title') or 'Sem coluna'}] {card.get('title')} — contato: {card.get('contact_name') or 'N/I'} — urgência: {card.get('urgency') or 'N/I'}"
         y = _relation_report_draw_paragraph(c, txt, 22 * mm, y, page_width - 40 * mm, small_style) - 1 * mm
 
+    y -= 3 * mm
     y = ensure_space(y, 55 * mm)
     c.setFillColor(colors_map['secondary'])
     c.setFont('Helvetica-Bold', 12)
@@ -4727,7 +4764,9 @@ def _relation_report_render_pdf(report_data):
         c.drawString(21 * mm, y - 6 * mm, topic)
         c.setFillColor(colors.HexColor('#374151'))
         topic_text = (narrative.get('topic_breakdown') or {}).get(topic) or f"Sem evidências relevantes para {topic.lower()}."
-        y = _relation_report_draw_paragraph(c, topic_text, 42 * mm, y - 2 * mm, page_width - 60 * mm, small_style) - 4 * mm
+        y = _relation_report_draw_paragraph(
+            c, topic_text, 70 * mm, y - 2 * mm, page_width - 88 * mm, small_style
+        ) - 4 * mm
 
     y = ensure_space(y, 30 * mm)
     c.setFillColor(colors_map['secondary'])
@@ -4775,6 +4814,12 @@ def export_relation_report():
             as_attachment=True,
             download_name=file_name
         )
+    except DocumentFeatureUnavailable as e:
+        logger.warning(f'[RelationReport] PDF indisponível: {REPORTLAB_IMPORT_ERROR or e}')
+        return jsonify({
+            'error': 'Geração de PDF indisponível neste ambiente.',
+            'code': 'PDF_GENERATION_UNAVAILABLE',
+        }), 503
     except Exception as e:
         logger.exception(f'[RelationReport] Falha ao gerar relatório: {e}')
         return jsonify({'error': str(e)}), 500
