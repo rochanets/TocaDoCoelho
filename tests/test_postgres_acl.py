@@ -605,3 +605,28 @@ def test_pg_whatsapp_inbound_scoped(client, monkeypatch):
         s['user_id'] = a_id
     names = {r['name'] for r in client.get('/api/inbound/pending').get_json()}
     assert f'CliA-{tag}' in names and f'CliB-{tag}' not in names
+
+
+# ── scheduled_sends: fila pessoal (owned_where) no Postgres ─────────────────
+
+def test_pg_scheduled_sends_owned(client, monkeypatch):
+    """/api/scheduled-sends no Postgres: fila PESSOAL — owned_where('scheduled_sends')
+    (COALESCE(owner_id, MIN(users.id)) = ?) traduzido; cada um vê só os seus."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ca = _new_client(a_id, f'CliA-{tag}')
+    cb = _new_client(b_id, f'CliB-{tag}')
+    from datetime import datetime as _dt, timedelta as _td
+    when = (_dt.now() + _td(hours=1)).strftime('%Y-%m-%d %H:%M')
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("""INSERT INTO scheduled_sends (channel, client_id, phone, message, scheduled_for, status, owner_id)
+                 VALUES ('whatsapp', ?, '11999990000', ?, ?, 'pending', ?)""", (ca, f'ma-{tag}', when, a_id))
+    c.execute("""INSERT INTO scheduled_sends (channel, client_id, phone, message, scheduled_for, status, owner_id)
+                 VALUES ('whatsapp', ?, '11999990000', ?, ?, 'pending', ?)""", (cb, f'mb-{tag}', when, b_id))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    owners = {r.get('owner_id') for r in client.get('/api/scheduled-sends').get_json()}
+    assert owners == {a_id}                                        # só os agendamentos de A

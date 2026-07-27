@@ -1548,6 +1548,16 @@ SCHEMA_MIGRATIONS = [
         'CREATE INDEX IF NOT EXISTS idx_message_templates_owner ON message_templates(owner_id)',
         'UPDATE message_templates SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
     ]),
+
+    # Fase 4 — owner_id nos envios agendados (scheduled_sends). Decisão: a fila de
+    # agendamentos é PESSOAL (por-usuário) — cada um vê/gerencia só os SEUS envios
+    # pendentes, como o Radar/Kanban. As activities/commitments que o envio gera já
+    # herdam o owner via os helpers. Backfill = fundador.
+    (19, 'multiusuario_fase_4_owner_id_scheduled_sends', [
+        'ALTER TABLE scheduled_sends ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_scheduled_sends_owner ON scheduled_sends(owner_id)',
+        'UPDATE scheduled_sends SET owner_id = (SELECT MIN(id) FROM users) WHERE owner_id IS NULL',
+    ]),
 ]
 
 
@@ -2093,7 +2103,7 @@ _ACL_ROOT_TABLES = {
     'kanban_columns', 'wiki_entries', 'wiki_documents', 'portfolio_offers',
     'iata_records', 'environment_cards', 'account_archives',
     'account_planning_runs', 'itoca_chat_history', 'daily_suggestions',
-    'message_templates',
+    'message_templates', 'scheduled_sends',
 }
 
 # Tabelas-FILHAS: não têm owner_id próprio — herdam a dona da RAIZ ancestral via
