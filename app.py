@@ -3129,7 +3129,12 @@ def _relation_report_topic_from_text(text):
 def _relation_report_collect_data(account_id, start_date=None, end_date=None):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+    # Escopo (decisão do produto): o relatório é NÍVEL-CONTA — quem enxerga a CONTA
+    # recebe o 360° completo (contatos/atividades/kanban/mapeamento da conta). O
+    # único gate é a visibilidade da conta; as consultas filhas seguem account-wide.
+    # Roda em contexto de request (as 4 rotas de relatório). Login off → '1=1'.
+    _vw, _vp = visible_where('accounts')
+    c.execute(f"SELECT * FROM accounts WHERE id = ? AND {_vw}", [account_id] + _vp)
     account = dict_from_row(c.fetchone())
     if not account:
         conn.close()
