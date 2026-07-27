@@ -630,3 +630,23 @@ def test_pg_scheduled_sends_owned(client, monkeypatch):
         s['user_id'] = a_id
     owners = {r.get('owner_id') for r in client.get('/api/scheduled-sends').get_json()}
     assert owners == {a_id}                                        # só os agendamentos de A
+
+
+# ── autotoca: dropdown de contas escopado no Postgres ───────────────────────
+
+def test_pg_autotoca_accounts_scoped(client, monkeypatch):
+    """/api/autotoca/accounts no Postgres: valida visible_where('accounts') +
+    ORDER BY ... COLLATE NOCASE traduzidos juntos pelo wrapper — membro só vê as
+    contas dele."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AcctA-{tag}', a_id))
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AcctB-{tag}', b_id))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    names = {a['name'] for a in client.get('/api/autotoca/accounts').get_json()}
+    assert f'AcctA-{tag}' in names and f'AcctB-{tag}' not in names
