@@ -638,10 +638,39 @@ def autotoca_chamado_juridico_robot():
         if errors:
             return jsonify({'error': ' '.join(errors)}), 400
 
-        with _forms_robot_tasks_lock:
-            busy = any(t.get('status') == 'processing' for t in _forms_robot_tasks.values())
-        if busy:
-            return jsonify({'error': 'O robô já está em execução. Aguarde ele terminar.'}), 409
+        companion_idempotency_key = None
+        if _auth_enabled():
+            try:
+                companion_idempotency_key = _companion_idempotency_key(
+                    request.headers.get('Idempotency-Key')
+                )
+            except ValueError as exc:
+                return jsonify({
+                    'error': str(exc),
+                    'code': 'COMPANION_IDEMPOTENCY_KEY_INVALID',
+                }), 400
+            existing_task = _companion_find_idempotent_task(
+                current_user_id(),
+                COMPANION_TASK_TYPE_CHAMADO_JURIDICO,
+                companion_idempotency_key,
+            )
+            if existing_task:
+                return jsonify({
+                    'task_id': existing_task['id'],
+                    'history_id': existing_task.get('history_id'),
+                    'idempotent_replay': True,
+                    'execution': 'companion',
+                }), 202
+        else:
+            with _forms_robot_tasks_lock:
+                busy = any(
+                    t.get('status') == 'processing'
+                    for t in _forms_robot_tasks.values()
+                )
+            if busy:
+                return jsonify({
+                    'error': 'O robô já está em execução. Aguarde ele terminar.'
+                }), 409
 
         # Cria a linha do histórico já para ter um id — os arquivos ficam
         # organizados em uploads/autotoca/chamado-juridico/<history_id>/<campo>/
@@ -682,6 +711,21 @@ def autotoca_chamado_juridico_robot():
         conn.commit()
         conn.close()
 
+        if _auth_enabled():
+            task, created = _companion_enqueue_task(
+                task_type=COMPANION_TASK_TYPE_CHAMADO_JURIDICO,
+                payload=payload,
+                history_id=history_id,
+                files_by_field=files_by_field,
+                idempotency_key=companion_idempotency_key,
+            )
+            return jsonify({
+                'task_id': task['id'],
+                'history_id': task.get('history_id'),
+                'idempotent_replay': not created,
+                'execution': 'companion',
+            }), 202
+
         task_id = uuid.uuid4().hex
         _forms_robot_task_set(task_id, {'status': 'processing', 'step': 'Iniciando o robô...', 'progress': 5})
         threading.Thread(
@@ -690,11 +734,39 @@ def autotoca_chamado_juridico_robot():
         return jsonify({'task_id': task_id, 'history_id': history_id}), 202
     except Exception as e:
         logger.exception(f'[AutoToca] POST /api/autotoca/chamado-juridico/robot: {e}')
+        if _auth_enabled():
+            return jsonify({
+                'error': 'Não foi possível criar a tarefa do Toca Companion.',
+                'code': 'COMPANION_TASK_CREATE_FAILED',
+            }), 500
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/autotoca/chamado-juridico/robot/tasks/<task_id>', methods=['GET'])
 def autotoca_chamado_juridico_robot_task(task_id):
+    if _auth_enabled():
+        task = _companion_task_for_owner(task_id)
+        if not task:
+            return jsonify({'error': 'Tarefa não encontrada.'}), 404
+        status_map = {
+            'succeeded': 'done',
+            'failed': 'error',
+            'expired': 'error',
+            'cancelled': 'cancelled',
+        }
+        public_status = status_map.get(task['status'], 'processing')
+        result = json.loads(task.get('result_json') or '{}')
+        if task.get('history_id') is not None:
+            result.setdefault('history_id', task['history_id'])
+        return jsonify({
+            'status': public_status,
+            'companion_status': task['status'],
+            'progress': int(task.get('progress') or 0),
+            'step': task.get('step'),
+            'result': result,
+            'error': task.get('error_message'),
+            'error_code': task.get('error_code'),
+        })
     task = _forms_robot_task_get(task_id)
     if not task:
         return jsonify({'error': 'Tarefa não encontrada.'}), 404

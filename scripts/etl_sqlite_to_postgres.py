@@ -54,6 +54,37 @@ def _sqlite_columns(sq, table):
     return [r[1] for r in sq.execute(f'PRAGMA table_info("{table}")').fetchall()]
 
 
+def _reset_postgres_id_sequences(pg, tables, pg_cols):
+    """Reajusta somente IDs que realmente têm sequence no PostgreSQL.
+
+    Algumas tabelas usam `id TEXT` com UUID/token aleatório. Consultar MAX(id)
+    junto ao fallback inteiro do setval nessas tabelas causa DatatypeMismatch,
+    mesmo quando pg_get_serial_sequence() é NULL.
+    """
+    cur = pg.cursor()
+    for table in tables:
+        if 'id' not in pg_cols[table]:
+            continue
+        cur.execute(
+            "SELECT pg_get_serial_sequence(%s, 'id')",
+            (f'"{table}"',),
+        )
+        sequence_name = cur.fetchone()[0]
+        if not sequence_name:
+            continue
+        quoted_table = '"' + table.replace('"', '""') + '"'
+        cur.execute(
+            (
+                "SELECT setval("
+                "  %s,"
+                f"  COALESCE((SELECT MAX(id) FROM {quoted_table}), 1),"
+                f"  (SELECT COUNT(*) FROM {quoted_table}) > 0"
+                ")"
+            ),
+            (sequence_name,),
+        )
+
+
 def run_etl(sqlite_path, database_url, *, log=print):
     """Executa o ETL e devolve um resumo {tables: {t: n}, mismatches: [...]}"""
     import psycopg
@@ -88,16 +119,9 @@ def run_etl(sqlite_path, database_url, *, log=print):
         cur.execute("SET session_replication_role = 'origin'")
         pg.commit()
 
-        # Reajusta as sequences das colunas `id` para MAX(id).
-        for table in tables:
-            if 'id' in pg_cols[table]:
-                cur.execute(
-                    "SELECT setval("
-                    f"  pg_get_serial_sequence('\"{table}\"', 'id'),"
-                    f"  COALESCE((SELECT MAX(id) FROM \"{table}\"), 1),"
-                    f"  (SELECT COUNT(*) FROM \"{table}\") > 0"
-                    ") WHERE pg_get_serial_sequence('\"" + table + "\"', 'id') IS NOT NULL"
-                )
+        # Reajusta apenas sequences reais. IDs textuais (ex.: Companion) não
+        # possuem sequence e devem ser ignorados.
+        _reset_postgres_id_sequences(pg, tables, pg_cols)
         pg.commit()
 
         # Validação: COUNT(*) origem vs destino.

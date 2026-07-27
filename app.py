@@ -1635,6 +1635,86 @@ SCHEMA_MIGRATIONS = [
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''',
     ]),
+    # Fase 7.4 — contrato persistente e auditável entre o web e o Toca
+    # Companion. Segredos de vínculo, dispositivo e lease são armazenados
+    # somente como hash; arquivos continuam no storage privado do chamado.
+    (30, 'fase_7_4_companion_contract', [
+        '''CREATE TABLE IF NOT EXISTS companion_pairings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code_hash TEXT NOT NULL UNIQUE,
+            owner_id INTEGER NOT NULL REFERENCES users(id),
+            org_id INTEGER REFERENCES organizations(id),
+            expires_at TIMESTAMP NOT NULL,
+            claimed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS companion_devices (
+            id TEXT PRIMARY KEY,
+            owner_id INTEGER NOT NULL REFERENCES users(id),
+            org_id INTEGER REFERENCES organizations(id),
+            name TEXT NOT NULL,
+            platform TEXT,
+            app_version TEXT,
+            token_hash TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            paired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TIMESTAMP,
+            revoked_at TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS companion_tasks (
+            id TEXT PRIMARY KEY,
+            owner_id INTEGER NOT NULL REFERENCES users(id),
+            org_id INTEGER REFERENCES organizations(id),
+            task_type TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            history_id INTEGER REFERENCES chamado_juridico_history(id),
+            assigned_device_id TEXT REFERENCES companion_devices(id),
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress INTEGER NOT NULL DEFAULT 0,
+            step TEXT,
+            lease_token_hash TEXT,
+            lease_expires_at TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            result_json TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            UNIQUE(owner_id, task_type, idempotency_key)
+        )''',
+        '''CREATE TABLE IF NOT EXISTS companion_task_files (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES companion_tasks(id) ON DELETE CASCADE,
+            field_key TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            stored_path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS companion_task_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL REFERENCES companion_tasks(id) ON DELETE CASCADE,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT,
+            event_type TEXT NOT NULL,
+            from_status TEXT,
+            to_status TEXT,
+            message TEXT,
+            details_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_companion_pairings_owner ON companion_pairings(owner_id, created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_companion_devices_owner_status ON companion_devices(owner_id, status)',
+        'CREATE INDEX IF NOT EXISTS idx_companion_tasks_queue ON companion_tasks(owner_id, status, created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_companion_tasks_device ON companion_tasks(assigned_device_id, status)',
+        'CREATE INDEX IF NOT EXISTS idx_companion_task_files_task ON companion_task_files(task_id)',
+        'CREATE INDEX IF NOT EXISTS idx_companion_task_events_task ON companion_task_events(task_id, created_at)',
+    ]),
 ]
 
 
@@ -2680,13 +2760,14 @@ def admin_write_required(fn):
     return _wrapper
 
 
-# Endpoints sempre públicos (sem redirect): /healthz e o próprio fluxo de auth.
+# Endpoints sem cookie de sessão: /healthz, fluxo de auth e protocolo v1 do
+# Companion. As rotas v1 aplicam token próprio ou código de vínculo.
 _AUTH_PUBLIC_ENDPOINTS = {'healthz'}
 # Assets estáticos da SPA (pasta public/): js/css/img podem carregar sem sessão
 # (não expõem dados). NÃO inclui /uploads/* (arquivos de negócio, endpoints
 # próprios), que ficam atrás do login.
 _AUTH_PUBLIC_ASSET_ENDPOINTS = {'static', 'serve_static', 'index'}
-_AUTH_PUBLIC_PREFIXES = ('/api/auth/',)
+_AUTH_PUBLIC_PREFIXES = ('/api/auth/', '/api/companion/v1/')
 _DEFAULT_WEB_MULTIPART_LIMIT_BYTES = 25 * 1024 * 1024
 
 
@@ -2710,8 +2791,9 @@ def _enforce_login_required():
     """Gate de autenticação. No-op quando o login está desligado (desktop/SQLite
     roda idêntico ao de sempre). Ligado: navegações de página (Accept text/html)
     sem sessão são levadas ao handshake SSO (/api/auth/login); requisições de
-    API/uploads sem sessão recebem 401 JSON; assets estáticos da SPA e /healthz
-    e /api/auth/* seguem públicos."""
+    API/uploads sem sessão recebem 401 JSON; assets estáticos da SPA, /healthz
+    e /api/auth/* seguem públicos. O protocolo /api/companion/v1/* passa sem
+    cookie, mas exige credencial própria dentro de cada rota."""
     if not _auth_enabled():
         return None
     if request.method == 'OPTIONS':
@@ -13603,7 +13685,7 @@ def handle_unexpected_exception(error):
 # No build PyInstaller, incluir --add-data "routes;routes".
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['auth', 'admin', 'shares', 'clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
-                 'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
+                 'whatsapp', 'outlook', 'itoca', 'autotoca', 'companion', 'wikitoca',
                  'portfolio', 'config', 'home']
 
 

@@ -1,7 +1,7 @@
 # Fase 7 - matriz de portabilidade
 
 Inventário iniciado sobre a `Live` no commit `29520b9` e atualizado até a
-F7.3 sobre o commit `195ba74`. A Fase 7 preserva o produto como CRM interno
+F7.4 sobre o commit `3816095`. A Fase 7 preserva o produto como CRM interno
 single-org e não antecipa Redis, object storage, produção ou multi-org.
 
 | Área | Implementação atual | Destino | Estado nesta branch | Condições e riscos |
@@ -13,7 +13,7 @@ single-org e não antecipa Redis, object storage, produção ou multi-org.
 | Imagens | Pillow em avatars, logos de relatório e conversão AutoToca | Servidor web, por fluxo | Parcial | Pillow entra com ReportLab; conversões de uploads não são declaradas portadas até receberem validação própria |
 | OCR de PDF escaneado | pytesseract + pypdfium2/pdf2image + binário Tesseract | Worker dedicado, Companion ou serviço | Adiado | CPU/memória altas, timeout, limite de páginas e isolamento de parser ainda não definidos |
 | Transcrição de áudio | Azure Speech F0 para ditados web; faster-whisper lazy no desktop | API externa / desktop | Portado em F7.3 | Web limitado a WAV PCM mono 16 kHz, 55 s e 5 h/mês; reuniões longas continuam fora |
-| Robô do Chamado Jurídico | Playwright visível, perfil do navegador e arquivos locais | Toca Companion | Delegado | Preservar preenchimento sem envio; contrato, autenticação, fila e auditoria ainda precisam de desenho |
+| Robô do Chamado Jurídico | Playwright visível, perfil do navegador e arquivos locais | Toca Companion | Contrato portado em F7.4 | Vínculo, fila, leases, arquivos privados e auditoria prontos; executor local entra na F7.5 |
 | Outlook PowerShell/COM | Implementação histórica desabilitada; Graph ativo | Microsoft Graph | Mantido desativado | Companion somente se surgir lacuna comprovada do Graph |
 | Selenium legado | Imports opcionais sem uso ativo identificado | Descontinuar após confirmação | Candidato | Não adicionar Selenium à imagem web |
 | XLSX/OpenPyXL | Exportações/importações e indexação de planilhas | Servidor web | Fora do F7.3 | Requer recorte próprio de validação de uploads e consumo de memória |
@@ -60,9 +60,24 @@ single-org e não antecipa Redis, object storage, produção ou multi-org.
 7. Preservar o `faster-whisper` e os formatos legados quando
    `TOCA_AUTH_ENABLED` estiver desligado.
 
+## Decisões do recorte F7.4
+
+1. Vincular cada Companion a um usuário por código aleatório, curto, expirável
+   e de uso único; tokens são mostrados uma vez e persistidos somente como hash.
+2. Persistir tarefas, anexos e eventos em SQLite/PostgreSQL, com isolamento pelo
+   proprietário e idempotência garantida por restrição única.
+3. Entregar cada tarefa por lease curto e renovável; reenfileirar apenas quando
+   o executor ainda não iniciou, evitando duplicação de efeitos externos.
+4. Exigir token do dispositivo e lease para baixar anexos; nunca expor o caminho
+   físico nem criar URL pública.
+5. Preservar a regra do robô: preencher e aguardar revisão humana, rejeitando
+   qualquer resultado que declare envio automático.
+6. Permitir cancelamento cooperativo, expiração, revogação de dispositivo,
+   auditoria de transições e manifesto de atualização com SHA-256.
+7. Manter o robô Playwright direto somente no desktop com autenticação
+   desligada; o web passa a enfileirar para o Companion.
+
 ## Próximos recortes recomendados
 
-- F7.4: contrato do Companion (auth, vínculo, fila, estados, idempotência,
-  expiração, cancelamento, transferência segura, logs e atualização).
 - F7.5: execução do robô jurídico no Companion e encerramento formal do COM
   legado.
