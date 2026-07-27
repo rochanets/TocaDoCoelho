@@ -402,6 +402,7 @@ def home_cobertura_detail():
                     )
                 ) AS last_activity
             FROM accounts acc
+            WHERE """ + _acl_visible_sql('accounts', 'acc') + """
             ORDER BY acc.name ASC
         """)
 
@@ -450,13 +451,20 @@ def home_overview():
         include_cold = request.args.get('include_cold') == '1'
 
         def client_filter(alias='c'):
-            """Retorna fragmento AND para filtrar clientes arquivados/frios conforme flags."""
+            """Fragmento AND: filtra arquivados/frios conforme flags E aplica a
+            visibilidade (dashboard por-usuário: membro vê a sua fatia, admin a
+            org; login off = '1=1')."""
             clauses = []
             if not include_archived:
                 clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
             if not include_cold:
                 clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
-            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
+            clauses.append(_acl_visible_sql('clients', alias))
+            return ' AND ' + ' AND '.join(clauses)
+
+        def account_filter(alias='a'):
+            """Fragmento AND com a visibilidade de accounts (mesmo racional)."""
+            return ' AND ' + _acl_visible_sql('accounts', alias)
 
         conn = get_db()
         c = conn.cursor()
@@ -493,7 +501,7 @@ def home_overview():
             return f" AND strftime('%Y-%m', {col}) IN ({ph})", list(months_filter)
 
         # --- KPIs base ---
-        c.execute("SELECT COUNT(*) AS n FROM accounts")
+        c.execute(f"SELECT COUNT(*) AS n FROM accounts WHERE {_acl_visible_sql('accounts', 'accounts')}")
         total_accounts = c.fetchone()['n']
 
         c.execute(f"SELECT COUNT(*) AS n FROM clients c WHERE 1=1{client_filter()}")
@@ -532,7 +540,7 @@ def home_overview():
         # 3 caminhos: atividade direta na conta | account_main_contacts → activities | fallback por nome
         mf_a, mfp_a = month_clause('a.activity_date')
         mf_aa, mfp_aa = month_clause('aa.activity_date')
-        c.execute("""
+        c.execute(f"""
             SELECT COUNT(DISTINCT acc_id) AS n FROM (
                 SELECT aa.account_id AS acc_id
                 FROM account_activities aa
@@ -549,7 +557,8 @@ def home_overview():
                 JOIN activities a2 ON a2.client_id = cl2.id
                 WHERE cl2.company IS NOT NULL AND TRIM(cl2.company) != ''
                 AND date(a2.activity_date) >= date('now', '-30 days')
-            )
+            ) sub
+            WHERE sub.acc_id IN (SELECT av.id FROM accounts av WHERE {_acl_visible_sql('accounts', 'av')})
         """)
         covered_accounts = c.fetchone()['n'] or 0
         cobertura_pct = round((covered_accounts / total_accounts) * 100) if total_accounts > 0 else 0
@@ -569,6 +578,7 @@ def home_overview():
             LEFT JOIN account_presences p ON p.account_id = a.id
                 AND (p.billing_type IS NULL OR p.billing_type = 'Mensal')
                 {fat_contract_clause}
+            WHERE {_acl_visible_sql('accounts', 'a')}
             GROUP BY a.id, a.name
             HAVING COALESCE(SUM(p.current_revenue_cents), 0) > 0
             ORDER BY receita DESC
@@ -582,6 +592,7 @@ def home_overview():
             LEFT JOIN account_presences p ON p.account_id = a.id
                 AND p.billing_type = 'Unico'
                 {fat_contract_clause}
+            WHERE {_acl_visible_sql('accounts', 'a')}
             GROUP BY a.id, a.name
             HAVING COALESCE(SUM(p.current_revenue_cents), 0) > 0
             ORDER BY receita DESC
@@ -600,7 +611,7 @@ def home_overview():
             acc_acts AS (
                 SELECT acc.name AS acc, COUNT(*) AS n
                 FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
-                WHERE 1=1 {mf_aa}
+                WHERE 1=1 {mf_aa} AND {_acl_visible_sql('accounts', 'acc')}
                 GROUP BY acc.name
             )
             SELECT acc AS name, SUM(n) AS total FROM (
@@ -629,7 +640,7 @@ def home_overview():
                        {mf_aa.replace('aa.activity_date', 'aa2.activity_date')}
                    ), 0) AS total
             FROM accounts a
-            WHERE COALESCE(a.is_target, 0) = 1
+            WHERE COALESCE(a.is_target, 0) = 1 AND {_acl_visible_sql('accounts', 'a')}
             ORDER BY total ASC, a.name ASC
             LIMIT 5
         """, mfp_a + mfp_aa)
@@ -647,11 +658,13 @@ def home_overview():
         interacoes_cargo = [{'name': r['cargo'], 'count': r['n']} for r in c.fetchall()]
 
         # --- Evolução mensal de interações (últimos 12 meses, ignora filtro de período) ---
-        c.execute("""
+        c.execute(f"""
             WITH all_acts AS (
                 SELECT strftime('%Y-%m', activity_date) AS ym FROM activities
+                WHERE {_acl_visible_sql('activities', 'activities')}
                 UNION ALL
                 SELECT strftime('%Y-%m', activity_date) AS ym FROM account_activities
+                WHERE {_acl_visible_sql('account_activities', 'account_activities')}
             )
             SELECT ym, COUNT(*) AS n
             FROM all_acts
@@ -786,14 +799,14 @@ def home_overview():
 
         # --- Insights & Alertas ---
         # Contas estratégicas (target) sem contato há >20 dias
-        c.execute("""
+        c.execute(f"""
             SELECT a.name,
                    MAX(COALESCE(
                        (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE cl2.company=a.name),
                        (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id)
                    )) AS last_act
             FROM accounts a
-            WHERE COALESCE(a.is_target,0)=1
+            WHERE COALESCE(a.is_target,0)=1 AND {_acl_visible_sql('accounts', 'a')}
             GROUP BY a.id, a.name
         """)
         target_sem_contato = 0
@@ -820,14 +833,16 @@ def home_overview():
             ym_anterior = evolucao_mensal[-2]['ym']
             crescimento_ym_atual = ym_atual
             crescimento_ym_anterior = ym_anterior
-            c.execute("""
+            c.execute(f"""
                 WITH acts AS (
                     SELECT cl.company AS acc, strftime('%Y-%m', a.activity_date) AS ym
                     FROM activities a JOIN clients cl ON cl.id = a.client_id
                     WHERE cl.company IS NOT NULL AND TRIM(cl.company) != ''
+                      AND {_acl_visible_sql('clients', 'cl')}
                     UNION ALL
                     SELECT acc.name AS acc, strftime('%Y-%m', aa.activity_date) AS ym
                     FROM account_activities aa JOIN accounts acc ON acc.id = aa.account_id
+                    WHERE {_acl_visible_sql('accounts', 'acc')}
                 )
                 SELECT * FROM (
                     SELECT acc,
@@ -869,12 +884,12 @@ def home_overview():
             ][:3]
 
         target_risco_atencao = 0
-        c.execute("""
+        c.execute(f"""
             SELECT a.name,
                    (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE cl2.company=a.name) AS la_cli,
                    (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id) AS la_acc
             FROM accounts a
-            WHERE COALESCE(a.is_target,0)=1
+            WHERE COALESCE(a.is_target,0)=1 AND {_acl_visible_sql('accounts', 'a')}
         """)
         for r in c.fetchall():
             last = r['la_cli'] or r['la_acc']
@@ -890,13 +905,16 @@ def home_overview():
                 logger.debug(f'[_rank_key] exceção ignorada: {e}')
 
         # --- Meses disponíveis (para o filtro) ---
-        c.execute("""
+        c.execute(f"""
             SELECT DISTINCT ym FROM (
-                SELECT strftime('%Y-%m', activity_date) AS ym FROM activities WHERE activity_date IS NOT NULL
+                SELECT strftime('%Y-%m', activity_date) AS ym FROM activities
+                WHERE activity_date IS NOT NULL AND {_acl_visible_sql('activities', 'activities')}
                 UNION
-                SELECT strftime('%Y-%m', activity_date) AS ym FROM account_activities WHERE activity_date IS NOT NULL
+                SELECT strftime('%Y-%m', activity_date) AS ym FROM account_activities
+                WHERE activity_date IS NOT NULL AND {_acl_visible_sql('account_activities', 'account_activities')}
                 UNION
-                SELECT strftime('%Y-%m', created_at) AS ym FROM clients WHERE created_at IS NOT NULL
+                SELECT strftime('%Y-%m', created_at) AS ym FROM clients
+                WHERE created_at IS NOT NULL AND {_acl_visible_sql('clients', 'clients')}
             )
             WHERE ym IS NOT NULL
             ORDER BY ym DESC

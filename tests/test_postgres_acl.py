@@ -476,3 +476,33 @@ def test_pg_home_radar_scoped(client, monkeypatch):
         from flask import session
         session['user_id'] = b_id; toca._reset_request_user_cache()
         assert toca.can_read('job_change_events', jc) is False
+
+
+# ── Home overview: dashboard por-usuário (_acl_visible_sql inline) no PG ─────
+
+def test_pg_home_overview_scoped(client, monkeypatch):
+    """/api/home/overview no Postgres: os agregados escopam por _acl_visible_sql
+    (COALESCE owner + EXISTS shares / IN org do admin, inlinado) e pelas filhas
+    de accounts — o membro só vê a SUA fatia. Exercita a tradução do inline +
+    strftime/julianday emulados na rota inteira."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AA-{tag}', a_id))
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AB1-{tag}', b_id))
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AB2-{tag}', b_id))
+    conn.commit(); conn.close()
+    _new_client(a_id, f'ca-{tag}')
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    r = client.get('/api/home/overview')
+    assert r.status_code == 200, r.get_data(as_text=True)[:400]
+    kpis = r.get_json()['kpis']
+    assert kpis['total_accounts'] == 1        # só a conta de A (as de B ficam de fora)
+
+    with client.session_transaction() as s:
+        s['user_id'] = admin_id
+    kadm = client.get('/api/home/overview').get_json()['kpis']
+    assert kadm['total_accounts'] >= 3        # admin vê a org (as 3 contas do tag + o que houver)
