@@ -446,3 +446,33 @@ def test_pg_itoca_search_scoped(client, monkeypatch):
     assert ('clients', ca) in keys and ('clients', cb) not in keys       # filtro por can_read
     panel = next((r for r in captured['rows'] if str(r.get('snippet', '')).startswith('PAINEL_GERAL')), None)
     assert panel is not None and 'total_contas: 1' in panel['snippet']   # só a conta de A
+
+
+# ── Home: Radar do Dia por-usuário (owned_where + filha job_change) no PG ────
+
+def test_pg_home_radar_scoped(client, monkeypatch):
+    """/api/suggestions/today no Postgres: o radar gera só sobre o que o usuário
+    vê (visible_where em clients/accounts/commitments, owned_where no kanban e no
+    daily_suggestions) e job_change_events herda a visibilidade do contato —
+    tudo traduzido pelo wrapper (inclui julianday/strftime emulados)."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ca = _new_client(a_id, f'Alice-{tag}')
+    _new_client(b_id, f'Bob-{tag}')
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO job_change_events (client_id, empresa_nova, status) VALUES (?, 'X', 'pendente')", (ca,))
+    jc = c.lastrowid
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    r = client.get('/api/suggestions/today')
+    assert r.status_code == 200, r.get_data(as_text=True)[:400]
+    titles = ' | '.join(x['title'] for x in r.get_json())
+    assert f'Alice-{tag}' in titles and f'Bob-{tag}' not in titles
+    # filha job_change_events → clients (EXISTS) traduzida: B não vê a de A
+    with toca.app.test_request_context('/'):
+        from flask import session
+        session['user_id'] = b_id; toca._reset_request_user_cache()
+        assert toca.can_read('job_change_events', jc) is False
