@@ -27,9 +27,9 @@ jobs:
           done
           echo "healthz não respondeu a tempo"; exit 1
 
-      - name: Smoke test — geração de PDF core
+      - name: Smoke test — documentos web
         run: |
-          docker exec toca-web python -c "import app; pdf = app._briefings_to_pdf('Smoke PDF', [('Seção', 'Conteúdo')]); assert pdf and pdf.startswith(b'%PDF-')"
+          docker exec toca-web python -c "import app; assert app.PDFPLUMBER_AVAILABLE and app.PYTHON_DOCX_AVAILABLE; pdf = app._briefings_to_pdf('Smoke PDF', [('Seção', 'Conteúdo')]); assert pdf and pdf.startswith(b'%PDF-')"
 
       - name: Logs do container
         if: always()

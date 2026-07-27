@@ -166,13 +166,32 @@ def upload_wiki_documents():
         if not files or all(not f.filename for f in files):
             return api_error(400, 'WIKI_DOC_NO_FILE', 'Nenhum arquivo enviado.')
         title = (request.form.get('title') or '').strip()
+        prepared_files = []
+        if _auth_enabled():
+            for f in files:
+                if not f.filename:
+                    continue
+                try:
+                    file_bytes, _ = read_document_upload(
+                        f,
+                        allowed_kinds=('pdf', 'docx'),
+                    )
+                except DocumentProcessingError as exc:
+                    return api_error(
+                        exc.status,
+                        exc.code,
+                        str(exc),
+                        hint=exc.hint,
+                    )
+                prepared_files.append((f, file_bytes))
+        else:
+            prepared_files = [(f, None) for f in files if f.filename]
+
         conn = get_db()
         c = conn.cursor()
         _owner_id = _acl_owner_for_insert()
         created = []
-        for f in files:
-            if not f.filename:
-                continue
+        for f, file_bytes in prepared_files:
             ext = Path(f.filename).suffix.lower()
             if ext not in ALLOWED_WIKI_EXTENSIONS:
                 logger.warning(f'[WARN] POST /api/wikitoca/documents: extensao rejeitada: {ext}')
@@ -180,7 +199,10 @@ def upload_wiki_documents():
             original_name = f.filename
             safe_name = secure_filename(f'wiki_{int(datetime.now().timestamp())}_{original_name}')
             save_path = WIKI_UPLOAD_DIR / safe_name
-            f.save(str(save_path))
+            if file_bytes is None:
+                f.save(str(save_path))
+            else:
+                save_path.write_bytes(file_bytes)
             file_size = save_path.stat().st_size
             file_url = f'/uploads/wikitoca/{safe_name}'
             doc_title = title or original_name
