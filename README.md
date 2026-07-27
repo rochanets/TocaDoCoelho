@@ -77,6 +77,21 @@ Uploads também são migrados quando encontrados.
 - As configurações são persistidas em `app_settings` no SQLite local do usuário.
 - Compatibilidade: se o usuário não preencher na UI, o sistema ainda tenta ler variáveis de ambiente (`TAVILY_API_KEY`, `OPENROUTER_API_KEY`, etc.).
 
+## 🎙️ Transcrição web gratuita (Azure Speech F0)
+
+No modo web autenticado, os ditados de voz usam a API de áudio curto do Azure
+Speech F0. Configure no servidor:
+
+- `AZURE_SPEECH_KEY`: chave do recurso Speech F0;
+- `AZURE_SPEECH_REGION`: região do recurso, por exemplo `brazilsouth`;
+- `TOCA_TRANSCRIPTION_MONTHLY_MINUTES`: teto opcional de até 300 minutos.
+
+O navegador converte a gravação para WAV PCM mono de 16 kHz. Cada ditado é
+interrompido em 55 segundos e o Toca registra no banco apenas o consumo mensal,
+sem persistir o áudio ou o texto transcrito. O teto nunca ultrapassa as cinco
+horas mensais do F0. Com `TOCA_AUTH_ENABLED` desligado, o desktop continua
+usando `faster-whisper` localmente.
+
 ## 💽 Backup automático
 
 - O SQLite é copiado automaticamente para `%AppData%\toca-do-coelho\backups\`

@@ -465,7 +465,7 @@
             <div class="iata-input-row" style="margin-top:14px;">
                 <textarea id="iataText" class="iata-textarea" placeholder="  Digite aqui sua pergunta em linguagem natural" style="flex:1;" onkeydown="handleITocaKeydown(event)"></textarea>
                 <button type="button" id="iataAskBtn" class="btn btn-primary" onclick="askIToca()"><i class="fas fa-paper-plane"></i> Enviar</button>
-                <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio">
+                <button type="button" id="iataVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('iataText','iataVoiceBtn')" title="Gravar áudio — máximo de 55 segundos" aria-label="Gravar áudio — máximo de 55 segundos" aria-pressed="false">
                     <i class="fas fa-microphone voice-icon"></i>
                     <span class="voice-anim"><span></span><span></span><span></span></span>
                     <span class="voice-processing">⏳</span>
@@ -1661,7 +1661,7 @@
                     <label>Informações *</label>
                     <div style="display:flex; gap:8px; align-items:flex-end;">
                         <textarea id="activityInformation" name="information" required rows="3" style="flex:1;"></textarea>
-                        <button type="button" id="activityVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('activityInformation','activityVoiceBtn')" title="Gravar áudio">
+                        <button type="button" id="activityVoiceBtn" class="voice-btn" onclick="toggleVoiceTranscription('activityInformation','activityVoiceBtn')" title="Gravar áudio — máximo de 55 segundos" aria-label="Gravar áudio — máximo de 55 segundos" aria-pressed="false">
                             <i class="fas fa-microphone voice-icon"></i>
                             <span class="voice-anim"><span></span><span></span><span></span></span>
                             <span class="voice-processing">⏳</span>
