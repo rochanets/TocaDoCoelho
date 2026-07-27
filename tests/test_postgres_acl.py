@@ -710,3 +710,45 @@ def test_pg_outlook_import_owner_scoped(client, monkeypatch):
     c.execute("SELECT client_id, owner_id FROM activities WHERE owner_id = ? AND contact_type = 'Email'", (a_id,))
     rows = [toca.dict_from_row(x) for x in c.fetchall()]; conn.close()
     assert len(rows) == 1 and rows[0]['client_id'] == ca            # atividade do contato de A, dele
+
+
+# ── outlook: stream de revisão escopado no Postgres ─────────────────────────
+
+def test_pg_outlook_stream_scoped(client, monkeypatch):
+    """/api/outlook/sync-stream-graph no Postgres: _build_outlook_stream_response
+    resolve o usuário por id (gerador sem contexto de request) e escopa o match/
+    all_clients por visible_where('clients', user=...) — traduzido pelo wrapper."""
+    import json as _json
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    monkeypatch.setattr(toca, 'outlook_graph_get_valid_access_token', lambda *a, **k: 'tok')
+    monkeypatch.setattr(toca, '_graph_get_me_email', lambda *a, **k: 'me@myco.com')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ea, eb = f'a-{tag}@acme.com', f'b-{tag}@beta.com'
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO clients (name, company, position, email, owner_id) "
+              "VALUES (?, 'Co', 'C', ?, ?)", (f'CliA-{tag}', ea, a_id))
+    c.execute("INSERT INTO clients (name, company, position, email, owner_id) "
+              "VALUES (?, 'Co', 'C', ?, ?)", (f'CliB-{tag}', eb, b_id))
+    conn.commit(); conn.close()
+
+    def _mail(sender):
+        return {'subject': f'S-{tag}', 'date': '2026-01-15T10:00', 'direction': 'received',
+                'sender': {'email': sender, 'name': 'C'}, 'recipients': [], 'body_preview': 'x',
+                'message_id': f'm-{sender}', 'conversation_id': ''}
+    monkeypatch.setattr(toca, 'outlook_graph_fetch_messages', lambda *a, **k: [_mail(ea), _mail(eb)])
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    resp = client.get('/api/outlook/sync-stream-graph')
+    done = None
+    for line in resp.get_data(as_text=True).splitlines():
+        if line.startswith('data: '):
+            try:
+                d = _json.loads(line[6:])
+            except Exception:
+                continue
+            if d.get('phase') == 'done':
+                done = d
+    names = {cl['name'] for cl in (done or {}).get('all_clients', [])}
+    assert f'CliA-{tag}' in names and f'CliB-{tag}' not in names    # seleção só com visíveis

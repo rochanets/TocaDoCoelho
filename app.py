@@ -7957,7 +7957,15 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
 
             conn = get_db()
             c = conn.cursor()
-            c.execute("SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
+            # Escopo: match e seleção manual só contra contatos VISÍVEIS ao dono do
+            # mailbox. Este gerador roda FORA do contexto de request (resposta em
+            # streaming), então resolvemos o usuário pelo user_id recebido e o
+            # passamos explicitamente a visible_where (current_user() devolveria
+            # None aqui). Login off → 1=1 (desktop).
+            _stream_user = dict_from_row(_fetch_user_row(conn, user_id)) if user_id else None
+            _vw, _vp = visible_where('clients', user=_stream_user)
+            c.execute(f"SELECT id, name, email, photo_url FROM clients "
+                      f"WHERE email IS NOT NULL AND TRIM(email) != '' AND {_vw}", _vp)
             clients_map = {}
             domain_map = {}
             for row in c.fetchall():
@@ -7971,7 +7979,7 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     domain_map.setdefault(domain, []).append(entry)
 
             all_clients_for_select = []
-            c.execute('SELECT id, name, company FROM clients ORDER BY name COLLATE NOCASE')
+            c.execute(f'SELECT id, name, company FROM clients WHERE {_vw} ORDER BY name COLLATE NOCASE', _vp)
             for row in c.fetchall():
                 all_clients_for_select.append({'id': row['id'], 'name': row['name'], 'company': row['company'] or ''})
 
