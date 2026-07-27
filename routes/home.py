@@ -982,13 +982,19 @@ def home_drilldown():
         now_dt = datetime.now()
         get_thresholds = _home_status_thresholds(c)
 
+        # Dashboard por-usuário: client_filter/account_filter embutem a
+        # visibilidade (membro=própria fatia, admin=org; login off='1=1').
         def client_filter(alias='c'):
             clauses = []
             if not include_archived:
                 clauses.append(f"COALESCE({alias}.is_archived, 0) = 0")
             if not include_cold:
                 clauses.append(f"COALESCE({alias}.is_cold_contact, 0) = 0")
-            return (' AND ' + ' AND '.join(clauses)) if clauses else ''
+            clauses.append(_acl_visible_sql('clients', alias))
+            return ' AND ' + ' AND '.join(clauses)
+
+        def account_filter(alias='a'):
+            return ' AND ' + _acl_visible_sql('accounts', alias)
 
         # -------- TYPE: accounts (Total de Contas) --------
         if dtype == 'accounts':
@@ -1002,6 +1008,7 @@ def home_drilldown():
                                    AND COALESCE(p.early_terminated, 0) = 0), 0) AS revenue_cents,
                        (SELECT MAX(aa.activity_date) FROM account_activities aa WHERE aa.account_id = a.id) AS last_activity
                 FROM accounts a
+                WHERE {_acl_visible_sql('accounts', 'a')}
                 ORDER BY revenue_cents DESC, a.name ASC
             """)
             items = [{
@@ -1072,7 +1079,7 @@ def home_drilldown():
             else:
                 return jsonify({'error': 'account_id ou account_name obrigatório'}), 400
             acc = c.fetchone()
-            if not acc:
+            if not acc or not can_read('accounts', dict_from_row(acc)['id'], c):
                 return jsonify({'error': 'conta não encontrada'}), 404
             acc = dict(acc)
 
@@ -1123,7 +1130,7 @@ def home_drilldown():
                            COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal,
                            a.activity_date AS dt, cl.name AS contato
                     FROM activities a JOIN clients cl ON cl.id = a.client_id
-                    WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
+                    WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?)) AND """ + _acl_visible_sql('clients', 'cl') + """
                 )
                 ORDER BY dt DESC LIMIT 12
             """, (acc['id'], acc['name']))
@@ -1132,10 +1139,10 @@ def home_drilldown():
             } for r in c.fetchall()]
 
             # Canal breakdown da conta
-            c.execute("""
+            c.execute(f"""
                 SELECT COALESCE(NULLIF(TRIM(a.contact_type),''),'Outro') AS canal, COUNT(*) AS n
                 FROM activities a JOIN clients cl ON cl.id = a.client_id
-                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
+                WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?)) AND {_acl_visible_sql('clients', 'cl')}
                 GROUP BY canal ORDER BY n DESC
             """, (acc['name'],))
             canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
@@ -1233,19 +1240,21 @@ def home_drilldown():
                 GROUP BY canal ORDER BY n DESC
             """, (ym,))
             canal_breakdown = [{'name': r['canal'], 'count': r['n']} for r in c.fetchall()]
-            # total do mês (client + account activities)
-            c.execute("""
-                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
-                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
+            # total do mês (client + account activities) — escopado por visibilidade
+            _av = _acl_visible_sql('activities', 'activities')
+            _aav = _acl_visible_sql('account_activities', 'account_activities')
+            c.execute(f"""
+                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ? AND {_av}) +
+                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ? AND {_aav}) AS n
             """, (ym, ym))
             total = c.fetchone()['n'] or 0
             # mês anterior para delta
             y, m = [int(x) for x in ym.split('-')]
             pm = (y - 1, 12) if m == 1 else (y, m - 1)
             prev_ym = f'{pm[0]:04d}-{pm[1]:02d}'
-            c.execute("""
-                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ?) +
-                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ?) AS n
+            c.execute(f"""
+                SELECT (SELECT COUNT(*) FROM activities WHERE strftime('%Y-%m', activity_date) = ? AND {_av}) +
+                       (SELECT COUNT(*) FROM account_activities WHERE strftime('%Y-%m', activity_date) = ? AND {_aav}) AS n
             """, (prev_ym, prev_ym))
             prev_total = c.fetchone()['n'] or 0
             return jsonify({'type': dtype, 'ym': ym, 'title': f'Interações — {ym}',
@@ -1257,12 +1266,12 @@ def home_drilldown():
             # Espelha exatamente a lógica de target_risco_atencao do overview:
             # contas target sem contato OU na janela de atenção (green <= dias < yellow)
             g_uni, y_uni = get_thresholds(None)
-            c.execute("""
+            c.execute(f"""
                 SELECT a.id, a.name, a.logo_url, a.sector,
                        (SELECT MAX(ac.activity_date) FROM activities ac JOIN clients cl2 ON cl2.id=ac.client_id WHERE LOWER(TRIM(cl2.company))=LOWER(TRIM(a.name))) AS la_cli,
                        (SELECT MAX(aa2.activity_date) FROM account_activities aa2 WHERE aa2.account_id=a.id) AS la_acc
                 FROM accounts a
-                WHERE COALESCE(a.is_target,0)=1
+                WHERE COALESCE(a.is_target,0)=1 AND {_acl_visible_sql('accounts', 'a')}
             """)
             items = []
             for r in c.fetchall():
@@ -1308,7 +1317,9 @@ def _context_trigger_scan():
     _openrouter_web_prompt (LLM com web) e cria sugestões 'context_trigger'."""
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT id, name FROM accounts WHERE COALESCE(is_target, 0) = 1 ORDER BY name LIMIT 12")
+    # Job de fundo (sem request): processa todas as contas target e atribui cada
+    # sugestão ao DONO da conta (daily_suggestions é por-usuário desde a migr. 17).
+    c.execute("SELECT id, name, owner_id FROM accounts WHERE COALESCE(is_target, 0) = 1 ORDER BY name LIMIT 12")
     target_accounts = c.fetchall()
     today = datetime.now().strftime('%Y-%m-%d')
     created = 0
@@ -1341,8 +1352,8 @@ def _context_trigger_scan():
             if c.fetchone():
                 continue
             c.execute("""INSERT INTO daily_suggestions
-                         (date, suggestion_type, title, description, target_id, target_data, score)
-                         VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                         (date, suggestion_type, title, description, target_id, target_data, score, owner_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                       (today, 'context_trigger',
                        f'Gatilho: {row["name"]} — {manchete[:80]}',
                        (news.get('resumo') or '')[:240],
@@ -1350,7 +1361,8 @@ def _context_trigger_scan():
                        json.dumps({'account_id': row['id'], 'company': row['name'],
                                    'manchete': manchete, 'resumo': news.get('resumo'),
                                    'data': news.get('data')}, ensure_ascii=False),
-                       55.0))
+                       55.0,
+                       dict_from_row(row).get('owner_id')))
             created += 1
     conn.commit()
     conn.close()
@@ -1381,20 +1393,24 @@ def suggestion_generate_draft(suggestion_id):
         c = conn.cursor()
         c.execute('SELECT * FROM daily_suggestions WHERE id = ?', (suggestion_id,))
         sug = dict_from_row(c.fetchone())
-        if not sug:
+        if not sug or not owns('daily_suggestions', suggestion_id, c):
             conn.close()
             return jsonify({'error': 'Sugestão não encontrada'}), 404
         data = json.loads(sug.get('target_data') or '{}')
 
-        # Resolve o contato: direto (client_id) ou principal da conta (mais recente)
+        # Resolve o contato: direto (client_id) ou principal da conta (mais
+        # recente) — só entre os VISÍVEIS ao usuário.
         client = None
         if data.get('client_id'):
             c.execute('SELECT * FROM clients WHERE id = ?', (data['client_id'],))
             client = dict_from_row(c.fetchone())
+            if client and not can_read('clients', client['id'], c):
+                client = None
         elif data.get('company'):
-            c.execute("""SELECT * FROM clients
+            c.execute(f"""SELECT * FROM clients
                          WHERE LOWER(TRIM(company)) = LOWER(TRIM(?))
                            AND COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
+                           AND {_acl_visible_sql('clients', 'clients')}
                          ORDER BY last_activity_date DESC NULLS LAST LIMIT 1""", (data['company'],))
             client = dict_from_row(c.fetchone())
         if not client:
@@ -1448,15 +1464,16 @@ def _weekly_review_data(c):
     week_ago = now_dt - timedelta(days=7)
     get_thresholds = _home_status_thresholds(c)
 
-    c.execute("SELECT COUNT(*) FROM activities WHERE activity_date >= ?",
+    # Semana por-usuário: atividades/contatos/compromissos/sugestões escopados.
+    c.execute(f"SELECT COUNT(*) AS n FROM activities WHERE activity_date >= ? AND {_acl_visible_sql('activities', 'activities')}",
               (week_ago.strftime('%Y-%m-%d %H:%M:%S'),))
-    touches = c.fetchone()[0]
+    touches = (dict_from_row(c.fetchone()) or {}).get('n', 0)
 
     # Esfriaram: estavam 'em_dia' há 7 dias e hoje estão 'atenção'/'atrasado'
     cooled = []
-    c.execute("""SELECT id, name, company, position, last_activity_date FROM clients
+    c.execute(f"""SELECT id, name, company, position, last_activity_date FROM clients
                  WHERE COALESCE(is_archived, 0) = 0 AND COALESCE(is_cold_contact, 0) = 0
-                   AND last_activity_date IS NOT NULL""")
+                   AND last_activity_date IS NOT NULL AND {_acl_visible_sql('clients', 'clients')}""")
     for row in c.fetchall():
         green, yellow = get_thresholds(row['position'])
         status_now, _ = _home_status_for(row['last_activity_date'], green, yellow, now_dt)
@@ -1465,22 +1482,25 @@ def _weekly_review_data(c):
             cooled.append({'id': row['id'], 'name': row['name'], 'company': row['company'],
                            'status': status_now})
 
-    c.execute("SELECT COUNT(*) FROM commitments WHERE created_at >= ?",
+    c.execute(f"SELECT COUNT(*) AS n FROM commitments co WHERE created_at >= ? AND {_acl_visible_sql('commitments', 'co')}",
               (week_ago.strftime('%Y-%m-%d %H:%M:%S'),))
-    fups_created = c.fetchone()[0]
-    c.execute("""SELECT COUNT(*) FROM commitments co
+    fups_created = (dict_from_row(c.fetchone()) or {}).get('n', 0)
+    c.execute(f"""SELECT COUNT(*) AS n FROM commitments co
                  WHERE co.due_date >= ? AND co.due_date <= ?
+                   AND {_acl_visible_sql('commitments', 'co')}
                    AND EXISTS (SELECT 1 FROM activities a
                                WHERE a.client_id = co.client_id
                                  AND date(a.activity_date) >= co.due_date)""",
               (week_ago.strftime('%Y-%m-%d'), now_dt.strftime('%Y-%m-%d')))
-    fups_done = c.fetchone()[0]
+    fups_done = (dict_from_row(c.fetchone()) or {}).get('n', 0)
 
-    c.execute("""SELECT title, suggestion_type FROM daily_suggestions
+    _dw, _dp = owned_where('daily_suggestions')   # radar é pessoal (owned, como na 4.9a)
+    c.execute(f"""SELECT title, suggestion_type FROM daily_suggestions
                  WHERE date = ? AND completed = 0
                    AND (snoozed_until IS NULL OR snoozed_until <= ?)
+                   AND {_dw}
                  ORDER BY score DESC""",
-              (now_dt.strftime('%Y-%m-%d'), now_dt.strftime('%Y-%m-%d')))
+              (now_dt.strftime('%Y-%m-%d'), now_dt.strftime('%Y-%m-%d'), *_dp))
     pending = [dict(r) for r in c.fetchall()]
 
     # Plano da próxima semana: ranking do Radar distribuído pelos dias úteis
