@@ -531,3 +531,29 @@ def test_pg_home_drilldown_and_week_scoped(client, monkeypatch):
     # week-review inteira roda escopada no PG (só checamos que não dá 5xx)
     wr = client.get('/api/week-review')
     assert wr.status_code == 200, wr.get_data(as_text=True)[:400]
+
+
+# ── Environment: respostas seguem o contato (filha) + cards compartilhados ──
+
+def test_pg_environment_scoped(client, monkeypatch):
+    """/api/environment/responses no Postgres: respostas escopadas pela
+    visibilidade do contato (environment_responses → clients, EXISTS traduzido);
+    cards permanecem compartilhados (sem filtro)."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    ca = _new_client(a_id, f'CliA-{tag}')
+    cb = _new_client(b_id, f'CliB-{tag}')
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO environment_cards (title, description) VALUES (?, 'd')", (f'Q-{tag}',))
+    card = c.lastrowid
+    c.execute("INSERT INTO environment_responses (card_id, client_id, response) VALUES (?, ?, 'ra')", (card, ca))
+    c.execute("INSERT INTO environment_responses (card_id, client_id, response) VALUES (?, ?, 'rb')", (card, cb))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    names = {r.get('client_name') for r in client.get('/api/environment/responses').get_json()}
+    assert f'CliA-{tag}' in names and f'CliB-{tag}' not in names   # só o contato visível
+    ctitles = {x['title'] for x in client.get('/api/environment/cards').get_json()}
+    assert f'Q-{tag}' in ctitles                                   # cards compartilhados

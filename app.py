@@ -2105,6 +2105,7 @@ _ACL_PARENTS = {
     'account_activities': ('accounts', 'account_id'),
     'account_main_contacts': ('accounts', 'account_id'),
     'account_presences': ('accounts', 'account_id'),
+    'environment_responses': ('clients', 'client_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
@@ -9064,10 +9065,11 @@ def create_environment_card():
         conn = get_db()
         c = conn.cursor()
         
-        # Obter a próxima posição de exibição
-        c.execute('SELECT MAX(display_order) FROM environment_cards')
-        max_order = c.fetchone()[0] or 0
-        
+        # Obter a próxima posição de exibição (cards = catálogo COMPARTILHADO do
+        # time; sem filtro por dono — só respostas seguem a visibilidade).
+        c.execute('SELECT COALESCE(MAX(display_order), 0) AS mx FROM environment_cards')
+        max_order = (dict_from_row(c.fetchone()) or {}).get('mx', 0) or 0
+
         c.execute('INSERT INTO environment_cards (title, description, display_order) VALUES (?, ?, ?)',
                   (title, description, max_order + 1))
         conn.commit()
@@ -9128,20 +9130,24 @@ def get_environment_responses():
         conn = get_db()
         c = conn.cursor()
         
+        # Respostas seguem a visibilidade do CLIENTE (owner/share/admin).
         if client_id:
             # Buscar respostas de um cliente específico
-            c.execute('''SELECT er.*, ec.title as card_title 
+            _ew, _ep = visible_where('environment_responses', alias='er')
+            c.execute(f'''SELECT er.*, ec.title as card_title
                         FROM environment_responses er
                         JOIN environment_cards ec ON er.card_id = ec.id
-                        WHERE er.client_id = ?
-                        ORDER BY ec.display_order, ec.id''', (client_id,))
+                        WHERE er.client_id = ? AND {_ew}
+                        ORDER BY ec.display_order, ec.id''', (client_id, *_ep))
         else:
             # Buscar todas as respostas
-            c.execute('''SELECT er.*, ec.title as card_title, cl.name as client_name, cl.company as client_company
+            _cw, _cp = visible_where('clients', alias='cl')
+            c.execute(f'''SELECT er.*, ec.title as card_title, cl.name as client_name, cl.company as client_company
                         FROM environment_responses er
                         JOIN environment_cards ec ON er.card_id = ec.id
                         JOIN clients cl ON er.client_id = cl.id
-                        ORDER BY ec.display_order, ec.id, cl.company, cl.name''')
+                        WHERE {_cw}
+                        ORDER BY ec.display_order, ec.id, cl.company, cl.name''', _cp)
         
         responses = [dict_from_row(row) for row in c.fetchall()]
         conn.close()
@@ -9166,7 +9172,12 @@ def save_environment_response():
         
         conn = get_db()
         c = conn.cursor()
-        
+
+        # Só grava resposta para um contato VISÍVEL ao usuário.
+        if not can_read('clients', client_id, c):
+            conn.close()
+            return jsonify({'error': 'Contato não encontrado'}), 404
+
         # Inserir ou atualizar resposta
         c.execute('''INSERT INTO environment_responses (card_id, client_id, response, updated_at)
                      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
@@ -9196,13 +9207,15 @@ def get_card_all_responses(card_id):
         if not card:
             return jsonify({'error': 'Card não encontrado'}), 404
         
-        # Buscar todos os clientes com suas respostas para este card
+        # Buscar todos os clientes VISÍVEIS com suas respostas para este card
         # Agrupar por empresa (pegar apenas a primeira ocorrência de cada empresa)
-        c.execute('''SELECT cl.id, cl.name, cl.company, 
+        _cw, _cp = visible_where('clients', alias='cl')
+        c.execute(f'''SELECT cl.id, cl.name, cl.company,
                             COALESCE(er.response, '') as response
                      FROM clients cl
                      LEFT JOIN environment_responses er ON er.client_id = cl.id AND er.card_id = ?
-                     ORDER BY cl.company, cl.name''', (card_id,))
+                     WHERE {_cw}
+                     ORDER BY cl.company, cl.name''', (card_id, *_cp))
         
         all_clients = [dict_from_row(row) for row in c.fetchall()]
         
@@ -9421,6 +9434,9 @@ def environment_auto_fill():
         account_id = data.get('account_id')
         if not account_id:
             return jsonify({'error': 'account_id é obrigatório'}), 400
+        # Só auto-preenche mapeamento de uma conta VISÍVEL ao usuário.
+        if not can_read('accounts', int(account_id)):
+            return jsonify({'error': 'Conta não encontrada'}), 404
         task_id = uuid.uuid4().hex
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
         threading.Thread(
