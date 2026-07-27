@@ -506,3 +506,28 @@ def test_pg_home_overview_scoped(client, monkeypatch):
         s['user_id'] = admin_id
     kadm = client.get('/api/home/overview').get_json()['kpis']
     assert kadm['total_accounts'] >= 3        # admin vê a org (as 3 contas do tag + o que houver)
+
+
+# ── Home drilldown + week-review por-usuário no PG ──────────────────────────
+
+def test_pg_home_drilldown_and_week_scoped(client, monkeypatch):
+    """drilldown?type=accounts e week-review no Postgres: escopados por
+    _acl_visible_sql (inline) e pelas filhas de accounts; exercita a tradução do
+    inline + strftime/julianday nas rotas inteiras."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AA-{tag}', a_id))
+    c.execute("INSERT INTO accounts (name, owner_id) VALUES (?, ?)", (f'AB-{tag}', b_id))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    r = client.get('/api/home/drilldown?type=accounts')
+    assert r.status_code == 200, r.get_data(as_text=True)[:400]
+    names = {i['name'] for i in r.get_json()['items']}
+    assert f'AA-{tag}' in names and f'AB-{tag}' not in names
+    # week-review inteira roda escopada no PG (só checamos que não dá 5xx)
+    wr = client.get('/api/week-review')
+    assert wr.status_code == 200, wr.get_data(as_text=True)[:400]
