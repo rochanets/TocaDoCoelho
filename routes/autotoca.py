@@ -9,7 +9,11 @@ def get_autotoca_mailing_positions():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT DISTINCT position FROM clients WHERE position IS NOT NULL AND TRIM(position) != '' ORDER BY position")
+        # Opções derivadas só dos contatos VISÍVEIS ao usuário (a mala-direta em si
+        # já sai por /api/clientes, escopado). Login off → 1=1 (desktop).
+        _vw, _vp = visible_where('clients')
+        c.execute(f"SELECT DISTINCT position FROM clients WHERE position IS NOT NULL "
+                  f"AND TRIM(position) != '' AND {_vw} ORDER BY position", _vp)
         positions = [row['position'] for row in c.fetchall()]
         conn.close()
         return jsonify(positions)
@@ -23,7 +27,10 @@ def get_autotoca_mailing_areas():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT DISTINCT area_of_activity FROM clients WHERE area_of_activity IS NOT NULL AND TRIM(area_of_activity) != '' ORDER BY area_of_activity")
+        # Opções derivadas só dos contatos VISÍVEIS ao usuário. Login off → 1=1.
+        _vw, _vp = visible_where('clients')
+        c.execute(f"SELECT DISTINCT area_of_activity FROM clients WHERE area_of_activity IS NOT NULL "
+                  f"AND TRIM(area_of_activity) != '' AND {_vw} ORDER BY area_of_activity", _vp)
         areas = [row['area_of_activity'] for row in c.fetchall()]
         conn.close()
         return jsonify(areas)
@@ -160,7 +167,9 @@ def autotoca_accounts():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT id, name FROM accounts ORDER BY name COLLATE NOCASE')
+        # Só as contas VISÍVEIS ao usuário (dono + shares + admin-org). Login off → 1=1.
+        _vw, _vp = visible_where('accounts')
+        c.execute(f'SELECT id, name FROM accounts WHERE {_vw} ORDER BY name COLLATE NOCASE', _vp)
         rows = c.fetchall()
         conn.close()
         accounts = [{'id': row['id'], 'name': row['name']} for row in rows]
