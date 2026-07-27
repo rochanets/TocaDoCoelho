@@ -2115,6 +2115,7 @@ _ACL_PARENTS = {
     'account_main_contacts': ('accounts', 'account_id'),
     'account_presences': ('accounts', 'account_id'),
     'environment_responses': ('clients', 'client_id'),
+    'inbound_messages': ('clients', 'client_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
