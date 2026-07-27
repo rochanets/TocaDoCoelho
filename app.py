@@ -2192,25 +2192,27 @@ def _acl_row_matches(record_type, record_id, where, params, cur=None):
             conn.close()
 
 
-def _acl_can(record_type, record_id, mode, cur=None):
+def _acl_can(record_type, record_id, mode, cur=None, user=None):
     """Reusa visible_where como fonte ÚNICA de verdade: a linha é acessível se
-    existe e casa a mesma cláusula de visibilidade. Login off → True."""
+    existe e casa a mesma cláusula de visibilidade. Login off → True. `user`
+    explícito permite checar em thread de background (sem request) — igual ao
+    parâmetro de visible_where; sem ele, cai no current_user()."""
     if not _auth_enabled():
         return True
-    where, params = visible_where(record_type, mode=mode)
+    where, params = visible_where(record_type, user=user, mode=mode)
     return _acl_row_matches(record_type, record_id, where, params, cur)
 
 
-def can_read(record_type, record_id, cur=None):
-    """True se o usuário atual pode LER a linha (raiz ou filha) dada. Filha herda
-    a permissão da raiz ancestral. Login off → True."""
-    return _acl_can(record_type, record_id, 'read', cur)
-
-
-def can_write(record_type, record_id, cur=None):
-    """True se o usuário atual pode ESCREVER (editar/excluir) a linha (raiz ou
+def can_read(record_type, record_id, cur=None, user=None):
+    """True se o usuário (atual, ou `user` explícito) pode LER a linha (raiz ou
     filha) dada. Filha herda a permissão da raiz ancestral. Login off → True."""
-    return _acl_can(record_type, record_id, 'write', cur)
+    return _acl_can(record_type, record_id, 'read', cur, user=user)
+
+
+def can_write(record_type, record_id, cur=None, user=None):
+    """True se o usuário (atual, ou `user` explícito) pode ESCREVER (editar/
+    excluir) a linha (raiz ou filha). Filha herda da raiz ancestral. Off → True."""
+    return _acl_can(record_type, record_id, 'write', cur, user=user)
 
 
 def owns(record_type, record_id, cur=None):
@@ -8592,7 +8594,34 @@ def _itoca_base_update_async(task_id, incremental):
         _bg_task_cleanup(task_id)
 
 
-def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, history_rows, owner_id=None):
+def _itoca_filter_visible_rows(rows, user):
+    """Remove do contexto do RAG as linhas que o usuário não pode VER (owner /
+    share / admin-org — a MESMA visibilidade do CRM, via can_read). Tabelas fora
+    do ACL (catálogos, config, perfil) passam — não são dados por-dono. Login off
+    → devolve tudo (desktop mono-usuário). Login on sem usuário resolvido →
+    devolve [] (fecha por padrão). Roda em thread de background, por isso recebe
+    o `user` explícito (current_user() não resolve fora do request)."""
+    if not _auth_enabled():
+        return rows
+    if not user:
+        return []
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        out = []
+        for item in rows:
+            table = item.get('table')
+            if table in _ACL_ROOT_TABLES or table in _ACL_PARENTS:
+                rid = item.get('id')
+                if rid is None or not can_read(table, rid, c, user=user):
+                    continue
+            out.append(item)
+        return out
+    finally:
+        conn.close()
+
+
+def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, history_rows, owner_id=None, user=None):
     """Processa a pergunta do iToca em background. Atualiza _bg_tasks com progresso em tempo real."""
     try:
         _q_lower = question.lower()
@@ -8662,18 +8691,31 @@ def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, 
             try:
                 _conn_s = get_db()
                 _cur_s = _conn_s.cursor()
-                _cur_s.execute('SELECT COUNT(*) as n FROM accounts')
-                _total_ac = (_cur_s.fetchone() or [0])[0]
-                _cur_s.execute('SELECT COUNT(*) as n FROM accounts WHERE is_target = 1')
-                _total_target = (_cur_s.fetchone() or [0])[0]
-                _cur_s.execute('SELECT COUNT(*) as n FROM clients')
-                _total_cl = (_cur_s.fetchone() or [0])[0]
-                _cur_s.execute('SELECT COUNT(*) as n FROM activities')
-                _total_act = (_cur_s.fetchone() or [0])[0]
-                _cur_s.execute('SELECT COUNT(*) as n FROM account_presences')
-                _total_srv = (_cur_s.fetchone() or [0])[0]
-                _cur_s.execute("SELECT COUNT(*) as n FROM activities WHERE date(activity_date) >= date('now', '-30 days')")
-                _act_30d = (_cur_s.fetchone() or [0])[0]
+                # Painel escopado ao que o usuário VÊ (owner/share/admin). Login
+                # off → visible_where = '1=1' e os totais são globais como antes.
+                # account_presences não está no registro ACL → escopa pela conta
+                # visível (EXISTS). Acesso por dict (AS n) — compat PostgreSQL.
+                def _scalar_n():
+                    return (dict_from_row(_cur_s.fetchone()) or {}).get('n', 0)
+                _avw, _avp = visible_where('accounts', user=user)
+                _cvw, _cvp = visible_where('clients', user=user)
+                _actvw, _actvp = visible_where('activities', user=user)
+                _avw2, _avp2 = visible_where('accounts', user=user, alias='a')
+                _cur_s.execute(f'SELECT COUNT(*) as n FROM accounts WHERE {_avw}', _avp)
+                _total_ac = _scalar_n()
+                _cur_s.execute(f'SELECT COUNT(*) as n FROM accounts WHERE is_target = 1 AND {_avw}', _avp)
+                _total_target = _scalar_n()
+                _cur_s.execute(f'SELECT COUNT(*) as n FROM clients WHERE {_cvw}', _cvp)
+                _total_cl = _scalar_n()
+                _cur_s.execute(f'SELECT COUNT(*) as n FROM activities WHERE {_actvw}', _actvp)
+                _total_act = _scalar_n()
+                _cur_s.execute(
+                    f'SELECT COUNT(*) as n FROM account_presences ap '
+                    f'WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.id = ap.account_id AND {_avw2})', _avp2)
+                _total_srv = _scalar_n()
+                _cur_s.execute(
+                    f"SELECT COUNT(*) as n FROM activities WHERE date(activity_date) >= date('now', '-30 days') AND {_actvw}", _actvp)
+                _act_30d = _scalar_n()
                 _conn_s.close()
                 _stats_snip = (
                     f'total_contas: {_total_ac} | contas_target: {_total_target} | '
@@ -8683,6 +8725,13 @@ def _itoca_ask_async(task_id, question, session_id, snapshot_items, updated_at, 
                 stats_rows.append({'table': 'user_profile', 'id': None, 'snippet': f'PAINEL_GERAL: {_stats_snip}', 'search_text': _stats_snip.lower()})
             except Exception as _se:
                 logger.warning(f'[iToca] Erro ao calcular stats analíticos: {_se}')
+
+        # ACL: só entra no contexto do LLM o que o usuário PODE VER (owner /
+        # share / admin-org). stats_rows não passa aqui — já é escopado por-
+        # usuário na origem (os COUNTs usam visible_where).
+        target_rows = _itoca_filter_visible_rows(target_rows, user)
+        live_rows = _itoca_filter_visible_rows(live_rows, user)
+        snapshot_rows = _itoca_filter_visible_rows(snapshot_rows, user)
 
         # Mescla: prioriza target > stats > live (banco) > snapshot, sem duplicatas
         seen_keys = set()
