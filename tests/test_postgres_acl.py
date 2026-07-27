@@ -650,3 +650,25 @@ def test_pg_autotoca_accounts_scoped(client, monkeypatch):
         s['user_id'] = a_id
     names = {a['name'] for a in client.get('/api/autotoca/accounts').get_json()}
     assert f'AcctA-{tag}' in names and f'AcctB-{tag}' not in names
+
+
+# ── outlook: diagnose conta só contatos visíveis no Postgres ────────────────
+
+def test_pg_outlook_diagnose_scoped(client, monkeypatch):
+    """/api/outlook/diagnose no Postgres: COUNT(*) AS n + dict_from_row (sem acesso
+    posicional, que quebra no dict-row do PG) sob visible_where('clients') — o
+    membro só conta os contatos dele."""
+    monkeypatch.setenv('TOCA_AUTH_ENABLED', '1')
+    org_id, admin_id, a_id, b_id = _seed_org_and_users()
+    tag = uuid.uuid4().hex[:8]
+    conn = toca.get_db(); c = conn.cursor()
+    c.execute("INSERT INTO clients (name, company, position, email, owner_id) "
+              "VALUES (?, 'Co', 'C', ?, ?)", (f'CliA-{tag}', f'a-{tag}@acme.com', a_id))
+    c.execute("INSERT INTO clients (name, company, position, email, owner_id) "
+              "VALUES (?, 'Co', 'C', ?, ?)", (f'CliB-{tag}', f'b-{tag}@beta.com', b_id))
+    conn.commit(); conn.close()
+
+    with client.session_transaction() as s:
+        s['user_id'] = a_id
+    data = client.get('/api/outlook/diagnose').get_json()
+    assert data['total_clients'] == 1 and data['clients_with_email'] == 1        # só o de A

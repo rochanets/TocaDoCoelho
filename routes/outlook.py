@@ -45,10 +45,14 @@ def outlook_diagnose():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT COUNT(*) FROM clients')
-        total_clients = (c.fetchone() or [0])[0]
-        c.execute("SELECT COUNT(*) FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
-        clients_with_email = (c.fetchone() or [0])[0]
+        # Só os contatos VISÍVEIS ao usuário — o match do Outlook é contra os
+        # contatos dele. Login off → 1=1 (desktop). AS n + dict: PG não indexa
+        # linha por posição.
+        _vw, _vp = visible_where('clients')
+        c.execute(f'SELECT COUNT(*) AS n FROM clients WHERE {_vw}', _vp)
+        total_clients = (dict_from_row(c.fetchone()) or {}).get('n', 0)
+        c.execute(f"SELECT COUNT(*) AS n FROM clients WHERE email IS NOT NULL AND TRIM(email) != '' AND {_vw}", _vp)
+        clients_with_email = (dict_from_row(c.fetchone()) or {}).get('n', 0)
         conn.close()
     except Exception as e:
         logger.debug(f'[outlook_diagnose] exceção ignorada: {e}')
@@ -306,17 +310,19 @@ def outlook_apply_suggestions():
         c = conn.cursor()
         applied = 0
 
+        # Só aplica em contato que o usuário pode ESCREVER e em card que é DELE
+        # (kanban é espaço pessoal). Login off → guardas True (desktop).
         for upd in status_updates:
             client_id = upd.get('client_id')
             stage = (upd.get('stage') or '').strip()
-            if client_id and stage:
+            if client_id and stage and can_write('clients', client_id, c):
                 c.execute('UPDATE clients SET relationship_stage = ? WHERE id = ?', (stage, client_id))
                 applied += 1
 
         for mv in kanban_moves:
             card_id = mv.get('card_id')
             col_id = mv.get('column_id')
-            if card_id and col_id:
+            if card_id and col_id and owns('kanban_cards', card_id, c):
                 c.execute(
                     'UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
                     (col_id, card_id)

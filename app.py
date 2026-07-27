@@ -8528,7 +8528,11 @@ def _outlook_match_emails(emails_data, conn):
     Retorna (activities, unmatched, all_clients_for_select).
     """
     c = conn.cursor()
-    c.execute("SELECT id, name, email, photo_url FROM clients WHERE email IS NOT NULL AND TRIM(email) != ''")
+    # Match e seleção manual só contra os contatos VISÍVEIS ao usuário (rodamos em
+    # contexto de request: addon-preview / ingest-from-addon). Login off → 1=1.
+    _vw, _vp = visible_where('clients')
+    c.execute(f"SELECT id, name, email, photo_url FROM clients "
+              f"WHERE email IS NOT NULL AND TRIM(email) != '' AND {_vw}", _vp)
     clients_map = {}
     domain_map = {}
     for row in c.fetchall():
@@ -8541,7 +8545,7 @@ def _outlook_match_emails(emails_data, conn):
         if domain and '.' in domain:
             domain_map.setdefault(domain, []).append(entry)
 
-    c.execute('SELECT id, name, company FROM clients ORDER BY name COLLATE NOCASE')
+    c.execute(f'SELECT id, name, company FROM clients WHERE {_vw} ORDER BY name COLLATE NOCASE', _vp)
     all_clients = [{'id': r['id'], 'name': r['name'], 'company': r['company'] or ''} for r in c.fetchall()]
 
     activities = []
