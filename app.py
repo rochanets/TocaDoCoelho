@@ -205,6 +205,23 @@ def readyz():
     try:
         conn = _open_main_db(timeout=3.0)
         conn.execute('SELECT 1')
+        row = conn.execute(
+            'SELECT MAX(version) AS version FROM schema_version'
+        ).fetchone()
+        applied_version = int(_first_column(row, 'version') or 0)
+        expected_version = max(
+            version for version, _, _ in SCHEMA_MIGRATIONS
+        )
+        if applied_version != expected_version:
+            logger.warning(
+                '[Readiness] Schema desatualizado: versão %s de %s.',
+                applied_version,
+                expected_version,
+            )
+            return jsonify({
+                'status': 'not_ready',
+                'reason': 'schema_outdated',
+            }), 503
         return jsonify({'status': 'ready'}), 200
     except Exception:
         logger.warning('[Readiness] Banco principal indisponível.', exc_info=True)
@@ -287,10 +304,63 @@ WHISPER_MODEL_LOCK = threading.Lock()
 TRANSCRIPTION_DEBUG = os.environ.get('TRANSCRIPTION_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
 
 
+_LOG_SECRET_RE = re.compile(
+    r'(?i)\b(authorization|cookie|set-cookie|api[_-]?key|client[_-]?secret|'
+    r'secret|token|password)\b(\s*[:=]\s*)([^\s,;]+)'
+)
+_LOG_QUERY_SECRET_RE = re.compile(
+    r'(?i)([?&](?:code|state|access_token|refresh_token|token|api_key)=)'
+    r'([^&#\s]+)'
+)
+_REQUEST_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$')
+
+
+def _redact_log_text(value):
+    text = str(value)
+    text = _LOG_SECRET_RE.sub(r'\1\2[REDACTED]', text)
+    return _LOG_QUERY_SECRET_RE.sub(r'\1[REDACTED]', text)
+
+
+class _JsonLogFormatter(logging.Formatter):
+    """Formato JSON de uma linha para coleta por stdout/orquestrador."""
+
+    def format(self, record):
+        payload = {
+            'timestamp': datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
+            'level': record.levelname,
+            'logger': record.name,
+            'message': _redact_log_text(record.getMessage()),
+        }
+        request_id = getattr(record, 'request_id', None)
+        if not request_id and has_request_context():
+            request_id = getattr(g, 'request_id', None)
+        if request_id:
+            payload['request_id'] = request_id
+        for field in ('event', 'method', 'path', 'status', 'duration_ms', 'user_id'):
+            value = getattr(record, field, None)
+            if value is not None:
+                payload[field] = value
+        if record.exc_info:
+            payload['exception'] = _redact_log_text(
+                self.formatException(record.exc_info)
+            )
+        return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+
+
 def setup_logging():
-    formatter = logging.Formatter(
-        '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+    log_format = (os.environ.get('TOCA_LOG_FORMAT') or '').strip().lower()
+    if not log_format:
+        is_production = (
+            (os.environ.get('TOCA_ENV') or '').strip().lower() == 'production'
+        )
+        log_format = 'json' if is_production else 'text'
+    formatter = (
+        _JsonLogFormatter()
+        if log_format == 'json'
+        else logging.Formatter(
+            '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+        )
     )
 
     root_logger = logging.getLogger()
@@ -298,14 +368,19 @@ def setup_logging():
 
     if not root_logger.handlers:
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
+    for handler in root_logger.handlers:
+        handler.setFormatter(formatter)
 
     file_handler_exists = any(
         isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', '') == str(LOG_FILE)
         for handler in root_logger.handlers
     )
-    if not file_handler_exists:
+    file_enabled = (
+        (os.environ.get('TOCA_LOG_FILE_ENABLED', '1') or '').strip().lower()
+        in {'1', 'true', 'yes', 'on'}
+    )
+    if file_enabled and not file_handler_exists:
         file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
@@ -313,6 +388,35 @@ def setup_logging():
 
 setup_logging()
 logger = logging.getLogger('toca-do-coelho')
+_PROCESS_STARTED_MONOTONIC = time.monotonic()
+
+
+@app.before_request
+def _assign_request_id():
+    supplied = (request.headers.get('X-Request-ID') or '').strip()
+    g.request_id = supplied if _REQUEST_ID_RE.fullmatch(supplied) else uuid.uuid4().hex
+    g.request_started_monotonic = time.monotonic()
+
+
+@app.after_request
+def _log_request(response):
+    request_id = getattr(g, 'request_id', uuid.uuid4().hex)
+    response.headers['X-Request-ID'] = request_id
+    started = getattr(g, 'request_started_monotonic', time.monotonic())
+    duration_ms = round((time.monotonic() - started) * 1000, 2)
+    logger.info(
+        'HTTP request concluída.',
+        extra={
+            'event': 'http_request',
+            'request_id': request_id,
+            'method': request.method,
+            'path': request.path,
+            'status': response.status_code,
+            'duration_ms': duration_ms,
+            'user_id': session.get('user_id'),
+        },
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +475,12 @@ def _production_configuration_errors(env=None):
     database_url = (source.get('DATABASE_URL') or '').strip()
     if (urlparse(database_url).scheme or '').lower() not in {'postgres', 'postgresql'}:
         errors.append('DATABASE_URL deve apontar para PostgreSQL em produção.')
+
+    process_role = (source.get('TOCA_PROCESS_ROLE') or 'web').strip().lower()
+    if process_role == 'migrate':
+        return errors
+    if process_role != 'web':
+        errors.append('TOCA_PROCESS_ROLE deve ser web ou migrate em produção.')
 
     if not _env_flag_from(source, 'TOCA_AUTH_ENABLED', '0'):
         errors.append('TOCA_AUTH_ENABLED deve estar ativo em produção.')
@@ -2752,7 +2862,16 @@ def _mark_interrupted_background_tasks():
         logger.debug(f'[Tasks] Falha ao marcar tasks interrompidas: {e}')
 
 
-_run_schema_migrations()
+def _startup_migrations_enabled(env=None):
+    source = os.environ if env is None else env
+    configured = source.get('TOCA_RUN_MIGRATIONS_ON_STARTUP')
+    if configured is not None:
+        return _env_flag_from(source, 'TOCA_RUN_MIGRATIONS_ON_STARTUP', '0')
+    return not _is_production_environment(source)
+
+
+if _startup_migrations_enabled():
+    _run_schema_migrations()
 _mark_interrupted_background_tasks()
 run_automatic_db_backup(interval_days=3)
 
@@ -14007,7 +14126,7 @@ def handle_unexpected_exception(error):
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['auth', 'admin', 'shares', 'clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'companion', 'wikitoca',
-                 'portfolio', 'config', 'home']
+                 'portfolio', 'config', 'home', 'operations']
 
 
 def _load_route_modules():

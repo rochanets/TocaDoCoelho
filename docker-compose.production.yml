@@ -1,5 +1,36 @@
 name: tocadocoelho-production
 
+x-toca-image: &toca-image "tocadocoelho-web:${TOCA_IMAGE_TAG:-local}"
+x-toca-environment: &toca-environment
+  TOCA_ENV: production
+  TOCA_DATA_DIR: /data
+  TOCA_AUTH_ENABLED: "1"
+  TOCA_COOKIE_SECURE: "1"
+  TOCA_COOKIE_SAMESITE: "${TOCA_COOKIE_SAMESITE:-Lax}"
+  TOCA_TRUST_PROXY: "1"
+  TOCA_RUN_MIGRATIONS_ON_STARTUP: "0"
+  TOCA_LOG_FORMAT: "${TOCA_LOG_FORMAT:-json}"
+  TOCA_LOG_FILE_ENABLED: "${TOCA_LOG_FILE_ENABLED:-0}"
+  WEB_CONCURRENCY: "${WEB_CONCURRENCY:-2}"
+  TOCA_MULTIWORKER_JOBS_ENABLED: "1"
+  TOCA_JOB_HEARTBEAT_SECONDS: "${TOCA_JOB_HEARTBEAT_SECONDS:-30}"
+  TOCA_TASK_STATE_TTL_HOURS: "${TOCA_TASK_STATE_TTL_HOURS:-24}"
+  TOCA_TIMEZONE: "${TOCA_TIMEZONE:-America/Sao_Paulo}"
+  TZ: "${TOCA_TIMEZONE:-America/Sao_Paulo}"
+  SECRET_KEY: "${SECRET_KEY:?Defina SECRET_KEY estável fora do Git}"
+  DATABASE_URL: "${DATABASE_URL:?Defina DATABASE_URL PostgreSQL fora do Git}"
+  OUTLOOK_GRAPH_TENANT_ID: "${OUTLOOK_GRAPH_TENANT_ID:?Defina o tenant do Entra}"
+  OUTLOOK_GRAPH_CLIENT_ID: "${OUTLOOK_GRAPH_CLIENT_ID:?Defina o client ID do Entra}"
+  OUTLOOK_GRAPH_LOGIN_REDIRECT_URI: "${OUTLOOK_GRAPH_LOGIN_REDIRECT_URI:?Defina o redirect HTTPS de login}"
+  OUTLOOK_GRAPH_REDIRECT_URI: "${OUTLOOK_GRAPH_REDIRECT_URI:?Defina o redirect HTTPS do Outlook}"
+  OUTLOOK_GRAPH_LOGIN_SCOPE: "${OUTLOOK_GRAPH_LOGIN_SCOPE:-openid profile email User.Read}"
+  OUTLOOK_GRAPH_SCOPE: "${OUTLOOK_GRAPH_SCOPE:-offline_access Mail.Read Mail.Send User.Read}"
+  WAHA_API_URL: "http://waha:3000"
+  WAHA_API_KEY: "${WAHA_API_KEY:?Defina a chave plain da API WAHA fora do Git}"
+  WAHA_API_KEY_HASH: "${WAHA_API_KEY_HASH:?Defina o hash SHA-512 da chave API fora do Git}"
+  WAHA_SESSION_NAME: "${WAHA_SESSION_NAME:-default}"
+  WAHA_WEBHOOK_HMAC_KEY: "${WAHA_WEBHOOK_HMAC_KEY:?Defina a chave HMAC do webhook fora do Git}"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,41 +52,46 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  web:
+  migrate:
+    image: *toca-image
     build:
       context: .
       dockerfile: Dockerfile
+    command: ["python", "manage.py", "migrate"]
     environment:
       TOCA_ENV: production
+      TOCA_PROCESS_ROLE: migrate
       TOCA_DATA_DIR: /data
-      TOCA_AUTH_ENABLED: "1"
-      TOCA_COOKIE_SECURE: "1"
-      TOCA_COOKIE_SAMESITE: "${TOCA_COOKIE_SAMESITE:-Lax}"
-      TOCA_TRUST_PROXY: "1"
-      WEB_CONCURRENCY: "${WEB_CONCURRENCY:-2}"
-      TOCA_MULTIWORKER_JOBS_ENABLED: "1"
-      TOCA_JOB_HEARTBEAT_SECONDS: "${TOCA_JOB_HEARTBEAT_SECONDS:-30}"
-      TOCA_TASK_STATE_TTL_HOURS: "${TOCA_TASK_STATE_TTL_HOURS:-24}"
-      TOCA_TIMEZONE: "${TOCA_TIMEZONE:-America/Sao_Paulo}"
-      TZ: "${TOCA_TIMEZONE:-America/Sao_Paulo}"
+      TOCA_DISABLE_BG_JOBS: "1"
+      TOCA_RUN_MIGRATIONS_ON_STARTUP: "0"
+      TOCA_LOG_FORMAT: "${TOCA_LOG_FORMAT:-json}"
+      TOCA_LOG_FILE_ENABLED: "${TOCA_LOG_FILE_ENABLED:-0}"
       SECRET_KEY: "${SECRET_KEY:?Defina SECRET_KEY estável fora do Git}"
       DATABASE_URL: "${DATABASE_URL:?Defina DATABASE_URL PostgreSQL fora do Git}"
-      OUTLOOK_GRAPH_TENANT_ID: "${OUTLOOK_GRAPH_TENANT_ID:?Defina o tenant do Entra}"
-      OUTLOOK_GRAPH_CLIENT_ID: "${OUTLOOK_GRAPH_CLIENT_ID:?Defina o client ID do Entra}"
-      OUTLOOK_GRAPH_LOGIN_REDIRECT_URI: "${OUTLOOK_GRAPH_LOGIN_REDIRECT_URI:?Defina o redirect HTTPS de login}"
-      OUTLOOK_GRAPH_REDIRECT_URI: "${OUTLOOK_GRAPH_REDIRECT_URI:?Defina o redirect HTTPS do Outlook}"
-      OUTLOOK_GRAPH_LOGIN_SCOPE: "${OUTLOOK_GRAPH_LOGIN_SCOPE:-openid profile email User.Read}"
-      OUTLOOK_GRAPH_SCOPE: "${OUTLOOK_GRAPH_SCOPE:-offline_access Mail.Read Mail.Send User.Read}"
-      WAHA_API_URL: "http://waha:3000"
-      WAHA_API_KEY: "${WAHA_API_KEY:?Defina a chave plain da API WAHA fora do Git}"
-      WAHA_API_KEY_HASH: "${WAHA_API_KEY_HASH:?Defina o hash SHA-512 da chave API fora do Git}"
-      WAHA_SESSION_NAME: "${WAHA_SESSION_NAME:-default}"
-      WAHA_WEBHOOK_HMAC_KEY: "${WAHA_WEBHOOK_HMAC_KEY:?Defina a chave HMAC do webhook fora do Git}"
     volumes:
       - toca_data:/data
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    image: *toca-image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment: *toca-environment
+    volumes:
+      - toca_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -70,6 +106,36 @@ services:
     networks:
       - backend
       - edge
+    security_opt:
+      - no-new-privileges:true
+
+  postgres-backup:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: "${POSTGRES_DB:?Defina POSTGRES_DB}"
+      PGUSER: "${POSTGRES_USER:?Defina POSTGRES_USER}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD fora do Git}"
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_HOURS: "${BACKUP_INTERVAL_HOURS:-24}"
+      BACKUP_RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-14}"
+    command: ["sh", "/opt/toca/backup-loop.sh"]
+    volumes:
+      - ./deploy/postgres:/opt/toca:ro
+      - postgres_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /backups/.last-success"]
+      interval: 5m
+      timeout: 5s
+      retries: 3
+      start_period: 2m
+    restart: unless-stopped
+    networks:
+      - backend
     security_opt:
       - no-new-privileges:true
 
@@ -142,6 +208,7 @@ services:
 
 volumes:
   postgres_data:
+  postgres_backups:
   toca_data:
   waha_sessions:
 

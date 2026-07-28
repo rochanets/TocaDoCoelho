@@ -100,9 +100,17 @@ Entra autorizado e ficam como critério da F8.5.
   participa da rede `edge` sem publicar porta, para acessar Entra, Graph e
   demais integrações HTTPS de saída.
 - `/healthz` responde enquanto o processo Flask estiver servindo.
-- `/readyz` responde 200 somente quando uma consulta ao banco funciona.
+- `/readyz` responde 200 somente quando uma consulta ao banco funciona e
+  `schema_version` corresponde ao código implantado.
 - O healthcheck do container web usa `/readyz`; o do Nginx usa `/healthz`
   através do TLS.
+
+## Operação durável na F8.4
+
+O stack executa `python manage.py migrate` no serviço one-shot `migrate` antes
+de liberar os workers web. Produção usa logs JSON em stdout com `request_id` e
+redaction de segredos. Backup, restore descartável, alertas e runbooks estão em
+`fase-8-operacao-duravel.md`.
 
 O `ProxyFix` confia em exatamente um proxy e só é ativado por
 `TOCA_TRUST_PROXY=1`. O web não deve ser publicado diretamente quando essa

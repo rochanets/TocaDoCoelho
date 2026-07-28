@@ -1,0 +1,83 @@
+name: Operação durável (F8.4)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backup-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar sintaxe dos scripts
+        run: |
+          sh -n deploy/postgres/backup-once.sh
+          sh -n deploy/postgres/backup-loop.sh
+          sh -n deploy/postgres/restore-verify.sh
+
+      - name: Subir PostgreSQL descartável
+        run: |
+          docker network create toca-operations-ci
+          docker run -d --name toca-operations-pg \
+            --network toca-operations-ci \
+            -e POSTGRES_DB=toca \
+            -e POSTGRES_USER=toca \
+            -e POSTGRES_PASSWORD=ci-only-password \
+            --health-cmd="pg_isready -U toca -d toca" \
+            --health-interval=2s \
+            --health-timeout=2s \
+            --health-retries=30 \
+            postgres:16-alpine
+          for i in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Health.Status}}' toca-operations-pg)" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs toca-operations-pg
+          exit 1
+
+      - name: Criar schema e dados descartáveis
+        run: |
+          docker exec -e PGPASSWORD=ci-only-password toca-operations-pg \
+            psql -U toca -d toca -v ON_ERROR_STOP=1 -c \
+            "CREATE TABLE schema_version(version integer primary key, name text, applied_at text); INSERT INTO schema_version VALUES (31, 'ci', CURRENT_TIMESTAMP); CREATE TABLE restore_probe(id integer primary key, value text); INSERT INTO restore_probe VALUES (1, 'preservado');"
+
+      - name: Executar backup, verificar checksum e restaurar
+        run: |
+          docker volume create toca-operations-backups
+          docker run --rm --network toca-operations-ci \
+            -v "$PWD/deploy/postgres:/opt/toca:ro" \
+            -v toca-operations-backups:/backups \
+            -e PGHOST=toca-operations-pg \
+            -e PGDATABASE=toca \
+            -e PGUSER=toca \
+            -e PGPASSWORD=ci-only-password \
+            -e BACKUP_DIR=/backups \
+            -e BACKUP_RETENTION_DAYS=14 \
+            postgres:16-alpine \
+            sh /opt/toca/backup-once.sh
+          docker run --rm --network toca-operations-ci \
+            -v "$PWD/deploy/postgres:/opt/toca:ro" \
+            -v toca-operations-backups:/backups \
+            -e PGHOST=toca-operations-pg \
+            -e PGDATABASE=toca \
+            -e PGUSER=toca \
+            -e PGPASSWORD=ci-only-password \
+            postgres:16-alpine \
+            sh -c 'backup="$(find /backups -name "tocadocoelho-*.dump" | head -n 1)"; sh /opt/toca/restore-verify.sh "$backup" toca_restore_ci'
+          test "$(docker exec -e PGPASSWORD=ci-only-password toca-operations-pg \
+            psql -U toca -d postgres -Atc "SELECT COUNT(*) FROM pg_database WHERE datname='toca_restore_ci'")" = "0"
+
+      - name: Logs
+        if: always()
+        run: docker logs toca-operations-pg || true
+
+      - name: Limpar recursos descartáveis
+        if: always()
+        run: |
+          docker rm -f toca-operations-pg || true
+          docker volume rm toca-operations-backups || true
+          docker network rm toca-operations-ci || true
