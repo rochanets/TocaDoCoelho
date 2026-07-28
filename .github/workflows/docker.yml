@@ -14,6 +14,21 @@ jobs:
       - name: Build da imagem web
         run: docker build -t tocadocoelho-web:ci .
 
+      - name: Validar stack de produção
+        run: >-
+          docker compose
+          --env-file .env.production.example
+          -f docker-compose.production.yml
+          config
+
+      - name: Produção incompleta deve falhar fechada
+        run: |
+          if docker run --rm -e TOCA_ENV=production tocadocoelho-web:ci python -c "import app"; then
+            echo "ERRO: runtime de produção iniciou sem configuração obrigatória"
+            exit 1
+          fi
+          echo "runtime recusou configuração insegura como esperado"
+
       - name: Subir o container
         run: docker run -d --name toca-web -p 3000:3000 tocadocoelho-web:ci
 

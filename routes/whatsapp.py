@@ -402,7 +402,16 @@ def _waha_daily_quota(c):
         limit = int(_resolve_setting('waha_daily_send_limit', 'WAHA_DAILY_SEND_LIMIT') or 45)
     except Exception:
         limit = 45
-    c.execute("SELECT COUNT(*) FROM whatsapp_sends WHERE status = 'sent' AND date(sent_at) = date('now', 'localtime')")
+    local_now = datetime.now(_application_timezone())
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+    utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+    utc_end = local_end.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+    c.execute(
+        "SELECT COUNT(*) FROM whatsapp_sends "
+        "WHERE status = 'sent' AND sent_at >= ? AND sent_at < ?",
+        (utc_start, utc_end),
+    )
     used = c.fetchone()[0]
     return limit, used
 
@@ -438,8 +447,12 @@ def _waha_send_and_register(c, client_id, phone, message, register_activity=True
     if not chat_id:
         return {'ok': False, 'error': 'Telefone inválido para WhatsApp.'}
     ok, err = _waha_send_text(chat_id, message)
-    c.execute('INSERT INTO whatsapp_sends (client_id, phone, message, status, error) VALUES (?, ?, ?, ?, ?)',
-              (client_id, phone, message[:500], 'sent' if ok else 'error', err))
+    sent_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+    c.execute(
+        'INSERT INTO whatsapp_sends '
+        '(client_id, phone, message, status, error, sent_at) VALUES (?, ?, ?, ?, ?, ?)',
+        (client_id, phone, message[:500], 'sent' if ok else 'error', err, sent_at),
+    )
     if not ok:
         return {'ok': False, 'error': err}
     activity_id = None

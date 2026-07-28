@@ -9,6 +9,7 @@ import webbrowser
 import subprocess
 import requests
 import threading
+import secrets
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -228,8 +229,33 @@ class WindowsTrayIcon:
         return 0
 
 WAHA_PORT = int(os.environ.get('WAHA_PORT', '3001'))
-WAHA_API_KEY_DEFAULT = os.environ.get('WAHA_API_KEY', 'toca-test-key-2024')
 WAHA_LITE_SCRIPT = Path('waha-lite') / 'waha-lite.js'
+
+
+def _load_or_create_waha_api_key():
+    configured = (os.environ.get('WAHA_API_KEY') or '').strip()
+    if configured:
+        return configured
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    key_path = DATA_DIR / '.waha_api_key'
+    if key_path.exists():
+        existing = key_path.read_text(encoding='utf-8').strip()
+        if existing:
+            return existing
+    generated = secrets.token_urlsafe(32)
+    fd = os.open(str(key_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, generated.encode('utf-8'))
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(str(key_path), 0o600)
+    except OSError:
+        pass
+    return generated
+
+
+WAHA_API_KEY_DEFAULT = _load_or_create_waha_api_key()
 
 
 def _find_node():

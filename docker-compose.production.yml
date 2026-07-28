@@ -1,0 +1,98 @@
+name: tocadocoelho-production
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:?Defina POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER:?Defina POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD fora do Git}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      TOCA_ENV: production
+      TOCA_DATA_DIR: /data
+      TOCA_AUTH_ENABLED: "1"
+      TOCA_COOKIE_SECURE: "1"
+      TOCA_COOKIE_SAMESITE: "${TOCA_COOKIE_SAMESITE:-Lax}"
+      TOCA_TRUST_PROXY: "1"
+      WEB_CONCURRENCY: "1"
+      TOCA_TIMEZONE: "${TOCA_TIMEZONE:-America/Sao_Paulo}"
+      TZ: "${TOCA_TIMEZONE:-America/Sao_Paulo}"
+      SECRET_KEY: "${SECRET_KEY:?Defina SECRET_KEY estável fora do Git}"
+      DATABASE_URL: "${DATABASE_URL:?Defina DATABASE_URL PostgreSQL fora do Git}"
+      OUTLOOK_GRAPH_TENANT_ID: "${OUTLOOK_GRAPH_TENANT_ID:?Defina o tenant do Entra}"
+      OUTLOOK_GRAPH_CLIENT_ID: "${OUTLOOK_GRAPH_CLIENT_ID:?Defina o client ID do Entra}"
+      OUTLOOK_GRAPH_LOGIN_REDIRECT_URI: "${OUTLOOK_GRAPH_LOGIN_REDIRECT_URI:?Defina o redirect HTTPS de login}"
+      OUTLOOK_GRAPH_REDIRECT_URI: "${OUTLOOK_GRAPH_REDIRECT_URI:?Defina o redirect HTTPS do Outlook}"
+      OUTLOOK_GRAPH_LOGIN_SCOPE: "${OUTLOOK_GRAPH_LOGIN_SCOPE:-openid profile email User.Read}"
+      OUTLOOK_GRAPH_SCOPE: "${OUTLOOK_GRAPH_SCOPE:-offline_access Mail.Read Mail.Send User.Read}"
+    volumes:
+      - toca_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:3000/readyz', timeout=4).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - backend
+      - edge
+    security_opt:
+      - no-new-privileges:true
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/toca.conf:/etc/nginx/conf.d/default.conf:ro
+      - "${TLS_CERTS_DIR:-./deploy/nginx/certs}:/etc/nginx/tls:ro"
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O /dev/null https://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - backend
+      - edge
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:
+  toca_data:
+
+networks:
+  backend:
+    internal: true
+  edge:

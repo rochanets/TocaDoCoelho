@@ -94,7 +94,14 @@ if not exist "%SCRIPT_DIR%\node_modules\express" (
 echo [1/2] Iniciando WAHA-lite...
 
 set WAHA_PORT=3001
-set WAHA_API_KEY=toca-test-key-2024
+if not defined WAHA_API_KEY (
+    for /f "delims=" %%K in ('"%NODE_EXE%" -e "console.log(require('crypto').randomBytes(32).toString('hex'))"') do set "WAHA_API_KEY=%%K"
+)
+if not defined WAHA_API_KEY (
+    echo [ERRO] Nao foi possivel gerar WAHA_API_KEY.
+    pause
+    exit /b 1
+)
 set WAHA_SESSION_NAME=default
 set "WAHA_DATA_DIR=%APPDATA%\toca-do-coelho\waha-sessions"
 
@@ -111,7 +118,7 @@ echo   WAHA-lite pronto: http://localhost:3001
 echo.
 echo   Configure no WhatsApp Update:
 echo     URL da API : http://localhost:3001
-echo     API Key    : toca-test-key-2024
+echo     API Key    : %WAHA_API_KEY%
 echo     Sessao     : default
 echo.
 echo   Clique em "Salvar e Conectar" e escaneie o QR com

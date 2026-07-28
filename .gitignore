@@ -1,5 +1,11 @@
 # Credenciais locais (não versionar — remover desta lista se quiser versionar com bypass)
 secrets.py
+.env
+.env.*
+!.env.production.example
+*.pem
+*.key
+deploy/nginx/certs/
 
 # Ambiente virtual Python
 .venv/
@@ -42,6 +48,7 @@ node.exe
 # Cache WhatsApp Web.js (sessão do navegador, gerado em runtime)
 .wwebjs_cache/
 scripts/.wwebjs_cache/
+.waha/
 
 # Logs de build
 build_log.txt
