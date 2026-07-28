@@ -47,7 +47,9 @@ falhar:
 - `TOCA_TRUST_PROXY` desligado;
 - `TOCA_COOKIE_SAMESITE` fora de `Lax`, `Strict` ou `None`;
 - tenant, client ID ou redirects do Entra ausentes/não HTTPS;
-- `WEB_CONCURRENCY` diferente de 1 antes da conclusão da F8.2.
+- `WEB_CONCURRENCY` inválido ou, com mais de um worker,
+  `TOCA_MULTIWORKER_JOBS_ENABLED` desligado;
+- coordenação multi-worker habilitada sem PostgreSQL.
 
 `TOCA_TIMEZONE` define o dia operacional (padrão `America/Sao_Paulo`) para
 quotas e agendamentos. Timestamps persistidos pelo envio WAHA permanecem em UTC;
@@ -98,8 +100,8 @@ O `ProxyFix` confia em exatamente um proxy e só é ativado por
 `TOCA_TRUST_PROXY=1`. O web não deve ser publicado diretamente quando essa
 opção estiver ativa.
 
-## Limite consciente da F8.1
+## Evolução na F8.2
 
-O stack mantém `WEB_CONCURRENCY=1`. Habilitar múltiplos workers antes da F8.2
-duplicaria pollers, agendadores e envios. A F8.2 removerá a guarda somente
-depois dos testes de liderança, persistência e concorrência.
+O stack passa a usar dois workers por padrão com
+`TOCA_MULTIWORKER_JOBS_ENABLED=1`. Advisory locks, claims duráveis e estado
+compartilhado estão documentados em `fase-8-jobs-multiworker.md`.

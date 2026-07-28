@@ -28,6 +28,7 @@ import uuid
 import hashlib
 import secrets
 import functools
+import socket
 from datetime import datetime, timedelta, date, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from io import BytesIO
@@ -385,10 +386,18 @@ def _production_configuration_errors(env=None):
         workers = int((source.get('WEB_CONCURRENCY') or '1').strip())
     except ValueError:
         workers = 0
-    if workers != 1:
+    multiworker_jobs = _env_flag_from(source, 'TOCA_MULTIWORKER_JOBS_ENABLED', '0')
+    if workers < 1:
+        errors.append('WEB_CONCURRENCY deve ser um inteiro maior ou igual a 1.')
+    elif workers > 1 and not multiworker_jobs:
         errors.append(
-            'WEB_CONCURRENCY deve permanecer 1 até a liderança distribuída da F8.2 ser habilitada.'
+            'TOCA_MULTIWORKER_JOBS_ENABLED deve estar ativo com mais de um worker.'
         )
+    if multiworker_jobs and (urlparse(database_url).scheme or '').lower() not in {
+        'postgres',
+        'postgresql',
+    }:
+        errors.append('Coordenação multi-worker exige PostgreSQL.')
 
     tenant = (source.get('OUTLOOK_GRAPH_TENANT_ID') or '').strip()
     client_id = (source.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
@@ -1826,6 +1835,42 @@ SCHEMA_MIGRATIONS = [
         'CREATE INDEX IF NOT EXISTS idx_companion_task_files_task ON companion_task_files(task_id)',
         'CREATE INDEX IF NOT EXISTS idx_companion_task_events_task ON companion_task_events(task_id, created_at)',
     ]),
+    # Fase 8.2 — coordenação multi-worker sem novo broker. Advisory locks do
+    # PostgreSQL serializam cada job; claims persistentes evitam repetir efeitos
+    # externos ambíguos depois de crash; payload/heartbeat tornam o polling de
+    # tasks independente do worker que recebeu a requisição.
+    (31, 'fase_8_2_jobs_multiworker', [
+        'ALTER TABLE background_tasks ADD COLUMN payload_json TEXT',
+        'ALTER TABLE background_tasks ADD COLUMN runner_id TEXT',
+        'ALTER TABLE background_tasks ADD COLUMN heartbeat_at TIMESTAMP',
+        'ALTER TABLE background_tasks ADD COLUMN expires_at TIMESTAMP',
+        'CREATE INDEX IF NOT EXISTS idx_background_tasks_expires ON background_tasks(expires_at)',
+        '''CREATE TABLE IF NOT EXISTS job_runtime_state (
+            job_key TEXT PRIMARY KEY,
+            owner_id TEXT,
+            status TEXT NOT NULL,
+            started_at TIMESTAMP,
+            heartbeat_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            detail TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS job_execution_claims (
+            job_key TEXT NOT NULL,
+            run_key TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            detail TEXT,
+            PRIMARY KEY (job_key, run_key)
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_job_claims_started ON job_execution_claims(started_at)',
+        'ALTER TABLE scheduled_sends ADD COLUMN claim_token TEXT',
+        'ALTER TABLE scheduled_sends ADD COLUMN claimed_at TIMESTAMP',
+        'ALTER TABLE scheduled_sends ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0',
+        'CREATE INDEX IF NOT EXISTS idx_scheduled_sends_claim ON scheduled_sends(status, claimed_at)',
+    ]),
 ]
 
 
@@ -2295,8 +2340,18 @@ def _run_schema_migrations():
     # para PostgreSQL na borda pelo wrapper de conexão (sub-PR 2b). Backends
     # não suportados são recusados por _open_main_db.
     conn = _open_main_db(timeout=5.0)
+    migration_lock_id = int.from_bytes(
+        hashlib.sha256(b'tocadocoelho:schema-migrations').digest()[:8],
+        byteorder='big',
+        signed=True,
+    )
+    migration_lock_acquired = False
     try:
         c = conn.cursor()
+        if DB_BACKEND == 'postgresql':
+            c.execute('SELECT pg_advisory_lock(?)', (migration_lock_id,))
+            conn.commit()
+            migration_lock_acquired = True
         c.execute('''CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER PRIMARY KEY,
             name TEXT,
@@ -2369,16 +2424,250 @@ def _run_schema_migrations():
             global _PG_ID_TABLES
             _PG_ID_TABLES = None
     finally:
+        if migration_lock_acquired:
+            try:
+                conn.rollback()
+                conn.execute('SELECT pg_advisory_unlock(?)', (migration_lock_id,))
+                conn.commit()
+            except Exception:
+                logger.warning(
+                    '[Database] Falha ao liberar lock de migrations.',
+                    exc_info=True,
+                )
+        conn.close()
+
+
+_PROCESS_INSTANCE_ID = (
+    (os.environ.get('TOCA_INSTANCE_ID') or '').strip()
+    or f'{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}'
+)
+
+
+def _job_lock_id(job_key):
+    """Chave bigint estável para pg_try_advisory_lock."""
+    digest = hashlib.sha256(f'tocadocoelho:job:{job_key}'.encode('utf-8')).digest()
+    return int.from_bytes(digest[:8], byteorder='big', signed=True)
+
+
+def _first_column(row, name=None):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        if name and name in row:
+            return row[name]
+        return next(iter(row.values()), None)
+    try:
+        return row[0]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _job_state_write(conn, job_key, status, *, detail=None, completed=False):
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+    completed_at = now if completed else None
+    conn.execute(
+        '''INSERT INTO job_runtime_state
+           (job_key, owner_id, status, started_at, heartbeat_at, completed_at, detail, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(job_key) DO UPDATE SET
+             owner_id = excluded.owner_id,
+             status = excluded.status,
+             started_at = CASE
+               WHEN excluded.status = 'running'
+                    AND job_runtime_state.status <> 'running'
+                 THEN excluded.started_at
+               ELSE job_runtime_state.started_at
+             END,
+             heartbeat_at = excluded.heartbeat_at,
+             completed_at = excluded.completed_at,
+             detail = excluded.detail,
+             updated_at = excluded.updated_at''',
+        (
+            job_key,
+            _PROCESS_INSTANCE_ID,
+            status,
+            now,
+            now,
+            completed_at,
+            (detail or '')[:500] or None,
+            now,
+        ),
+    )
+    conn.commit()
+
+
+def _job_claim_once(conn, job_key, run_key):
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+    cursor = conn.execute(
+        '''INSERT INTO job_execution_claims
+           (job_key, run_key, owner_id, status, started_at)
+           VALUES (?, ?, ?, 'running', ?)
+           ON CONFLICT(job_key, run_key) DO NOTHING''',
+        (job_key, run_key, _PROCESS_INSTANCE_ID, now),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def _job_claim_finish(conn, job_key, run_key, status, detail=None):
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+    conn.execute(
+        '''UPDATE job_execution_claims
+           SET status = ?, completed_at = ?, detail = ?
+           WHERE job_key = ? AND run_key = ? AND owner_id = ?''',
+        (
+            status,
+            now,
+            (detail or '')[:500] or None,
+            job_key,
+            run_key,
+            _PROCESS_INSTANCE_ID,
+        ),
+    )
+    conn.commit()
+
+
+def _job_claim_release(conn, job_key, run_key):
+    conn.execute(
+        '''DELETE FROM job_execution_claims
+           WHERE job_key = ? AND run_key = ? AND owner_id = ?''',
+        (job_key, run_key, _PROCESS_INSTANCE_ID),
+    )
+    conn.commit()
+
+
+def _run_distributed_job(job_key, fn, *, run_key=None):
+    """Executa ``fn`` sob lock distribuído e claim opcional.
+
+    Em PostgreSQL usa advisory lock de sessão. ``run_key`` adiciona uma claim
+    durável at-most-once para efeitos externos: após crash, a execução fica
+    visível para revisão e não é repetida silenciosamente. SQLite preserva o
+    comportamento de processo único do desktop, mas também registra estado.
+    """
+    conn = _open_main_db(timeout=10.0, row_factory=True, foreign_keys=True)
+    acquired = DB_BACKEND != 'postgresql'
+    lock_id = _job_lock_id(job_key)
+    guard = threading.Lock()
+    stop_heartbeat = threading.Event()
+    heartbeat_thread = None
+    claim_created = False
+
+    try:
+        if DB_BACKEND == 'postgresql':
+            cursor = conn.execute(
+                'SELECT pg_try_advisory_lock(?) AS acquired',
+                (lock_id,),
+            )
+            acquired = bool(_first_column(cursor.fetchone(), 'acquired'))
+            conn.commit()
+        if not acquired:
+            return {'executed': False, 'reason': 'lock_unavailable'}
+
+        if run_key is not None:
+            claim_created = _job_claim_once(conn, job_key, str(run_key))
+            if not claim_created:
+                return {'executed': False, 'reason': 'already_claimed'}
+
+        _job_state_write(conn, job_key, 'running')
+
+        try:
+            heartbeat_raw = int(
+                os.environ.get('TOCA_JOB_HEARTBEAT_SECONDS', '30') or 30
+            )
+        except (TypeError, ValueError):
+            heartbeat_raw = 30
+        heartbeat_seconds = max(5, min(300, heartbeat_raw))
+
+        def _heartbeat():
+            while not stop_heartbeat.wait(heartbeat_seconds):
+                try:
+                    with guard:
+                        _job_state_write(conn, job_key, 'running')
+                except Exception as error:
+                    logger.warning(
+                        '[Jobs] Heartbeat distribuído falhou para %s: %s',
+                        job_key,
+                        error,
+                    )
+                    return
+
+        if DB_BACKEND == 'postgresql':
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat,
+                name=f'toca-job-heartbeat-{job_key[:24]}',
+                daemon=True,
+            )
+            heartbeat_thread.start()
+
+        try:
+            result = fn()
+        except Exception as error:
+            detail = f'{type(error).__name__}: {error}'
+            stop_heartbeat.set()
+            if heartbeat_thread:
+                heartbeat_thread.join(timeout=5)
+            with guard:
+                _job_state_write(conn, job_key, 'failed', detail=detail, completed=True)
+                if claim_created:
+                    _job_claim_finish(conn, job_key, str(run_key), 'failed', detail)
+            raise
+
+        stop_heartbeat.set()
+        if heartbeat_thread:
+            heartbeat_thread.join(timeout=5)
+        final_status = 'skipped' if result == 'skip' else 'succeeded'
+        with guard:
+            _job_state_write(conn, job_key, final_status, completed=True)
+            if claim_created:
+                if final_status == 'skipped':
+                    # "skip" declara que nenhum efeito ocorreu (ex.: fora do
+                    # dia da semana); libera a claim para nova tentativa.
+                    _job_claim_release(conn, job_key, str(run_key))
+                else:
+                    _job_claim_finish(conn, job_key, str(run_key), final_status)
+        return {'executed': True, 'reason': final_status, 'result': result}
+    finally:
+        stop_heartbeat.set()
+        if acquired and DB_BACKEND == 'postgresql':
+            try:
+                with guard:
+                    conn.execute('SELECT pg_advisory_unlock(?)', (lock_id,))
+                    conn.commit()
+            except Exception:
+                logger.warning('[Jobs] Falha ao liberar lock %s.', job_key, exc_info=True)
         conn.close()
 
 
 def _mark_interrupted_background_tasks():
-    """Ao subir, marca tasks 'processing' de execuções anteriores como interrompidas."""
+    """Recupera apenas execuções comprovadamente abandonadas.
+
+    Não marca tasks recentes: em Gunicorn cada worker importa o módulo e não
+    pode invalidar trabalho ativo de outro processo.
+    """
     try:
         conn = _open_main_db(timeout=5.0)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        stale = (now - timedelta(minutes=15)).isoformat(timespec='seconds')
+        now_text = now.isoformat(timespec='seconds')
         conn.execute(
-            "UPDATE background_tasks SET status = 'interrupted', updated_at = CURRENT_TIMESTAMP "
-            "WHERE status = 'processing'"
+            "UPDATE background_tasks SET status = 'interrupted', updated_at = ? "
+            "WHERE status = 'processing' AND "
+            "(heartbeat_at IS NULL OR heartbeat_at < ?)",
+            (now_text, stale),
+        )
+        conn.execute(
+            "DELETE FROM background_tasks WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (now_text,),
+        )
+        conn.execute(
+            "UPDATE scheduled_sends "
+            "SET status = 'error', error = ?, claim_token = NULL "
+            "WHERE status = 'processing' "
+            "AND (claimed_at IS NULL OR claimed_at < ?)",
+            (
+                'Execução interrompida após claim; revisão manual obrigatória para evitar envio duplicado.',
+                stale,
+            ),
         )
         conn.commit()
         conn.close()
@@ -8560,30 +8849,17 @@ def _build_outlook_stream_response(days=60, source='graph', page_size=50, max_pa
     )
 
 
-_outlook_confirm_tasks = {}
-_outlook_confirm_tasks_lock = threading.Lock()
-
-
 def _outlook_confirm_task_set(task_id, update):
-    with _outlook_confirm_tasks_lock:
-        if task_id not in _outlook_confirm_tasks:
-            _outlook_confirm_tasks[task_id] = {}
-        _outlook_confirm_tasks[task_id].update(update)
-        snapshot = dict(_outlook_confirm_tasks[task_id])
-    _bg_task_persist(task_id, 'outlook_confirm', snapshot)
+    _bg_task_register_persistent(task_id, 'outlook_confirm')
+    _bg_task_set(task_id, update)
 
 
 def _outlook_confirm_task_get(task_id):
-    with _outlook_confirm_tasks_lock:
-        return dict(_outlook_confirm_tasks.get(task_id) or {})
+    return _bg_task_get(task_id)
 
 
 def _outlook_confirm_task_cleanup(task_id, delay=300):
-    def _do():
-        time.sleep(delay)
-        with _outlook_confirm_tasks_lock:
-            _outlook_confirm_tasks.pop(task_id, None)
-    threading.Thread(target=_do, daemon=True).start()
+    _bg_task_cleanup(task_id, delay=delay)
 
 
 def _detect_followup_from_text(c, client_id, activity_id, client_name, text, owner_id=None):
@@ -10571,23 +10847,55 @@ _bg_persistent_kinds: dict = {}
 _bg_task_owners: dict = {}
 
 
-def _bg_task_register_persistent(task_id, kind):
+def _bg_task_register_persistent(task_id, kind, owner_id=None):
     _bg_persistent_kinds[task_id] = kind
-    if has_request_context() and _auth_enabled():
+    if owner_id is not None:
+        _bg_task_owners[task_id] = owner_id
+    elif has_request_context() and _auth_enabled():
         _bg_task_owners[task_id] = current_user_id()
 
 
 def _bg_task_persist(task_id, kind, task):
     try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        try:
+            ttl_hours = int(os.environ.get('TOCA_TASK_STATE_TTL_HOURS', '24') or 24)
+        except (TypeError, ValueError):
+            ttl_hours = 24
+        expires_at = now + timedelta(
+            hours=max(1, min(168, ttl_hours))
+        )
+        payload_json = json.dumps(task, ensure_ascii=False, default=str)
         conn = get_db()
         conn.execute(
-            'INSERT INTO background_tasks (task_id, kind, status, step, progress, owner_id, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) '
-            'ON CONFLICT(task_id) DO UPDATE SET status = excluded.status, step = excluded.step, '
-            'progress = excluded.progress, updated_at = CURRENT_TIMESTAMP',
-            (task_id, kind, task.get('status') or 'processing',
-             task.get('step'), int(task.get('progress') or 0),
-             _bg_task_owners.get(task_id))
+            '''INSERT INTO background_tasks
+               (task_id, kind, status, step, progress, owner_id, payload_json,
+                runner_id, heartbeat_at, expires_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(task_id) DO UPDATE SET
+                 kind = excluded.kind,
+                 status = excluded.status,
+                 step = excluded.step,
+                 progress = excluded.progress,
+                 owner_id = COALESCE(excluded.owner_id, background_tasks.owner_id),
+                 payload_json = excluded.payload_json,
+                 runner_id = excluded.runner_id,
+                 heartbeat_at = excluded.heartbeat_at,
+                 expires_at = excluded.expires_at,
+                 updated_at = excluded.updated_at''',
+            (
+                task_id,
+                kind,
+                task.get('status') or 'processing',
+                task.get('step'),
+                int(task.get('progress') or 0),
+                _bg_task_owners.get(task_id),
+                payload_json,
+                _PROCESS_INSTANCE_ID,
+                now.isoformat(timespec='seconds'),
+                expires_at.isoformat(timespec='seconds'),
+                now.isoformat(timespec='seconds'),
+            ),
         )
         conn.commit()
         conn.close()
@@ -10603,18 +10911,60 @@ def _bg_task_set(task_id, updates):
         task.update(updates)
         _bg_tasks[task_id] = task
         snapshot = dict(task)
-    kind = _bg_persistent_kinds.get(task_id)
-    if kind:
-        _bg_task_persist(task_id, kind, snapshot)
+    kind = _bg_persistent_kinds.get(task_id, 'generic')
+    _bg_task_persist(task_id, kind, snapshot)
 
 
 def _bg_task_get(task_id):
     with _bg_tasks_lock:
         if _auth_enabled() and has_request_context():
             owner_id = _bg_task_owners.get(task_id)
-            if owner_id is not None and owner_id != current_user_id():
+            if owner_id is None:
+                cached = {}
+            elif owner_id != current_user_id():
                 return {}
-        return dict(_bg_tasks.get(task_id) or {})
+            else:
+                cached = dict(_bg_tasks.get(task_id) or {})
+        else:
+            cached = dict(_bg_tasks.get(task_id) or {})
+    if cached:
+        return cached
+
+    try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+        conn = get_db()
+        row = conn.execute(
+            '''SELECT task_id, kind, status, step, progress, owner_id, payload_json
+               FROM background_tasks
+               WHERE task_id = ? AND (expires_at IS NULL OR expires_at > ?)''',
+            (task_id, now),
+        ).fetchone()
+        conn.close()
+    except Exception as error:
+        logger.debug('[Tasks] Falha ao recuperar task %s: %s', task_id, error)
+        return {}
+    if not row:
+        return {}
+
+    record = dict_from_row(row)
+    owner_id = record.get('owner_id')
+    if _auth_enabled() and has_request_context() and owner_id != current_user_id():
+        return {}
+    try:
+        task = json.loads(record.get('payload_json') or '{}')
+    except (TypeError, ValueError):
+        task = {}
+    task.update({
+        'status': record.get('status') or task.get('status'),
+        'step': record.get('step') if record.get('step') is not None else task.get('step'),
+        'progress': record.get('progress') if record.get('progress') is not None else task.get('progress', 0),
+    })
+    with _bg_tasks_lock:
+        _bg_tasks[task_id] = dict(task)
+        _bg_persistent_kinds[task_id] = record.get('kind') or 'generic'
+        if owner_id is not None:
+            _bg_task_owners[task_id] = owner_id
+    return task
 
 
 def _bg_task_cleanup(task_id, delay=300):
@@ -10629,28 +10979,17 @@ def _bg_task_cleanup(task_id, delay=300):
 
 # ---------------------------------------------------------------------------
 
-_portfolio_tasks = {}
-_portfolio_tasks_lock = threading.Lock()
-
-
 def _portfolio_task_set(task_id, update):
-    with _portfolio_tasks_lock:
-        if task_id not in _portfolio_tasks:
-            _portfolio_tasks[task_id] = {}
-        _portfolio_tasks[task_id].update(update)
+    _bg_task_register_persistent(task_id, 'portfolio_offer')
+    _bg_task_set(task_id, update)
 
 
 def _portfolio_task_get(task_id):
-    with _portfolio_tasks_lock:
-        return dict(_portfolio_tasks.get(task_id) or {})
+    return _bg_task_get(task_id)
 
 
 def _portfolio_task_cleanup(task_id, delay=300):
-    def _do():
-        time.sleep(delay)
-        with _portfolio_tasks_lock:
-            _portfolio_tasks.pop(task_id, None)
-    threading.Thread(target=_do, daemon=True).start()
+    _bg_task_cleanup(task_id, delay=delay)
 
 
 def _portfolio_process_offer_async(task_id, input_text, file_bytes, file_mime, filename, owner_id=None):
@@ -11081,28 +11420,17 @@ def _iata_generate_insights(ata_data, portfolio_offers):
     return None, 'llm_invalid_response'
 
 
-_iata_tasks = {}
-_iata_tasks_lock = threading.Lock()
-
-
 def _iata_task_set(task_id, updates):
-    with _iata_tasks_lock:
-        task = _iata_tasks.get(task_id, {})
-        task.update(updates)
-        _iata_tasks[task_id] = task
+    _bg_task_register_persistent(task_id, 'iata')
+    _bg_task_set(task_id, updates)
 
 
 def _iata_task_get(task_id):
-    with _iata_tasks_lock:
-        return dict(_iata_tasks.get(task_id) or {})
+    return _bg_task_get(task_id)
 
 
 def _iata_task_cleanup(task_id, delay=300):
-    def _do():
-        time.sleep(delay)
-        with _iata_tasks_lock:
-            _iata_tasks.pop(task_id, None)
-    threading.Thread(target=_do, daemon=True).start()
+    _bg_task_cleanup(task_id, delay=delay)
 
 
 def _iata_extract_bytes(file_bytes, filename):
@@ -12231,6 +12559,33 @@ def _save_app_setting(key, value):
     conn.close()
 
 
+def _operational_state_cleanup_job():
+    """Remove somente estados expirados/concluídos; falhas ficam para revisão."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    claims_cutoff = (now - timedelta(days=30)).isoformat(timespec='seconds')
+    conn = get_db()
+    try:
+        expired = conn.execute(
+            'DELETE FROM background_tasks '
+            'WHERE expires_at IS NOT NULL AND expires_at < ?',
+            (now.isoformat(timespec='seconds'),),
+        ).rowcount
+        old_claims = conn.execute(
+            '''DELETE FROM job_execution_claims
+               WHERE status = 'succeeded' AND completed_at < ?''',
+            (claims_cutoff,),
+        ).rowcount
+        conn.commit()
+        logger.info(
+            '[Jobs] Limpeza operacional: tasks=%s claims=%s',
+            expired,
+            old_claims,
+        )
+        return {'expired_tasks': expired, 'old_claims': old_claims}
+    finally:
+        conn.close()
+
+
 def _start_scheduled_jobs():
     global _scheduled_jobs_started
     if _scheduled_jobs_started or os.environ.get('TOCA_DISABLE_BG_JOBS') == '1':
@@ -12240,12 +12595,13 @@ def _start_scheduled_jobs():
     def _loop():
         while True:
             time.sleep(30 * 60)  # verifica a cada 30 min o que está vencido
-            now = datetime.now()
             for key, interval_days, fn, only_after_hour in list(_SCHEDULED_JOBS):
                 try:
+                    now = datetime.now(_application_timezone()).replace(tzinfo=None)
                     if only_after_hour is not None and now.hour < only_after_hour:
                         continue
                     last_raw = _resolve_setting(key, '')
+                    last = None
                     if last_raw:
                         try:
                             last = datetime.fromisoformat(last_raw)
@@ -12253,11 +12609,41 @@ def _start_scheduled_jobs():
                                 continue
                         except ValueError:
                             pass
-                    logger.info(f'[Jobs] Executando job agendado: {key}')
-                    result = fn()
-                    if result == 'skip':
-                        continue  # fora da janela do job — tenta de novo mais tarde
-                    _save_app_setting(key, now.isoformat(timespec='seconds'))
+                    run_key = (
+                        (last + timedelta(days=interval_days)).isoformat(timespec='seconds')
+                        if last is not None
+                        else 'initial'
+                    )
+
+                    def _execute():
+                        # Revalida dentro do lock/claim para não depender do
+                        # snapshot lido simultaneamente por outro worker.
+                        current = datetime.now(_application_timezone()).replace(tzinfo=None)
+                        current_last_raw = _resolve_setting(key, '')
+                        if current_last_raw:
+                            try:
+                                current_last = datetime.fromisoformat(current_last_raw)
+                                if (current - current_last) < timedelta(days=interval_days):
+                                    return 'skip'
+                            except ValueError:
+                                pass
+                        logger.info('[Jobs] Executando job agendado: %s', key)
+                        result = fn()
+                        if result != 'skip':
+                            _save_app_setting(key, current.isoformat(timespec='seconds'))
+                        return result
+
+                    outcome = _run_distributed_job(
+                        f'scheduled:{key}',
+                        _execute,
+                        run_key=run_key,
+                    )
+                    if not outcome['executed']:
+                        logger.debug(
+                            '[Jobs] %s não executado: %s',
+                            key,
+                            outcome['reason'],
+                        )
                 except Exception as e:
                     logger.warning(f'[Jobs] Job {key} falhou: {e}')
 
@@ -12283,7 +12669,7 @@ def _start_inbound_poller():
                 minutes = 15
             time.sleep(max(minutes, 1) * 60)
             try:
-                _inbound_scan_whatsapp()
+                _run_distributed_job('poller:inbound_whatsapp', _inbound_scan_whatsapp)
             except Exception as e:
                 logger.debug(f'[Inbound] Poller: scan falhou (WAHA offline?): {e}')
 
@@ -13536,6 +13922,12 @@ def _load_route_modules():
 
 
 _load_route_modules()
+_register_scheduled_job(
+    'operational_state_cleanup_last_run',
+    1,
+    _operational_state_cleanup_job,
+    only_after_hour=3,
+)
 _start_inbound_poller()
 _start_scheduled_jobs()
 

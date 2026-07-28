@@ -666,11 +666,25 @@ def _scheduled_send_execute(c, row):
 
 def _scheduled_send_finish(c, send_id, ok, error):
     if ok:
-        c.execute("UPDATE scheduled_sends SET status = 'sent', sent_at = CURRENT_TIMESTAMP, error = NULL WHERE id = ?",
+        c.execute("UPDATE scheduled_sends SET status = 'sent', sent_at = CURRENT_TIMESTAMP, "
+                  "error = NULL, claim_token = NULL WHERE id = ?",
                   (send_id,))
     else:
-        c.execute("UPDATE scheduled_sends SET status = 'error', error = ? WHERE id = ?",
+        c.execute("UPDATE scheduled_sends SET status = 'error', error = ?, claim_token = NULL WHERE id = ?",
                   ((error or '')[:300], send_id))
+
+
+def _scheduled_send_claim(c, send_id):
+    claim_token = uuid.uuid4().hex
+    claimed_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
+    c.execute(
+        '''UPDATE scheduled_sends
+           SET status = 'processing', claim_token = ?, claimed_at = ?,
+               attempt_count = COALESCE(attempt_count, 0) + 1
+           WHERE id = ? AND status = 'pending' ''',
+        (claim_token, claimed_at, send_id),
+    )
+    return c.rowcount == 1
 
 
 def _scheduled_sends_worker_tick():
@@ -685,13 +699,30 @@ def _scheduled_sends_worker_tick():
                  WHERE status = 'pending' AND scheduled_for <= ? AND scheduled_for >= ?""",
               (now_str, grace_str))
     due = [dict_from_row(r) for r in c.fetchall()]
-    for row in due:
-        ok, error = _scheduled_send_execute(c, row)
-        _scheduled_send_finish(c, row['id'], ok, error)
-        logger.info(f'[Agendados] Envio {row["id"]} ({row["channel"]}): {"ok" if ok else error}')
-    conn.commit()
     conn.close()
-    return len(due)
+    executed = 0
+    for row in due:
+        item_conn = get_db()
+        item_cursor = item_conn.cursor()
+        if not _scheduled_send_claim(item_cursor, row['id']):
+            item_conn.rollback()
+            item_conn.close()
+            continue
+        # Claim durável ANTES do efeito externo. Se o processo cair depois do
+        # envio, a recuperação marca erro para revisão e nunca reenvia sozinha.
+        item_conn.commit()
+        try:
+            ok, error = _scheduled_send_execute(item_cursor, row)
+        except Exception as exc:
+            item_conn.rollback()
+            item_cursor = item_conn.cursor()
+            ok, error = False, f'Falha após claim: {exc}'
+        _scheduled_send_finish(item_cursor, row['id'], ok, error)
+        item_conn.commit()
+        item_conn.close()
+        executed += 1
+        logger.info(f'[Agendados] Envio {row["id"]} ({row["channel"]}): {"ok" if ok else error}')
+    return executed
 
 
 _scheduled_sends_worker_started = False
@@ -707,7 +738,10 @@ def _start_scheduled_sends_worker():
         while True:
             time.sleep(60)
             try:
-                _scheduled_sends_worker_tick()
+                _run_distributed_job(
+                    'worker:scheduled_sends',
+                    _scheduled_sends_worker_tick,
+                )
             except Exception as e:
                 logger.debug(f'[Agendados] tick falhou: {e}')
 
@@ -820,7 +854,17 @@ def scheduled_send_now(send_id):
         if not row:
             conn.close()
             return jsonify({'error': 'Agendamento não encontrado (ou já processado).'}), 404
-        ok, error = _scheduled_send_execute(c, row)
+        if not _scheduled_send_claim(c, send_id):
+            conn.rollback()
+            conn.close()
+            return jsonify({'error': 'Agendamento já foi reivindicado por outro worker.'}), 409
+        conn.commit()
+        try:
+            ok, error = _scheduled_send_execute(c, row)
+        except Exception as exc:
+            conn.rollback()
+            c = conn.cursor()
+            ok, error = False, f'Falha após claim: {exc}'
         _scheduled_send_finish(c, send_id, ok, error)
         conn.commit()
         conn.close()
@@ -845,7 +889,15 @@ def scheduled_send_cancel(send_id):
         if not row:
             conn.close()
             return jsonify({'error': 'Agendamento não encontrado (ou já processado).'}), 404
-        c.execute("UPDATE scheduled_sends SET status = 'cancelled' WHERE id = ?", (send_id,))
+        c.execute(
+            "UPDATE scheduled_sends SET status = 'cancelled' "
+            "WHERE id = ? AND status = 'pending'",
+            (send_id,),
+        )
+        if c.rowcount != 1:
+            conn.rollback()
+            conn.close()
+            return jsonify({'error': 'Agendamento já foi reivindicado por outro worker.'}), 409
         if row['activity_id']:
             c.execute('DELETE FROM activities WHERE id = ?', (row['activity_id'],))
         conn.commit()

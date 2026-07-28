@@ -49,4 +49,5 @@ jobs:
             tests/test_postgres_routes.py \
             tests/test_postgres_lastrowid.py \
             tests/test_postgres_etl.py \
-            tests/test_postgres_acl.py
+            tests/test_postgres_acl.py \
+            tests/test_postgres_jobs.py

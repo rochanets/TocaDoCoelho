@@ -106,14 +106,10 @@ custo operacional, sem antecipá-la na F8.1.
 
 ### F8.2 - jobs multi-worker e liderança
 
-- transformar o inventário acima em registro por job: dono, periodicidade,
-  duração, efeito externo, idempotência e estado;
-- escolher entre advisory locks/tabelas ou fila externa;
-- separar eleição de líder dos executores iniciados por requisição;
-- substituir estados locais relevantes por persistência compartilhada;
-- implementar claim/lease/retry e recuperação após reinício;
-- provar, com dois ou mais workers, que cada tick e envio externo ocorre uma
-  única vez.
+Implementada em `docs/fase-8-jobs-multiworker.md` com PostgreSQL advisory
+locks, claims duráveis, task store compartilhado e recuperação fail-safe de
+envios. Redis/RQ e Celery permanecem alternativas condicionais, não
+dependências atuais.
 
 ### F8.3 - WAHA sidecar
 
