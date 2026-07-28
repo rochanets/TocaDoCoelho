@@ -29,12 +29,14 @@ import hashlib
 import secrets
 import functools
 from datetime import datetime, timedelta, date, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect, session, g, has_request_context
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from document_processing import (
     DocumentProcessingError,
@@ -176,7 +178,10 @@ except ImportError:
 
 # Configuracao
 app = Flask(__name__, static_folder='public', static_url_path='')
-CORS(app)
+# O desktop/local preserva o CORS legado. Em produção, navegador, API e assets
+# são servidos pela mesma origem HTTPS; não anunciamos acesso cross-origin.
+if (os.environ.get('TOCA_ENV') or '').strip().lower() != 'production':
+    CORS(app)
 
 
 @app.route('/healthz')
@@ -185,6 +190,26 @@ def healthz():
     load balancer). Sem auth e sem tocar no banco — só confirma que o processo
     está de pé e servindo requisições."""
     return jsonify({'status': 'ok'}), 200
+
+
+@app.route('/readyz')
+def readyz():
+    """Readiness: confirma que o processo consegue consultar o banco principal.
+
+    Não executa migrations nem devolve detalhes da conexão. Em caso de falha,
+    o processo continua vivo (/healthz), mas sai do balanceamento.
+    """
+    conn = None
+    try:
+        conn = _open_main_db(timeout=3.0)
+        conn.execute('SELECT 1')
+        return jsonify({'status': 'ready'}), 200
+    except Exception:
+        logger.warning('[Readiness] Banco principal indisponível.', exc_info=True)
+        return jsonify({'status': 'not_ready'}), 503
+    finally:
+        if conn is not None:
+            conn.close()
 
 # Diretorio de dados.
 # Em produção web (container/servidor), a variável de ambiente TOCA_DATA_DIR
@@ -308,6 +333,96 @@ def _env_flag(name, default='0'):
     return (os.environ.get(name, default) or '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def _env_flag_from(env, name, default='0'):
+    return (env.get(name, default) or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _is_production_environment(env=None):
+    source = os.environ if env is None else env
+    return (source.get('TOCA_ENV') or '').strip().lower() == 'production'
+
+
+def _application_timezone():
+    name = (os.environ.get('TOCA_TIMEZONE') or 'America/Sao_Paulo').strip()
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        logger.warning('[Config] TOCA_TIMEZONE inválido (%r); usando UTC.', name)
+        return timezone.utc
+
+
+def _production_configuration_errors(env=None):
+    """Retorna erros de configuração fail-closed do runtime de produção.
+
+    A função aceita um mapping para permitir testes sem alterar o ambiente do
+    processo. Valores sensíveis nunca são incluídos nas mensagens.
+    """
+    source = os.environ if env is None else env
+    if not _is_production_environment(source):
+        return []
+
+    errors = []
+    secret = (source.get('SECRET_KEY') or source.get('TOCA_SECRET_KEY') or '').strip()
+    if len(secret) < 32 or secret.upper().startswith(('CHANGE_ME', 'REPLACE_ME')):
+        errors.append('SECRET_KEY deve ser estável, não exemplar e ter ao menos 32 caracteres.')
+
+    database_url = (source.get('DATABASE_URL') or '').strip()
+    if (urlparse(database_url).scheme or '').lower() not in {'postgres', 'postgresql'}:
+        errors.append('DATABASE_URL deve apontar para PostgreSQL em produção.')
+
+    if not _env_flag_from(source, 'TOCA_AUTH_ENABLED', '0'):
+        errors.append('TOCA_AUTH_ENABLED deve estar ativo em produção.')
+    if not _env_flag_from(source, 'TOCA_COOKIE_SECURE', '1'):
+        errors.append('TOCA_COOKIE_SECURE deve estar ativo em produção.')
+    if not _env_flag_from(source, 'TOCA_TRUST_PROXY', '0'):
+        errors.append('TOCA_TRUST_PROXY deve estar ativo atrás do reverse proxy de produção.')
+
+    same_site = (source.get('TOCA_COOKIE_SAMESITE') or 'Lax').strip().lower()
+    if same_site not in {'lax', 'strict', 'none'}:
+        errors.append('TOCA_COOKIE_SAMESITE deve ser Lax, Strict ou None.')
+
+    try:
+        workers = int((source.get('WEB_CONCURRENCY') or '1').strip())
+    except ValueError:
+        workers = 0
+    if workers != 1:
+        errors.append(
+            'WEB_CONCURRENCY deve permanecer 1 até a liderança distribuída da F8.2 ser habilitada.'
+        )
+
+    tenant = (source.get('OUTLOOK_GRAPH_TENANT_ID') or '').strip()
+    client_id = (source.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
+    if not tenant or tenant.upper().startswith(('CHANGE_ME', 'REPLACE_ME')):
+        errors.append('OUTLOOK_GRAPH_TENANT_ID é obrigatório em produção.')
+    try:
+        parsed_client_id = uuid.UUID(client_id)
+    except (ValueError, AttributeError):
+        parsed_client_id = None
+    if parsed_client_id is None or parsed_client_id.int == 0:
+        errors.append('OUTLOOK_GRAPH_CLIENT_ID é obrigatório em produção.')
+
+    for name in ('OUTLOOK_GRAPH_LOGIN_REDIRECT_URI', 'OUTLOOK_GRAPH_REDIRECT_URI'):
+        value = (source.get(name) or '').strip()
+        parsed = urlparse(value)
+        hostname = (parsed.hostname or '').lower()
+        if (
+            parsed.scheme.lower() != 'https'
+            or not parsed.netloc
+            or hostname == 'example.com'
+            or hostname.endswith('.example.com')
+        ):
+            errors.append(f'{name} deve ser uma URL HTTPS absoluta em produção.')
+
+    return errors
+
+
+def _validate_production_configuration(env=None):
+    errors = _production_configuration_errors(env)
+    if errors:
+        formatted = '\n'.join(f'- {item}' for item in errors)
+        raise RuntimeError(f'Configuração de produção inválida:\n{formatted}')
+
+
 def _load_or_create_session_secret():
     env_secret = (os.environ.get('SECRET_KEY') or os.environ.get('TOCA_SECRET_KEY') or '').strip()
     if env_secret:
@@ -336,16 +451,20 @@ def _load_or_create_session_secret():
         return secrets.token_urlsafe(48)
 
 
+_validate_production_configuration()
 app.secret_key = _load_or_create_session_secret()
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SAMESITE=(os.environ.get('TOCA_COOKIE_SAMESITE') or 'Lax').strip().title(),
     # Secure por padrão (produção atrás de TLS). Ambientes http (dev/desktop,
     # test client) podem desligar com TOCA_COOKIE_SECURE=0.
     SESSION_COOKIE_SECURE=_env_flag('TOCA_COOKIE_SECURE', '1'),
     PERMANENT_SESSION_LIFETIME=timedelta(days=7),
     SESSION_REFRESH_EACH_REQUEST=True,
 )
+if _env_flag('TOCA_TRUST_PROXY', '0'):
+    # Exatamente um reverse proxy confiável (Nginx do stack de produção).
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 
 def _auth_enabled():
@@ -2754,7 +2873,7 @@ def admin_write_required(fn):
 
 # Endpoints sem cookie de sessão: /healthz, fluxo de auth e protocolo v1 do
 # Companion. As rotas v1 aplicam token próprio ou código de vínculo.
-_AUTH_PUBLIC_ENDPOINTS = {'healthz'}
+_AUTH_PUBLIC_ENDPOINTS = {'healthz', 'readyz'}
 # Assets estáticos da SPA (pasta public/): js/css/img podem carregar sem sessão
 # (não expõem dados). NÃO inclui /uploads/* (arquivos de negócio, endpoints
 # próprios), que ficam atrás do login.
@@ -2913,7 +3032,10 @@ def _sai_simple_prompt(question: str) -> str | None:
     """
     base_url = (_load_app_settings_map(['itoca_sai_base_url']).get('itoca_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 
-    geral_claude_key = _resolve_setting('itoca_sai_geral_claude_api_key', 'ITOCA_SAI_GERAL_CLAUDE_API_KEY') or 'fuBoUPGL+UmrErevVE6VWQ'
+    geral_claude_key = _resolve_setting(
+        'itoca_sai_geral_claude_api_key',
+        'ITOCA_SAI_GERAL_CLAUDE_API_KEY',
+    )
     if geral_claude_key:
         geral_claude_template_id = (_load_app_settings_map(['itoca_sai_geral_claude_template_id']).get('itoca_sai_geral_claude_template_id') or '').strip() or '6a45658f1615d7b89d76c4ac'
         result = _sai_execute_question_template(base_url, geral_claude_template_id, geral_claude_key, question, 'geral_claude')
@@ -3965,7 +4087,10 @@ def _relation_report_call_sai_narrative_template(
         'relation_report_sai_template_id',
         'relation_report_sai_base_url'
     ])
-    api_key = (settings_map.get('relation_report_sai_api_key') or '').strip() or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip() or 'RuWKlxg1Sk+/3PpzUKof+w'
+    api_key = (
+        (settings_map.get('relation_report_sai_api_key') or '').strip()
+        or (os.environ.get('RELATION_REPORT_SAI_API_KEY', '') or '').strip()
+    )
     template_id = (settings_map.get('relation_report_sai_template_id') or '').strip() or '69b83e37025459101ee6735d'
     base_url = (settings_map.get('relation_report_sai_base_url') or '').strip() or 'https://sai-library.saiapplications.com'
 

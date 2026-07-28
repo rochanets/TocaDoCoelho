@@ -4,6 +4,14 @@
 .gitignore
 .manus
 .claude
+.env
+.env.*
+.waha
+tmp/
+output/
+*.pem
+*.key
+deploy/nginx/certs/
 
 # Caches / builds
 __pycache__/

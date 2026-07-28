@@ -13,6 +13,7 @@ Werkzeug==2.3.7
 requests>=2.31.0
 chardet==5.2.0
 cryptography>=41.0.0
+tzdata>=2024.1
 gunicorn>=21.2.0
 # Driver PostgreSQL (Fase 2 — backend web). Só é usado quando DATABASE_URL
 # aponta para postgresql://; no modo SQLite (desktop/local) fica ocioso.

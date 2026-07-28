@@ -10,7 +10,7 @@ services:
       # Engine baseada em navegador (estável, plano gratuito)
       WHATSAPP_DEFAULT_ENGINE: "WEBJS"
       # Proteção da API por chave (header X-Api-Key)
-      WHATSAPP_API_KEY: "toca-test-key-2024"
+      WHATSAPP_API_KEY: "${WAHA_API_KEY:?Defina WAHA_API_KEY fora do Git}"
       # Sessão persistida em arquivo (reconecta sem reescanear o QR)
       WHATSAPP_RESTART_ALL_SESSIONS: "true"
       WHATSAPP_DOWNLOAD_MEDIA: "false"
