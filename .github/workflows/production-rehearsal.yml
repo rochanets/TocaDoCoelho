@@ -1,0 +1,63 @@
+name: Ensaio de produção (F8.5)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  production-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      REHEARSAL_CANDIDATE_IMAGE: tocadocoelho-web:f85-candidate
+      REHEARSAL_PREVIOUS_IMAGE: tocadocoelho-web:f85-previous
+      REHEARSAL_PROJECT_NAME: toca-f85-${{ github.run_id }}
+      REHEARSAL_BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar ausência de segredos rastreados
+        run: python scripts/check_no_secrets.py
+
+      - name: Resolver revisão anterior para rollback
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base_sha="$EVENT_BASE_SHA"
+          if [ -z "$base_sha" ] || echo "$base_sha" | grep -Eq '^0+$'; then
+            base_sha="$(git rev-parse HEAD^)"
+          fi
+          git cat-file -e "$base_sha^{commit}"
+          echo "REHEARSAL_BASE_SHA=$base_sha" >> "$GITHUB_ENV"
+
+      - name: Build imutável do candidato
+        run: |
+          docker build \
+            --build-arg TOCA_BUILD_SHA="$GITHUB_SHA" \
+            --build-arg TOCA_BUILD_VERSION="f85-${GITHUB_SHA::12}" \
+            -t "$REHEARSAL_CANDIDATE_IMAGE" .
+          test "$(docker image inspect --format \
+            '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+            "$REHEARSAL_CANDIDATE_IMAGE")" = "$GITHUB_SHA"
+
+      - name: Build da imagem anterior para rollback
+        run: |
+          previous_dir="$RUNNER_TEMP/toca-f85-previous"
+          git worktree add --detach "$previous_dir" "$REHEARSAL_BASE_SHA"
+          docker build -t "$REHEARSAL_PREVIOUS_IMAGE" "$previous_dir"
+
+      - name: Validar sintaxe do ensaio
+        run: sh -n deploy/rehearsal/run-production-rehearsal.sh
+
+      - name: Ensaiar stack, TLS, integrações internas e rollback
+        run: sh deploy/rehearsal/run-production-rehearsal.sh
+
+      - name: Remover worktree anterior
+        if: always()
+        run: |
+          previous_dir="$RUNNER_TEMP/toca-f85-previous"
+          if [ -d "$previous_dir" ]; then
+            git worktree remove --force "$previous_dir"
+          fi
