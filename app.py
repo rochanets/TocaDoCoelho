@@ -785,6 +785,40 @@ maybe_seed_test_db_fallback()
 
 logger.info(f'[Database] Caminho: {DB_PATH}')
 
+
+def _seed_waha_settings_from_environment(cursor, environ=None):
+    """Preenche apenas valores WAHA ainda vazios/padrão.
+
+    O nome da tabela no predicado do UPSERT é obrigatório no PostgreSQL:
+    sem ele, ``value`` fica ambíguo em relação a ``excluded.value``.
+    """
+    env = os.environ if environ is None else environ
+    candidates = (
+        (
+            'WAHA_API_URL',
+            'waha_api_url',
+            "app_settings.value='' OR "
+            "app_settings.value='http://localhost:3001'",
+        ),
+        ('WAHA_API_KEY', 'waha_api_key', "app_settings.value=''"),
+        (
+            'WAHA_SESSION_NAME',
+            'waha_session_name',
+            "app_settings.value='' OR app_settings.value='default'",
+        ),
+    )
+    for env_name, setting_key, update_condition in candidates:
+        env_value = env.get(env_name, '').strip()
+        if not env_value:
+            continue
+        cursor.execute(
+            'INSERT INTO app_settings (key,value) VALUES(?,?) '
+            'ON CONFLICT(key) DO UPDATE SET value=excluded.value '
+            f'WHERE {update_condition}',
+            (setting_key, env_value),
+        )
+
+
 # Inicializar banco de dados
 def init_db():
     # Baseline do schema (migração 1). Passa pela fábrica para ser traduzido ao
@@ -1262,14 +1296,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('waha_session_name', 'default'))
     # Auto-configurar a partir de variáveis de ambiente injetadas pelo launcher (build bundled)
     _waha_url_env = os.environ.get('WAHA_API_URL', '').strip()
-    _waha_key_env = os.environ.get('WAHA_API_KEY', '').strip()
-    _waha_session_env = os.environ.get('WAHA_SESSION_NAME', '').strip()
-    if _waha_url_env:
-        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='http://localhost:3001'", ('waha_api_url', _waha_url_env))
-    if _waha_key_env:
-        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value=''", ('waha_api_key', _waha_key_env))
-    if _waha_session_env:
-        c.execute("INSERT INTO app_settings (key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value='' OR value='default'", ('waha_session_name', _waha_session_env))
+    _seed_waha_settings_from_environment(c)
     # Cura URLs já salvas apontando para a porta do próprio app (causa loop Flask→Flask, 404/405).
     # A validação no PUT impede salvar novas, mas valores antigos no banco precisam ser corrigidos aqui.
     _app_port = str(os.environ.get('PORT', '3000'))

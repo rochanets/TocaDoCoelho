@@ -9,6 +9,33 @@ import yaml
 import app as toca
 
 
+def test_waha_environment_upserts_qualify_postgres_conflict_columns():
+    class RecordingCursor:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params):
+            self.calls.append((sql, params))
+
+    cursor = RecordingCursor()
+    toca._seed_waha_settings_from_environment(
+        cursor,
+        {
+            'WAHA_API_URL': 'http://waha:3000',
+            'WAHA_API_KEY': 'api-key',
+            'WAHA_SESSION_NAME': 'default',
+        },
+    )
+
+    assert [params[0] for _, params in cursor.calls] == [
+        'waha_api_url',
+        'waha_api_key',
+        'waha_session_name',
+    ]
+    assert all('WHERE app_settings.value' in sql for sql, _ in cursor.calls)
+    assert all('WHERE value' not in sql for sql, _ in cursor.calls)
+
+
 def test_production_compose_has_one_private_persistent_waha_sidecar():
     root = Path(__file__).resolve().parents[1]
     compose = yaml.safe_load(
