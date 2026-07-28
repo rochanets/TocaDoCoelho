@@ -115,6 +115,18 @@ jobs:
           docker logs toca-waha
           exit 1
 
+      - name: Aplicar migrations em processo one-shot
+        run: |
+          docker run --rm --network toca-ci \
+            -e TOCA_ENV=production \
+            -e TOCA_DATA_DIR=/data \
+            -e SECRET_KEY=ci-only-secret-key-with-more-than-32-characters \
+            -e DATABASE_URL=postgresql://toca:ci-password@toca-pg:5432/toca \
+            -e TOCA_RUN_MIGRATIONS_ON_STARTUP=0 \
+            -e TOCA_DISABLE_BG_JOBS=1 \
+            tocadocoelho-web:ci \
+            python manage.py migrate
+
       - name: Smoke Gunicorn com dois workers
         run: |
           docker run -d --name toca-web-multi --network toca-ci -p 3002:3000 \
@@ -125,6 +137,9 @@ jobs:
             -e TOCA_AUTH_ENABLED=1 \
             -e TOCA_COOKIE_SECURE=1 \
             -e TOCA_TRUST_PROXY=1 \
+            -e TOCA_RUN_MIGRATIONS_ON_STARTUP=0 \
+            -e TOCA_LOG_FORMAT=json \
+            -e TOCA_LOG_FILE_ENABLED=0 \
             -e WEB_CONCURRENCY=2 \
             -e TOCA_MULTIWORKER_JOBS_ENABLED=1 \
             -e TOCA_DISABLE_BG_JOBS=1 \
@@ -146,6 +161,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:3002/readyz
           test "$(docker logs toca-web-multi 2>&1 | grep -c 'Booting worker with pid')" -ge 2
+          docker logs toca-web-multi 2>&1 | grep -q '"event":"http_request"'
 
       - name: Validar web, webhook HMAC e persistência WAHA
         run: |

@@ -121,13 +121,12 @@ uma conta real.
 
 ### F8.4 - operação durável
 
-- retirar migrations concorrentes do import ou serializá-las com lock
-  PostgreSQL e comando de deploy;
-- adicionar backup `pg_dump`, retenção, verificação e restore descartável;
-- definir ordem de deploy e compatibilidade progressiva das migrations;
-- adicionar logs JSON, `request_id`/correlação e proteção de dados sensíveis;
-- definir métricas/alertas mínimos e runbooks de deploy, rollback, incidente,
-  indisponibilidade de dependência e recuperação.
+Implementada em `docs/fase-8-operacao-duravel.md`: migrations produtivas rodam
+em processo one-shot antes do web e continuam serializadas por advisory lock;
+backup `pg_dump` possui verificação, checksum e retenção; restore é comprovado
+em banco descartável; logs JSON propagam `request_id` e mascaram segredos; os
+endpoints, alertas mínimos e runbooks cobrem deploy, rollback, incidentes,
+dependências e recuperação.
 
 ### F8.5 - ensaio e prontidão
 
