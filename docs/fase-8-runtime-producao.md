@@ -3,7 +3,7 @@
 ## Artefatos
 
 - `docker-compose.production.yml`: stack de referência PostgreSQL + web +
-  Nginx, com somente 80/443 publicados;
+  WAHA + Nginx, com somente 80/443 publicados;
 - `deploy/nginx/toca.conf`: terminação TLS, redirect HTTP -> HTTPS, headers de
   proxy e segurança;
 - `.env.production.example`: contrato de configuração sem valores reais;
@@ -49,7 +49,8 @@ falhar:
 - tenant, client ID ou redirects do Entra ausentes/não HTTPS;
 - `WEB_CONCURRENCY` inválido ou, com mais de um worker,
   `TOCA_MULTIWORKER_JOBS_ENABLED` desligado;
-- coordenação multi-worker habilitada sem PostgreSQL.
+- coordenação multi-worker habilitada sem PostgreSQL;
+- URL interna, chave plain/hash SHA-512, HMAC ou nome de sessão WAHA inválidos.
 
 `TOCA_TIMEZONE` define o dia operacional (padrão `America/Sao_Paulo`) para
 quotas e agendamentos. Timestamps persistidos pelo envio WAHA permanecem em UTC;
@@ -57,6 +58,13 @@ a janela diária é convertida explicitamente, evitando erro na virada de dia.
 
 Fora do modo de produção explícito, o desktop preserva SQLite, login desligado
 e segredo local, sem mudança de comportamento.
+
+## WAHA
+
+O sidecar produtivo não publica porta. O web usa `http://waha:3000` pela rede
+interna, enquanto o WAHA recebe uma rede separada apenas para saída ao
+WhatsApp. Sessão, HMAC, primeiro QR, restart e atualização estão documentados
+em `fase-8-waha-sidecar.md`.
 
 ## Microsoft Entra e Graph
 

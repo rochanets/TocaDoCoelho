@@ -113,12 +113,11 @@ dependências atuais.
 
 ### F8.3 - WAHA sidecar
 
-- consolidar os Compose legados em um serviço suportado;
-- fixar versão da imagem em vez de `latest`;
-- manter API e webhook em rede interna, com chave via secret/env;
-- persistir a sessão em volume dedicado;
-- adicionar healthcheck, política de restart e procedimento de novo QR;
-- validar web -> WAHA, WAHA -> webhook e reinício sem perda de sessão.
+Implementada em `docs/fase-8-waha-sidecar.md`: os Compose legados foram
+consolidados no stack produtivo, com imagem fixada, API privada protegida por
+chave, webhook HMAC, volume de sessão, healthcheck e política de restart. O CI
+valida rede web -> WAHA, webhook assinado e persistência do volume sem conectar
+uma conta real.
 
 ### F8.4 - operação durável
 

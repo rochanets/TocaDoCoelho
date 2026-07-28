@@ -6,19 +6,24 @@
 
 @app.route('/api/whatsapp/config', methods=['GET'])
 def whatsapp_get_config():
-    s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
-    has_key = bool((s.get('waha_api_key') or '').strip())
+    api_url, api_key, session = _waha_settings()
     return jsonify({
-        'waha_api_url': s.get('waha_api_url') or 'http://localhost:3001',
-        'waha_api_key': '••••••••' if has_key else '',
-        'waha_session_name': s.get('waha_session_name') or 'default',
-        'configured': bool((s.get('waha_api_url') or '').strip()),
+        'waha_api_url': api_url or 'http://localhost:3001',
+        'waha_api_key': '••••••••' if api_key else '',
+        'waha_session_name': session or 'default',
+        'configured': bool(api_url),
+        'managed_by_environment': _is_production_environment(),
     })
 
 
 @app.route('/api/whatsapp/config', methods=['PUT'])
 @admin_required
 def whatsapp_save_config():
+    if _is_production_environment():
+        return jsonify({
+            'ok': False,
+            'error': 'Em produção, a configuração WAHA é gerenciada por variáveis de ambiente.',
+        }), 409
     data = request.get_json(force=True) or {}
     waha_url = (data.get('waha_api_url') or '').strip()
     if waha_url:
@@ -72,6 +77,13 @@ def whatsapp_status():
                         'state': 'offline' if waha_err else 'stopped',
                         'error': waha_err or 'Sessão do WhatsApp parada. Clique para reconectar.'})
     except requests.exceptions.ConnectionError:
+        if _is_production_environment():
+            return jsonify({
+                'configured': True,
+                'connected': False,
+                'state': 'offline',
+                'error': 'Sidecar WAHA indisponível; verifique o healthcheck do serviço.',
+            })
         # Dependências ausentes: o Node nem sobe. Reiniciar não resolve — orientar reinstalação.
         if _waha_deps_missing():
             return jsonify({'configured': True, 'connected': False, 'state': 'offline',
@@ -258,9 +270,16 @@ def whatsapp_approve():
 
 @app.route('/api/whatsapp/webhook', methods=['POST'])
 def whatsapp_webhook():
-    """Fase B: recebe eventos do WAHA (configurar WHATSAPP_HOOK_URL no
-    docker-compose.waha.yml apontando para este endpoint)."""
+    """Recebe eventos autenticados do sidecar WAHA pela rede interna."""
     try:
+        raw_body = request.get_data(cache=True)
+        if not _waha_webhook_is_authorized(
+            raw_body,
+            request.headers.get('X-Webhook-Hmac'),
+            request.headers.get('X-Webhook-Hmac-Algorithm'),
+        ):
+            logger.warning('[WhatsApp] Webhook WAHA rejeitado por HMAC inválido.')
+            return jsonify({'error': 'Webhook WAHA não autorizado.'}), 401
         body = request.get_json(force=True, silent=True) or {}
         event = (body.get('event') or '').lower()
         payload = body.get('payload') or {}

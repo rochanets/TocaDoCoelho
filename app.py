@@ -26,6 +26,7 @@ import base64
 import mimetypes
 import uuid
 import hashlib
+import hmac
 import secrets
 import functools
 import socket
@@ -398,6 +399,55 @@ def _production_configuration_errors(env=None):
         'postgresql',
     }:
         errors.append('Coordenação multi-worker exige PostgreSQL.')
+
+    waha_url = (source.get('WAHA_API_URL') or '').strip()
+    parsed_waha_url = urlparse(waha_url)
+    if (
+        parsed_waha_url.scheme.lower() not in {'http', 'https'}
+        or not parsed_waha_url.hostname
+        or parsed_waha_url.username
+        or parsed_waha_url.password
+        or parsed_waha_url.path not in {'', '/'}
+        or parsed_waha_url.query
+        or parsed_waha_url.fragment
+        or parsed_waha_url.hostname.lower() in {'localhost', '127.0.0.1', '::1'}
+    ):
+        errors.append(
+            'WAHA_API_URL deve apontar para o sidecar interno por URL HTTP(S) absoluta.'
+        )
+
+    waha_api_key = (source.get('WAHA_API_KEY') or '').strip()
+    if (
+        len(waha_api_key) < 32
+        or waha_api_key.upper().startswith(('CHANGE_ME', 'REPLACE_ME'))
+    ):
+        errors.append('WAHA_API_KEY deve ter ao menos 32 caracteres aleatórios.')
+
+    waha_api_key_hash = (source.get('WAHA_API_KEY_HASH') or '').strip()
+    expected_waha_hash = (
+        'sha512:' + hashlib.sha512(waha_api_key.encode('utf-8')).hexdigest()
+        if waha_api_key
+        else ''
+    )
+    if (
+        not re.fullmatch(r'sha512:[0-9a-fA-F]{128}', waha_api_key_hash)
+        or not hmac.compare_digest(
+            waha_api_key_hash.lower(),
+            expected_waha_hash.lower(),
+        )
+    ):
+        errors.append('WAHA_API_KEY_HASH deve corresponder ao SHA-512 da WAHA_API_KEY.')
+
+    waha_webhook_key = (source.get('WAHA_WEBHOOK_HMAC_KEY') or '').strip()
+    if (
+        len(waha_webhook_key) < 32
+        or waha_webhook_key.upper().startswith(('CHANGE_ME', 'REPLACE_ME'))
+    ):
+        errors.append('WAHA_WEBHOOK_HMAC_KEY deve ter ao menos 32 caracteres aleatórios.')
+
+    waha_session = (source.get('WAHA_SESSION_NAME') or 'default').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', waha_session):
+        errors.append('WAHA_SESSION_NAME possui formato inválido.')
 
     tenant = (source.get('OUTLOOK_GRAPH_TENANT_ID') or '').strip()
     client_id = (source.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
@@ -3160,9 +3210,9 @@ def admin_write_required(fn):
     return _wrapper
 
 
-# Endpoints sem cookie de sessão: /healthz, fluxo de auth e protocolo v1 do
-# Companion. As rotas v1 aplicam token próprio ou código de vínculo.
-_AUTH_PUBLIC_ENDPOINTS = {'healthz', 'readyz'}
+# Endpoints sem cookie de sessão: health, fluxo de auth, protocolo v1 do
+# Companion e webhook WAHA. Companion e WAHA aplicam credencial própria.
+_AUTH_PUBLIC_ENDPOINTS = {'healthz', 'readyz', 'whatsapp_webhook'}
 # Assets estáticos da SPA (pasta public/): js/css/img podem carregar sem sessão
 # (não expõem dados). NÃO inclui /uploads/* (arquivos de negócio, endpoints
 # próprios), que ficam atrás do login.
@@ -3191,9 +3241,9 @@ def _enforce_login_required():
     """Gate de autenticação. No-op quando o login está desligado (desktop/SQLite
     roda idêntico ao de sempre). Ligado: navegações de página (Accept text/html)
     sem sessão são levadas ao handshake SSO (/api/auth/login); requisições de
-    API/uploads sem sessão recebem 401 JSON; assets estáticos da SPA, /healthz
-    e /api/auth/* seguem públicos. O protocolo /api/companion/v1/* passa sem
-    cookie, mas exige credencial própria dentro de cada rota."""
+    API/uploads sem sessão recebem 401 JSON; assets estáticos da SPA, health e
+    /api/auth/* seguem públicos. Companion e webhook WAHA passam sem cookie,
+    mas exigem credencial própria dentro de cada rota."""
     if not _auth_enabled():
         return None
     if request.method == 'OPTIONS':
@@ -12390,6 +12440,12 @@ def _phone_to_waha_chatid(phone):
 
 
 def _waha_settings():
+    if _is_production_environment():
+        return (
+            (os.environ.get('WAHA_API_URL') or '').strip().rstrip('/'),
+            (os.environ.get('WAHA_API_KEY') or '').strip(),
+            (os.environ.get('WAHA_SESSION_NAME') or 'default').strip(),
+        )
     s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
     return (
         (s.get('waha_api_url') or 'http://localhost:3001').strip().rstrip('/'),
@@ -12403,6 +12459,21 @@ def _waha_headers(api_key):
     if api_key:
         h['X-Api-Key'] = api_key
     return h
+
+
+def _waha_webhook_is_authorized(raw_body, signature, algorithm):
+    """Valida o HMAC emitido pelo sidecar sem expor a chave em logs/respostas."""
+    secret = (os.environ.get('WAHA_WEBHOOK_HMAC_KEY') or '').strip()
+    if not secret:
+        return not _is_production_environment()
+    if (algorithm or '').strip().lower() != 'sha512' or not signature:
+        return False
+    expected = hmac.new(
+        secret.encode('utf-8'),
+        raw_body,
+        hashlib.sha512,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature.strip().lower())
 
 
 # ---------------------------------------------------------------------------

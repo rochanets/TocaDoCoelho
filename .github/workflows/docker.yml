@@ -7,7 +7,7 @@ on:
 jobs:
   build-and-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +75,46 @@ jobs:
           docker logs toca-pg
           exit 1
 
+      - name: Preparar credenciais descartáveis do sidecar
+        run: |
+          WAHA_CI_KEY='ci-only-waha-api-key-with-more-than-32-characters'
+          WAHA_CI_HMAC='ci-only-waha-webhook-hmac-with-more-than-32-characters'
+          WAHA_CI_DIGEST="$(printf '%s' "$WAHA_CI_KEY" | sha512sum | cut -d' ' -f1)"
+          echo "WAHA_CI_KEY=$WAHA_CI_KEY" >> "$GITHUB_ENV"
+          echo "WAHA_CI_HMAC=$WAHA_CI_HMAC" >> "$GITHUB_ENV"
+          echo "WAHA_CI_HASH=sha512:$WAHA_CI_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Subir WAHA privado e fixado
+        run: |
+          docker volume create toca-waha-ci
+          docker run -d --name toca-waha --network toca-ci \
+            --restart unless-stopped \
+            -v toca-waha-ci:/app/.sessions \
+            -e WHATSAPP_DEFAULT_ENGINE=WEBJS \
+            -e WAHA_API_KEY="$WAHA_CI_HASH" \
+            -e WHATSAPP_API_KEY_EXCLUDE_PATH=health \
+            -e WAHA_DASHBOARD_ENABLED=false \
+            -e WHATSAPP_SWAGGER_ENABLED=false \
+            -e WAHA_PRINT_QR=false \
+            -e WAHA_LOCAL_STORE_BASE_DIR=/app/.sessions \
+            -e WHATSAPP_RESTART_ALL_SESSIONS=true \
+            -e WHATSAPP_DOWNLOAD_MEDIA=false \
+            -e WHATSAPP_HOOK_URL=http://toca-web-multi:3000/api/whatsapp/webhook \
+            -e WHATSAPP_HOOK_EVENTS=message.any \
+            -e WHATSAPP_HOOK_HMAC_KEY="$WAHA_CI_HMAC" \
+            -e WAHA_LOG_FORMAT=JSON \
+            devlikeapro/waha:latest-2026.7.1
+          test -z "$(docker port toca-waha)"
+          for i in $(seq 1 60); do
+            if docker exec toca-waha node -e \
+              "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs toca-waha
+          exit 1
+
       - name: Smoke Gunicorn com dois workers
         run: |
           docker run -d --name toca-web-multi --network toca-ci -p 3002:3000 \
@@ -88,6 +128,11 @@ jobs:
             -e WEB_CONCURRENCY=2 \
             -e TOCA_MULTIWORKER_JOBS_ENABLED=1 \
             -e TOCA_DISABLE_BG_JOBS=1 \
+            -e WAHA_API_URL=http://toca-waha:3000 \
+            -e WAHA_API_KEY="$WAHA_CI_KEY" \
+            -e WAHA_API_KEY_HASH="$WAHA_CI_HASH" \
+            -e WAHA_WEBHOOK_HMAC_KEY="$WAHA_CI_HMAC" \
+            -e WAHA_SESSION_NAME=default \
             -e OUTLOOK_GRAPH_TENANT_ID=ci-tenant \
             -e OUTLOOK_GRAPH_CLIENT_ID=00000000-0000-0000-0000-000000000001 \
             -e OUTLOOK_GRAPH_LOGIN_REDIRECT_URI=https://toca.invalid/api/auth/callback \
@@ -102,14 +147,36 @@ jobs:
           curl -fsS http://127.0.0.1:3002/readyz
           test "$(docker logs toca-web-multi 2>&1 | grep -c 'Booting worker with pid')" -ge 2
 
+      - name: Validar web, webhook HMAC e persistência WAHA
+        run: |
+          docker exec toca-web-multi python -c \
+            "import os,requests; base=os.environ['WAHA_API_URL']; assert requests.get(base + '/api/server/version', timeout=10).status_code == 401; response=requests.get(base + '/api/server/version', headers={'X-Api-Key': os.environ['WAHA_API_KEY']}, timeout=10); assert response.status_code == 200, response.text"
+          docker exec toca-waha node -e \
+            "const crypto=require('crypto'),http=require('http');const body=JSON.stringify({event:'message.any',session:'default',payload:{from:'5511000000000@c.us',fromMe:false,body:'smoke',timestamp:1750000000}});const sig=crypto.createHmac('sha512',process.env.WHATSAPP_HOOK_HMAC_KEY).update(body).digest('hex');const req=http.request(process.env.WHATSAPP_HOOK_URL,{method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body),'X-Webhook-Hmac':sig,'X-Webhook-Hmac-Algorithm':'sha512'}},res=>process.exit(res.statusCode===200?0:1));req.on('error',()=>process.exit(1));req.end(body);"
+          docker exec toca-waha sh -c "printf 'persisted' > /app/.sessions/.f83-ci"
+          test "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/.sessions"}}{{.Name}}:{{.Type}}{{end}}{{end}}' toca-waha)" = "toca-waha-ci:volume"
+          docker restart toca-waha
+          for i in $(seq 1 60); do
+            if docker exec toca-waha node -e \
+              "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec toca-waha node -e \
+            "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+          docker exec toca-waha test -f /app/.sessions/.f83-ci
+
       - name: Logs do smoke multi-worker
         if: always()
         run: |
           docker logs toca-web-multi || true
           docker logs toca-pg || true
+          docker logs toca-waha || true
 
       - name: Derrubar smoke multi-worker
         if: always()
         run: |
-          docker rm -f toca-web-multi toca-pg || true
+          docker rm -f toca-web-multi toca-pg toca-waha || true
+          docker volume rm toca-waha-ci || true
           docker network rm toca-ci || true

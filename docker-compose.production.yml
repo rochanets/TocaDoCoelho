@@ -46,6 +46,11 @@ services:
       OUTLOOK_GRAPH_REDIRECT_URI: "${OUTLOOK_GRAPH_REDIRECT_URI:?Defina o redirect HTTPS do Outlook}"
       OUTLOOK_GRAPH_LOGIN_SCOPE: "${OUTLOOK_GRAPH_LOGIN_SCOPE:-openid profile email User.Read}"
       OUTLOOK_GRAPH_SCOPE: "${OUTLOOK_GRAPH_SCOPE:-offline_access Mail.Read Mail.Send User.Read}"
+      WAHA_API_URL: "http://waha:3000"
+      WAHA_API_KEY: "${WAHA_API_KEY:?Defina a chave plain da API WAHA fora do Git}"
+      WAHA_API_KEY_HASH: "${WAHA_API_KEY_HASH:?Defina o hash SHA-512 da chave API fora do Git}"
+      WAHA_SESSION_NAME: "${WAHA_SESSION_NAME:-default}"
+      WAHA_WEBHOOK_HMAC_KEY: "${WAHA_WEBHOOK_HMAC_KEY:?Defina a chave HMAC do webhook fora do Git}"
     volumes:
       - toca_data:/data
     depends_on:
@@ -65,6 +70,50 @@ services:
     networks:
       - backend
       - edge
+    security_opt:
+      - no-new-privileges:true
+
+  waha:
+    image: devlikeapro/waha:latest-2026.7.1
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: "WEBJS"
+      WAHA_API_KEY: "${WAHA_API_KEY_HASH:?Defina o hash SHA-512 da chave API fora do Git}"
+      WHATSAPP_API_KEY_EXCLUDE_PATH: "health"
+      WAHA_DASHBOARD_ENABLED: "false"
+      WHATSAPP_SWAGGER_ENABLED: "false"
+      WAHA_PRINT_QR: "false"
+      WAHA_LOCAL_STORE_BASE_DIR: "/app/.sessions"
+      WHATSAPP_RESTART_ALL_SESSIONS: "true"
+      WHATSAPP_DOWNLOAD_MEDIA: "false"
+      WHATSAPP_HOOK_URL: "http://web:3000/api/whatsapp/webhook"
+      WHATSAPP_HOOK_EVENTS: "message.any"
+      WHATSAPP_HOOK_HMAC_KEY: "${WAHA_WEBHOOK_HMAC_KEY:?Defina a chave HMAC do webhook fora do Git}"
+      WHATSAPP_HOOK_RETRIES_POLICY: "linear"
+      WHATSAPP_HOOK_RETRIES_DELAY_SECONDS: "2"
+      WHATSAPP_HOOK_RETRIES_ATTEMPTS: "4"
+      WAHA_LOG_FORMAT: "JSON"
+      WAHA_LOG_LEVEL: "info"
+      WAHA_HTTP_LOG_LEVEL: "info"
+      TZ: "${TOCA_TIMEZONE:-America/Sao_Paulo}"
+    expose:
+      - "3000"
+    volumes:
+      - waha_sessions:/app/.sessions
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:3000/health',function(r){process.exit(r.statusCode===200?0:1)}).on('error',function(){process.exit(1)})"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+    shm_size: "1gb"
+    networks:
+      - backend
+      - waha_egress
     security_opt:
       - no-new-privileges:true
 
@@ -94,8 +143,10 @@ services:
 volumes:
   postgres_data:
   toca_data:
+  waha_sessions:
 
 networks:
   backend:
     internal: true
   edge:
+  waha_egress:
