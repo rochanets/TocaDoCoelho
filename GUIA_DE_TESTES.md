@@ -79,7 +79,7 @@ Gestão de Conta > botão **✦ Account Planning**.
 | 6.1 | Mensagem recebida | Pedir para um contato cadastrado te mandar um WhatsApp; aguardar 1 ciclo (15 min) ou reiniciar o app | Painel vermelho "💬 Pendentes de Resposta" na Home + badge numérico no menu Home |
 | 6.2 | Responder remove | Responder o contato pelo celular; aguardar o próximo ciclo | Item some do painel |
 | 6.3 | Marcar manual | Clicar **Respondi** em um item | Item some na hora |
-| 6.4 | Webhook (opcional) | Subir o WAHA com o novo `docker-compose.waha.yml` | Mensagem recebida aparece em segundos, sem esperar o polling, e sem duplicar |
+| 6.4 | Webhook (opcional) | No ambiente autorizado, subir o sidecar de `docker-compose.production.yml` conforme `docs/fase-8-waha-sidecar.md` | Mensagem recebida aparece em segundos, sem esperar o polling, e sem duplicar |
 | 6.5 | E-mail | Importar e-mails do Outlook havendo e-mail de cliente sem resposta sua | Item com ícone 📧 no mesmo painel |
 
 ## Bloco 7 — Follow-ups
