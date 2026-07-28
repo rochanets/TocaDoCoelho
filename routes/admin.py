@@ -238,3 +238,38 @@ def admin_deactivate_user(user_id):
         f'por user_id={current_user_id()}.'
     )
     return '', 204
+
+
+@app.route('/api/admin/jobs/status', methods=['GET'])
+@admin_required
+def admin_jobs_status():
+    """Estado operacional compartilhado dos jobs da F8.2."""
+    conn = get_db()
+    try:
+        states = [
+            dict_from_row(row)
+            for row in conn.execute(
+                '''SELECT job_key, owner_id, status, started_at, heartbeat_at,
+                          completed_at, detail, updated_at
+                   FROM job_runtime_state
+                   ORDER BY job_key'''
+            ).fetchall()
+        ]
+        claims = [
+            dict_from_row(row)
+            for row in conn.execute(
+                '''SELECT job_key, run_key, owner_id, status, started_at,
+                          completed_at, detail
+                   FROM job_execution_claims
+                   ORDER BY started_at DESC
+                   LIMIT 100'''
+            ).fetchall()
+        ]
+        return jsonify({
+            'instance_id': _PROCESS_INSTANCE_ID,
+            'backend': DB_BACKEND,
+            'states': states,
+            'recent_claims': claims,
+        })
+    finally:
+        conn.close()

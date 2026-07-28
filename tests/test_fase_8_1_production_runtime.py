@@ -50,7 +50,7 @@ def test_production_contract_fails_closed_for_unsafe_runtime():
     assert any('TOCA_AUTH_ENABLED' in error for error in errors)
     assert any('TOCA_COOKIE_SECURE' in error for error in errors)
     assert any('TOCA_TRUST_PROXY' in error for error in errors)
-    assert any('WEB_CONCURRENCY' in error for error in errors)
+    assert any('TOCA_MULTIWORKER_JOBS_ENABLED' in error for error in errors)
     assert any('OUTLOOK_GRAPH_TENANT_ID' in error for error in errors)
     assert any('OUTLOOK_GRAPH_CLIENT_ID' in error for error in errors)
     assert any('OUTLOOK_GRAPH_LOGIN_REDIRECT_URI' in error for error in errors)
@@ -68,6 +68,15 @@ def test_production_validation_never_echoes_secret():
         raise AssertionError('Configuração insegura deveria falhar.')
 
     assert env['SECRET_KEY'] not in message
+
+
+def test_production_contract_accepts_coordinated_postgres_workers():
+    env = _valid_production_env()
+    env.update({
+        'WEB_CONCURRENCY': '3',
+        'TOCA_MULTIWORKER_JOBS_ENABLED': '1',
+    })
+    assert toca._production_configuration_errors(env) == []
 
 
 def test_readyz_checks_database_and_is_public_with_auth(client, monkeypatch):

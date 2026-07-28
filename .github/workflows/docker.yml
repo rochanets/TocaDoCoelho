@@ -53,3 +53,63 @@ jobs:
       - name: Derrubar o container
         if: always()
         run: docker rm -f toca-web || true
+
+      - name: Subir PostgreSQL para smoke multi-worker
+        run: |
+          docker network create toca-ci
+          docker run -d --name toca-pg --network toca-ci \
+            -e POSTGRES_USER=toca \
+            -e POSTGRES_PASSWORD=ci-password \
+            -e POSTGRES_DB=toca \
+            --health-cmd="pg_isready -U toca -d toca" \
+            --health-interval=2s \
+            --health-timeout=2s \
+            --health-retries=30 \
+            postgres:16-alpine
+          for i in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Health.Status}}' toca-pg)" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs toca-pg
+          exit 1
+
+      - name: Smoke Gunicorn com dois workers
+        run: |
+          docker run -d --name toca-web-multi --network toca-ci -p 3002:3000 \
+            -e TOCA_ENV=production \
+            -e TOCA_DATA_DIR=/data \
+            -e SECRET_KEY=ci-only-secret-key-with-more-than-32-characters \
+            -e DATABASE_URL=postgresql://toca:ci-password@toca-pg:5432/toca \
+            -e TOCA_AUTH_ENABLED=1 \
+            -e TOCA_COOKIE_SECURE=1 \
+            -e TOCA_TRUST_PROXY=1 \
+            -e WEB_CONCURRENCY=2 \
+            -e TOCA_MULTIWORKER_JOBS_ENABLED=1 \
+            -e TOCA_DISABLE_BG_JOBS=1 \
+            -e OUTLOOK_GRAPH_TENANT_ID=ci-tenant \
+            -e OUTLOOK_GRAPH_CLIENT_ID=00000000-0000-0000-0000-000000000001 \
+            -e OUTLOOK_GRAPH_LOGIN_REDIRECT_URI=https://toca.invalid/api/auth/callback \
+            -e OUTLOOK_GRAPH_REDIRECT_URI=https://toca.invalid/api/outlook/oauth/callback \
+            tocadocoelho-web:ci
+          for i in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:3002/readyz; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:3002/readyz
+          test "$(docker logs toca-web-multi 2>&1 | grep -c 'Booting worker with pid')" -ge 2
+
+      - name: Logs do smoke multi-worker
+        if: always()
+        run: |
+          docker logs toca-web-multi || true
+          docker logs toca-pg || true
+
+      - name: Derrubar smoke multi-worker
+        if: always()
+        run: |
+          docker rm -f toca-web-multi toca-pg || true
+          docker network rm toca-ci || true
