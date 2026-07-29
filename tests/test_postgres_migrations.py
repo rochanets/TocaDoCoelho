@@ -17,13 +17,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_schema_version_reaches_31():
+def test_schema_version_reaches_32():
     toca._run_schema_migrations()  # idempotente (version gate)
     conn = toca._open_main_db()
     try:
         cur = conn.cursor()
         cur.execute('SELECT MAX(version) FROM schema_version')
-        assert cur.fetchone()[0] == 31
+        assert cur.fetchone()[0] == 32
     finally:
         conn.close()
 
@@ -57,6 +57,10 @@ def test_core_tables_queryable_on_postgres():
             'SELECT status FROM job_runtime_state LIMIT 1',
             'SELECT status FROM job_execution_claims LIMIT 1',
             'SELECT claim_token FROM scheduled_sends LIMIT 1',
+            'SELECT session_name FROM user_waha_sessions LIMIT 1',
+            'SELECT owner_id FROM whatsapp_sends LIMIT 1',
+            'SELECT owner_id FROM whatsapp_sync_log LIMIT 1',
+            'SELECT owner_id FROM inbound_messages LIMIT 1',
         ):
             cur.execute(stmt)
             cur.fetchall()

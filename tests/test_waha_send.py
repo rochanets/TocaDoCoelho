@@ -13,7 +13,10 @@ def test_send_quota_e_limite(client, sample_client_id, db_path, monkeypatch):
     assert q['limit'] == 45 and q['used_today'] == 0
 
     # simula envio bem-sucedido sem WAHA real
-    monkeypatch.setattr(toca, '_waha_send_text', lambda chat_id, text: (True, None))
+    monkeypatch.setattr(
+        toca, '_waha_send_text',
+        lambda chat_id, text, owner_id=None: (True, None),
+    )
 
     resp = client.post('/api/whatsapp/send', json={
         'client_id': sample_client_id, 'phone': '+55 11 99999-9999', 'message': 'Olá!'

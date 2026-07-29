@@ -10,7 +10,9 @@ def whatsapp_get_config():
     return jsonify({
         'waha_api_url': api_url or 'http://localhost:3001',
         'waha_api_key': '••••••••' if api_key else '',
-        'waha_session_name': session or 'default',
+        'waha_session_name': '' if _auth_enabled() else (session or 'default'),
+        'personal_session': _auth_enabled(),
+        'has_session': bool(session),
         'configured': bool(api_url),
         'managed_by_environment': _is_production_environment(),
     })
@@ -50,6 +52,13 @@ def whatsapp_status():
     api_url, api_key, session = _waha_settings()
     if not api_url:
         return jsonify({'configured': False, 'connected': False, 'state': 'not_configured'})
+    if not session:
+        return jsonify({
+            'configured': True,
+            'connected': False,
+            'state': 'no_session',
+            'personal_session': _auth_enabled(),
+        })
     try:
         resp = requests.get(f'{api_url}/api/sessions/{session}', headers=_waha_headers(api_key), timeout=5)
         if resp.status_code == 404:
@@ -105,10 +114,9 @@ def whatsapp_status():
 
 
 @app.route('/api/whatsapp/connect', methods=['POST'])
-@admin_required
 def whatsapp_connect():
-    api_url, api_key, session = _waha_settings()
-    if not api_url:
+    api_url, api_key, session = _waha_settings(create_session=True)
+    if not api_url or not session:
         return jsonify({'ok': False, 'error': 'WAHA não configurado.'}), 400
     headers = _waha_headers(api_key)
 
@@ -174,6 +182,37 @@ def whatsapp_connect():
     return jsonify({'ok': False, 'error': 'O QR code não apareceu a tempo. O Chrome pode estar demorando para abrir na primeira conexão — aguarde alguns instantes e clique em Tentar novamente.'}), 500
 
 
+@app.route('/api/whatsapp/disconnect', methods=['POST'])
+def whatsapp_disconnect():
+    """Desconecta somente a sessão WAHA do usuário autenticado."""
+    api_url, api_key, session_name = _waha_settings()
+    if not session_name:
+        return jsonify({'ok': True, 'disconnected': True})
+    try:
+        resp = requests.post(
+            f'{api_url}/api/sessions/{session_name}/logout',
+            headers=_waha_headers(api_key),
+            timeout=20,
+        )
+        if resp.status_code not in (200, 201, 204, 404):
+            return jsonify({
+                'ok': False,
+                'error': f'WAHA recusou a desconexão (HTTP {resp.status_code}).',
+            }), 502
+    except Exception as exc:
+        logger.warning(
+            '[WhatsApp] Falha ao desconectar sessão do usuário: %s',
+            type(exc).__name__,
+        )
+        return jsonify({
+            'ok': False,
+            'error': 'Não foi possível desconectar o WhatsApp agora.',
+        }), 503
+    if _auth_enabled():
+        _waha_forget_user_session(current_user_id())
+    return jsonify({'ok': True, 'disconnected': True})
+
+
 @app.route('/api/whatsapp/sync', methods=['POST'])
 def whatsapp_sync_start():
     data = request.get_json(force=True) or {}
@@ -181,9 +220,15 @@ def whatsapp_sync_start():
     if period_days not in [1, 3, 7, 15, 30]:
         period_days = 7
     task_id = uuid.uuid4().hex
-    _bg_task_register_persistent(task_id, 'whatsapp_sync')
+    owner_id = _acl_owner_for_insert()
+    user = current_user()
+    _bg_task_register_persistent(task_id, 'whatsapp_sync', owner_id=owner_id)
     _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando sincronização...', 'progress': 5})
-    threading.Thread(target=_whatsapp_sync_async, args=(task_id, period_days), daemon=True).start()
+    threading.Thread(
+        target=_whatsapp_sync_async,
+        args=(task_id, period_days, owner_id, user),
+        daemon=True,
+    ).start()
     return jsonify({'task_id': task_id}), 202
 
 
@@ -230,8 +275,18 @@ def whatsapp_approve():
         if not can_read('clients', client_id, c):
             continue
 
-        c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
-                  (client_id, content_hash))
+        if _auth_enabled():
+            c.execute(
+                '''SELECT id FROM whatsapp_sync_log
+                   WHERE client_id = ? AND content_hash = ? AND owner_id = ?''',
+                (client_id, content_hash, _owner_id),
+            )
+        else:
+            c.execute(
+                '''SELECT id FROM whatsapp_sync_log
+                   WHERE client_id = ? AND content_hash = ?''',
+                (client_id, content_hash),
+            )
         if c.fetchone():
             continue
 
@@ -242,8 +297,14 @@ def whatsapp_approve():
         activity_id = c.lastrowid
         c.execute("UPDATE clients SET last_activity_date = ? WHERE id = ?", (activity_date, client_id))
         c.execute(
-            "INSERT INTO whatsapp_sync_log (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (client_id, phone, period_days, message_count, content_hash, last_message_ts, activity_id)
+            '''INSERT INTO whatsapp_sync_log
+               (client_id, phone, period_days, message_count, content_hash,
+                last_message_ts, activity_id, owner_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (
+                client_id, phone, period_days, message_count, content_hash,
+                last_message_ts, activity_id, _owner_id,
+            ),
         )
         inserted += 1
 
@@ -285,15 +346,36 @@ def whatsapp_webhook():
         payload = body.get('payload') or {}
         if event not in ('message', 'message.any'):
             return jsonify({'ok': True, 'ignored': event})
+        session_name = str(
+            body.get('session') or payload.get('session') or ''
+        ).strip()
+        conn = get_db()
+        if _auth_enabled():
+            webhook_user = _waha_user_for_session(session_name, conn=conn)
+            if not webhook_user:
+                conn.close()
+                return jsonify({'ok': True, 'ignored': 'sessao_desconhecida'})
+            owner_id = webhook_user['id']
+        else:
+            webhook_user = None
+            owner_id = _founder_user_id(conn)
         chat_raw = payload.get('from') if not payload.get('fromMe') else payload.get('to')
         chat_id = str(chat_raw or '')
         digits = re.sub(r'\D', '', chat_id.split('@')[0])
         if not digits:
+            conn.close()
             return jsonify({'ok': True, 'ignored': 'sem_numero'})
-        conn = get_db()
         c = conn.cursor()
-        # match por telefone normalizado (compara via chatid gerado)
-        c.execute("SELECT id, name, phone FROM clients WHERE phone IS NOT NULL AND phone != ''")
+        # Match somente entre contatos visíveis ao dono da sessão. Pendências
+        # continuam pessoais mesmo quando o contato foi compartilhado.
+        _cw, _cp = visible_where('clients', user=webhook_user, alias='cl')
+        c.execute(
+            f'''SELECT cl.id, cl.name, cl.phone
+                FROM clients cl
+                WHERE cl.phone IS NOT NULL AND cl.phone != '' AND {_cw}
+                ORDER BY CASE WHEN cl.owner_id = ? THEN 0 ELSE 1 END, cl.id''',
+            list(_cp) + [owner_id],
+        )
         client_id = None
         for row in c.fetchall():
             cid = _phone_to_waha_chatid(row['phone']) or ''
@@ -309,16 +391,21 @@ def whatsapp_webhook():
             ts = 0
         when = datetime.fromtimestamp(ts).isoformat(timespec='seconds') if ts else datetime.now().isoformat(timespec='seconds')
         if payload.get('fromMe'):
-            _inbound_mark_responded(c, client_id, 'whatsapp', when)
+            _inbound_mark_responded(
+                c, client_id, 'whatsapp', when, owner_id=owner_id
+            )
         elif not _waha_is_content_message(payload):
             pass  # aviso de sistema do WhatsApp (ex.: criptografia) — não é mensagem do contato
         else:
             msg_id = payload.get('id')
             if isinstance(msg_id, dict):
                 msg_id = msg_id.get('_serialized') or msg_id.get('id')
-            _inbound_upsert(c, client_id, 'whatsapp', when,
-                            payload.get('body') or '(mensagem sem texto)',
-                            f'wa:{msg_id or (str(client_id) + ":" + str(ts))}')
+            _inbound_upsert(
+                c, client_id, 'whatsapp', when,
+                payload.get('body') or '(mensagem sem texto)',
+                f'wa:{owner_id}:{msg_id or (str(client_id) + ":" + str(ts))}',
+                owner_id=owner_id,
+            )
         conn.commit()
         conn.close()
         return jsonify({'ok': True})
@@ -332,16 +419,17 @@ def inbound_pending():
     try:
         conn = get_db()
         c = conn.cursor()
-        _cw, _cp = visible_where('clients', alias='cl')
+        _iw, _ip = owned_where('inbound_messages', alias='im')
         c.execute(f"""
             SELECT im.id, im.client_id, im.channel, im.received_at, im.preview,
                    cl.name, cl.company,
                    CAST((julianday('now', 'localtime') - julianday(im.received_at)) * 24 AS INTEGER) AS waiting_hours
             FROM inbound_messages im
             JOIN clients cl ON cl.id = im.client_id
-            WHERE im.responded_at IS NULL AND COALESCE(cl.is_archived, 0) = 0 AND {_cw}
+            WHERE im.responded_at IS NULL AND COALESCE(cl.is_archived, 0) = 0
+              AND {_iw}
             ORDER BY im.received_at ASC
-        """, _cp)
+        """, _ip)
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
         return jsonify(rows)
@@ -355,7 +443,7 @@ def inbound_mark_responded_manual(item_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        if not can_read('inbound_messages', item_id, c):
+        if not owns('inbound_messages', item_id, c):
             conn.close()
             return jsonify({'error': 'Pendência não encontrada (ou já respondida)'}), 404
         c.execute('UPDATE inbound_messages SET responded_at = ? WHERE id = ? AND responded_at IS NULL',
@@ -377,7 +465,7 @@ def inbound_metrics():
     try:
         conn = get_db()
         c = conn.cursor()
-        _iw, _ip = visible_where('inbound_messages')
+        _iw, _ip = owned_where('inbound_messages')
         c.execute(f"""
             SELECT (julianday(responded_at) - julianday(received_at)) * 24 AS hours
             FROM inbound_messages
@@ -403,7 +491,9 @@ def inbound_metrics():
 def inbound_scan_now():
     """Dispara manualmente um ciclo de verificação (útil para testar a conexão)."""
     try:
-        result = _inbound_scan_whatsapp()
+        result = _inbound_scan_whatsapp(
+            user_id=current_user_id() if _auth_enabled() else None
+        )
         return jsonify({'ok': True, **result})
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/inbound/scan: {e}')
@@ -415,8 +505,8 @@ def inbound_scan_now():
 # para mitigar risco de bloqueio do número.
 # ===========================================================================
 
-def _waha_daily_quota(c):
-    """Retorna (limite, usados_hoje). Limite configurável em app_settings."""
+def _waha_daily_quota(c, owner_id=None):
+    """Retorna (limite, usados_hoje), por usuário na web."""
     try:
         limit = int(_resolve_setting('waha_daily_send_limit', 'WAHA_DAILY_SEND_LIMIT') or 45)
     except Exception:
@@ -426,18 +516,26 @@ def _waha_daily_quota(c):
     local_end = local_start + timedelta(days=1)
     utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
     utc_end = local_end.astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
-    c.execute(
+    sql = (
         "SELECT COUNT(*) FROM whatsapp_sends "
-        "WHERE status = 'sent' AND sent_at >= ? AND sent_at < ?",
-        (utc_start, utc_end),
+        "WHERE status = 'sent' AND sent_at >= ? AND sent_at < ?"
     )
+    params = [utc_start, utc_end]
+    if _auth_enabled():
+        if owner_id is None:
+            return limit, 0
+        sql += ' AND owner_id = ?'
+        params.append(owner_id)
+    c.execute(sql, params)
     used = c.fetchone()[0]
     return limit, used
 
 
-def _waha_send_text(chat_id, text):
+def _waha_send_text(chat_id, text, owner_id=None):
     """Envia texto via WAHA sendText. Retorna (ok, erro)."""
-    api_url, api_key, session = _waha_settings()
+    api_url, api_key, session = _waha_settings(user_id=owner_id)
+    if not api_url or not session:
+        return False, 'Conecte sua sessão do WhatsApp antes de enviar.'
     try:
         resp = requests.post(
             f'{api_url}/api/sendText',
@@ -457,7 +555,9 @@ def _waha_send_and_register(c, client_id, phone, message, register_activity=True
     Retorna dict {ok, error, activity_id, limit_reached}. `owner_id` é o dono a
     gravar na atividade gerada — passado pelo chamador (contexto de request ou
     thread de background), já que a atividade herda a visibilidade do envio."""
-    limit, used = _waha_daily_quota(c)
+    if _auth_enabled() and owner_id is None:
+        return {'ok': False, 'error': 'Usuário do envio não identificado.'}
+    limit, used = _waha_daily_quota(c, owner_id=owner_id)
     if used >= limit:
         return {'ok': False, 'limit_reached': True,
                 'error': f'Limite diário de {limit} mensagens via WAHA atingido. '
@@ -465,12 +565,16 @@ def _waha_send_and_register(c, client_id, phone, message, register_activity=True
     chat_id = _phone_to_waha_chatid(phone)
     if not chat_id:
         return {'ok': False, 'error': 'Telefone inválido para WhatsApp.'}
-    ok, err = _waha_send_text(chat_id, message)
+    ok, err = _waha_send_text(chat_id, message, owner_id=owner_id)
     sent_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')
     c.execute(
         'INSERT INTO whatsapp_sends '
-        '(client_id, phone, message, status, error, sent_at) VALUES (?, ?, ?, ?, ?, ?)',
-        (client_id, phone, message[:500], 'sent' if ok else 'error', err, sent_at),
+        '''(client_id, phone, message, status, error, sent_at, owner_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        (
+            client_id, phone, message[:500], 'sent' if ok else 'error',
+            err, sent_at, owner_id,
+        ),
     )
     if not ok:
         return {'ok': False, 'error': err}
@@ -481,14 +585,17 @@ def _waha_send_and_register(c, client_id, phone, message, register_activity=True
                   (client_id, info, owner_id))
         activity_id = c.lastrowid
         c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (client_id,))
-        _inbound_mark_responded(c, client_id, 'whatsapp')
+        _inbound_mark_responded(
+            c, client_id, 'whatsapp', owner_id=owner_id
+        )
     return {'ok': True, 'activity_id': activity_id}
 
 
 @app.route('/api/whatsapp/send-quota', methods=['GET'])
 def whatsapp_send_quota():
     conn = get_db()
-    limit, used = _waha_daily_quota(conn.cursor())
+    owner_id = _acl_owner_for_insert()
+    limit, used = _waha_daily_quota(conn.cursor(), owner_id=owner_id)
     conn.close()
     return jsonify({'limit': limit, 'used_today': used, 'remaining': max(limit - used, 0)})
 
@@ -509,9 +616,12 @@ def whatsapp_send_single():
         if client_id and not can_read('clients', client_id, c):
             conn.close()
             return jsonify({'error': 'Contato não encontrado.'}), 404
-        result = _waha_send_and_register(c, client_id, phone, message,
-                                         register_activity=data.get('register_activity', True),
-                                         owner_id=_acl_owner_for_insert())
+        owner_id = _acl_owner_for_insert()
+        result = _waha_send_and_register(
+            c, client_id, phone, message,
+            register_activity=data.get('register_activity', True),
+            owner_id=owner_id,
+        )
         conn.commit()
         conn.close()
         status = 200 if result.get('ok') else (429 if result.get('limit_reached') else 502)
@@ -655,7 +765,9 @@ def _scheduled_send_promote_activity(c, row):
         c.execute("INSERT INTO activities (client_id, contact_type, information, owner_id) VALUES (?, ?, ?, ?)",
                   (row['client_id'], 'WhatsApp' if row['channel'] == 'whatsapp' else 'Email', info, owner_id))
     c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (row['client_id'],))
-    _inbound_mark_responded(c, row['client_id'], row['channel'])
+    _inbound_mark_responded(
+        c, row['client_id'], row['channel'], owner_id=owner_id
+    )
 
 
 def _scheduled_send_execute(c, row):
@@ -663,8 +775,10 @@ def _scheduled_send_execute(c, row):
     channel = row['channel']
     if channel == 'whatsapp':
         # register_activity=False: a atividade provisória do agendamento é promovida abaixo
-        result = _waha_send_and_register(c, row['client_id'], row['phone'] or '', row['message'],
-                                         register_activity=False)
+        result = _waha_send_and_register(
+            c, row['client_id'], row['phone'] or '', row['message'],
+            register_activity=False, owner_id=row.get('owner_id'),
+        )
         if not result.get('ok'):
             return False, result.get('error') or 'Falha no envio via WAHA.'
         _scheduled_send_promote_activity(c, row)

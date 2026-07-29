@@ -146,6 +146,23 @@ def test_waha_webhook_hmac_is_public_but_authenticated(
     monkeypatch.setenv('WAHA_WEBHOOK_HMAC_KEY', secret)
     monkeypatch.setattr(toca, '_auth_enabled', lambda: True)
     monkeypatch.setattr(toca, 'current_user', lambda: None)
+    conn = toca.get_db()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO organizations (name) VALUES ('Org webhook WAHA')")
+    org_id = cur.lastrowid
+    cur.execute(
+        '''INSERT INTO users (org_id, email, full_name, role, is_active)
+           VALUES (?, 'webhook-waha@corp.com', 'Webhook WAHA', 'member', 1)''',
+        (org_id,),
+    )
+    user_id = cur.lastrowid
+    conn.execute(
+        '''INSERT INTO user_waha_sessions (user_id, session_name)
+           VALUES (?, 'default')''',
+        (user_id,),
+    )
+    conn.commit()
+    conn.close()
     raw = json.dumps(
         {
             'event': 'message.any',

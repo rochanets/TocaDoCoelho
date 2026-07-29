@@ -699,10 +699,14 @@ def test_pg_whatsapp_inbound_scoped(client, monkeypatch):
     conn = toca.get_db(); c = conn.cursor()
     from datetime import datetime as _dt
     now = _dt.now().isoformat(timespec='seconds')
-    c.execute("INSERT INTO inbound_messages (client_id, channel, received_at, preview, source_msg_id) "
-              "VALUES (?, 'whatsapp', ?, 'oi', ?)", (ca, now, f'sa-{tag}'))
-    c.execute("INSERT INTO inbound_messages (client_id, channel, received_at, preview, source_msg_id) "
-              "VALUES (?, 'whatsapp', ?, 'oi', ?)", (cb, now, f'sb-{tag}'))
+    c.execute("INSERT INTO inbound_messages "
+              "(client_id, channel, received_at, preview, source_msg_id, owner_id) "
+              "VALUES (?, 'whatsapp', ?, 'oi', ?, ?)",
+              (ca, now, f'sa-{tag}', a_id))
+    c.execute("INSERT INTO inbound_messages "
+              "(client_id, channel, received_at, preview, source_msg_id, owner_id) "
+              "VALUES (?, 'whatsapp', ?, 'oi', ?, ?)",
+              (cb, now, f'sb-{tag}', b_id))
     conn.commit(); conn.close()
 
     with client.session_transaction() as s:

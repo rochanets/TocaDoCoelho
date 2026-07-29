@@ -49,7 +49,6 @@ def test_member_is_forbidden_from_global_and_administrative_writes(client, monke
         ('post', '/api/config/download-update', {}),
         ('post', '/api/config/install-update', {}),
         ('put', '/api/whatsapp/config', {}),
-        ('post', '/api/whatsapp/connect', {}),
         ('post', '/api/outlook/graph-config', {}),
         ('post', '/api/itoca/base-update', {}),
         ('post', '/api/environment/cards', {'title': 'Global'}),

@@ -44,9 +44,11 @@ O web valida `X-Webhook-Hmac` com HMAC-SHA512 sobre o corpo bruto. O endpoint
 precisa ser público para o gate de cookie porque o emissor é o sidecar, mas
 requisições sem assinatura válida recebem `401`.
 
-Em produção, URL, chave e sessão são sempre lidas do ambiente. A tela continua
-mostrando o estado mascarado, mas não pode alterar configuração gerenciada pelo
-deploy.
+Em produção, URL e chaves são sempre lidas do ambiente. Com autenticação
+ligada, cada usuário recebe no banco um nome de sessão opaco e exclusivo; o
+valor `WAHA_SESSION_NAME` permanece apenas como fallback do modo desktop/sem
+autenticação. A tela não expõe nomes de sessão nem permite alterar configuração
+gerenciada pelo deploy.
 
 ## Rede e fluxo
 
@@ -62,10 +64,12 @@ O WAHA não participa da rede `edge` e não possui `ports`. A rede
 é publicado por ela.
 
 O webhook global envia somente `message.any`, com quatro tentativas e backoff
-linear. Isso cobre mensagens recebidas e respostas feitas fora do Toca sem
-assinar todos os eventos disponíveis.
+linear. O campo `session` do evento é associado ao usuário antes de consultar
+contatos ou gravar uma pendência. Eventos de sessão desconhecida são ignorados.
+Isso cobre mensagens recebidas e respostas feitas fora do Toca sem assinar
+todos os eventos disponíveis nem misturar dados entre usuários.
 
-## Primeiro QR
+## Primeiro QR de cada usuário
 
 1. Preencha um arquivo de ambiente fora do Git a partir de
    `.env.production.example`.
@@ -77,10 +81,16 @@ assinar todos os eventos disponíveis.
    ```
 
 3. No deploy autorizado, suba o stack e aguarde `waha` ficar `healthy`.
-4. Entre no Toca como administrador, abra a configuração do WhatsApp e acione
-   a conexão. O web cria/inicia a sessão e entrega o QR sem expor Dashboard ou
-   API WAHA.
-5. Escaneie o QR no telefone e confirme o estado `connected`.
+4. Cada usuário entra no Toca, abre a integração do WhatsApp e aciona a
+   conexão. O web cria/inicia somente a sessão daquele usuário e entrega seu QR
+   sem expor nome de sessão, Dashboard ou API WAHA.
+5. O usuário escaneia o QR com o próprio telefone e confirma o estado
+   `connected`.
+
+Um único container WAHA hospeda as sessões individuais. A associação
+`user_id → session_name` fica em `user_waha_sessions`; os nomes são UUIDs
+opacos, sem email ou telefone. Envios, sincronizações, quotas, webhooks e
+pendências usam o proprietário dessa associação.
 
 ## Reinício e persistência
 
@@ -93,13 +103,14 @@ docker compose --env-file /caminho/seguro/toca.env \
   -f docker-compose.production.yml ps waha
 ```
 
-Depois do healthcheck, a sessão deve voltar a `WORKING`. Nunca execute
-`docker compose down -v`: `-v` remove o volume de sessão.
+Depois do healthcheck, as sessões pareadas devem voltar a `WORKING`. Nunca
+execute `docker compose down -v`: `-v` remove o volume de todas as sessões.
 
-Para forçar um novo pareamento, faça logout explícito da sessão pela API
-interna e só então use novamente o fluxo de QR do Toca. Logout remove a
-credencial pareada e é uma ação destrutiva; deve ser feito apenas durante uma
-janela autorizada.
+Para forçar um novo pareamento, o próprio usuário usa **Desconectar meu
+WhatsApp** e então repete o fluxo de QR. A operação faz logout somente da
+sessão atual e remove sua associação local. A desativação administrativa do
+usuário também remove a associação e tenta encerrar a sessão remota sem afetar
+as demais.
 
 ## Atualização
 
@@ -108,7 +119,8 @@ Não use `latest`. Para atualizar:
 1. selecione uma versão publicada e leia o changelog oficial;
 2. altere somente a tag fixada;
 3. rode os testes e o smoke Docker da PR;
-4. valide QR, envio, webhook e reinício em dados/sessão descartáveis;
+4. valide QR, envio, webhook, isolamento com dois usuários e reinício em
+   dados/sessões descartáveis;
 5. promova a mesma imagem, sem novo pull implícito.
 
 Backup operacional do volume e ensaio completo de rollback pertencem às F8.4 e
@@ -125,4 +137,6 @@ O workflow Docker comprova:
 - webhook assinado alcança o web e passa pelo HMAC;
 - um marcador no volume sobrevive ao restart do container.
 
-Nenhum teste automático conecta uma conta real ou envia mensagem.
+Os testes de aplicação também comprovam sessões opacas distintas, QR acessível
+a membros, quota por usuário, roteamento do webhook pelo dono e desconexão
+isolada. Nenhum teste automático conecta uma conta real ou envia mensagem.

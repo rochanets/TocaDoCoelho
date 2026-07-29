@@ -2248,9 +2248,14 @@
               <button class="btn btn-secondary btn-small wa-period-btn" data-days="15" onclick="selectWaPeriod(15)">15 dias</button>
               <button class="btn btn-secondary btn-small wa-period-btn" data-days="30" onclick="selectWaPeriod(30)">30 dias</button>
             </div>
-            <button onclick="startWhatsappSync()" class="btn btn-auto-mapping" id="waSyncStartBtn">
-              <span class="ai-star-icon">✦</span> Iniciar Sincronização
-            </button>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <button onclick="startWhatsappSync()" class="btn btn-auto-mapping" id="waSyncStartBtn">
+                <span class="ai-star-icon">✦</span> Iniciar Sincronização
+              </button>
+              <button onclick="_waDisconnect()" class="btn btn-secondary btn-small">
+                <i class="fas fa-unlink"></i> Desconectar meu WhatsApp
+              </button>
+            </div>
           </div>
 
           <!-- Área: Progresso -->
