@@ -494,7 +494,7 @@ async function findChat(rawChatId) {
       if (u && variants.has(u)) return chat;
     }
   } catch (e) {
-    log('WARN', `findChat: getChats falhou: ${e.message}`);
+    log('WARN', `findChat: getChats falhou (${e && e.name ? e.name : 'Error'}).`);
   }
 
   // 2) Fallback: resolve o WID real via getNumberId e tenta getChatById.
@@ -506,7 +506,7 @@ async function findChat(rawChatId) {
       if (chat) return chat;
     }
   } catch (e) {
-    log('WARN', `findChat: getNumberId/getChatById falhou para ${digits}: ${e.message}`);
+    log('WARN', `findChat: getNumberId/getChatById falhou (${e && e.name ? e.name : 'Error'}).`);
   }
 
   // 3) Último recurso: getChatById com o id adivinhado. Sabemos que isso lança o
@@ -515,7 +515,7 @@ async function findChat(rawChatId) {
   try {
     return await waClient.getChatById(rawChatId);
   } catch (e) {
-    log('WARN', `findChat: getChatById(${rawChatId}) falhou: ${e.message}`);
+    log('WARN', `findChat: getChatById falhou (${e && e.name ? e.name : 'Error'}).`);
     return null;
   }
 }
@@ -534,7 +534,7 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
   try {
     const chat = await findChat(rawChatId);
     if (!chat) {
-      log('INFO', `Sem conversa sincronizada para ${rawChatId}.`);
+      log('INFO', 'Sem conversa sincronizada para o contato consultado.');
       return res.status(404).json({ error: 'Sem conversa para este contato.' });
     }
     const messages = await chat.fetchMessages({ limit });
@@ -555,12 +555,12 @@ app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
         hasMedia: m.hasMedia,
       }));
 
-    log('INFO', `Mensagens de ${chat.id._serialized}: ${filtered.length} no intervalo.`);
+    log('INFO', `Mensagens consultadas: ${filtered.length} no intervalo.`);
     res.json(filtered);
   } catch (_err) {
     // Chat inexistente = sem conversa com este contato (ou a resolução por LID do
-    // WhatsApp Web falhou) — loga o chatId original para diagnosticar sem reproduzir.
-    log('WARN', `Chat não encontrado para ${rawChatId}: ${_err.message}`);
+    // WhatsApp Web falhou) — registra somente o tipo do erro, sem identificadores.
+    log('WARN', `Chat não encontrado (${_err && _err.name ? _err.name : 'Error'}).`);
     res.status(404).json({ error: _err.message });
   }
 });
