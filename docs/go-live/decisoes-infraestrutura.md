@@ -45,7 +45,7 @@ aplicação seja hospedada no Azure.
 | Servidor corporativo | disponível; preparação em conversa separada | runtime candidato |
 | VPN/SSH | disponível segundo o responsável | administração privada do host |
 | Portal Azure | acesso informado; não será usado para hospedagem | Entra/App Registration, se aplicável |
-| Zona DNS/domínio | acesso/canal informado; publicação em andamento | candidato e domínio final |
+| Zona DNS/domínio | `toca.stefanini.com`; publicação em andamento | hostname único de homologação e produção |
 | Administrador Entra | Henrique Netto | App Registration, consentimento e allowlist |
 | Mailbox de teste | disponível; identificador não registrado no Git | Graph/E2E |
 | Telefones WAHA | cada usuário utilizará o próprio aparelho/número | QR, envio e recebimento por sessão individual |
@@ -279,10 +279,10 @@ Opções consideradas:
 Escolha aprovada:
 **opção 1**. Não mover a zona DNS nesta migração.
 
-- domínio informado anteriormente: `toca.stefanini.com`;
-- domínio informado mais recentemente: `toca.stefanin.com`;
-- decisão de DNS bloqueada até confirmar qual grafia é a correta; não criar
-  registros ou redirects enquanto houver divergência;
+- hostname confirmado: `toca.stefanini.com`;
+- o mesmo hostname será usado no candidato e na produção;
+- durante a homologação, o acesso será limitado pela allowlist do Microsoft
+  Entra; o go-live libera os usuários aprovados sem alterar a URL;
 - IP público informado: `69.41.39.34`;
 - certificado publicamente confiável, preferencialmente gerenciado na borda
   corporativa, com renovação e alerta de expiração;
@@ -303,9 +303,10 @@ Evidência/contrato:
 - `deploy/nginx/toca.conf`
 
 Risco:
-há divergência de grafia entre `stefanini.com` e `stefanin.com`. O chamado
-corporativo também precisa confirmar TLS, WAF/proxy, healthcheck e o backend. A
-porta 3000 não deve ser exposta.
+o chamado corporativo ainda precisa confirmar TLS, WAF/proxy, healthcheck e o
+backend. Como candidato e produção compartilham o hostname, a allowlist Entra
+deve permanecer restrita até a autorização formal do go-live. A porta 3000 não
+deve ser exposta.
 
 Plano alternativo:
 certificado público no Nginx somente se a arquitetura corporativa exigir,
@@ -327,8 +328,8 @@ Escolha:
 **proposta — opção 1**. App Registration de produção single-tenant,
 Authorization Code + PKCE, sem `client_secret` no Toca, com redirects exatos:
 
-- redirects exatos do domínio candidato, após confirmação de sua grafia;
-- redirects equivalentes do domínio final somente quando a G7 autorizar.
+- `https://toca.stefanini.com/api/auth/callback`;
+- `https://toca.stefanini.com/api/outlook/oauth/callback`.
 
 Permissões delegadas:
 `openid profile email offline_access User.Read Mail.Read Mail.Send`.
@@ -489,7 +490,8 @@ proposta operacional:
 - desktop é fonte autoritativa até o congelamento formal da G8;
 - após copiar fontes, calcular checksums e iniciar o ETL final, não reabrir
   escritas no desktop sem decisão de rollback;
-- ponto de não retorno: validação final dos dados e mudança do domínio/DNS;
+- ponto de não retorno: validação final dos dados e liberação dos usuários
+  produtivos na allowlist Entra;
 - rollback antes desse ponto volta ao desktop congelado;
 - depois desse ponto, qualquer divergência exige congelar os dois lados e
   decidir a fonte autoritativa antes de escrever.
@@ -557,8 +559,8 @@ corporativo segue a aprovação interna aplicável.
 - [x] substituir Azure/Brazil South pelo servidor corporativo;
 - [x] registrar que não há teto mensal Azure para hospedagem;
 - [ ] confirmar capacidade e armazenamento do servidor;
-- [ ] confirmar se o domínio correto é `toca.stefanini.com` ou
-  `toca.stefanin.com`;
+- [x] confirmar `toca.stefanini.com` como hostname único de candidato e
+  produção;
 - [ ] confirmar o tenant Entra;
 - [x] confirmar disponibilidade da mailbox de teste;
 - [x] confirmar Henrique Netto como administrador Entra;
