@@ -65,7 +65,7 @@ def test_rehearsal_covers_stack_auth_waha_backup_and_image_rollback():
         '/api/auth/login',
         '/api/auth/logout',
         'code_challenge=',
-        'compose port waha 3000',
+        '.HostConfig.PortBindings',
         'X-Webhook-Hmac',
         '/backups/.last-success',
         'export TOCA_IMAGE_TAG="$PREVIOUS_TAG"',

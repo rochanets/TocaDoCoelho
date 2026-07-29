@@ -166,7 +166,13 @@ curl --insecure --fail --silent \
     "https://127.0.0.1:$HTTPS_PORT/api/auth/logout" \
     | grep -q '"ok":true'
 
-if compose port waha 3000 2>/dev/null | grep -q .; then
+waha_container="$(compose ps -q waha)"
+published_waha_ports="$(
+    docker inspect --format \
+        '{{range $port, $bindings := .HostConfig.PortBindings}}{{if $bindings}}{{$port}} {{end}}{{end}}' \
+        "$waha_container"
+)"
+if [ -n "$published_waha_ports" ]; then
     echo "WAHA publicou porta no host durante o ensaio." >&2
     exit 1
 fi
