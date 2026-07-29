@@ -61,7 +61,10 @@ def _login(client, user_id):
 
 def _mock_waha_ok(monkeypatch):
     """Faz o envio WAHA 'suceder' sem rede — para exercitar o registro da atividade."""
-    monkeypatch.setattr(toca, '_waha_send_text', lambda chat_id, text: (True, None))
+    monkeypatch.setattr(
+        toca, '_waha_send_text',
+        lambda chat_id, text, owner_id=None: (True, None),
+    )
 
 
 class _ImmediateThread:

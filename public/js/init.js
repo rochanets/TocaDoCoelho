@@ -101,11 +101,6 @@
           return;
         }
         if (d.connected) { _waShowSection('form'); return; }
-        if (window.TocaSession?.state.authEnabled && !window.TocaSession.isAdmin()) {
-          document.getElementById('waSyncOfflineMsg').textContent = 'A sessão do WhatsApp precisa ser conectada por um administrador.';
-          _waShowSection('offline');
-          return;
-        }
         // not connected but configured → get QR
         _waGetQrCode();
       }).catch(()=>{ _waShowSection('offline'); document.getElementById('waSyncOfflineMsg').textContent = 'Não foi possível contatar o servidor.'; });
@@ -144,6 +139,21 @@
           }
         })
         .catch(e=>{ document.getElementById('waSyncOfflineMsg').textContent = 'Erro: '+e; _waShowSection('offline'); });
+    }
+
+    function _waDisconnect() {
+      if (!window.confirm('Desconectar seu WhatsApp desta aplicação? Você precisará escanear um novo QR para conectar novamente.')) return;
+      fetch('/api/whatsapp/disconnect', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:'{}'
+      }).then(async r=>{
+        const d = await r.json().catch(()=>({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || 'Falha ao desconectar.');
+        showSuccess('Seu WhatsApp foi desconectado.');
+        _waShowSection('loading');
+        _waCheckStatus();
+      }).catch(e=>showError(e.message || 'Falha ao desconectar.'));
     }
 
     function selectWaPeriod(days) {

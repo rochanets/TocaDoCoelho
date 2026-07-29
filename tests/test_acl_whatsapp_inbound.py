@@ -40,9 +40,18 @@ def _seed_client(owner_id, name):
 def _seed_inbound(client_id, responded=False):
     conn = toca.get_db(); c = conn.cursor()
     now = datetime.now().isoformat(timespec='seconds')
-    c.execute("INSERT INTO inbound_messages (client_id, channel, received_at, preview, responded_at, source_msg_id) "
-              "VALUES (?, 'whatsapp', ?, 'oi', ?, ?)",
-              (client_id, now, (now if responded else None), f'src-{client_id}-{now}'))
+    c.execute('SELECT owner_id FROM clients WHERE id = ?', (client_id,))
+    owner_id = c.fetchone()['owner_id']
+    c.execute(
+        '''INSERT INTO inbound_messages
+           (client_id, channel, received_at, preview, responded_at,
+            source_msg_id, owner_id)
+           VALUES (?, 'whatsapp', ?, 'oi', ?, ?, ?)''',
+        (
+            client_id, now, (now if responded else None),
+            f'src-{client_id}-{now}', owner_id,
+        ),
+    )
     iid = c.lastrowid; conn.commit(); conn.close()
     return iid
 

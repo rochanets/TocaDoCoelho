@@ -390,11 +390,14 @@ Requisitos:
 - aplicar limites de envio por usuário/sessão;
 - testar pelo menos dois usuários e dois telefones simultaneamente.
 
-Constatação:
-o WAHA suporta múltiplas sessões no mesmo container, mas o Toca atual usa
-`WAHA_SESSION_NAME` e `app_settings.waha_session_name` globais. As rotas de
-status/conexão/envio e o webhook ainda não implementam isolamento por usuário.
-Essa adaptação de código é obrigatória antes do E2E e do go-live.
+Implementação:
+o Toca usa um único container WAHA com associação persistente
+`user_waha_sessions(user_id, session_name)`. Os identificadores são opacos e
+as rotas de status, conexão, envio, sincronização, quota, webhook, pendências e
+desconexão resolvem a sessão pelo usuário. `WAHA_SESSION_NAME` e
+`app_settings.waha_session_name` ficam restritos ao modo desktop/sem
+autenticação. A implementação possui testes automatizados com dois usuários;
+o pareamento com dois telefones reais permanece para o E2E.
 
 Responsável:
 Cada usuário é custodiante do próprio telefone e da própria sessão. Henrique
@@ -413,8 +416,8 @@ Evidência/contrato:
 Risco:
 cada sessão WAHA consome recursos e contém credenciais de pareamento. O volume
 deve ser tratado como segredo, e a capacidade precisa ser testada com múltiplas
-sessões simultâneas. O modelo atual de sessão global causaria uso cruzado da
-conta de WhatsApp e é bloqueante para o go-live multiusuário.
+sessões simultâneas. O isolamento lógico foi implementado; capacidade do host
+e pareamento simultâneo com aparelhos reais ainda precisam de validação no E2E.
 
 Plano alternativo:
 o próprio usuário refaz o QR de sua sessão quando necessário. Não usar sessão
@@ -588,6 +591,7 @@ Estas pendências não são decisões de arquitetura e não reabrem a G2:
 - [ ] inventariar CPU, RAM, arquitetura, discos e espaço do servidor na G3;
 - [ ] validar o tenant, App Registration, redirects e consentimento Entra na
   G3;
-- [ ] implementar e testar isolamento WAHA por usuário antes do E2E;
+- [x] implementar e testar isolamento WAHA por usuário antes do E2E;
+- [ ] validar no E2E o pareamento simultâneo com dois telefones reais;
 - [ ] adaptar e testar o ETL antes da G5;
 - [ ] comprovar backup local e restore antes do candidato receber dados.

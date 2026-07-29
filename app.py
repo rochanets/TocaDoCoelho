@@ -2065,6 +2065,40 @@ SCHEMA_MIGRATIONS = [
         'ALTER TABLE scheduled_sends ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0',
         'CREATE INDEX IF NOT EXISTS idx_scheduled_sends_claim ON scheduled_sends(status, claimed_at)',
     ]),
+    # Go-live — cada usuário web conecta o próprio WhatsApp. O identificador da
+    # sessão é opaco e fica no banco; telefone, QR e credenciais de pareamento
+    # continuam somente no WAHA/volume protegido. Tabelas auxiliares recebem
+    # owner_id para quota, deduplicação e inbound não atravessarem usuários.
+    (32, 'go_live_waha_sessions_per_user', [
+        '''CREATE TABLE IF NOT EXISTS user_waha_sessions (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            session_name TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_user_waha_session_name ON user_waha_sessions(session_name)',
+        'ALTER TABLE whatsapp_sends ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE whatsapp_sync_log ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'ALTER TABLE inbound_messages ADD COLUMN owner_id INTEGER REFERENCES users(id)',
+        'CREATE INDEX IF NOT EXISTS idx_wa_sends_owner_date ON whatsapp_sends(owner_id, sent_at)',
+        'CREATE INDEX IF NOT EXISTS idx_wa_sync_owner_client ON whatsapp_sync_log(owner_id, client_id, last_message_ts)',
+        'CREATE INDEX IF NOT EXISTS idx_inbound_owner_pending ON inbound_messages(owner_id, responded_at, received_at)',
+        '''UPDATE whatsapp_sends
+           SET owner_id = (SELECT MIN(id) FROM users)
+           WHERE owner_id IS NULL''',
+        '''UPDATE whatsapp_sync_log
+           SET owner_id = COALESCE(
+               (SELECT owner_id FROM clients WHERE clients.id = whatsapp_sync_log.client_id),
+               (SELECT MIN(id) FROM users)
+           )
+           WHERE owner_id IS NULL''',
+        '''UPDATE inbound_messages
+           SET owner_id = COALESCE(
+               (SELECT owner_id FROM clients WHERE clients.id = inbound_messages.client_id),
+               (SELECT MIN(id) FROM users)
+           )
+           WHERE owner_id IS NULL''',
+    ]),
 ]
 
 
@@ -2958,7 +2992,7 @@ _ACL_ROOT_TABLES = {
     'iata_records', 'environment_cards', 'account_archives',
     'account_planning_runs', 'itoca_chat_history', 'daily_suggestions',
     'message_templates', 'scheduled_sends', 'automapping_runs',
-    'chamado_juridico_history',
+    'chamado_juridico_history', 'inbound_messages',
 }
 
 # Entidades-raiz cujo modelo de produto permite compartilhamento seletivo.
@@ -2991,7 +3025,6 @@ _ACL_PARENTS = {
     'account_main_contacts': ('accounts', 'account_id'),
     'account_presences': ('accounts', 'account_id'),
     'environment_responses': ('clients', 'client_id'),
-    'inbound_messages': ('clients', 'client_id'),
 }
 
 # Dono efetivo de uma linha-raiz = owner_id, ou o fundador quando NULL (legado).
@@ -9427,6 +9460,7 @@ def _outlook_match_emails(emails_data, conn):
     Retorna (activities, unmatched, all_clients_for_select).
     """
     c = conn.cursor()
+    owner_id = _acl_owner_for_insert()
     # Match e seleção manual só contra os contatos VISÍVEIS ao usuário (rodamos em
     # contexto de request: addon-preview / ingest-from-addon). Login off → 1=1.
     _vw, _vp = visible_where('clients')
@@ -9525,7 +9559,9 @@ def _outlook_match_emails(emails_data, conn):
 
     # Caixa de respostas pendentes (Bloco 6): e-mails de clientes sem resposta sua
     try:
-        _inbound_feed_from_outlook(c, emails_data, clients_map)
+        _inbound_feed_from_outlook(
+            c, emails_data, clients_map, owner_id=owner_id
+        )
         conn.commit()
     except Exception as e:
         logger.debug(f'[Inbound] Falha ao alimentar pendências via Outlook: {e}')
@@ -12592,18 +12628,155 @@ def _phone_to_waha_chatid(phone):
     return f'{digits}@c.us'
 
 
-def _waha_settings():
+def _waha_base_settings():
+    """Configuração do sidecar, comum a todas as sessões."""
     if _is_production_environment():
         return (
             (os.environ.get('WAHA_API_URL') or '').strip().rstrip('/'),
             (os.environ.get('WAHA_API_KEY') or '').strip(),
-            (os.environ.get('WAHA_SESSION_NAME') or 'default').strip(),
         )
     s = _load_app_settings_map(['waha_api_url', 'waha_api_key', 'waha_session_name'])
     return (
         (s.get('waha_api_url') or 'http://localhost:3001').strip().rstrip('/'),
         (s.get('waha_api_key') or '').strip(),
-        (s.get('waha_session_name') or 'default').strip(),
+    )
+
+
+def _waha_legacy_session_name():
+    """Sessão única preservada para o desktop, onde o login fica desligado."""
+    if _is_production_environment():
+        return (os.environ.get('WAHA_SESSION_NAME') or 'default').strip()
+    s = _load_app_settings_map(['waha_session_name'])
+    return (s.get('waha_session_name') or 'default').strip()
+
+
+def _waha_user_session_name(user_id=None, create=False):
+    """Resolve a sessão privada de um usuário web.
+
+    Login desligado mantém o nome global histórico. Login ligado fecha por
+    padrão: fora de uma request o chamador precisa passar user_id, e usuário
+    inexistente/inativo nunca recebe sessão. O nome opaco não contém email,
+    telefone ou outro identificador pessoal.
+    """
+    if not _auth_enabled():
+        return _waha_legacy_session_name()
+    if user_id is None:
+        user = current_user()
+        user_id = user.get('id') if user else None
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    if user_id <= 0:
+        return None
+
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute(
+            '''SELECT ws.session_name
+               FROM user_waha_sessions ws
+               JOIN users u ON u.id = ws.user_id
+               WHERE ws.user_id = ? AND COALESCE(u.is_active, 1) = 1
+               LIMIT 1''',
+            (user_id,),
+        )
+        row = c.fetchone()
+        if row:
+            return row['session_name']
+        if not create:
+            return None
+        c.execute(
+            'SELECT 1 FROM users WHERE id = ? AND COALESCE(is_active, 1) = 1',
+            (user_id,),
+        )
+        if not c.fetchone():
+            return None
+        session_name = f'toca_{uuid.uuid4().hex}'
+        c.execute(
+            '''INSERT INTO user_waha_sessions (user_id, session_name)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO NOTHING''',
+            (user_id, session_name),
+        )
+        conn.commit()
+        c.execute(
+            'SELECT session_name FROM user_waha_sessions WHERE user_id = ?',
+            (user_id,),
+        )
+        row = c.fetchone()
+        return row['session_name'] if row else None
+    finally:
+        conn.close()
+
+
+def _waha_user_for_session(session_name, conn=None):
+    """Retorna o usuário ativo dono de uma sessão opaca, ou None."""
+    if not session_name or not _auth_enabled():
+        return None
+    own_conn = conn is None
+    if own_conn:
+        conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute(
+            '''SELECT u.*
+               FROM user_waha_sessions ws
+               JOIN users u ON u.id = ws.user_id
+               WHERE ws.session_name = ? AND COALESCE(u.is_active, 1) = 1
+               LIMIT 1''',
+            ((session_name or '').strip(),),
+        )
+        return dict_from_row(c.fetchone())
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _waha_active_session_users():
+    """Usuários ativos que têm sessão WAHA, para o poller de background."""
+    if not _auth_enabled():
+        return []
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute(
+            '''SELECT u.*
+               FROM user_waha_sessions ws
+               JOIN users u ON u.id = ws.user_id
+               WHERE COALESCE(u.is_active, 1) = 1
+               ORDER BY u.id'''
+        )
+        return [dict_from_row(row) for row in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def _waha_forget_user_session(user_id):
+    """Remove somente o vínculo local; o logout remoto é feito pelo chamador."""
+    if not _auth_enabled():
+        return None
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute(
+            'SELECT session_name FROM user_waha_sessions WHERE user_id = ?',
+            (user_id,),
+        )
+        row = c.fetchone()
+        c.execute('DELETE FROM user_waha_sessions WHERE user_id = ?', (user_id,))
+        conn.commit()
+        return row['session_name'] if row else None
+    finally:
+        conn.close()
+
+
+def _waha_settings(user_id=None, create_session=False):
+    api_url, api_key = _waha_base_settings()
+    return (
+        api_url,
+        api_key,
+        _waha_user_session_name(user_id=user_id, create=create_session),
     )
 
 
@@ -12634,35 +12807,66 @@ def _waha_webhook_is_authorized(raw_body, signature, algorithm):
 # Registra a última mensagem recebida de cada cliente sem resposta sua.
 # ---------------------------------------------------------------------------
 
-def _inbound_upsert(c, client_id, channel, received_at, preview, source_msg_id):
-    """Registra mensagem recebida pendente (dedup por source_msg_id)."""
+def _inbound_upsert(
+    c, client_id, channel, received_at, preview, source_msg_id, owner_id=None
+):
+    """Registra mensagem pendente no espaço pessoal do usuário."""
     c.execute(
-        '''INSERT INTO inbound_messages (client_id, channel, received_at, preview, source_msg_id)
-           VALUES (?, ?, ?, ?, ?)
+        '''INSERT INTO inbound_messages
+           (client_id, channel, received_at, preview, source_msg_id, owner_id)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(source_msg_id) DO NOTHING''',
-        (client_id, channel, received_at, (preview or '')[:280], source_msg_id)
+        (
+            client_id, channel, received_at, (preview or '')[:280],
+            source_msg_id, owner_id,
+        ),
     )
 
 
-def _inbound_mark_responded(c, client_id, channel, responded_at=None):
+def _inbound_mark_responded(
+    c, client_id, channel, responded_at=None, owner_id=None
+):
     responded_at = responded_at or datetime.now().isoformat(timespec='seconds')
-    c.execute(
-        '''UPDATE inbound_messages SET responded_at = ?
-           WHERE client_id = ? AND channel = ? AND responded_at IS NULL''',
-        (responded_at, client_id, channel)
+    sql = (
+        'UPDATE inbound_messages SET responded_at = ? '
+        'WHERE client_id = ? AND channel = ? AND responded_at IS NULL'
     )
+    params = [responded_at, client_id, channel]
+    if _auth_enabled():
+        if owner_id is None:
+            return
+        sql += ' AND owner_id = ?'
+        params.append(owner_id)
+    c.execute(sql, params)
 
 
-def _inbound_scan_whatsapp():
+def _inbound_scan_whatsapp(user_id=None):
     """Fase A (polling): consulta o WAHA pelas conversas dos clientes cadastrados
     e registra a última mensagem com fromMe=false posterior à última fromMe=true.
-    Comportamento passivo (equivalente a abrir o WhatsApp Web)."""
-    api_url, api_key, session = _waha_settings()
+    Na web, session, clientes e pendências são escopados pelo usuário explícito.
+    """
+    user = None
+    if _auth_enabled():
+        conn = get_db()
+        try:
+            user = dict_from_row(_fetch_user_row(conn, user_id)) if user_id else None
+        finally:
+            conn.close()
+        if not user or not bool(user.get('is_active', 1)):
+            return {'scanned': 0, 'pending': 0}
+    api_url, api_key, session = _waha_settings(user_id=user_id)
+    if not api_url or not session:
+        return {'scanned': 0, 'pending': 0}
     headers = _waha_headers(api_key)
     conn = get_db()
     c = conn.cursor()
-    c.execute("""SELECT id, name, phone FROM clients
-                 WHERE phone IS NOT NULL AND phone != '' AND COALESCE(is_archived, 0) = 0""")
+    _cw, _cp = visible_where('clients', user=user, alias='cl')
+    c.execute(
+        f'''SELECT cl.id, cl.name, cl.phone FROM clients cl
+            WHERE cl.phone IS NOT NULL AND cl.phone != ''
+              AND COALESCE(cl.is_archived, 0) = 0 AND {_cw}''',
+        _cp,
+    )
     clients = c.fetchall()
     conn.close()
     since_ts = int((datetime.now() - timedelta(days=14)).timestamp())
@@ -12702,7 +12906,11 @@ def _inbound_scan_whatsapp():
             msg_id = last_in_msg.get('id')
             if isinstance(msg_id, dict):
                 msg_id = msg_id.get('_serialized') or msg_id.get('id')
-            source_id = f'wa:{msg_id or (str(row["id"]) + ":" + str(last_in))}'
+            owner_scope = user_id if _auth_enabled() else 0
+            source_id = (
+                f'wa:{owner_scope}:'
+                f'{msg_id or (str(row["id"]) + ":" + str(last_in))}'
+            )
             # Conexão aberta só pelo tempo da escrita — nunca durante as chamadas
             # HTTP ao WAHA acima, que podem levar até 20s cada por cliente e não
             # devem manter o lock de escrita do SQLite reservado por tanto tempo.
@@ -12710,7 +12918,8 @@ def _inbound_scan_whatsapp():
             w_c = w_conn.cursor()
             _inbound_upsert(w_c, row['id'], 'whatsapp',
                             datetime.fromtimestamp(last_in).isoformat(timespec='seconds'),
-                            text or '(mensagem sem texto)', source_id)
+                            text or '(mensagem sem texto)', source_id,
+                            owner_id=user_id)
             w_conn.commit()
             w_conn.close()
             pending += 1
@@ -12718,14 +12927,28 @@ def _inbound_scan_whatsapp():
             w_conn = get_db()
             w_c = w_conn.cursor()
             _inbound_mark_responded(w_c, row['id'], 'whatsapp',
-                                    datetime.fromtimestamp(last_out).isoformat(timespec='seconds'))
+                                    datetime.fromtimestamp(last_out).isoformat(timespec='seconds'),
+                                    owner_id=user_id)
             w_conn.commit()
             w_conn.close()
     logger.info(f'[Inbound] Scan WhatsApp: {scanned} conversas verificadas, {pending} pendências registradas')
     return {'scanned': scanned, 'pending': pending}
 
 
-def _inbound_feed_from_outlook(c, emails_data, clients_map):
+def _inbound_scan_whatsapp_all_users():
+    """Executa o poller para cada sessão ativa sem depender de cookie."""
+    if not _auth_enabled():
+        return _inbound_scan_whatsapp()
+    total = {'scanned': 0, 'pending': 0, 'users': 0}
+    for user in _waha_active_session_users():
+        result = _inbound_scan_whatsapp(user_id=user['id'])
+        total['scanned'] += result.get('scanned', 0)
+        total['pending'] += result.get('pending', 0)
+        total['users'] += 1
+    return total
+
+
+def _inbound_feed_from_outlook(c, emails_data, clients_map, owner_id=None):
     """Alimenta o painel de pendências a partir dos e-mails importados do Outlook:
     cliente cujo último e-mail recebido é posterior ao último enviado = pendente."""
     per_client = {}
@@ -12751,11 +12974,18 @@ def _inbound_feed_from_outlook(c, emails_data, clients_map):
                     slot['out'] = max(slot['out'], when)
     for client_id, slot in per_client.items():
         if slot['in'] and slot['in']['date'] > slot['out']:
-            source_id = f'em:{slot["in"]["msg_id"] or (str(client_id) + ":" + slot["in"]["date"])}'
+            owner_scope = owner_id if _auth_enabled() else 0
+            source_id = (
+                f'em:{owner_scope}:'
+                f'{slot["in"]["msg_id"] or (str(client_id) + ":" + slot["in"]["date"])}'
+            )
             _inbound_upsert(c, client_id, 'email', slot['in']['date'][:19].replace('T', ' '),
-                            slot['in']['preview'], source_id)
+                            slot['in']['preview'], source_id, owner_id=owner_id)
         elif slot['out']:
-            _inbound_mark_responded(c, client_id, 'email', slot['out'][:19].replace('T', ' '))
+            _inbound_mark_responded(
+                c, client_id, 'email', slot['out'][:19].replace('T', ' '),
+                owner_id=owner_id,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -12893,7 +13123,10 @@ def _start_inbound_poller():
                 minutes = 15
             time.sleep(max(minutes, 1) * 60)
             try:
-                _run_distributed_job('poller:inbound_whatsapp', _inbound_scan_whatsapp)
+                _run_distributed_job(
+                    'poller:inbound_whatsapp',
+                    _inbound_scan_whatsapp_all_users,
+                )
             except Exception as e:
                 logger.debug(f'[Inbound] Poller: scan falhou (WAHA offline?): {e}')
 
@@ -13070,16 +13303,24 @@ def _waha_extract_text(msg, client_name):
     return None, sender
 
 
-def _whatsapp_sync_async(task_id, period_days):
+def _whatsapp_sync_async(task_id, period_days, owner_id=None, user=None):
     try:
         _bg_task_set(task_id, {'step': '📋 Carregando clientes...', 'progress': 5})
 
-        api_url, api_key, session = _waha_settings()
+        api_url, api_key, session = _waha_settings(user_id=owner_id)
+        if not api_url or not session:
+            raise RuntimeError('Conecte sua sessão do WhatsApp antes de sincronizar.')
         headers = _waha_headers(api_key)
 
         db = get_db()
         c = db.cursor()
-        c.execute("SELECT id, name, phone FROM clients WHERE phone IS NOT NULL AND phone != '' AND is_archived = 0")
+        _cw, _cp = visible_where('clients', user=user, alias='cl')
+        c.execute(
+            f'''SELECT cl.id, cl.name, cl.phone FROM clients cl
+                WHERE cl.phone IS NOT NULL AND cl.phone != ''
+                  AND cl.is_archived = 0 AND {_cw}''',
+            _cp,
+        )
         clients = c.fetchall()
 
         if not clients:
@@ -13120,7 +13361,17 @@ def _whatsapp_sync_async(task_id, period_days):
 
             # Deduplicação incremental: só resumimos mensagens MAIS NOVAS do que a
             # última já processada para este cliente. Evita re-resumir a mesma conversa.
-            c.execute('SELECT MAX(last_message_ts) FROM whatsapp_sync_log WHERE client_id = ?', (client_id,))
+            if _auth_enabled():
+                c.execute(
+                    '''SELECT MAX(last_message_ts) FROM whatsapp_sync_log
+                       WHERE client_id = ? AND owner_id = ?''',
+                    (client_id, owner_id),
+                )
+            else:
+                c.execute(
+                    'SELECT MAX(last_message_ts) FROM whatsapp_sync_log WHERE client_id = ?',
+                    (client_id,),
+                )
             _row = c.fetchone()
             last_processed_ts = int(_row[0]) if _row and _row[0] else 0
             effective_since = max(since_ts, last_processed_ts + 1) if last_processed_ts else since_ts
@@ -13184,8 +13435,18 @@ def _whatsapp_sync_async(task_id, period_days):
                 continue
 
             content_hash = hashlib.sha256('|'.join(texts).encode('utf-8', errors='replace')).hexdigest()[:40]
-            c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',
-                      (client_id, content_hash))
+            if _auth_enabled():
+                c.execute(
+                    '''SELECT id FROM whatsapp_sync_log
+                       WHERE client_id = ? AND content_hash = ? AND owner_id = ?''',
+                    (client_id, content_hash, owner_id),
+                )
+            else:
+                c.execute(
+                    '''SELECT id FROM whatsapp_sync_log
+                       WHERE client_id = ? AND content_hash = ?''',
+                    (client_id, content_hash),
+                )
             if c.fetchone():
                 skipped += 1
                 continue

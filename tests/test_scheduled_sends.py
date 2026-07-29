@@ -36,7 +36,10 @@ def test_agendar_validacoes(client, sample_client_id, db_path):
 
 def test_worker_envia_no_horario_e_missed_pergunta(client, sample_client_id, db_path, monkeypatch):
     import app as toca
-    monkeypatch.setattr(toca, '_waha_send_text', lambda chat_id, text: (True, None))
+    monkeypatch.setattr(
+        toca, '_waha_send_text',
+        lambda chat_id, text, owner_id=None: (True, None),
+    )
 
     sid = _schedule(client, sample_client_id).get_json()['ids'][0]
     conn = toca.get_db()
@@ -102,7 +105,10 @@ def test_first_run_e_extensao(client, db_path):
 
 def test_agendamento_cria_atividade_provisoria_e_promove(client, sample_client_id, db_path, monkeypatch):
     import app as toca
-    monkeypatch.setattr(toca, '_waha_send_text', lambda chat_id, text: (True, None))
+    monkeypatch.setattr(
+        toca, '_waha_send_text',
+        lambda chat_id, text, owner_id=None: (True, None),
+    )
 
     sid = _schedule(client, sample_client_id).get_json()['ids'][0]
     conn = toca.get_db()

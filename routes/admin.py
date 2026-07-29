@@ -197,6 +197,7 @@ def admin_update_user_role(user_id):
 def admin_deactivate_user(user_id):
     """Revoga acesso sem apagar dados ou autoria. Auto-bloqueio exige confirmação."""
     data = request.get_json(silent=True) or {}
+    waha_session_name = None
     conn = get_db()
     try:
         user = _active_user_in_admin_org(conn, user_id)
@@ -224,6 +225,18 @@ def admin_deactivate_user(user_id):
         # permanecem intactos para não perder dados e podem ser administrados.
         c.execute('DELETE FROM shares WHERE shared_with_user_id = ?', (user_id,))
         c.execute(
+            'SELECT session_name FROM user_waha_sessions WHERE user_id = ?',
+            (user_id,),
+        )
+        waha_row = c.fetchone()
+        waha_session_name = (
+            waha_row['session_name'] if waha_row else None
+        )
+        c.execute(
+            'DELETE FROM user_waha_sessions WHERE user_id = ?',
+            (user_id,),
+        )
+        c.execute(
             '''UPDATE users
                SET is_active = 0, entra_object_id = NULL,
                    updated_at = CURRENT_TIMESTAMP
@@ -233,6 +246,19 @@ def admin_deactivate_user(user_id):
         conn.commit()
     finally:
         conn.close()
+    if waha_session_name:
+        api_url, api_key = _waha_base_settings()
+        try:
+            requests.post(
+                f'{api_url}/api/sessions/{waha_session_name}/logout',
+                headers=_waha_headers(api_key),
+                timeout=10,
+            )
+        except Exception as exc:
+            logger.warning(
+                '[Admin] Sessão WAHA do usuário desativado não respondeu ao logout: %s',
+                type(exc).__name__,
+            )
     logger.info(
         f'[Admin] Usuário desativado: id={user_id} '
         f'por user_id={current_user_id()}.'
