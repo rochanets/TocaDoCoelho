@@ -1,6 +1,6 @@
 # G2 — decisões de infraestrutura para o go-live
 
-Status: **decisões parcialmente aprovadas; pendências corporativas registradas**
+Status: **aprovada com exceções e riscos explícitos**
 
 Data: 29/07/2026
 
@@ -208,7 +208,7 @@ se o fornecedor comprovar e auditar `GRANT SET ON PARAMETER
 session_replication_role TO toca_etl`, usar o papel somente em banco vazio,
 revogá-lo imediatamente e ainda executar validação integral de FKs.
 
-## 6. Backup externo e recuperação
+## 6. Backup e recuperação
 
 Decisão:
 destino, criptografia, retenção, RPO/RTO, alerta e restore.
@@ -554,14 +554,16 @@ Aprovador de custo:
 Henrique Netto para custos sob sua alçada; contratação ou chargeback
 corporativo segue a aprovação interna aplicável.
 
-## 13. Aprovações necessárias para concluir a G2
+## 13. Aprovações da G2
 
 - [x] substituir Azure/Brazil South pelo servidor corporativo;
 - [x] registrar que não há teto mensal Azure para hospedagem;
-- [ ] confirmar capacidade e armazenamento do servidor;
+- [x] definir que capacidade e armazenamento serão inventariados e validados
+  na preparação do host/G3;
 - [x] confirmar `toca.stefanini.com` como hostname único de candidato e
   produção;
-- [ ] confirmar o tenant Entra;
+- [x] definir Henrique Netto como responsável por validar o tenant Entra na G3,
+  sem versionar seu identificador;
 - [x] confirmar disponibilidade da mailbox de teste;
 - [x] confirmar Henrique Netto como administrador Entra;
 - [x] confirmar uma sessão WAHA e um telefone por usuário;
@@ -575,7 +577,17 @@ corporativo segue a aprovação interna aplicável.
 - [x] aprovar RPO 15 min, RTO 4 h, soak 72 h, downtime 2 h e hypercare 5 dias;
 - [x] retirar HA do escopo inicial e registrar evolução futura;
 - [x] aprovar adaptação do ETL antes da G5;
-- [ ] implementar e testar isolamento WAHA por usuário antes do E2E.
 
-Enquanto algum item permanecer aberto, a G2 está **parcial** e a G3 não está
-liberada.
+A G2 está **aprovada**. Estão liberadas a preparação do host e a G3, respeitando
+as exceções aceitas para backup local e ausência de monitoramento automático.
+
+## 14. Dependências de implementação e validação
+
+Estas pendências não são decisões de arquitetura e não reabrem a G2:
+
+- [ ] inventariar CPU, RAM, arquitetura, discos e espaço do servidor na G3;
+- [ ] validar o tenant, App Registration, redirects e consentimento Entra na
+  G3;
+- [ ] implementar e testar isolamento WAHA por usuário antes do E2E;
+- [ ] adaptar e testar o ETL antes da G5;
+- [ ] comprovar backup local e restore antes do candidato receber dados.
