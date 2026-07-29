@@ -130,14 +130,16 @@ dependências e recuperação.
 
 ### F8.5 - ensaio e prontidão
 
-- construir imagens a partir do commit entregue;
-- subir stack descartável com TLS e PostgreSQL;
-- executar migrations, smoke, suíte PostgreSQL e teste multi-worker;
-- validar SSO, logout, renovação de sessão, Outlook Graph e WAHA somente no
-  ambiente autorizado;
-- executar backup/restore e rollback documentados;
-- verificar ausência de segredos e fechar o checklist de produção.
+Implementada em `docs/fase-8-ensaio-prontidao.md`: a CI constrói imagens
+imutáveis do candidato e da revisão anterior, sobe o stack descartável com TLS,
+PostgreSQL, dois workers, WAHA e backup, ensaia autenticação sem chamar contas
+reais, executa rollback/roll-forward por ID de imagem e verifica ausência de
+segredos. `docs/fase-8-checklist-prontidao.md` fecha os gates técnicos e mantém
+o go-live condicionado às validações no ambiente externo autorizado.
 
 DNS, certificado público, host, fornecedor de PostgreSQL e qualquer alteração
 no Entra ou em serviços externos exigem acesso/autorização explícitos e não são
 executados por este plano local.
+
+Com F8.1-F8.5 integradas e verdes, a implementação técnica da Fase 8 está
+encerrada. Isso não autoriza avanço para a Fase 9.

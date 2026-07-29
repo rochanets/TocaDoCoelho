@@ -6,10 +6,18 @@
 # do Azure Speech F0; OCR, formatos legados e modelos locais ficam de fora.
 FROM python:3.11-slim
 
+ARG TOCA_BUILD_SHA=unknown
+ARG TOCA_BUILD_VERSION=dev
+
+LABEL org.opencontainers.image.title="TocaDoCoelho" \
+      org.opencontainers.image.revision="${TOCA_BUILD_SHA}" \
+      org.opencontainers.image.version="${TOCA_BUILD_VERSION}"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    TOCA_DATA_DIR=/data
+    TOCA_DATA_DIR=/data \
+    TOCA_APP_VERSION=${TOCA_BUILD_VERSION}
 
 WORKDIR /app
 
