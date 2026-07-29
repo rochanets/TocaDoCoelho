@@ -1,6 +1,6 @@
 # Plano de ação pós-Fase 8 — ambiente online, E2E e go-live
 
-Status do documento: **proposto para revisão e execução faseada**
+Status do documento: **aprovado para execução faseada**
 
 Data-base: 29/07/2026
 
@@ -142,15 +142,18 @@ resolvido por merge automático.
 
 ### Ações
 
-- [ ] Revisar este plano com o responsável pelo produto.
-- [ ] Confirmar por escrito:
+- [x] Revisar este plano com o responsável pelo produto.
+- [x] Confirmar por escrito:
   - `main` = desktop distribuído e canal atual de updates;
   - `Live` = candidato web;
   - nenhuma troca de default branch antes do E2E;
   - nenhuma fusão integral entre as branches antes da Fase G7.
-- [ ] Vincular este plano ao checklist da Fase 8.
-- [ ] Confirmar que PRs de web futuras usam `Live` como base.
-- [ ] Confirmar que correções urgentes de desktop continuam usando `main`.
+- [x] Vincular este plano ao checklist da Fase 8.
+- [x] Confirmar que PRs de web futuras usam `Live` como base.
+- [x] Confirmar que correções urgentes de desktop continuam usando `main`.
+
+Confirmação do contrato de branches registrada pelo responsável pelo produto
+em 29/07/2026.
 
 ### Critérios de aceite
 
@@ -301,6 +304,7 @@ infraestrutura seja criada de forma improvisada.
 
 - [ ] fornecedor/host e região;
 - [ ] capacidade inicial de CPU, RAM e disco;
+- [ ] perfil de carga esperado, margem de capacidade e método de validação;
 - [ ] IP e política de firewall;
 - [ ] acesso administrativo, MFA e lista de operadores;
 - [ ] estratégia de atualização do host e Docker;
@@ -324,6 +328,7 @@ adequada ou o ETL deve ser adaptado e testado antes da Fase G5.
 - [ ] destino criptografado fora do host;
 - [ ] credencial de acesso mínimo;
 - [ ] retenção e expiração;
+- [ ] RPO, RTO e prazo máximo comprovado para restore;
 - [ ] alerta para backup atrasado;
 - [ ] frequência do teste de restore.
 
@@ -348,6 +353,7 @@ adequada ou o ETL deve ser adaptado e testado antes da Fase G5.
 
 - [ ] coletor de logs;
 - [ ] métricas e healthchecks externos;
+- [ ] limites numéricos de disponibilidade, taxa de 5xx e latência p95;
 - [ ] canal de alertas;
 - [ ] retenção sem conteúdo sensível;
 - [ ] responsável por responder a alertas.
@@ -357,6 +363,9 @@ adequada ou o ETL deve ser adaptado e testado antes da Fase G5.
 - [ ] dono técnico;
 - [ ] aprovador de go-live;
 - [ ] janela de deploy e rollback;
+- [ ] indisponibilidade máxima e duração do soak;
+- [ ] fonte autoritativa antes, durante e depois do cutover;
+- [ ] ponto de não retorno e regra para congelamento de escritas;
 - [ ] duração de hypercare;
 - [ ] canal de incidente;
 - [ ] critérios de no-go.
@@ -1120,7 +1129,7 @@ Adicionar uma linha após cada fase. Não incluir segredos ou dados pessoais.
 
 | Fase | Status | Data | Branch/SHA | PR/evidência | Próxima ação |
 |---|---|---|---|---|---|
-| G0 | em revisão | 29/07/2026 | `codex/plano-acao-go-live` | documento local | revisar e versionar o plano |
+| G0 | concluída | 29/07/2026 | `codex/plano-acao-go-live` | PR `#299`; contrato confirmado | executar G1 |
 | G1 | pendente | — | — | — | portar PR `#251` para `Live` |
 | G2 | pendente | — | — | — | decisões de infraestrutura |
 | G3 | pendente | — | — | — | provisionar candidato |
