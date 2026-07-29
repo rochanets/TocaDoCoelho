@@ -1,48 +1,54 @@
 # G2 — decisões de infraestrutura para o go-live
 
-Status: **proposta técnica aguardando aprovações humanas**
+Status: **decisões parcialmente aprovadas; pendências corporativas registradas**
 
 Data: 29/07/2026
 
 Base avaliada: `Live` em `58dcdd3` (G1 integrada)
 
-Este documento não contém credenciais, IDs de tenant, emails, telefones,
-domínios reais ou strings de conexão. Nenhum recurso externo foi criado.
+Este documento não contém credenciais, IDs de tenant, números de telefone ou
+strings de conexão. O domínio e o email operacional aqui registrados são dados
+corporativos fornecidos pelo responsável. Nenhum recurso externo foi criado.
 
 ## 1. Resumo executivo
 
 A arquitetura recomendada preserva o stack já ensaiado na Fase 8:
 
-- uma VM Linux x86-64 no Azure, na região Brazil South, executa Docker Compose,
-  Nginx, web, WAHA e os volumes de arquivos/sessão;
-- Azure Database for PostgreSQL Flexible Server 16 substitui o container
-  PostgreSQL no ambiente online;
-- PostgreSQL e armazenamento de backup usam acesso privado pela VNet;
-- Azure Blob Storage recebe os dumps lógicos e checksums fora da VM;
-- Azure Key Vault é a fonte autoritativa dos segredos;
-- Azure Monitor, Log Analytics e Application Insights recebem métricas, logs,
-  probes e alertas;
+- o servidor Linux corporativo `soalv3tcd01` (`10.161.75.33`) executa Docker
+  Compose, Nginx, web, WAHA e os volumes de arquivos/sessão;
+- a borda corporativa publica HTTPS pelo IP `69.41.39.34`, via WAF/proxy/NAT a
+  ser confirmado por Redes e Segurança;
+- o usuário acessa somente uma URL HTTPS; a porta 3000 do Gunicorn permanece
+  exclusiva da rede Docker;
+- PostgreSQL 16 usa rede privada. A preferência é serviço corporativo
+  gerenciado com HA; se ele não existir, o fallback é PostgreSQL autogerido,
+  sem alegação de HA, acompanhado de backup externo e recuperação comprovada;
+- backups são copiados para armazenamento corporativo fora do host;
+- segredos e observabilidade usam os serviços corporativos disponíveis, ainda
+  a confirmar;
 - Microsoft Entra e Graph continuam usando Authorization Code + PKCE, sem
   `client_secret` no Toca;
-- apenas 80/443 ficam públicos; administração ocorre por caminho privado.
+- apenas HTTPS fica disponível ao usuário; administração ocorre por VPN/SSH.
 
-Essa escolha minimiza mudanças no runtime já testado e mantém host, banco,
-backup, identidade e observabilidade no mesmo fornecedor. Ela não está aprovada
-até o responsável confirmar orçamento, assinatura Azure, domínio, tenant,
-telefone e donos operacionais.
+Azure/Brazil South não será usado para hospedar a aplicação. A proposta Azure
+anterior existia porque ainda não havia informação sobre o servidor
+corporativo. O uso do Microsoft Entra para identidade não obriga que a
+aplicação seja hospedada no Azure.
 
 ## 2. Estado dos acessos
 
 | Acesso/autoridade | Estado em 29/07/2026 | Necessário para |
 |---|---|---|
 | Repositório GitHub | disponível | documentação e futuras PRs |
-| Assinatura/CLI Azure | não disponível ou não autenticada neste ambiente | cotação, G3 e recursos |
-| Zona DNS/domínio | não informado | subdomínio candidato e domínio final |
-| Administrador Entra | não informado | App Registration, consentimento e allowlist |
-| Mailbox de teste | não informada | Graph/E2E |
-| Telefone WAHA de teste | não informado | QR, envio e recebimento |
-| Canal de alertas | não informado | Action Group e incidentes |
-| Orçamento aprovado | não informado | contratação/provisionamento |
+| Servidor corporativo | disponível; preparação em conversa separada | runtime candidato |
+| VPN/SSH | disponível segundo o responsável | administração privada do host |
+| Portal Azure | acesso informado; não será usado para hospedagem | Entra/App Registration, se aplicável |
+| Zona DNS/domínio | acesso/canal informado; publicação em andamento | candidato e domínio final |
+| Administrador Entra | acesso administrativo informado; identidade do executor a confirmar | App Registration, consentimento e allowlist |
+| Mailbox de teste | disponível; identificador não registrado no Git | Graph/E2E |
+| Telefone WAHA de teste | disponível; número não registrado no Git | QR, envio e recebimento |
+| Canal de alertas | `hfnetto@stefanini.com` | alertas e incidentes |
+| Orçamento Azure | não aplicável à hospedagem | custos incrementais corporativos a confirmar |
 
 ## 3. Hospedagem, região e rede
 
@@ -51,46 +57,41 @@ fornecedor, região, capacidade inicial, rede e acesso administrativo.
 
 Opções consideradas:
 
-1. Azure VM + serviços gerenciados Azure;
-2. VPS de outro fornecedor + banco/backup de fornecedores separados;
-3. host único com PostgreSQL autogerido.
+1. servidor Linux corporativo;
+2. Azure VM + serviços gerenciados Azure;
+3. VPS de outro fornecedor.
 
-Escolha:
-**proposta — opção 1**, Azure em Brazil South. Usar VM Linux x86-64 de uso
-geral com 4 vCPU e 16 GiB de RAM (família D, SKU exato condicionado à
-disponibilidade e cota), disco de sistema de 64 GiB e disco de dados Premium
-SSD de 128 GiB para `/data`, volumes Docker e staging de backups. Não usar ARM
-na primeira implantação, pois todas as dependências atuais foram validadas em
-x86-64.
+Escolha aprovada:
+**opção 1**, servidor corporativo `soalv3tcd01`, IP privado `10.161.75.33`.
+Arquitetura, CPU, memória e discos ainda serão inventariados antes da G3. A
+primeira implantação deve usar x86-64, pois as dependências atuais foram
+validadas nessa arquitetura.
 
 Rede proposta:
 
-- VNet dedicada ao candidato;
-- subnet da VM separada da subnet delegada do PostgreSQL;
+- administração por VPN/SSH, sem SSH público;
 - PostgreSQL sem endpoint público;
-- IP público estático somente no Nginx;
-- NSG público permitindo apenas TCP 80/443;
-- administração via Azure Bastion ou VPN, sem SSH público permanente;
-- saída HTTPS permitida para Entra, Graph, WhatsApp, Azure Monitor, registro de
+- IP público `69.41.39.34` terminado/encaminhado pela borda corporativa;
+- entrada pública somente HTTPS/TCP 443; eventual TCP 80 apenas para
+  redirecionamento ou validação de certificado, se Segurança aprovar;
+- porta 3000 somente na rede Docker, sem publicação no host;
+- saída HTTPS permitida para Entra, Graph, WhatsApp, monitoramento, registro de
   imagens e dependências já autorizadas;
-- atualização crítica/de segurança pelo Azure Update Manager, em janela
+- atualização crítica/de segurança pelo mecanismo corporativo, em janela
   controlada e com healthcheck após reboot.
 
-Perfil de carga de partida:
-até 25 usuários cadastrados, 10 simultâneos, dois workers Gunicorn e até
-5 requisições por segundo sustentadas. Essa hipótese precisa ser substituída
-pelos números reais antes do teste de capacidade.
+Perfil de carga informado:
+15 usuários cadastrados e até 6 simultâneos. Dois workers Gunicorn são o ponto
+de partida, sujeitos a teste de carga e observação de CPU, memória, disco e p95.
 
 Responsável:
-**pendente — dono técnico e administrador da assinatura Azure**.
+Henrique Netto — dono técnico e responsável pelo servidor/aplicação.
 
 Data:
 29/07/2026, proposta.
 
 Evidência/contrato:
 
-- [VMs Azure série D](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/d-family)
-- [patching automático de VMs](https://learn.microsoft.com/en-us/azure/virtual-machines/automatic-vm-guest-patching)
 - `docker-compose.production.yml`
 - `docs/fase-8-runtime-producao.md`
 
@@ -100,9 +101,8 @@ transcrição também podem pressionar CPU/RAM. O tamanho inicial só pode ser
 aceito após teste de carga e observação de CPU, memória, disco e p95.
 
 Plano alternativo:
-subir a VM para 8 vCPU/32 GiB sem mudar o desenho; se Azure não for aprovado,
-usar VPS x86-64 com capacidade equivalente e manter banco/backup gerenciados,
-desde que os mesmos gates de rede, TLS e restore sejam comprovados.
+solicitar expansão de CPU/RAM/disco ou outro host corporativo se o inventário e
+o teste de capacidade não atenderem aos gates.
 
 ## 4. PostgreSQL
 
@@ -111,19 +111,21 @@ modelo, major, capacidade, TLS, rede, HA, manutenção e papéis.
 
 Opções consideradas:
 
-1. Azure Database for PostgreSQL Flexible Server;
-2. PostgreSQL 16 em container na VM;
-3. PostgreSQL gerenciado por outro fornecedor.
+1. PostgreSQL 16 corporativo gerenciado, com HA;
+2. PostgreSQL 16 autogerido em host/nó separado, com réplica e failover;
+3. PostgreSQL 16 no mesmo servidor da aplicação.
 
 Escolha:
-**proposta — opção 1**, PostgreSQL Flexible Server 16, acesso privado na mesma
-VNet, TLS obrigatório com validação de certificado, armazenamento inicial de
-64 GiB com crescimento automático e tier General Purpose de 2 vCore/8 GiB.
+**preferência aprovada — opção 1**, caso a empresa ofereça o serviço. Henrique
+Netto confirmará com Infraestrutura/DBA a disponibilidade, endpoint privado,
+capacidade, TLS, manutenção, backups e failover. A opção 2 é aceitável se
+operada pela infraestrutura corporativa.
 
-Para o candidato, HA fica desabilitada para reduzir custo. Para produção, a
-proposta é habilitar HA com redundância de zona; se a região/SKU não tiver
-capacidade, usar HA na mesma zona e registrar o risco. A manutenção deve ficar
-fora da janela operacional aprovada.
+A opção 3 pode atender à carga de 15/6, mas é fallback e **não constitui HA**:
+uma falha do host derruba simultaneamente aplicação e banco. Se for a única
+opção corporativa disponível, o risco precisa ser aceito explicitamente antes
+da produção, com recuperação externa capaz de cumprir RPO/RTO. A manutenção
+deve ficar fora da janela operacional.
 
 Papéis separados:
 
@@ -136,28 +138,25 @@ Revogar criação no schema `public` para `PUBLIC` e conceder somente os
 privilégios necessários a cada papel.
 
 Responsável:
-**pendente — administrador de banco/assinatura**.
+Henrique Netto — responsável técnico/PostgreSQL e coordenador com
+Infraestrutura/DBA.
 
 Data:
 29/07/2026, proposta.
 
 Evidência/contrato:
 
-- [controle de acesso do Flexible Server](https://learn.microsoft.com/en-us/azure/postgresql/security/security-access-control)
-- [rede privada do Flexible Server](https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private)
-- [TLS do Flexible Server](https://learn.microsoft.com/en-us/azure/postgresql/security/security-tls-how-to-connect)
-- [opções de computação](https://learn.microsoft.com/pt-br/azure/postgresql/flexible-server/concepts-compute)
 - a CI do Toca usa PostgreSQL 16.
 
 Risco:
-conexões da aplicação precisam usar `sslmode=verify-full` e a CA recomendada.
-HA aproximadamente duplica a parcela de compute do banco e depende de cota e
-capacidade regional.
+HA exige pelo menos outro nó/domínio de falha ou um serviço gerenciado; ela não
+pode ser obtida apenas configurando o PostgreSQL no mesmo servidor. O endpoint
+de banco deve permanecer privado e o TLS deve seguir a política corporativa.
 
 Plano alternativo:
-PostgreSQL 16 autogerido somente se custo impedir o serviço gerenciado, com
-disco dedicado, TLS, monitoramento, backup externo, PITR equivalente e dono
-operacional explícito. Não é a recomendação.
+PostgreSQL 16 autogerido no host, com disco adequado, monitoramento, backup
+externo, arquivamento contínuo de WAL/PITR e restore comprovado. Essa opção
+prioriza recuperação, não disponibilidade, e requer aceite formal do risco.
 
 ## 5. Estratégia de privilégio do ETL
 
@@ -170,11 +169,11 @@ Opções consideradas:
 2. conceder `SET` específico ao papel temporário, se o fornecedor permitir;
 3. adaptar o ETL para ordenar tabelas por dependências e manter FKs ativas.
 
-Escolha:
-**proposta — opção 3 antes da G5**. Não depender de superuser no ambiente
-gerenciado. O schema atual possui 57 tabelas, 60 relações de FK e nenhum ciclo
-no grafo gerado a partir das migrations de `Live`; portanto, uma ordenação
-topológica é tecnicamente viável. O ETL adaptado deve:
+Escolha aprovada:
+**opção 3 antes da G5**. Não depender de superuser nem de desativação global de
+integridade referencial. O schema atual possui 57 tabelas, 60 relações de FK e
+nenhum ciclo no grafo gerado a partir das migrations de `Live`; portanto, uma
+ordenação topológica é tecnicamente viável. O ETL adaptado deve:
 
 - recusar destino não vazio;
 - executar `TRUNCATE ... CASCADE` somente no banco descartável/autorizado;
@@ -185,11 +184,11 @@ topológica é tecnicamente viável. O ETL adaptado deve:
 - remover/revogar `toca_etl` após o uso.
 
 O PostgreSQL permite alterar `session_replication_role` somente a superuser ou
-a quem recebeu privilégio `SET`. O Azure não entrega superuser ao cliente; por
-isso a opção 2 pode ser testada no candidato, mas não é o caminho principal.
+a quem recebeu privilégio `SET`. Mesmo em banco autogerido, reduzir esse
+privilégio torna o processo mais seguro e portátil.
 
 Responsável:
-**pendente — dono técnico da aplicação**.
+Henrique Netto — dono técnico da aplicação.
 
 Data:
 29/07/2026, proposta.
@@ -197,12 +196,11 @@ Data:
 Evidência/contrato:
 
 - [PostgreSQL 16 — `session_replication_role`](https://www.postgresql.org/docs/16/runtime-config-client.html#GUC-SESSION-REPLICATION-ROLE)
-- [restrição de superuser no Azure](https://learn.microsoft.com/en-us/azure/postgresql/security/security-access-control)
 - `scripts/etl_sqlite_to_postgres.py`
 
 Risco:
-o ETL atual é bloqueante para Azure enquanto depender de superuser. A adaptação
-é uma mudança de código e precisa de PR/testes próprios antes da G5.
+o ETL atual depende de privilégio elevado e desativa controles de integridade.
+A adaptação é uma mudança de código e precisa de PR/testes próprios antes da G5.
 
 Plano alternativo:
 se o fornecedor comprovar e auditar `GRANT SET ON PARAMETER
@@ -216,52 +214,52 @@ destino, criptografia, retenção, RPO/RTO, alerta e restore.
 
 Opções consideradas:
 
-1. somente backup gerenciado do PostgreSQL;
-2. PITR gerenciado + dumps lógicos em Azure Blob Storage;
-3. volume de backup somente na VM.
+1. PITR do serviço PostgreSQL corporativo + dumps lógicos externos;
+2. arquivamento contínuo de WAL/PITR autogerido + dumps lógicos externos;
+3. volume de backup somente no mesmo host.
 
-Escolha:
-**proposta — opção 2**.
+Escolha aprovada:
+**opção 1 se houver PostgreSQL corporativo gerenciado; caso contrário, opção
+2**. A opção 3 isolada é proibida para produção.
 
-- PITR do PostgreSQL: retenção de 14 dias;
+- PITR/arquivamento de WAL: retenção mínima de 14 dias;
 - dumps `pg_dump` + SHA-256: a cada 24 horas;
-- destino: container privado em Storage Account separado da VM;
-- redundância proposta: GRS para produção e LRS/ZRS para candidato;
+- destino: armazenamento corporativo criptografado e separado do servidor;
 - retenção lógica: 35 backups diários; retenção mensal/longa depende de
   política corporativa ainda não informada;
-- soft delete/versionamento habilitados;
-- lifecycle policy para expiração;
-- credencial de mínimo acesso via identidade gerenciada;
+- imutabilidade, versionamento ou proteção contra exclusão, se disponível;
+- expiração automatizada conforme retenção;
+- credencial de mínimo acesso;
+- envio/arquivamento de WAL monitorado para limitar a perda a 15 minutos;
 - alerta quando o último dump externo tiver mais de 26 horas;
 - restore lógico em banco descartável mensal e antes de cada go-live.
 
 Objetivos propostos:
 
-- RPO operacional: 15 minutos usando PITR;
+- RPO operacional aprovado: 15 minutos usando PITR/WAL;
 - RPO do backup externo independente: 24 horas;
-- RTO: 4 horas para restaurar, reconciliar e redirecionar a aplicação.
+- RTO aprovado: 4 horas para restaurar, reconciliar e redirecionar a aplicação.
 
 Responsável:
-**pendente — dono técnico e responsável por continuidade**.
+Henrique Netto — dono técnico e responsável por continuidade.
 
 Data:
 29/07/2026, proposta.
 
 Evidência/contrato:
 
-- [backup/PITR do Flexible Server](https://learn.microsoft.com/en-us/azure/postgresql/backup-restore/concepts-backup-restore)
-- [lifecycle do Azure Blob Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/lifecycle-management-overview)
 - `deploy/postgres/backup-once.sh`
 - `deploy/postgres/restore-verify.sh`
 
 Risco:
-o repositório hoje só grava dumps no volume `postgres_backups`; a cópia para
-Blob e seu alerta ainda precisam ser implementados/provados na G3. Backups
-gerenciados não são exportáveis, então não substituem o dump lógico externo.
+o repositório hoje só grava dumps no volume `postgres_backups`, que pode estar
+no mesmo host. O destino corporativo externo, o arquivamento de WAL e seus
+alertas ainda precisam ser definidos e provados na G3. Snapshot do host não
+substitui backup de banco e teste de restore.
 
 Plano alternativo:
-storage S3 compatível em conta/fornecedor separado, com criptografia,
-versionamento, lifecycle e restore comprovado.
+storage S3 compatível ou compartilhamento corporativo protegido, com
+criptografia, versionamento/imutabilidade, retenção e restore comprovado.
 
 ## 7. DNS, TLS e segredos
 
@@ -270,40 +268,42 @@ subdomínios, certificado, renovação e secret store.
 
 Opções consideradas:
 
-1. manter o provedor DNS atual e usar Let's Encrypt/Certbot no Nginx;
-2. mover a zona para Azure DNS;
-3. usar proxy/CDN gerenciado na borda.
+1. publicação pela borda/WAF corporativa e DNS existente;
+2. certificado público diretamente no Nginx;
+3. migração da zona para outro provedor.
 
-Escolha:
-**proposta — opção 1**. Não mover a zona DNS nesta migração.
+Escolha aprovada:
+**opção 1**. Não mover a zona DNS nesta migração.
 
-- candidato: `toca-candidato.<dominio-a-confirmar>`;
-- produção: `toca.<dominio-a-confirmar>`;
-- certificado Let's Encrypt separado para o candidato;
-- renovação automática por timer e alerta de expiração;
-- Azure Key Vault como fonte dos segredos;
-- identidade gerenciada da VM com RBAC mínimo;
+- candidato recomendado: `toca-candidato.stefanini.com`;
+- produção confirmada: `toca.stefanini.com`;
+- IP público informado: `69.41.39.34`;
+- certificado publicamente confiável, preferencialmente gerenciado na borda
+  corporativa, com renovação e alerta de expiração;
+- fonte corporativa de segredos a confirmar;
 - materialização do arquivo de ambiente fora do checkout, com permissão `0600`;
 - certificados montados no Nginx por caminho fora do Git.
 
 Responsável:
-**pendente — dono do domínio/DNS e administrador Azure**.
+Henrique Netto — coordenador técnico; execução da publicação pela equipe
+corporativa de Redes/Segurança.
 
 Data:
 29/07/2026, proposta.
 
 Evidência/contrato:
 
-- [Key Vault para VM Linux](https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/key-vault-linux)
 - `.env.production.example`
 - `deploy/nginx/toca.conf`
 
 Risco:
-o domínio e seu provedor não foram informados. Sem acesso DNS não há G3.
+o nome candidato ainda precisa ser confirmado e o chamado corporativo precisa
+confirmar TLS, WAF/proxy, healthcheck e o backend. A porta 3000 não deve ser
+exposta.
 
 Plano alternativo:
-Azure DNS se o responsável decidir delegar a zona; certificado gerenciado por
-um proxy de borda somente após validar cookies, redirects Entra e `ProxyFix`.
+certificado público no Nginx somente se a arquitetura corporativa exigir,
+mantendo cookies, redirects Entra e `ProxyFix` validados.
 
 ## 8. Microsoft Entra e Outlook Graph
 
@@ -321,9 +321,10 @@ Escolha:
 **proposta — opção 1**. App Registration de produção single-tenant,
 Authorization Code + PKCE, sem `client_secret` no Toca, com redirects exatos:
 
-- `https://toca-candidato.<dominio>/api/auth/callback`;
-- `https://toca-candidato.<dominio>/api/outlook/oauth/callback`;
-- redirects equivalentes do domínio final somente quando a G7 autorizar.
+- `https://toca-candidato.stefanini.com/api/auth/callback`;
+- `https://toca-candidato.stefanini.com/api/outlook/oauth/callback`;
+- redirects equivalentes em `https://toca.stefanini.com` somente quando a G7
+  autorizar.
 
 Permissões delegadas:
 `openid profile email offline_access User.Read Mail.Read Mail.Send`.
@@ -334,7 +335,11 @@ negada, todos de teste/autorizados. Mailbox de teste deve poder ler e enviar
 uma mensagem controlada.
 
 Responsável:
-**pendente — administrador do tenant e aprovador de consentimento**.
+**pendente de nome** — pessoa/equipe com permissão administrativa no Microsoft
+Entra para criar/alterar o App Registration, cadastrar redirects, revisar
+permissões Graph e conceder consentimento administrativo. Henrique Netto
+coordena a solicitação; ele pode assumir também este papel somente se possuir
+essas permissões no tenant.
 
 Data:
 29/07/2026, proposta.
@@ -345,8 +350,9 @@ Evidência/contrato:
 - `docs/fase-8-runtime-producao.md`
 
 Risco:
-tenant, administrador, política de consentimento, mailbox e usuários de teste
-não foram informados.
+o acesso e a mailbox de teste foram informados como disponíveis, mas ainda
+faltam o executor Entra, a política de consentimento e a confirmação dos
+usuários de teste. IDs e contas não devem ser registrados neste documento.
 
 Plano alternativo:
 confidential client/certificado somente se a política do tenant exigir; isso
@@ -366,9 +372,9 @@ Opções consideradas:
 Escolha:
 **proposta — opção 1** na G3–G6.
 
-- telefone e responsável dedicados ao teste;
+- telefone/número dedicado ao teste, informado como disponível;
 - janela de QR de 30 minutos com responsável disponível;
-- volume `waha_sessions` no disco de dados criptografado da VM;
+- volume `waha_sessions` em disco criptografado do servidor;
 - porta privada e Dashboard/Swagger desligados;
 - snapshot frio semanal do volume, com WAHA parado e acesso restrito;
 - perda da sessão: tentar restore; novo QR somente com autorização;
@@ -378,7 +384,10 @@ Escolha:
 - nenhuma mensagem em massa no candidato.
 
 Responsável:
-**pendente — custodiante do telefone e dono operacional**.
+**pendente de confirmação — custodiante do telefone**. É a pessoa que mantém
+posse/controle do aparelho e SIM, consegue abrir o WhatsApp, escanear o QR e
+recuperar ou autorizar nova sessão. Henrique Netto pode assumir o papel se o
+telefone estiver sob seu controle.
 
 Data:
 29/07/2026, proposta.
@@ -389,8 +398,9 @@ Evidência/contrato:
 - `docker-compose.production.yml`
 
 Risco:
-telefone, custodiante e janela de QR não foram informados. Snapshot de sessão
-contém credenciais de pareamento e deve ser tratado como segredo.
+o telefone foi informado como disponível, mas seu custodiante ainda precisa
+ser confirmado. Snapshot de sessão contém credenciais de pareamento e deve ser
+tratado como segredo.
 
 Plano alternativo:
 refazer QR com o mesmo número de teste. Não usar mocks como prova da G6.
@@ -402,20 +412,20 @@ coletor, métricas, probes, retenção, alertas e canal.
 
 Opções consideradas:
 
-1. Azure Monitor + Log Analytics + Application Insights;
+1. plataforma corporativa de monitoramento/logs;
 2. stack Prometheus/Loki/Grafana autogerida;
 3. serviço externo de uptime/logs.
 
 Escolha:
-**proposta — opção 1**.
+**preferência — opção 1**, a confirmar com a equipe do servidor.
 
-- VM Insights para CPU, memória, disco e rede;
-- métricas nativas do Flexible Server;
-- Azure Monitor Agent e DCR para coletar JSON do Docker, com transformação que
-  preserve `request_id` e descarte payloads não permitidos;
+- métricas de CPU, memória, disco e rede;
+- métricas do PostgreSQL;
+- coleta estruturada dos logs Docker, preservando `request_id` e descartando
+  payloads não permitidos;
 - retenção inicial de logs: 30 dias;
-- Application Insights Availability Tests externos em `/healthz` e `/readyz`;
-- Action Group com email e um segundo canal a confirmar;
+- probes externos ou corporativos em `/healthz` e `/readyz`;
+- alertas para `hfnetto@stefanini.com`; segundo canal rápido recomendado;
 - teste de alerta obrigatório antes do aceite da G3.
 
 Limiares iniciais:
@@ -429,23 +439,19 @@ Limiares iniciais:
 - WAHA indisponível por 5 minutos.
 
 Responsável:
-**pendente — plantonista/dono operacional e destinatários do Action Group**.
+Henrique Netto — plantonista/dono operacional e destinatário dos alertas.
 
 Data:
 29/07/2026, proposta.
 
 Evidência/contrato:
 
-- [VM Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/vm/vminsights-performance)
-- [coleta de JSON de VM](https://learn.microsoft.com/en-us/azure/azure-monitor/vm/data-collection-log-json)
-- [Availability Tests](https://learn.microsoft.com/en-us/azure/azure-monitor/app/availability)
-- [Action Groups](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups)
 - `docs/fase-8-operacao-duravel.md`
 
 Risco:
-logs de container precisam de DCR/transformação testada; não enviar bodies,
-headers de autenticação, mensagens ou documentos. O canal de alerta ainda não
-foi definido.
+o serviço corporativo ainda não foi identificado. Não enviar bodies, headers
+de autenticação, mensagens ou documentos aos logs. Email é o canal registrado,
+mas um segundo canal rápido reduz o risco de atraso fora do expediente.
 
 Plano alternativo:
 serviço externo de uptime mais coletor gerenciado de logs, mantendo os mesmos
@@ -462,10 +468,11 @@ proposta operacional:
 - disponibilidade mensal alvo: 99,5% no primeiro mês;
 - p95 alvo: abaixo de 2 segundos;
 - taxa de 5xx: abaixo de 2%;
-- soak do candidato: 72 horas;
-- indisponibilidade máxima do cutover: 2 horas;
-- RTO: 4 horas; RPO: 15 minutos;
-- hypercare: 5 dias úteis;
+- soak do candidato aprovado: 72 horas;
+- indisponibilidade máxima aprovada para o cutover: 2 horas, com meta interna
+  de conclusão em até 60 minutos;
+- RTO aprovado: 4 horas; RPO aprovado: 15 minutos;
+- hypercare aprovada: 5 dias úteis;
 - desktop é fonte autoritativa até o congelamento formal da G8;
 - após copiar fontes, calcular checksums e iniciar o ETL final, não reabrir
   escritas no desktop sem decisão de rollback;
@@ -481,65 +488,77 @@ desktop/updater não protegido.
 
 Responsáveis:
 
-- dono técnico: **pendente**;
-- aprovador do go-live: **pendente**;
-- administrador Azure/PostgreSQL: **pendente**;
+- dono técnico: Henrique Netto;
+- aprovador do go-live: Henrique Netto;
+- responsável técnico pelo servidor/PostgreSQL: Henrique Netto;
 - administrador Entra: **pendente**;
 - custodiante WAHA: **pendente**;
-- plantonista/hypercare: **pendente**.
+- plantonista/hypercare: Henrique Netto.
 
 Janela:
-**pendente — data, horário e timezone America/Sao_Paulo**.
+é o período reservado para congelar gravações no desktop, fazer backup final,
+executar o ETL, validar os dados, ativar a URL e, se necessário, fazer rollback.
+Proposta de referência: 2 horas fora do expediente comercial,
+19:00–21:00 em `America/Sao_Paulo`. A data e o horário serão aprovados na G7.
 
 Canal de incidente:
-**pendente**.
+`hfnetto@stefanini.com`. Recomenda-se adicionar um canal síncrono corporativo
+(Teams/telefone) antes do go-live.
 
 Evidência/contrato:
 `docs/plano-acao-pos-fase-8-go-live.md`.
 
 Risco:
-sem nomes, janela e canal, alertas e rollback não têm executor.
+Entra e WAHA ainda não têm responsáveis nominalmente confirmados. Uma janela
+base foi proposta, mas data e horário só serão fechados na G7.
 
 Plano alternativo:
 adiar G3 até os responsáveis aceitarem explicitamente seus papéis.
 
 ## 12. Orçamento e aprovação
 
-O orçamento não foi aprovado nesta execução. A cotação deve incluir:
+Não haverá contratação de VM Azure para hospedar o Toca: será usado o servidor
+corporativo existente. Portanto, não se aplica um teto mensal Azure para o
+runtime.
 
-- VM 4 vCPU/16 GiB, discos, IP e tráfego;
-- Bastion ou VPN;
-- Flexible Server 2 vCore/8 GiB, 64 GiB, backup e HA;
-- Storage Account/Blob e operações;
-- Key Vault;
-- Log Analytics, Application Insights e alertas;
-- DNS, se migrado;
-- margem de 30% para logs, crescimento e restore temporário.
+Ainda devem ser identificados eventuais custos/chargeback corporativos de:
 
-Usar a [Calculadora de Preços do Azure](https://azure.microsoft.com/pricing/calculator/)
-na assinatura e moeda aprovadas. Guardar a URL/estimativa sem dados financeiros
-sensíveis no PR ou sistema de compras.
+- PostgreSQL gerenciado ou segundo nó para HA;
+- armazenamento externo de backups;
+- monitoramento e retenção de logs;
+- WAF/proxy, certificado e DNS;
+- expansão de CPU, memória ou disco do servidor.
 
 Teto mensal:
-**pendente**.
+**não aplicável à hospedagem Azure; custos incrementais corporativos pendentes
+de identificação**.
 
 Aprovador de custo:
-**pendente**.
+Henrique Netto para custos sob sua alçada; contratação ou chargeback
+corporativo segue a aprovação interna aplicável.
 
 ## 13. Aprovações necessárias para concluir a G2
 
-- [ ] confirmar Azure e Brazil South;
-- [ ] confirmar teto mensal e aprovador de custo;
-- [ ] confirmar domínio e os dois subdomínios;
-- [ ] confirmar tenant, administrador Entra e mailbox de teste;
-- [ ] confirmar número/custodiante WAHA;
-- [ ] confirmar os seis responsáveis operacionais;
-- [ ] confirmar janela, canal de incidente e canal de alertas;
-- [ ] confirmar carga esperada ou substituir a hipótese 25/10;
-- [ ] aprovar RPO 15 min, RTO 4 h, soak 72 h, downtime 2 h e hypercare 5 dias;
-- [ ] aprovar HA no PostgreSQL produtivo;
-- [ ] aprovar adaptação do ETL antes da G5;
-- [ ] anexar cotação aprovada.
+- [x] substituir Azure/Brazil South pelo servidor corporativo;
+- [x] registrar que não há teto mensal Azure para hospedagem;
+- [ ] confirmar capacidade e armazenamento do servidor;
+- [ ] confirmar `toca-candidato.stefanini.com` para candidato;
+- [x] confirmar `toca.stefanini.com` para produção;
+- [ ] confirmar tenant e nome do administrador Entra;
+- [x] confirmar disponibilidade da mailbox de teste;
+- [x] confirmar disponibilidade do telefone/número WAHA de teste;
+- [ ] confirmar custodiante WAHA;
+- [ ] confirmar serviço corporativo PostgreSQL/HA ou aceitar formalmente o
+  fallback sem HA;
+- [ ] confirmar destino corporativo externo de backup e monitoramento;
+- [x] confirmar responsáveis técnico, PostgreSQL, go-live e hypercare;
+- [ ] confirmar responsáveis Entra e WAHA;
+- [x] registrar janela de referência, canal de incidente e canal de alertas;
+- [x] confirmar carga esperada de 15 cadastrados/6 simultâneos;
+- [x] aprovar RPO 15 min, RTO 4 h, soak 72 h, downtime 2 h e hypercare 5 dias;
+- [x] aprovar HA no PostgreSQL produtivo, condicionada a serviço/nó que a
+  implemente de fato;
+- [x] aprovar adaptação do ETL antes da G5.
 
 Enquanto algum item permanecer aberto, a G2 está **parcial** e a G3 não está
 liberada.
