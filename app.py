@@ -13132,11 +13132,19 @@ def _whatsapp_sync_async(task_id, period_days):
                     timeout=25
                 )
                 if msg_resp.status_code != 200:
+                    logger.debug(
+                        '[WhatsApp Sync] WAHA retornou HTTP %s ao consultar conversa.',
+                        msg_resp.status_code,
+                    )
                     skipped += 1
                     continue
                 raw = msg_resp.json()
                 messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    '[WhatsApp Sync] Falha ao consultar WAHA (%s).',
+                    type(exc).__name__,
+                )
                 skipped += 1
                 continue
 
