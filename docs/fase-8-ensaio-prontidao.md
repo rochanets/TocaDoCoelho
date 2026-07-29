@@ -42,6 +42,8 @@ O rollback ensaiado troca somente a imagem web. Migrations não são revertidas:
 o schema da Fase 8 segue a estratégia expand/contract e precisa permanecer
 compatível com a imagem anterior. A imagem anterior é construída do SHA real
 da base do PR, não apenas uma segunda tag do mesmo candidato.
+Por isso, `/readyz` rejeita schema atrasado, mas aceita e registra schema mais
+novo que o código durante o rollback.
 
 Em produção:
 

@@ -27,6 +27,8 @@ def _operations_database_status():
             'migration_version': applied_version,
             'expected_migration_version': expected_version,
             'migrations_current': applied_version == expected_version,
+            'migrations_compatible': applied_version >= expected_version,
+            'schema_ahead': applied_version > expected_version,
             'interrupted_tasks': int(_first_column(interrupted, 'total') or 0),
             'ambiguous_scheduled_sends': int(
                 _first_column(ambiguous_sends, 'total') or 0
@@ -62,7 +64,7 @@ def admin_operations_status():
     waha = _operations_waha_status()
     overall = (
         'ready'
-        if database['migrations_current'] and waha['status'] in {
+        if database['migrations_compatible'] and waha['status'] in {
             'ready',
             'not_configured',
         }

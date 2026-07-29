@@ -45,6 +45,38 @@ def test_readyz_rejects_schema_behind_deployed_code(client):
     }
 
 
+def test_readyz_accepts_schema_ahead_for_expand_contract_rollback(
+    client,
+    monkeypatch,
+):
+    latest = max(version for version, _, _ in toca.SCHEMA_MIGRATIONS)
+    conn = toca.get_db()
+    conn.execute(
+        '''INSERT INTO schema_version (version, name, applied_at)
+           VALUES (?, ?, CURRENT_TIMESTAMP)''',
+        (latest + 1, 'future_expand_contract'),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(
+        toca,
+        '_operations_waha_status',
+        lambda: {'status': 'ready', 'http_status': 200},
+    )
+
+    readiness = client.get('/readyz')
+    operations = client.get('/api/admin/operations/status')
+
+    assert readiness.status_code == 200
+    assert readiness.get_json() == {'status': 'ready'}
+    assert operations.status_code == 200
+    payload = operations.get_json()
+    assert payload['status'] == 'ready'
+    assert payload['database']['migrations_current'] is False
+    assert payload['database']['migrations_compatible'] is True
+    assert payload['database']['schema_ahead'] is True
+
+
 def test_production_compose_orders_migration_and_backup_services():
     root = Path(__file__).resolve().parents[1]
     compose = yaml.safe_load(
@@ -180,6 +212,8 @@ def test_admin_operations_status_is_read_only_and_secret_free(
     payload = response.get_json()
     assert payload['status'] == 'ready'
     assert payload['database']['migrations_current'] is True
+    assert payload['database']['migrations_compatible'] is True
+    assert payload['database']['schema_ahead'] is False
     assert payload['database']['backend'] == 'sqlite'
     assert payload['waha'] == {'status': 'ready', 'http_status': 200}
     assert 'DATABASE_URL' not in json.dumps(payload)
