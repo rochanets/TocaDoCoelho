@@ -91,8 +91,9 @@ seguir a política interna.
 ## Probes, painel e alertas mínimos
 
 - `GET /healthz`: processo vivo, sem banco;
-- `GET /readyz`: consulta real ao banco e confirmação da versão esperada do
-  schema;
+- `GET /readyz`: consulta real ao banco e confirmação de schema igual ou mais
+  recente que o esperado. Schema atrasado bloqueia; schema adiantado permanece
+  pronto para permitir rollback expand/contract;
 - `GET /api/admin/operations/status`: versão do app/schema, uptime, instância,
   estado WAHA, tarefas interrompidas e envios ambíguos, sem segredos;
 - `GET /api/admin/jobs/status`: liderança, heartbeat e claims da F8.2;

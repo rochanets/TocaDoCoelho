@@ -212,7 +212,7 @@ def readyz():
         expected_version = max(
             version for version, _, _ in SCHEMA_MIGRATIONS
         )
-        if applied_version != expected_version:
+        if applied_version < expected_version:
             logger.warning(
                 '[Readiness] Schema desatualizado: versão %s de %s.',
                 applied_version,
@@ -222,6 +222,13 @@ def readyz():
                 'status': 'not_ready',
                 'reason': 'schema_outdated',
             }), 503
+        if applied_version > expected_version:
+            logger.info(
+                '[Readiness] Schema à frente do código: versão %s de %s; '
+                'compatibilidade expand/contract habilitada para rollback.',
+                applied_version,
+                expected_version,
+            )
         return jsonify({'status': 'ready'}), 200
     except Exception:
         logger.warning('[Readiness] Banco principal indisponível.', exc_info=True)

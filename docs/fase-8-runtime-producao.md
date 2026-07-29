@@ -101,7 +101,9 @@ Entra autorizado e ficam como critério da F8.5.
   demais integrações HTTPS de saída.
 - `/healthz` responde enquanto o processo Flask estiver servindo.
 - `/readyz` responde 200 somente quando uma consulta ao banco funciona e
-  `schema_version` corresponde ao código implantado.
+  `schema_version` é igual ou superior ao esperado pelo código. Versão inferior
+  bloqueia o tráfego; versão superior é compatível com rollback expand/contract
+  e aparece como `schema_ahead` no status administrativo.
 - O healthcheck do container web usa `/readyz`; o do Nginx usa `/healthz`
   através do TLS.
 
