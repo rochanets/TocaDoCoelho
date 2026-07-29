@@ -122,12 +122,12 @@ Instrução exata para o próximo chat:
 | G0 | Plano e contrato de branches registrados | `Live` | documento revisado |
 | G1 | Correções do PR `#251` portadas para web | `Live` | PR e CI verdes |
 | G2 | Arquitetura e fornecedores de produção decididos | nenhuma mudança de código obrigatória | decisões e responsáveis aprovados |
-| G3 | Ambiente online não produtivo provisionado e seguro | infraestrutura | probes, TLS, DB e observabilidade |
+| G3 | Ambiente online não produtivo provisionado e seguro | infraestrutura | healthchecks, TLS, DB, backup e logs |
 | G4 | Candidato de `Live` implantado online | `Live` | stack saudável e SHA conferido |
 | G5 | Migração de dados ensaiada e reconciliada | cópias descartáveis | contagens, FKs, arquivos e usuários |
 | G6 | E2E online concluído | ambiente candidato | matriz E2E integralmente aprovada |
 | G7 | Go/no-go e estratégia de branches aprovados | decisão humana | autorização formal |
-| G8 | Cutover produtivo executado | imagem já testada | smoke real e monitoramento |
+| G8 | Cutover produtivo executado | imagem já testada | smoke real e checklist manual |
 | G9 | Hypercare encerrado e operação transferida | produção | estabilidade e runbooks aceitos |
 
 ---
@@ -283,8 +283,8 @@ Também validar:
 Leia docs/plano-acao-pos-fase-8-go-live.md e execute somente a Fase G2.
 Confirme primeiro que a Fase G1 está mergeada em Live e verde. Não altere
 main, Live, default branch, updater, DNS ou serviços. Conduza e documente as
-decisões de host, PostgreSQL, backup externo, DNS/TLS, Entra, WAHA,
-observabilidade, responsáveis e orçamento. Não invente fornecedor nem
+decisões de host, PostgreSQL, backup/recuperação, DNS/TLS, Entra, WAHA,
+visibilidade operacional, responsáveis e orçamento. Não invente fornecedor nem
 credencial: registre opções, decisão, dono e evidência; pare nas decisões que
 dependem do usuário.
 ```
@@ -308,7 +308,8 @@ infraestrutura seja criada de forma improvisada.
 - [ ] IP e política de firewall;
 - [ ] acesso administrativo, MFA e lista de operadores;
 - [ ] estratégia de atualização do host e Docker;
-- [ ] subdomínio de candidato e domínio final.
+- [ ] hostname de candidato e domínio final; eles podem coincidir somente com
+  acesso restrito até o go-live.
 
 #### PostgreSQL
 
@@ -323,13 +324,13 @@ O ETL atual usa `SET session_replication_role = 'replica'`, normalmente
 restrito a superuser. O fornecedor precisa permitir uma função temporária
 adequada ou o ETL deve ser adaptado e testado antes da Fase G5.
 
-#### Backup externo
+#### Backup e recuperação
 
-- [ ] destino criptografado fora do host;
-- [ ] credencial de acesso mínimo;
+- [ ] destino e decisão explícita sobre cópia fora do host;
+- [ ] credencial de acesso mínimo, quando houver destino externo;
 - [ ] retenção e expiração;
 - [ ] RPO, RTO e prazo máximo comprovado para restore;
-- [ ] alerta para backup atrasado;
+- [ ] detecção automática ou verificação manual de backup atrasado;
 - [ ] frequência do teste de restore.
 
 #### Microsoft Entra e Graph
@@ -349,14 +350,14 @@ adequada ou o ETL deve ser adaptado e testado antes da Fase G5.
 - [ ] armazenamento e backup do volume de sessão;
 - [ ] limites operacionais e política de envio.
 
-#### Observabilidade
+#### Visibilidade operacional
 
-- [ ] coletor de logs;
-- [ ] métricas e healthchecks externos;
+- [ ] logs locais ou coletor;
+- [ ] healthchecks locais e, se aprovados, probes externos;
 - [ ] limites numéricos de disponibilidade, taxa de 5xx e latência p95;
-- [ ] canal de alertas;
+- [ ] alertas automáticos ou rotina manual explicitamente aceita;
 - [ ] retenção sem conteúdo sensível;
-- [ ] responsável por responder a alertas.
+- [ ] responsável pela verificação e resposta a incidentes.
 
 #### Operação
 
@@ -391,6 +392,8 @@ Plano alternativo:
 - Custos e acessos foram aprovados.
 - Nenhum segredo foi versionado.
 - A estratégia de privilégio do ETL está definida.
+- Exceções a backup externo, HA ou monitoramento têm risco e responsável
+  explicitamente registrados.
 
 ### Condições de parada
 
@@ -405,9 +408,10 @@ Leia docs/plano-acao-pos-fase-8-go-live.md e
 docs/go-live/decisoes-infraestrutura.md. Execute somente a Fase G3.
 Antes de qualquer criação externa, confirme os acessos e autorizações
 disponíveis. Provisione um ambiente online não produtivo para a candidata
-Live, sem mudar DNS final, main, default branch ou updater. Mantenha segredos
-fora do Git, publique apenas 80/443, configure PostgreSQL, backup externo,
-TLS, logs, métricas e alertas e entregue evidências sem dados sensíveis.
+Live, sem mudar main, default branch ou updater. Use o hostname único aprovado
+com allowlist Entra restrita. Mantenha segredos fora do Git, publique apenas
+80/443, configure PostgreSQL, backup local automatizado, TLS, healthchecks e
+logs locais e entregue evidências sem dados sensíveis.
 ```
 
 ---
@@ -417,14 +421,14 @@ TLS, logs, métricas e alertas e entregue evidências sem dados sensíveis.
 ### Objetivo
 
 Disponibilizar uma infraestrutura online segura para receber o candidato de
-`Live`, sem impacto nos usuários desktop e sem promover o domínio final.
+`Live`, sem impacto nos usuários desktop e sem liberar usuários produtivos.
 
 ### Pré-requisitos
 
 - Fase G2 aprovada.
-- Acessos explícitos ao host, DNS de candidato, banco, secret store e
-  observabilidade.
-- Subdomínio separado, por exemplo `toca-candidato.<domínio>`.
+- Acessos explícitos ao host, DNS, banco e armazenamento seguro de segredos.
+- Hostname separado ou hostname único com allowlist Entra restrita, conforme
+  decisão G2.
 - Dados e contas de teste autorizados.
 
 ### Procedimento
@@ -450,27 +454,30 @@ Disponibilizar uma infraestrutura online segura para receber o candidato de
 
 #### DNS e TLS do candidato
 
-- [ ] criar apenas o registro do subdomínio candidato;
+- [ ] criar ou confirmar somente o registro aprovado na G2;
 - [ ] emitir certificado válido;
 - [ ] configurar renovação automática;
 - [ ] testar cadeia, hostname e expiração;
-- [ ] não alterar o domínio usado pelos usuários atuais.
+- [ ] manter a allowlist restrita aos usuários de homologação.
 
 #### PostgreSQL
 
 - [ ] criar instância/banco vazio de candidato;
-- [ ] habilitar TLS e backups do fornecedor;
+- [ ] manter o banco privado e configurar os backups definidos na G2;
 - [ ] restringir rede;
 - [ ] criar papéis separados conforme G2;
-- [ ] configurar métricas de conexão, armazenamento e disponibilidade.
+- [ ] registrar conexão, armazenamento e disponibilidade nas verificações
+  manuais.
 
-#### Backup e observabilidade
+#### Backup e visibilidade operacional
 
-- [ ] conectar a cópia externa criptografada;
-- [ ] configurar alerta para último backup acima de 26 horas;
-- [ ] configurar probes externos de `/healthz` e `/readyz`;
-- [ ] configurar alertas iniciais do runbook F8.4;
-- [ ] confirmar redaction e ausência de payloads sensíveis.
+- [ ] automatizar backup local diário com checksum e retenção;
+- [ ] preferir filesystem/volume local separado do volume PostgreSQL;
+- [ ] registrar o resultado do backup em log local;
+- [ ] configurar `/healthz`, `/readyz` e healthchecks dos containers;
+- [ ] configurar rotação de logs;
+- [ ] confirmar redaction e ausência de payloads sensíveis;
+- [ ] documentar a rotina manual de verificação durante deploy e hypercare.
 
 ### Validação
 
@@ -490,7 +497,7 @@ Guardar, sem segredos:
 - PostgreSQL major;
 - IDs dos recursos;
 - política de backup;
-- destinos de alertas;
+- rotina e responsável pelas verificações manuais;
 - resultado de firewall/port scan.
 
 ### Critérios de aceite
@@ -498,14 +505,16 @@ Guardar, sem segredos:
 - Apenas 80/443 estão publicamente acessíveis.
 - Certificado do candidato é válido.
 - Banco aceita conexão somente pelas origens autorizadas.
-- Backup externo e alertas estão configurados.
-- Nenhuma alteração ocorreu em `main`, no updater ou no domínio final.
+- Backup local automatizado e restore estão comprovados.
+- Healthchecks e logs locais estão disponíveis.
+- Nenhuma alteração ocorreu em `main` ou no updater.
 
 ### Condições de parada
 
 - Segredo aparecer no Git, logs ou saída compartilhada.
 - PostgreSQL ou WAHA ficar publicamente acessível.
-- Não houver backup externo ou responsável por alertas.
+- Não houver backup local executável/restaurável ou responsável pelas
+  verificações manuais.
 
 ### Mensagem para o próximo chat
 
@@ -563,8 +572,8 @@ ser adaptado ao shell, mas o SHA completo deve ser guardado. Não usar `latest`.
 - [ ] dois workers Gunicorn estão ativos.
 - [ ] PostgreSQL, web e WAHA não publicam portas.
 - [ ] backup gera dump e checksum.
-- [ ] coletor recebe logs JSON sem segredos.
-- [ ] alertas de teste chegam ao canal definido.
+- [ ] logs locais são rotacionados e não contêm segredos.
+- [ ] checklist manual registra health, readiness, backup e WAHA.
 - [ ] dashboard Swagger do WAHA permanece desligado.
 
 ### Evidências
@@ -577,7 +586,7 @@ Criar `docs/go-live/evidencias-deploy-candidato.md` com:
 - resultado dos probes;
 - versão do schema;
 - estado dos serviços;
-- IDs de backup/alerta;
+- identificação do backup e registro das verificações manuais;
 - incidentes e correções, sem dados sensíveis.
 
 ### Critérios de aceite
@@ -804,14 +813,14 @@ Usar ao menos:
 - [ ] restore em banco descartável;
 - [ ] rollback para a imagem anterior;
 - [ ] roll-forward para a candidata;
-- [ ] alertas de health, readiness, backup e WAHA;
+- [ ] verificações manuais de health, readiness, backup e WAHA;
 - [ ] logs correlacionáveis por `request_id`.
 
 ### Teste de soak
 
-Manter o candidato online pelo período decidido na G2, com monitoramento. O
-soak deve incluir restart controlado de web e WAHA, troca de workers e ao menos
-um ciclo de backup.
+Manter o candidato online pelo período decidido na G2, com verificações manuais
+registradas. O soak deve incluir restart controlado de web e WAHA, troca de
+workers e ao menos um ciclo de backup.
 
 ### Artefato
 
@@ -876,7 +885,7 @@ Responder formalmente:
 - [ ] restore e rollback funcionam?
 - [ ] os dados reconciliam?
 - [ ] SSO, Graph e WAHA funcionam com contas autorizadas?
-- [ ] alertas têm responsável?
+- [ ] verificações operacionais e incidentes têm responsável?
 - [ ] desktop e updater estão protegidos?
 - [ ] existe capacidade de voltar ao desktop durante a janela?
 
@@ -972,7 +981,7 @@ acesso de forma reversível.
 - [ ] confirmar SHA e digest;
 - [ ] confirmar imagem anterior;
 - [ ] testar acesso operacional;
-- [ ] confirmar backup externo recente;
+- [ ] confirmar backup local recente e restore previamente comprovado;
 - [ ] confirmar banco produtivo vazio/estado aprovado;
 - [ ] confirmar DNS TTL reduzido conforme plano;
 - [ ] abrir canal de incidente.
@@ -991,9 +1000,10 @@ acesso de forma reversível.
 10. executar migration one-shot;
 11. subir a stack;
 12. validar health/readiness;
-13. alterar DNS/entrada final;
+13. confirmar DNS/entrada e certificado do hostname aprovado;
 14. executar smoke de SSO, Graph, WAHA, ACL e Companion;
-15. iniciar monitoramento intensivo.
+15. liberar os usuários produtivos na allowlist Entra;
+16. iniciar checklist manual intensivo de hypercare.
 
 Não incluir correções de código durante a janela. Defeito de código exige
 rollback ou nova release completa.
@@ -1011,7 +1021,8 @@ rollback ou nova release completa.
 
 ### Rollback
 
-- reverter DNS/entrada conforme plano;
+- remover usuários produtivos da allowlist Entra e reverter a entrada somente
+  se necessário;
 - promover imagem anterior somente se compatível com o schema;
 - não desfazer migration automaticamente;
 - manter fontes desktop congeladas até decidir qual lado contém dados
@@ -1024,16 +1035,17 @@ rollback ou nova release completa.
 - Domínio final funcional.
 - Dados reconciliados.
 - Smokes reais aprovados.
-- Alertas e dashboards normais.
+- Healthchecks, logs, backup e checklist manual normais.
 - Responsável declara início da hypercare.
 
 ### Mensagem para o próximo chat
 
 ```text
 Leia docs/plano-acao-pos-fase-8-go-live.md e execute somente a Fase G9.
-Monitore a produção durante a hypercare aprovada, acompanhe health/readiness,
-5xx, p95, PostgreSQL, backup, jobs e WAHA, valide restore periódico e registre
-incidentes. Não desative imediatamente o desktop/updater nem apague fontes.
+Verifique manualmente a produção durante a hypercare aprovada, acompanhe
+health/readiness, logs de erro, PostgreSQL, backup, jobs e WAHA, valide restore
+periódico e registre incidentes. Não desative imediatamente o desktop/updater
+nem apague fontes.
 Proponha o encerramento apenas após estabilidade, aceite operacional e plano
 de retenção/decomissionamento aprovado.
 ```
@@ -1047,7 +1059,7 @@ de retenção/decomissionamento aprovado.
 Confirmar estabilidade após o cutover e transferir o sistema para operação
 rotineira sem perder o caminho de recuperação.
 
-### Monitoramento
+### Verificação operacional manual
 
 - [ ] `/healthz` e `/readyz`;
 - [ ] taxa de 5xx;
@@ -1063,7 +1075,7 @@ rotineira sem perder o caminho de recuperação.
 
 ### Operação
 
-- [ ] revisar alertas e ajustar limiares com evidência;
+- [ ] revisar logs, healthchecks e frequência da rotina manual;
 - [ ] executar restore em banco descartável;
 - [ ] revisar claims ambíguas;
 - [ ] rotacionar credenciais temporárias;
@@ -1115,12 +1127,12 @@ após autorização explícita.
 | Gate | Fase que prepara | Fase que comprova |
 |---|---|---|
 | Host, firewall, DNS e certificado | G2/G3 | G4/G8 |
-| PostgreSQL, criptografia, capacidade e HA | G2/G3 | G4/G5/G8 |
-| Backup externo e alerta de atraso | G2/G3 | G4/G6/G9 |
+| PostgreSQL, privacidade, capacidade e risco sem HA | G2/G3 | G4/G5/G8 |
+| Backup local, retenção e restore; cópia externa futura | G2/G3 | G4/G6/G9 |
 | Entra login/logout/renovação | G2/G3 | G6/G8 |
 | Outlook Graph | G2/G3 | G6/G8 |
 | WAHA com telefone autorizado | G2/G3 | G6/G8 |
-| Logs, métricas e alertas | G2/G3 | G4/G6/G9 |
+| Healthchecks, logs locais e verificações manuais | G2/G3 | G4/G6/G9 |
 | Dono operacional e janela de rollback | G2 | G7/G8/G9 |
 
 ## 7. Registro de execução
@@ -1130,8 +1142,8 @@ Adicionar uma linha após cada fase. Não incluir segredos ou dados pessoais.
 | Fase | Status | Data | Branch/SHA | PR/evidência | Próxima ação |
 |---|---|---|---|---|---|
 | G0 | concluída | 29/07/2026 | `codex/plano-acao-go-live` | PR `#299`; contrato confirmado | executar G1 |
-| G1 | pendente | — | — | — | portar PR `#251` para `Live` |
-| G2 | pendente | — | — | — | decisões de infraestrutura |
+| G1 | concluída | 29/07/2026 | `58dcdd3` em `Live` | PR `#300`; 10 checks verdes | executar G2 |
+| G2 | concluída | 29/07/2026 | `codex/g2-decisoes-infraestrutura` | PR `#301`; decisões e riscos aprovados | preparar host e executar G3 |
 | G3 | pendente | — | — | — | provisionar candidato |
 | G4 | pendente | — | — | — | deploy online |
 | G5 | pendente | — | — | — | ensaio de dados |
