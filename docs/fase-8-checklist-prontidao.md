@@ -2,6 +2,9 @@
 
 Data do fechamento técnico: 28/07/2026.
 
+Execução dos gates externos, ambiente online, E2E, decisão de branches e
+go-live: [plano de ação pós-Fase 8](plano-acao-pos-fase-8-go-live.md).
+
 ## Gates automatizados
 
 - [x] Imagem web não-root, SHA/versão fixados e sem dependências desktop.
