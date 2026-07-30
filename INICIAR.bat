@@ -25,10 +25,10 @@ echo [OK] Python encontrado
 
 set PORT=3000
 
-echo [INFO] Iniciando servidor (porta %PORT%)...
+echo [INFO] Iniciando Toca do Coelho e WAHA-lite (portas %PORT% e 3001)...
 echo.
 
-python app.py
+python launcher.py
 
 if errorlevel 1 (
     echo.
