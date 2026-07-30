@@ -167,7 +167,7 @@
             () => { closeWhatsappSyncModal(); },   // minimizar: fecha o modal, a tarefa segue no background
             () => { _waResetToForm(); }             // cancelar: volta ao formulário
           );
-          const sourceTab = (typeof _currentTab !== 'undefined') ? _currentTab : 'auto-toca';
+          const sourceTab = (typeof _currentTab !== 'undefined') ? _currentTab : 'autotoca';
           BgTaskManager.register(
             taskId,
             '/api/whatsapp/tasks/' + taskId,

@@ -157,7 +157,11 @@ def outlook_oauth_start():
     try:
         user_id = max(1, int(request.args.get('user_id', 1)))
         settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
-        auth_url = outlook_graph_build_authorize_url(user_id=user_id, settings=settings)
+        conn = get_db()
+        try:
+            auth_url = outlook_graph_build_authorize_url(conn=conn, user_id=user_id, settings=settings)
+        finally:
+            conn.close()
         return jsonify({'auth_url': auth_url, 'provider': 'outlook_graph', 'user_id': user_id})
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha ao iniciar OAuth: {e}')
@@ -180,11 +184,15 @@ def outlook_oauth_callback():
         if not code or not state:
             return redirect('/outlook-connected.html?error=Par%C3%A2metros+OAuth+incompletos', 302)
 
-        user_id = outlook_graph_parse_state(state)
-        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
         conn = get_db()
-        outlook_graph_exchange_code_and_store(conn=conn, code=code, user_id=user_id, settings=settings)
-        conn.close()
+        try:
+            user_id, verifier = outlook_graph_consume_oauth_state(conn, state)
+            settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+            outlook_graph_exchange_code_and_store(
+                conn=conn, code=code, user_id=user_id, verifier=verifier, settings=settings
+            )
+        finally:
+            conn.close()
         return redirect('/outlook-connected.html', 302)
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')

@@ -1,0 +1,17 @@
+# Versão do WhatsApp Web fixada para o WAHA-lite.
+#
+# POR QUE ISTO EXISTE: sem fixar, o WhatsApp Web se auto-atualiza. Uma dessas
+# atualizações passou a FORÇAR o endereçamento por LID, quebrando o getChatById
+# por "numero@c.us" com "No LID for user" — o WhatsApp Update passou a retornar
+# 0 conversas mesmo havendo mensagens. Fixar uma versão conhecida-boa evita isso
+# (também mitiga o bug "trava em 99% -> LOGOUT", issue upstream whatsapp-web.js #5758).
+#
+# Esta versão rodou de forma estável em produção (milhares de buscas de mensagem
+# com sucesso). Se o WhatsApp um dia recusar esta versão, troque pela mais recente
+# conhecida-boa em https://github.com/wppconnect-team/wa-version (pasta html/).
+#
+# Regras do parser (resolveWebVersion em waha-lite.js):
+#   - linhas iniciadas por # são ignoradas;
+#   - a primeira linha não-comentário é usada como a versão;
+#   - a variável de ambiente WAHA_WEB_VERSION, se definida, tem prioridade sobre este arquivo.
+2.3000.1041467552-alpha
