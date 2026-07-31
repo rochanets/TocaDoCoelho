@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "AutoToca Helper",
-  "version": "0.8.0",
-  "description": "Extensão auxiliar do AutoToca: preenche Microsoft Forms e captura perfis do LinkedIn para preparação de reuniões.",
-  "permissions": ["storage", "tabs", "scripting"],
+  "version": "0.9.11",
+  "description": "Extensão auxiliar do AutoToca: preenche formulários, e-Reembolso e captura perfis do LinkedIn.",
+  "permissions": ["storage", "tabs", "scripting", "alarms"],
   "host_permissions": [
     "https://forms.office.com/*",
     "https://www.linkedin.com/*",
     "https://linkedin.com/*",
     "https://*.licdn.com/*",
+    "https://ereembolso.stefanini.com.br/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "file:///*"
@@ -19,7 +20,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["content.js", "reembolso.js"],
       "run_at": "document_idle"
     }
   ],

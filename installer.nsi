@@ -102,6 +102,21 @@ Section "Instalar Toca do Coelho" SecApp
     File "README.md"
     File "coelho_icon_transparent.ico"
 
+    ; OCR local para comprovantes/PDFs escaneados. O Python usa pytesseract
+    ; como wrapper, mas o binario tesseract.exe precisa existir na maquina do
+    ; usuario. Instalamos uma copia per-user dentro do proprio app.
+    !if /FileExists "tools\tesseract-ocr-w64-setup.exe"
+        SetOutPath "$INSTDIR\tools"
+        File "tools\tesseract-ocr-w64-setup.exe"
+        DetailPrint "Instalando Tesseract OCR local..."
+        ExecWait '"$INSTDIR\tools\tesseract-ocr-w64-setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="$INSTDIR\tesseract"' $0
+        ${If} $0 != 0
+            DetailPrint "Aviso: instalador do Tesseract retornou codigo $0. OCR local pode ficar indisponivel."
+        ${EndIf}
+    !else
+        !warning "tools\tesseract-ocr-w64-setup.exe ausente no build: OCR local ficara indisponivel no instalador."
+    !endif
+
     ; WhatsApp Update: mini-servidor Node.js (sem Docker).
     ; node.exe   = Node.js portátil (baixado de nodejs.org/dist/.../node.exe antes do build).
     ; waha-lite/ = servidor + node_modules (rodar "npm install" em waha-lite/ antes do build).
@@ -174,6 +189,23 @@ Section "Uninstall"
     RMDir "$SMPROGRAMS\$StartMenuFolder"
     Delete "$DESKTOP\Toca.lnk"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TocaDoCoelho"
+
+    ; Remove a política de auto-instalação da extensão AutoToca (Chrome/Edge/Brave).
+    ; O app grava, sob Software\TocaDoCoelho\ExtForcelist, uma marca por política:
+    ; nome = a subchave da política, dado = o índice que criamos naquela lista.
+    ReadRegStr $0 HKCU "Software\TocaDoCoelho\ExtForcelist" "Software\Policies\Google\Chrome\ExtensionInstallForcelist"
+    ${If} $0 != ""
+        DeleteRegValue HKCU "Software\Policies\Google\Chrome\ExtensionInstallForcelist" "$0"
+    ${EndIf}
+    ReadRegStr $0 HKCU "Software\TocaDoCoelho\ExtForcelist" "Software\Policies\Microsoft\Edge\ExtensionInstallForcelist"
+    ${If} $0 != ""
+        DeleteRegValue HKCU "Software\Policies\Microsoft\Edge\ExtensionInstallForcelist" "$0"
+    ${EndIf}
+    ReadRegStr $0 HKCU "Software\TocaDoCoelho\ExtForcelist" "Software\Policies\BraveSoftware\Brave-Browser\ExtensionInstallForcelist"
+    ${If} $0 != ""
+        DeleteRegValue HKCU "Software\Policies\BraveSoftware\Brave-Browser\ExtensionInstallForcelist" "$0"
+    ${EndIf}
+
     DeleteRegKey HKCU "Software\TocaDoCoelho"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TocaDoCoelho"
 SectionEnd

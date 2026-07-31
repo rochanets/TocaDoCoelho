@@ -1,6 +1,8 @@
 (() => {
   // Confirmação visível no DevTools (F12 → Console) para diagnóstico
-  console.log('[AutoToca Helper] content.js v0.8.0 carregado em:', window.location.href);
+  let _extVersion = '0.0.0';
+  try { _extVersion = chrome.runtime.getManifest().version || _extVersion; } catch (_) {}
+  console.log(`[AutoToca Helper] content.js v${_extVersion} carregado em:`, window.location.href);
 
   const WEB_PING_EVENT    = 'autotoca-extension-ping';
   const WEB_PONG_EVENT    = 'autotoca-extension-pong';
@@ -75,7 +77,7 @@
       detail: {
         ok: true,
         extension: 'AutoToca Helper',
-        version: '0.8.0',
+        version: _extVersion,
         href: window.location.href,
         isFormsPage: isFormsPage(),
         timestamp: Date.now(),
@@ -593,6 +595,33 @@
   async function handleCommand(detail) {
     const command = detail?.command;
 
+    if (command === 'start_reembolso_task') {
+      if (!['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+        emitResult({ ok: false, command, taskId: detail?.taskId, message: 'Este comando só pode ser iniciado pelo AutoToca local.' });
+        return;
+      }
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'start_reembolso_task',
+          task: {
+            taskId: detail?.taskId,
+            apiBase: detail?.apiBase,
+            targetUrl: detail?.targetUrl,
+          },
+        });
+        emitResult({
+          ok: !!response?.ok,
+          command,
+          taskId: detail?.taskId,
+          tabId: response?.tabId,
+          message: response?.ok ? 'e-Reembolso aberto em uma nova aba.' : (response?.error || 'Falha ao abrir a aba.'),
+        });
+      } catch (error) {
+        emitResult({ ok: false, command, taskId: detail?.taskId, message: error?.message || String(error) });
+      }
+      return;
+    }
+
     if (command === 'store_payload') {
       persistEnvelope(detail.envelope || null);
       emitResult({ ok: true, command, message: 'Payload salvo na extensão.', href: window.location.href });
@@ -695,7 +724,7 @@
 
   _lastUrl = window.location.href;
 
-  _log('info', 'Extensão AutoToca v0.7.0 carregada', {
+  _log('info', `Extensão AutoToca v${_extVersion} carregada`, {
     isLinkedInProfile: isLinkedInProfilePage(),
     isForms: isFormsPage(),
     pathname: window.location.pathname,

@@ -1,6 +1,10 @@
 # Credenciais locais (não versionar — remover desta lista se quiser versionar com bypass)
 secrets.py
 
+# Chave privada de assinatura da extensão AutoToca (.crx) — NUNCA versionar
+secrets/
+*.pem
+
 # Ambiente virtual Python
 .venv/
 venv/

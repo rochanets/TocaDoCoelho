@@ -1012,15 +1012,53 @@ def extension_update_status():
         conn.close()
         first_run = (not has_profile) and (not _resolve_setting('first_run_seen', ''))
         update_available = bool(current) and (seen != current) and not first_run
+        # Quando o auto-update local está ativo (Windows + .crx assinado empacotado),
+        # o navegador atualiza a extensão sozinho — não há por que pedir download manual.
+        auto_update = (os.name == 'nt') and ext_autoupdate.is_available()
+        if auto_update:
+            update_available = False
         return jsonify({
             'current': current,
             'seen': seen or None,
             'update_available': update_available,
+            'auto_update': auto_update,
             'download_url': '/autotoca-extension/autotoca-chrome-extension.zip',
         })
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/extension/update-status: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ext/updates.xml', methods=['GET'])
+def extension_update_manifest():
+    """Manifesto Omaha lido pelo Chrome/Edge para auto-atualizar a extensão AutoToca.
+    Servido localmente pelo próprio app (ver integrations/ext_autoupdate.py)."""
+    try:
+        if not ext_autoupdate.is_available():
+            return Response('extensão assinada indisponível neste build', status=404)
+        crx_url = request.url_root.rstrip('/') + '/ext/' + ext_autoupdate.CRX_FILENAME
+        xml = ext_autoupdate.updates_xml(crx_url)
+        return Response(xml, mimetype='application/xml')
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /ext/updates.xml: {e}')
+        return Response(str(e), status=500)
+
+
+@app.route('/ext/autotoca-helper.crx', methods=['GET'])
+def extension_crx():
+    """Entrega o pacote .crx3 assinado para o navegador instalar/atualizar."""
+    try:
+        if not ext_autoupdate.CRX_PATH.exists():
+            return Response('pacote .crx indisponível', status=404)
+        return send_file(
+            str(ext_autoupdate.CRX_PATH),
+            mimetype='application/x-chrome-extension',
+            as_attachment=False,
+            download_name=ext_autoupdate.CRX_FILENAME,
+        )
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /ext/autotoca-helper.crx: {e}')
+        return Response(str(e), status=500)
 
 
 @app.route('/api/extension/update-status/seen', methods=['POST'])
@@ -1031,4 +1069,37 @@ def extension_update_seen():
         return jsonify({'ok': True, 'version': version})
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/extension/update-status/seen: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/extension/current-version', methods=['GET'])
+def extension_current_version():
+    """Versão da extensão empacotada com este build. A própria extensão consulta
+    este endpoint periodicamente e, se estiver defasada, se recarrega sozinha do
+    disco (ver background.js -> chrome.runtime.reload())."""
+    try:
+        return jsonify({'version': _extension_bundled_version()})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/extension/current-version: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/extension/local-folder', methods=['GET', 'POST'])
+def extension_local_folder():
+    """Caminho da pasta estável onde a extensão fica publicada (para o
+    "carregar sem compactação" uma única vez). No POST, abre a pasta no
+    gerenciador de arquivos (Windows), facilitando o carregamento inicial."""
+    try:
+        folder = str(EXT_LOCAL_DIR)
+        ext_autoupdate.publish_unpacked(EXT_LOCAL_DIR)
+        opened = False
+        if request.method == 'POST' and os.name == 'nt':
+            try:
+                os.startfile(folder)  # noqa: only exists on Windows
+                opened = True
+            except Exception as open_exc:
+                logger.debug(f'[ExtAutoUpdate] Falha ao abrir pasta da extensão: {open_exc}')
+        return jsonify({'path': folder, 'version': _extension_bundled_version(), 'opened': opened})
+    except Exception as e:
+        logger.exception(f'[ERROR] /api/extension/local-folder: {e}')
         return jsonify({'error': str(e)}), 500

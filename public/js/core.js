@@ -1437,11 +1437,27 @@
             _autoTocaSetAutomationEnabled(true);
         }
 
+        function _cmpExtVersion(a, b) {
+            const pa = String(a || '0').split('.').map(n => Number(n) || 0);
+            const pb = String(b || '0').split('.').map(n => Number(n) || 0);
+            for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+                const diff = (pa[i] || 0) - (pb[i] || 0);
+                if (diff !== 0) return diff < 0 ? -1 : 1;
+            }
+            return 0;
+        }
+
         function handleAutoTocaExtensionPong(event) {
             const detail = event?.detail || {};
             autoTocaExtensionInstalled = true;
             autoTocaExtensionLastSeenAt = new Date().toLocaleTimeString('pt-BR');
-            window.__AUTOTOCA_EXTENSION_INFO__ = detail;
+            // Se houver mais de uma extensão instalada (ex.: uma versão antiga que
+            // sobrou), fica com a de MAIOR versão — assim uma 0.9.5 remanescente não
+            // "rebaixa" a detecção de uma versão nova.
+            const current = window.__AUTOTOCA_EXTENSION_INFO__;
+            if (!current || _cmpExtVersion(detail.version, current.version) >= 0) {
+                window.__AUTOTOCA_EXTENSION_INFO__ = detail;
+            }
             renderAutoTocaExtensionState();
         }
 
@@ -1469,6 +1485,7 @@
 
         async function checkAutoTocaExtension(showFeedback = false) {
             autoTocaExtensionInstalled = false;
+            window.__AUTOTOCA_EXTENSION_INFO__ = null;
             renderAutoTocaExtensionState();
             window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_REQUEST_EVENT, {
                 detail: {
@@ -1489,17 +1506,29 @@
         }
 
         async function showAutoTocaExtensionInstallGuide() {
+            // Carrega uma ÚNICA vez a partir da pasta estável mantida pelo app.
+            // Depois disso, as atualizações se aplicam sozinhas (a extensão se
+            // recarrega quando o app publica uma versão nova) — sem baixar,
+            // descompactar ou re-adicionar nada.
+            let folder = null;
+            try {
+                const info = await (await fetch(`${API_BASE}/extension/local-folder`, { method: 'POST' })).json();
+                folder = info?.path || null;
+            } catch (_) { /* segue com instrução genérica */ }
+            const folderStep = folder
+                ? `2. Selecione esta pasta (já foi aberta para você):\n     ${folder}`
+                : '2. Selecione a pasta da extensão publicada pelo app (…\\toca-do-coelho\\extension).';
             await openSystemDialog({
-                title: 'Como instalar a extensão do AutoToca',
+                title: 'Instalar a extensão do AutoToca (só uma vez)',
                 message: [
-                    '1. Clique em “Baixar Extensão”.',
-                    '2. Extraia o arquivo ZIP em uma pasta do seu computador.',
-                    '3. Abra chrome://extensions no Google Chrome.',
-                    '4. Ative o “Modo do desenvolvedor” (canto superior direito).',
-                    '5. Clique em “Carregar sem compactação”.',
-                    '6. Selecione a pasta extraída da extensão.',
-                    '⚠️ 7. IMPORTANTE: Recarregue esta página (F5) após instalar.',
-                    '8. Clique em “Verificar novamente”.',
+                    'Você carrega a extensão UMA vez. Depois, as atualizações são automáticas.',
+                    '',
+                    '1. Abra chrome://extensions e ative o “Modo do desenvolvedor” (canto superior direito).',
+                    folderStep,
+                    '3. Clique em “Carregar sem compactação” e selecione a pasta acima.',
+                    '⚠️ 4. Recarregue esta página (F5) e clique em “Verificar novamente”.',
+                    '',
+                    'Não precisa mais baixar ZIP nem reinstalar a cada versão — o app cuida disso.',
                 ].join('\n'),
                 showCancel: false,
             });
@@ -1563,12 +1592,14 @@
             const panels = {
                 'chamado-juridico': 'autoTocaChamadoJuridico',
                 'mala-direta': 'autoTocaMalaDireta',
-                'sync-outlook': 'autoTocaSyncOutlook'
+                'sync-outlook': 'autoTocaSyncOutlook',
+                'reembolsos': 'autoTocaReembolsos'
             };
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
                 'mala-direta': 'autoTocaBtn_mala-direta',
-                'sync-outlook': 'autoTocaBtn_sync-outlook'
+                'sync-outlook': 'autoTocaBtn_sync-outlook',
+                'reembolsos': 'autoTocaBtn_reembolsos'
             };
             const targetId = panels[key];
             if (!targetId) return;
@@ -1599,6 +1630,7 @@
             if (isOpening) {
                 target.style.display = 'block';
                 setActiveAutoTocaModuleButton(buttons[key]);
+                if (key === 'reembolsos') { loadReembContas(); loadReembOrigemHistorico(); }
             }
         }
 
@@ -3200,6 +3232,680 @@
                 _autoTocaAppendLog(`Robô não iniciou: ${error.message || 'erro desconhecido'}`, 'error');
             }
         }
+
+        let _reembPedagioValorCents = 0;
+        let _reembEstacResumo = null;
+        let _reembAlmResumo = null;
+        const _reembFileSelections = {
+            data: [],
+            pedagio: [],
+            estacionamento: [],
+            almoco: [],
+        };
+        const _reembReceiptItems = {
+            data: [],
+            pedagio: [],
+            estacionamento: [],
+            almoco: [],
+        };
+        const _reembAnalysisVersions = {
+            data: 0,
+            pedagio: 0,
+            estacionamento: 0,
+            almoco: 0,
+        };
+        const _reembAnalysisPrefixes = {
+            data: 'reembDataAnalysis',
+            pedagio: 'reembPedagioAnalysis',
+            estacionamento: 'reembEstacAnalysis',
+            almoco: 'reembAlmAnalysis',
+        };
+        const _reembReceiptReviewIds = {
+            data: 'reembDataReceiptReview',
+            pedagio: 'reembPedagioReceiptReview',
+            estacionamento: 'reembEstacReceiptReview',
+            almoco: 'reembAlmReceiptReview',
+        };
+
+        function _reembFileKeyForInput(inputId) {
+            return {
+                reembDataComprovante: 'data',
+                reembPedagioComprovantes: 'pedagio',
+                reembEstacComprovantes: 'estacionamento',
+                reembAlmComprovantes: 'almoco',
+            }[inputId];
+        }
+
+        function _reembFileIdentity(file) {
+            return `${file.name}|${file.size}|${file.lastModified}`;
+        }
+
+        function _reembSyncFileInput(inputId, files) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            const dt = new DataTransfer();
+            files.forEach(file => dt.items.add(file));
+            input.files = dt.files;
+        }
+
+        function _reembRenderFileList(inputId, key) {
+            const listEl = document.getElementById(`${inputId}List`);
+            if (!listEl) return;
+            listEl.innerHTML = _reembFileSelections[key].map((file, index) => `
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; max-width:100%; margin-top:4px; padding:4px 8px; background:#f3f4f6; border-radius:6px; font-size:12px;">
+                    <span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+                    <button type="button" onclick="_reembRemoveFile('${inputId}', ${index})" title="Remover arquivo" aria-label="Remover arquivo" style="flex:0 0 auto; border:0; background:transparent; color:#dc2626; cursor:pointer; padding:0 2px; line-height:1;"><i class="fas fa-times"></i></button>
+                </div>
+            `).join('');
+        }
+
+        function _reembFormatCents(cents) {
+            if (cents === null || cents === undefined || cents === '') return '';
+            return (Number(cents) / 100).toFixed(2).replace('.', ',');
+        }
+
+        function _reembParseCents(value) {
+            const raw = String(value ?? '').trim().replace(/R\$\s*/gi, '').replace(/[^\d,.-]/g, '');
+            if (!raw) return null;
+            const normalized = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw;
+            const parsed = Number(normalized);
+            return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
+        }
+
+        function _reembRenderReceiptReview(key) {
+            const reviewEl = document.getElementById(_reembReceiptReviewIds[key]);
+            if (!reviewEl) return;
+            const items = _reembReceiptItems[key] || [];
+            if (!items.length) {
+                reviewEl.innerHTML = '';
+                return;
+            }
+            reviewEl.innerHTML = `
+                <div class="reemb-receipt-review-title">Dados identificados por comprovante</div>
+                ${items.map((item, index) => `
+                    <div class="reemb-receipt-item">
+                        <div class="reemb-receipt-file" title="${escapeHtml(item.filename || '')}">${escapeHtml(item.filename || `Comprovante ${index + 1}`)}</div>
+                        <div class="reemb-receipt-field">
+                            <label for="reembReceiptDate_${key}_${index}">Data</label>
+                            <input id="reembReceiptDate_${key}_${index}" type="date" value="${escapeHtml(item.data || '')}" onchange="_reembReceiptEdited('${key}', ${index}, 'data', this.value)">
+                        </div>
+                        <div class="reemb-receipt-field">
+                            <label for="reembReceiptValue_${key}_${index}">Valor (R$)</label>
+                            <input id="reembReceiptValue_${key}_${index}" type="text" inputmode="decimal" value="${escapeHtml(_reembFormatCents(item.valor_cents))}" placeholder="Não identificado" onchange="_reembReceiptEdited('${key}', ${index}, 'valor', this.value)">
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        function _reembRecalculateReceiptSummary(key) {
+            const items = _reembReceiptItems[key] || [];
+            const dates = items.map(item => item.data).filter(Boolean).sort();
+            const summary = {
+                quantidade: items.length,
+                periodo_inicio: dates[0] || null,
+                periodo_fim: dates[dates.length - 1] || null,
+                valor_total_cents: items.reduce((total, item) => total + (item.valor_cents || 0), 0),
+                items,
+            };
+            if (key === 'data') {
+                const dateInput = document.getElementById('reembDataDeslocamento');
+                if (dateInput && items[0]?.data) dateInput.value = items[0].data;
+            } else if (key === 'pedagio') {
+                _reembPedagioValorCents = summary.valor_total_cents;
+                const summaryEl = document.getElementById('reembPedagioValor');
+                if (summaryEl) summaryEl.textContent = `Valor total do pedágio: R$ ${_reembFormatCents(summary.valor_total_cents)}`;
+            } else if (key === 'estacionamento') {
+                _reembEstacResumo = summary;
+                const summaryEl = document.getElementById('reembEstacResumo');
+                if (summaryEl) summaryEl.textContent = `${summary.quantidade} comprovante(s) — total R$ ${_reembFormatCents(summary.valor_total_cents)}` +
+                    (summary.periodo_inicio ? ` — período ${summary.periodo_inicio} a ${summary.periodo_fim}` : '');
+            } else if (key === 'almoco') {
+                _reembAlmResumo = summary;
+                const summaryEl = document.getElementById('reembAlmResumo');
+                if (summaryEl) summaryEl.textContent = `${summary.quantidade} comprovante(s) — total R$ ${_reembFormatCents(summary.valor_total_cents)}` +
+                    (summary.periodo_inicio ? ` — período ${summary.periodo_inicio} a ${summary.periodo_fim}` : '');
+            }
+            return summary;
+        }
+
+        function _reembSetReceiptItems(key, result) {
+            _reembReceiptItems[key] = (result?.items || []).map(item => ({
+                filename: item.filename || '',
+                data: item.data || null,
+                valor_cents: item.valor_cents === null || item.valor_cents === undefined ? null : Number(item.valor_cents),
+            }));
+            _reembRenderReceiptReview(key);
+            return _reembRecalculateReceiptSummary(key);
+        }
+
+        function _reembClearReceiptItems(key) {
+            _reembReceiptItems[key] = [];
+            _reembRenderReceiptReview(key);
+        }
+
+        function _reembReceiptEdited(key, index, field, value) {
+            const item = _reembReceiptItems[key]?.[index];
+            if (!item) return;
+            if (field === 'data') item.data = value || null;
+            if (field === 'valor') item.valor_cents = _reembParseCents(value);
+            _reembRecalculateReceiptSummary(key);
+        }
+
+        function _reembUpdateFileSelection(inputId) {
+            const input = document.getElementById(inputId);
+            const key = _reembFileKeyForInput(inputId);
+            if (!input || !key) return [];
+            const selected = Array.from(input.files || []);
+            if (input.multiple) {
+                const existing = _reembFileSelections[key];
+                const identities = new Set(existing.map(_reembFileIdentity));
+                selected.forEach(file => {
+                    if (!identities.has(_reembFileIdentity(file))) {
+                        existing.push(file);
+                        identities.add(_reembFileIdentity(file));
+                    }
+                });
+            } else {
+                _reembFileSelections[key] = selected.slice(0, 1);
+            }
+            _reembSyncFileInput(inputId, _reembFileSelections[key]);
+            _reembRenderFileList(inputId, key);
+            return _reembFileSelections[key];
+        }
+
+        function _reembRemoveFile(inputId, index) {
+            const key = _reembFileKeyForInput(inputId);
+            if (!key) return;
+            _reembFileSelections[key].splice(index, 1);
+            _reembSyncFileInput(inputId, _reembFileSelections[key]);
+            _reembRenderFileList(inputId, key);
+            if (inputId === 'reembPedagioComprovantes') reembOnPedagioChange();
+            if (inputId === 'reembEstacComprovantes') reembOnEstacComprovantesChange();
+            if (inputId === 'reembAlmComprovantes') reembOnAlmComprovantesChange();
+            if (inputId === 'reembDataComprovante') reembOnDataComprovanteChange();
+        }
+
+        function onReembTipoChange() {
+            const tipo = document.getElementById('reembTipo').value;
+            document.getElementById('reembFormDeslocamento').style.display = tipo === 'deslocamento' ? 'block' : 'none';
+            document.getElementById('reembFormAlmoco').style.display = tipo === 'almoco' ? 'block' : 'none';
+        }
+
+        function onReembSubFluxoChange() {
+            const sub = document.getElementById('reembSubFluxo').value;
+            document.getElementById('reembBlocoDeslocamento').style.display = sub === 'deslocamento' ? 'grid' : 'none';
+            document.getElementById('reembBlocoEstacionamento').style.display = sub === 'estacionamento' ? 'grid' : 'none';
+        }
+
+        async function loadReembContas() {
+            const response = await fetch(`${API_BASE}/autotoca/accounts`);
+            if (!response.ok) return;
+            const contas = await response.json();
+            const select = document.getElementById('reembConta');
+            select.innerHTML = contas.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+        }
+
+        async function onReembContaChange() {
+            const accountId = document.getElementById('reembConta').value;
+            const destinoInput = document.getElementById('reembDestino');
+            if (accountId === '0') {
+                destinoInput.value = '';
+                return;
+            }
+            const response = await fetch(`${API_BASE}/autotoca/reembolsos/conta-endereco/${accountId}`);
+            if (!response.ok) return;
+            const data = await response.json();
+            destinoInput.value = data.endereco || '';
+        }
+
+        async function loadReembOrigemHistorico() {
+            const response = await fetch(`${API_BASE}/autotoca/reembolsos/origem-historico`);
+            if (!response.ok) return;
+            const items = await response.json();
+            document.getElementById('reembOrigemHistorico').innerHTML =
+                items.map(i => `<option value="${escapeHtml(i.texto)}">`).join('');
+        }
+
+        async function reembBuscarEnderecoIA() {
+            const contaSelect = document.getElementById('reembConta');
+            const contaNome = contaSelect.options[contaSelect.selectedIndex]?.textContent || '';
+            if (!contaNome) { showError('Selecione uma conta primeiro.'); return; }
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/account-info`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_name: contaNome })
+                });
+                const data = await response.json();
+                if (data?.endereco) document.getElementById('reembDestino').value = data.endereco;
+                else showInfo('Não encontrei um endereço automaticamente — preencha manualmente.');
+            } catch (e) {
+                showError('Falha ao buscar endereço com IA.');
+            }
+        }
+
+        function _reembEnsureAnalysisProgress(key) {
+            const prefix = _reembAnalysisPrefixes[key];
+            const host = document.getElementById(`${prefix}Progress`);
+            if (!host || host.dataset.initialized === 'true') return prefix;
+            host.dataset.initialized = 'true';
+            host.style.display = 'none';
+            host.style.padding = '14px 4px 8px';
+            host.style.maxWidth = '640px';
+            host.innerHTML = `
+                <div id="${prefix}Step" style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center; overflow-wrap:anywhere;">Preparando os comprovantes...</div>
+                <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                    <div id="${prefix}Bar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div style="text-align:right; padding:0 16px; font-size:11px; color:#6b7280;" id="${prefix}Pct">5%</div>
+            `;
+            return prefix;
+        }
+
+        function _reembSetAnalysisProgress(key, pct, step, visible = true) {
+            const prefix = _reembEnsureAnalysisProgress(key);
+            const host = document.getElementById(`${prefix}Progress`);
+            const bar = document.getElementById(`${prefix}Bar`);
+            const stepEl = document.getElementById(`${prefix}Step`);
+            const pctEl = document.getElementById(`${prefix}Pct`);
+            if (host) host.style.display = visible ? 'block' : 'none';
+            if (bar) bar.style.width = `${Math.max(5, Math.min(100, Number(pct) || 0))}%`;
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = `${Math.round(Number(pct) || 0)}%`;
+        }
+
+        function _reembCancelAnalysis(key) {
+            _reembAnalysisVersions[key] += 1;
+            _reembSetAnalysisProgress(key, 5, '', false);
+        }
+
+        async function _reembAnalyzeFiles(key, files) {
+            const version = ++_reembAnalysisVersions[key];
+            if (!files.length) {
+                _reembSetAnalysisProgress(key, 5, '', false);
+                return null;
+            }
+
+            const fd = new FormData();
+            files.forEach(file => fd.append('files', file));
+            _reembSetAnalysisProgress(key, 5, 'Preparando os comprovantes...');
+
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/reembolsos/extract/tasks`, { method: 'POST', body: fd });
+                const started = await response.json().catch(() => ({}));
+                if (!response.ok || !started.task_id) {
+                    throw new Error(started.error || 'Não foi possível iniciar a análise dos comprovantes.');
+                }
+
+                while (_reembAnalysisVersions[key] === version) {
+                    const statusResponse = await fetch(
+                        `${API_BASE}/autotoca/reembolsos/extract/tasks/${encodeURIComponent(started.task_id)}`
+                    );
+                    const task = await statusResponse.json().catch(() => ({}));
+                    if (!statusResponse.ok) throw new Error(task.error || 'Falha ao acompanhar a análise.');
+                    _reembSetAnalysisProgress(key, task.progress || 5, task.step || 'Analisando comprovantes...');
+
+                    if (task.status === 'done') {
+                        window.setTimeout(() => {
+                            if (_reembAnalysisVersions[key] === version) {
+                                _reembSetAnalysisProgress(key, 100, task.step || '', false);
+                            }
+                        }, 900);
+                        return task.result || null;
+                    }
+                    if (task.status === 'error') {
+                        throw new Error(task.error || 'Falha ao analisar os comprovantes.');
+                    }
+                    await new Promise(resolve => window.setTimeout(resolve, 800));
+                }
+            } catch (error) {
+                if (_reembAnalysisVersions[key] === version) {
+                    _reembSetAnalysisProgress(key, 5, '', false);
+                    showError(error.message || 'Falha ao analisar os comprovantes.');
+                }
+            }
+            return null;
+        }
+
+        async function reembOnDataComprovanteChange() {
+            const file = _reembUpdateFileSelection('reembDataComprovante')[0];
+            if (!file) {
+                _reembCancelAnalysis('data');
+                _reembClearReceiptItems('data');
+                document.getElementById('reembDataDeslocamento').value = '';
+                return;
+            }
+            _reembClearReceiptItems('data');
+            const result = await _reembAnalyzeFiles('data', [file]);
+            if (result) _reembSetReceiptItems('data', result);
+        }
+
+        async function reembOnPedagioChange() {
+            const files = _reembUpdateFileSelection('reembPedagioComprovantes');
+            const resumoEl = document.getElementById('reembPedagioValor');
+            if (!files.length) {
+                _reembCancelAnalysis('pedagio');
+                _reembClearReceiptItems('pedagio');
+                _reembPedagioValorCents = 0;
+                resumoEl.textContent = '';
+                return;
+            }
+            _reembClearReceiptItems('pedagio');
+            resumoEl.textContent = '';
+            const result = await _reembAnalyzeFiles('pedagio', files);
+            if (!result) return;
+            _reembSetReceiptItems('pedagio', result);
+        }
+
+        async function reembOnEstacComprovantesChange() {
+            const files = _reembUpdateFileSelection('reembEstacComprovantes');
+            const resumoEl = document.getElementById('reembEstacResumo');
+            if (!files.length) {
+                _reembCancelAnalysis('estacionamento');
+                _reembClearReceiptItems('estacionamento');
+                _reembEstacResumo = null;
+                resumoEl.textContent = '';
+                return;
+            }
+            _reembClearReceiptItems('estacionamento');
+            resumoEl.textContent = '';
+            const result = await _reembAnalyzeFiles('estacionamento', files);
+            if (!result) return;
+            _reembSetReceiptItems('estacionamento', result);
+        }
+
+        function _reembValidateDeslocamento(sub) {
+            const celula = document.getElementById('reembCelulaCusto').value.trim();
+            const descricao = document.getElementById('reembDescricaoDespesa').value.trim();
+            if (!celula) return 'Célula custo é obrigatória.';
+            if (!descricao) return 'Descrição da despesa é obrigatória.';
+            if (sub === 'deslocamento') {
+                if (!document.getElementById('reembDestino').value.trim()) return 'Destino é obrigatório.';
+                if (!document.getElementById('reembOrigem').value.trim()) return 'Origem é obrigatória.';
+                if (!document.getElementById('reembDataDeslocamento').value) return 'Data do deslocamento é obrigatória (anexe o comprovante).';
+            } else {
+                if (!_reembEstacResumo || !_reembEstacResumo.quantidade) return 'Anexe ao menos um comprovante de estacionamento.';
+                if (!document.getElementById('reembEstacDescricao').value.trim()) return 'Descrição é obrigatória.';
+            }
+            return null;
+        }
+
+        function _reembToggleRunning(running) {
+            const btn = document.getElementById('reembRobotBtn');
+            const area = document.getElementById('reembRobotProgress');
+            if (btn) btn.disabled = running;
+            if (area) area.style.display = running ? 'block' : 'none';
+        }
+
+        function _reembSetProgress(pct, step) {
+            const bar = document.getElementById('reembRobotBar');
+            const stepEl = document.getElementById('reembRobotStep');
+            const pctEl = document.getElementById('reembRobotPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        async function _reembStartRobotRequest(url, body, label) {
+            try {
+                return await fetch(url, { method: 'POST', body });
+            } catch (error) {
+                let apiAvailable = false;
+                try {
+                    const health = await fetch(`${API_BASE}/system/config?_=${Date.now()}`, {
+                        cache: 'no-store',
+                    });
+                    apiAvailable = health.ok;
+                } catch (_) {
+                    // A segunda tentativa apenas identifica se a API local caiu.
+                }
+
+                const message = apiAvailable
+                    ? `A API local está ativa, mas a conexão foi interrompida ao iniciar o robô de ${label}. Recarregue a página e tente novamente.`
+                    : 'Não foi possível conectar à API local do Toca. Confirme que o servidor está em execução e recarregue a página.';
+                tocaDebug('reemb.robot.start.network_error', message, {
+                    url,
+                    label,
+                    apiAvailable,
+                    online: navigator.onLine,
+                    origin: window.location.origin,
+                    originalError: error?.message || String(error),
+                });
+                throw new Error(message);
+            }
+        }
+
+        async function _reembResolveBrowserMode() {
+            const extensionReady = await checkAutoTocaExtension(false);
+            const extensionVersion = window.__AUTOTOCA_EXTENSION_INFO__?.version || '0.0.0';
+            const versionParts = extensionVersion.split('.').map(part => Number(part) || 0);
+            const supportsReembolso = versionParts[0] > 0 || versionParts[1] > 9 ||
+                (versionParts[1] === 9 && (versionParts[2] || 0) >= 6);
+            if (extensionReady && supportsReembolso) return 'extension';
+
+            const extensionMessage = extensionReady
+                ? `A extensão AutoToca instalada (${extensionVersion}) precisa ser atualizada para a versão 0.9.6 ou superior. `
+                : 'Para abrir o e-Reembolso em uma aba deste mesmo navegador, instale e ative a extensão AutoToca. ';
+            const useControlledWindow = await uiConfirm(
+                extensionMessage +
+                'Sem a extensão, o robô precisa usar uma janela controlada com perfil separado. Deseja continuar assim?',
+                'Como abrir o e-Reembolso'
+            );
+            if (useControlledWindow) return 'playwright';
+            await showAutoTocaExtensionInstallGuide();
+            return null;
+        }
+
+        function _reembOpenExtensionTab(taskData) {
+            return new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
+                    reject(new Error('A extensão AutoToca não confirmou a abertura da aba. Recarregue a extensão e tente novamente.'));
+                }, 6000);
+                const onResult = event => {
+                    const detail = event?.detail || {};
+                    if (detail.command !== 'start_reembolso_task' || detail.taskId !== taskData.task_id) return;
+                    clearTimeout(timeout);
+                    window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
+                    if (detail.ok) resolve(detail);
+                    else reject(new Error(detail.message || 'A extensão não conseguiu abrir o e-Reembolso.'));
+                };
+                window.addEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
+                window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_COMMAND_EVENT, {
+                    detail: {
+                        command: 'start_reembolso_task',
+                        taskId: taskData.task_id,
+                        apiBase: window.location.origin,
+                        targetUrl: taskData.target_url,
+                    }
+                }));
+            });
+        }
+
+        async function _reembMarkExtensionError(taskId, error) {
+            try {
+                await fetch(`${API_BASE}/autotoca/reembolsos/extension/tasks/${encodeURIComponent(taskId)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        status: 'error', progress: 0, step: '',
+                        error: error?.message || String(error),
+                    }),
+                });
+            } catch (_) {
+                // O erro original de abertura é mais útil para o usuário.
+            }
+        }
+
+        async function runReembDeslocamentoRobot(event) {
+            event?.preventDefault?.();
+            const sub = document.getElementById('reembSubFluxo').value;
+            if (sub === 'estacionamento') _reembRecalculateReceiptSummary('estacionamento');
+            const validationError = _reembValidateDeslocamento(sub);
+            if (validationError) { showError(validationError); return; }
+            const browserMode = await _reembResolveBrowserMode();
+            if (!browserMode) return;
+
+            const fd = new FormData();
+            fd.append('browser_mode', browserMode);
+            fd.append('celula_custo', document.getElementById('reembCelulaCusto').value.trim());
+            fd.append('descricao_despesa', document.getElementById('reembDescricaoDespesa').value.trim());
+            fd.append('sub_fluxo', sub);
+
+            if (sub === 'deslocamento') {
+                const contaSelect = document.getElementById('reembConta');
+                fd.append('account_id', contaSelect.value);
+                fd.append('conta', contaSelect.options[contaSelect.selectedIndex]?.textContent || '');
+                fd.append('destino', document.getElementById('reembDestino').value.trim());
+                fd.append('origem', document.getElementById('reembOrigem').value.trim());
+                fd.append('data_deslocamento', document.getElementById('reembDataDeslocamento').value);
+                fd.append('tipo_transporte', document.getElementById('reembTipoTransporte').value);
+                fd.append('ida_e_volta', document.getElementById('reembIdaVolta').checked ? 'true' : 'false');
+                if (_reembPedagioValorCents > 0) fd.append('pedagio_valor_total', (_reembPedagioValorCents / 100).toFixed(2));
+                _reembFileSelections.pedagio.forEach(f => fd.append('pedagio_comprovantes', f));
+                const dataFile = _reembFileSelections.data[0];
+                if (dataFile) fd.append('data_deslocamento_comprovante', dataFile);
+            } else {
+                fd.append('quantidade', String(_reembEstacResumo.quantidade));
+                fd.append('periodo_inicio', _reembEstacResumo.periodo_inicio || document.getElementById('reembDataDeslocamento').value);
+                fd.append('periodo_fim', _reembEstacResumo.periodo_fim || document.getElementById('reembDataDeslocamento').value);
+                fd.append('valor_total', (_reembEstacResumo.valor_total_cents / 100).toFixed(2));
+                fd.append('descricao_estacionamento', document.getElementById('reembEstacDescricao').value.trim());
+                _reembFileSelections.estacionamento.forEach(f => fd.append('estacionamento_comprovantes', f));
+            }
+
+            _reembToggleRunning(true);
+            _reembSetProgress(5, 'Iniciando o robô...');
+
+            try {
+                const response = await _reembStartRobotRequest(
+                    `${API_BASE}/autotoca/reembolsos/deslocamento/robot`,
+                    fd,
+                    'Deslocamento'
+                );
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                if (data.browser_mode === 'extension') {
+                    try {
+                        await _reembOpenExtensionTab(data);
+                    } catch (error) {
+                        await _reembMarkExtensionError(data.task_id, error);
+                        throw error;
+                    }
+                }
+                const taskId = data.task_id;
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/autotoca/reembolsos/deslocamento/robot/tasks/${taskId}`,
+                    'Robô de Reembolso (Deslocamento)',
+                    sourceTab,
+                    () => { _reembToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie no e-Reembolso.'); loadReembOrigemHistorico(); },
+                    (errMsg) => { _reembToggleRunning(false); showError(errMsg || 'Erro no robô de Reembolsos.'); },
+                    (pct, step) => _reembSetProgress(pct, step)
+                );
+            } catch (error) {
+                _reembToggleRunning(false);
+                showError(error.message || 'Erro ao iniciar o robô.');
+            }
+        }
+
+        async function reembOnAlmComprovantesChange() {
+            const files = _reembUpdateFileSelection('reembAlmComprovantes');
+            const resumoEl = document.getElementById('reembAlmResumo');
+            if (!files.length) {
+                _reembCancelAnalysis('almoco');
+                _reembClearReceiptItems('almoco');
+                _reembAlmResumo = null;
+                resumoEl.textContent = '';
+                return;
+            }
+            _reembClearReceiptItems('almoco');
+            resumoEl.textContent = '';
+            const result = await _reembAnalyzeFiles('almoco', files);
+            if (!result) return;
+            _reembSetReceiptItems('almoco', result);
+        }
+
+        function _reembAlmToggleRunning(running) {
+            const btn = document.getElementById('reembAlmRobotBtn');
+            const area = document.getElementById('reembAlmRobotProgress');
+            if (btn) btn.disabled = running;
+            if (area) area.style.display = running ? 'block' : 'none';
+        }
+
+        function _reembAlmSetProgress(pct, step) {
+            const bar = document.getElementById('reembAlmRobotBar');
+            const stepEl = document.getElementById('reembAlmRobotStep');
+            const pctEl = document.getElementById('reembAlmRobotPct');
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        async function runReembAlmocoRobot(event) {
+            event?.preventDefault?.();
+            _reembRecalculateReceiptSummary('almoco');
+            const celula = document.getElementById('reembAlmCelulaCusto').value.trim();
+            const descricaoDespesa = document.getElementById('reembAlmDescricaoDespesa').value.trim();
+            const descricao = document.getElementById('reembAlmDescricao').value.trim();
+            if (!celula) { showError('Célula custo é obrigatória.'); return; }
+            if (!descricaoDespesa) { showError('Descrição da despesa é obrigatória.'); return; }
+            if (!_reembAlmResumo || !_reembAlmResumo.quantidade) { showError('Anexe ao menos um comprovante.'); return; }
+            if (!descricao) { showError('Descrição é obrigatória.'); return; }
+            const browserMode = await _reembResolveBrowserMode();
+            if (!browserMode) return;
+
+            const fd = new FormData();
+            fd.append('browser_mode', browserMode);
+            fd.append('celula_custo', celula);
+            fd.append('descricao_despesa', descricaoDespesa);
+            fd.append('quantidade', String(_reembAlmResumo.quantidade));
+            fd.append('periodo_inicio', _reembAlmResumo.periodo_inicio || '');
+            fd.append('periodo_fim', _reembAlmResumo.periodo_fim || '');
+            fd.append('valor_total', (_reembAlmResumo.valor_total_cents / 100).toFixed(2));
+            fd.append('descricao', descricao);
+            _reembFileSelections.almoco.forEach(f => fd.append('comprovantes', f));
+
+            _reembAlmToggleRunning(true);
+            _reembAlmSetProgress(5, 'Iniciando o robô...');
+
+            try {
+                const response = await _reembStartRobotRequest(
+                    `${API_BASE}/autotoca/reembolsos/almoco/robot`,
+                    fd,
+                    'Almoço com Cliente'
+                );
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'Erro ao iniciar o robô.');
+                if (data.browser_mode === 'extension') {
+                    try {
+                        await _reembOpenExtensionTab(data);
+                    } catch (error) {
+                        await _reembMarkExtensionError(data.task_id, error);
+                        throw error;
+                    }
+                }
+                const taskId = data.task_id;
+                const sourceTab = typeof _currentTab !== 'undefined' ? _currentTab : 'autotoca';
+                BgTaskManager.register(
+                    taskId,
+                    `${API_BASE}/autotoca/reembolsos/almoco/robot/tasks/${taskId}`,
+                    'Robô de Reembolso (Almoço)',
+                    sourceTab,
+                    () => { _reembAlmToggleRunning(false); showInfo('Preenchimento concluído. Revise e envie no e-Reembolso.'); },
+                    (errMsg) => { _reembAlmToggleRunning(false); showError(errMsg || 'Erro no robô de Reembolsos.'); },
+                    (pct, step) => _reembAlmSetProgress(pct, step)
+                );
+            } catch (error) {
+                _reembAlmToggleRunning(false);
+                showError(error.message || 'Erro ao iniciar o robô.');
+            }
+        }
+
         async function loadIntegrationConfig() {
             const response = await fetch(`${API_BASE}/config/integrations`);
             if (response.ok) integrationConfig = await response.json();

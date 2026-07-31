@@ -56,6 +56,7 @@ from integrations.outlook_graph import (
     get_valid_access_token as outlook_graph_get_valid_access_token,
     send_mail as outlook_graph_send_mail,
 )
+from integrations import ext_autoupdate
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
@@ -113,12 +114,13 @@ except ImportError:
 
 try:
     from PIL import Image as PILImage
-    from PIL import ImageOps, ImageFilter
+    from PIL import ImageOps, ImageFilter, ImageEnhance
     PIL_AVAILABLE = True
 except ImportError:
     PILImage = None
     ImageOps = None
     ImageFilter = None
+    ImageEnhance = None
     PIL_AVAILABLE = False
 
 REPORTLAB_IMPORT_ERROR = None
@@ -189,10 +191,19 @@ WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Pasta ESTÁVEL onde a extensão AutoToca é publicada para o "carregar sem compactação"
+# + auto-reload (o usuário carrega uma vez; atualizações se aplicam sozinhas).
+EXT_LOCAL_DIR = DATA_DIR / 'extension'
+try:
+    ext_autoupdate.publish_unpacked(EXT_LOCAL_DIR)
+except Exception as _ext_exc:  # best-effort
+    logging.getLogger('toca-do-coelho').debug(f'[ExtAutoUpdate] publish inicial: {_ext_exc}')
 AUTOTOCA_SUPPORT_FILES_DIR = Path(app.static_folder) / 'assets' / 'autotoca' / 'chamado-juridico'
 AUTOTOCA_SUPPORT_FILES_DIR.mkdir(parents=True, exist_ok=True)
 CHAMADO_JURIDICO_UPLOAD_DIR = AUTOTOCA_UPLOAD_DIR / 'chamado-juridico'
 CHAMADO_JURIDICO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+REEMBOLSOS_UPLOAD_DIR = AUTOTOCA_UPLOAD_DIR / 'reembolsos'
+REEMBOLSOS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 WHISPER_MODEL = None
 WHISPER_MODEL_LOCK = threading.Lock()
@@ -832,6 +843,32 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_chamado_juridico_history_created_at ON chamado_juridico_history(created_at)')
 
+    # Reembolsos — histórico de endereços de Origem digitados (dropdown de
+    # reaproveitamento) e endereço de Destino salvo por conta.
+    c.execute('''CREATE TABLE IF NOT EXISTS reembolso_origem_historico (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        texto TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS account_reembolso_enderecos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        endereco TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS reembolsos_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        files_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_reembolsos_history_created_at ON reembolsos_history(created_at)')
+
     # Tokens de integrações OAuth por usuário (Outlook Graph e futuros conectores)
     outlook_graph_ensure_schema(conn)
 
@@ -1272,6 +1309,29 @@ SCHEMA_MIGRATIONS = [
         # registrados como pendência de resposta por engano — só geram esse
         # preview quando não há corpo de texto nem mídia (ver _waha_is_content_message).
         "DELETE FROM inbound_messages WHERE preview = '(mensagem sem texto)' AND responded_at IS NULL",
+    ]),
+    (14, 'reembolsos_schema', [
+        '''CREATE TABLE IF NOT EXISTS reembolso_origem_historico (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            texto TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS account_reembolso_enderecos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            endereco TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+            UNIQUE(account_id)
+        )''',
+        '''CREATE TABLE IF NOT EXISTS reembolsos_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            files_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_reembolsos_history_created_at ON reembolsos_history(created_at)',
     ]),
 ]
 
@@ -1809,6 +1869,282 @@ def format_currency_br(cents):
         return 'Não informado'
     formatted = f"{value:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
     return f'R$ {formatted}'
+
+
+def _reembolso_aggregate_receipts(extracted):
+    """Soma valores e calcula período min/max de uma lista de comprovantes
+    já extraídos via IA. Cada item: {'data': 'YYYY-MM-DD'|None, 'valor_cents': int|None}.
+    Valores e datas são agregados de forma independente: uma data ilegível não
+    descarta um valor reconhecido. Todos os anexos contam na quantidade."""
+    datas = sorted(e['data'] for e in extracted if e.get('data'))
+    return {
+        'valor_total_cents': sum(
+            e['valor_cents'] for e in extracted if e.get('valor_cents') is not None
+        ),
+        'periodo_inicio': datas[0] if datas else None,
+        'periodo_fim': datas[-1] if datas else None,
+        'quantidade': len(extracted),
+    }
+
+
+def _reembolso_normalize_date_value(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    candidates = [
+        (r'(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})', ('ymd', 1, 2, 3)),
+        (r'(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})', ('dmy', 1, 2, 3)),
+    ]
+    for pattern, meta in candidates:
+        m = re.search(pattern, text)
+        if not m:
+            continue
+        kind, a, b, c = meta
+        try:
+            if kind == 'ymd':
+                year, month, day = int(m.group(a)), int(m.group(b)), int(m.group(c))
+            else:
+                day, month, year = int(m.group(a)), int(m.group(b)), int(m.group(c))
+                if year < 100:
+                    year += 2000 if year < 70 else 1900
+            if year < 2000 or year > 2100:
+                continue
+            return datetime(year, month, day).strftime('%Y-%m-%d')
+        except Exception:
+            continue
+    return None
+
+
+def _reembolso_parse_value_to_cents(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(round(float(value) * 100))
+        except Exception:
+            return None
+    return parse_currency_to_cents(value)
+
+
+def _reembolso_parse_receipt_text(text):
+    """Extrai data e valor de texto de comprovante, sem depender da IA."""
+    text = (text or '').strip()
+    if not text:
+        return {'data': None, 'valor_cents': None}
+
+    data = _reembolso_normalize_date_value(text)
+    currency_pattern = re.compile(r'(?:R\$\s*)?\d{1,3}(?:\.\d{3})*,\d{2}|(?:R\$\s*)?\d+,\d{2}|R\$\s*\d+\.\d{2}', re.IGNORECASE)
+    positive_labels = (
+        'valor total', 'total pago', 'valor pago', 'total a pagar', 'vl total',
+        'valor da venda', 'valor cobrado', 'valor recebido', 'total r$',
+        'avulso', 'dinheiro', 'pagto', 'pagamento', 'credito', 'crédito', 'total'
+    )
+    identifier_labels = (
+        'cnpj', 'cpf', 'ccm', 'inscricao', 'inscrição', 'ticket', 'cupom',
+        'rps', 'serie', 'série', 'cartao', 'cartão', 'placa', 'doc=', 'aut='
+    )
+    negative_labels = ('subtotal', 'sub total', 'desconto', 'troco', 'saldo')
+
+    labeled_candidates = []
+    all_candidates = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        values = [parse_currency_to_cents(m.group(0)) for m in currency_pattern.finditer(line)]
+        values = [v for v in values if v is not None]
+        if not values:
+            continue
+        # OCR costuma inserir vírgulas em CNPJ, tickets e outros identificadores.
+        # Esses números não podem participar nem mesmo do fallback de valor.
+        has_positive_label = any(label in lower for label in positive_labels)
+        if any(label in lower for label in identifier_labels) and not has_positive_label:
+            continue
+        all_candidates.extend(values)
+        if has_positive_label and not any(label in lower for label in negative_labels):
+            labeled_candidates.extend(values)
+
+    source = labeled_candidates or all_candidates
+    valor_cents = max(source) if source else None
+    return {'data': data, 'valor_cents': valor_cents}
+
+
+def _reembolso_is_pdf(mime, filename=''):
+    return (mime or '').lower().split(';')[0].strip() == 'application/pdf' or (filename or '').lower().endswith('.pdf')
+
+
+def _reembolso_is_image(mime, filename=''):
+    mime = (mime or '').lower().split(';')[0].strip()
+    suffix = Path(filename or '').suffix.lower()
+    return mime.startswith('image/') or suffix in ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff')
+
+
+def _reembolso_extract_text_from_bytes(file_bytes, mime, filename=''):
+    """Extrai texto localmente de imagens/PDFs de comprovantes.
+
+    PDFs reaproveitam o pipeline do iToca, que ja tenta texto digital,
+    pdftotext e OCR. Imagens usam Tesseract diretamente quando disponivel.
+    """
+    if not file_bytes:
+        return ''
+    if _reembolso_is_pdf(mime, filename):
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+            return _itoca_extract_text_from_file(tmp_path)
+        finally:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    if _reembolso_is_image(mime, filename) and PIL_AVAILABLE and PYTESSERACT_AVAILABLE:
+        tess_cmd = _itoca_find_tesseract_cmd()
+        if not tess_cmd:
+            logger.info('[Reembolsos] Tesseract não encontrado; OCR local de imagem indisponível.')
+            return ''
+        try:
+            pytesseract.pytesseract.tesseract_cmd = tess_cmd
+            img = PILImage.open(BytesIO(file_bytes))
+            try:
+                img = ImageOps.exif_transpose(img)
+            except Exception:
+                pass
+            gray = ImageOps.grayscale(img)
+            contrast = ImageEnhance.Contrast(ImageOps.autocontrast(gray)).enhance(2.0)
+            variants = [
+                gray,
+                ImageOps.autocontrast(gray),
+                contrast,
+                ImageOps.autocontrast(gray).point(lambda value: 0 if value < 170 else 255),
+            ]
+            best_text = ''
+            best_score = -1
+            for variant in variants:
+                for config in ('--psm 6', '--psm 11'):
+                    try:
+                        candidate = pytesseract.image_to_string(variant, lang='por+eng', config=config).strip()
+                    except Exception:
+                        candidate = pytesseract.image_to_string(variant, lang='eng', config=config).strip()
+                    parsed = _reembolso_parse_receipt_text(candidate)
+                    score = (3 if parsed.get('valor_cents') is not None else 0) + (2 if parsed.get('data') else 0)
+                    score += min(len(candidate), 4000) / 10000
+                    if score > best_score:
+                        best_text = candidate
+                        best_score = score
+                    if parsed.get('valor_cents') is not None and parsed.get('data'):
+                        return candidate
+            return best_text
+        except Exception as e:
+            logger.debug(f'[Reembolsos] OCR local de imagem falhou: {e}')
+    return ''
+
+
+def _reembolso_render_pdf_pages_for_vision(file_bytes, max_pages=3):
+    if not file_bytes or not PYPDFIUM2_AVAILABLE or not PIL_AVAILABLE:
+        return []
+    images = []
+    try:
+        doc = pdfium.PdfDocument(file_bytes)
+        for i in range(min(len(doc), max_pages)):
+            page = doc[i]
+            bitmap = page.render(scale=200/72)
+            pil_img = bitmap.to_pil()
+            out = BytesIO()
+            pil_img.save(out, format='PNG')
+            images.append(('image/png', out.getvalue()))
+    except Exception as e:
+        logger.debug(f'[Reembolsos] Render de PDF para visão falhou: {e}')
+    return images
+
+
+def _reembolso_extract_receipt(file_bytes, mime, filename=''):
+    """Lê um comprovante via OCR local e, se preciso, IA de visão/texto."""
+    ocr_text = _reembolso_extract_text_from_bytes(file_bytes, mime, filename)
+    local_result = _reembolso_parse_receipt_text(ocr_text)
+    if local_result.get('data') and local_result.get('valor_cents') is not None:
+        return local_result
+
+    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
+    if not or_key:
+        return local_result
+
+    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
+    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
+    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
+    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
+
+    prompt = (
+        "Você está lendo um comprovante fiscal brasileiro (nota fiscal, recibo ou "
+        "cupom). Extraia a data da despesa e o valor total pago. "
+        'Retorne EXCLUSIVAMENTE um objeto JSON válido no formato exato: '
+        '{"data":"YYYY-MM-DD","valor":123.45}. '
+        "Se não conseguir identificar a data ou o valor com confiança, use null "
+        "no campo correspondente. Não inclua markdown nem texto fora do JSON."
+    )
+    if ocr_text:
+        prompt += "\n\nTexto extraído por OCR/PDF para conferência:\n" + ocr_text[:8000]
+
+    vision_inputs = []
+    if _reembolso_is_pdf(mime, filename):
+        vision_inputs = _reembolso_render_pdf_pages_for_vision(file_bytes)
+    elif _reembolso_is_image(mime, filename):
+        vision_inputs = [((mime or 'image/jpeg').split(';')[0].strip() or 'image/jpeg', file_bytes)]
+
+    content = [{'type': 'text', 'text': prompt}]
+    for item_mime, item_bytes in vision_inputs[:3]:
+        image_data = base64.b64encode(item_bytes).decode('utf-8')
+        content.append({'type': 'image_url', 'image_url': {'url': f'data:{item_mime};base64,{image_data}'}})
+
+    if not vision_inputs and not ocr_text:
+        return local_result
+
+    payload = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': 'Você é um leitor de comprovantes fiscais. Responda SEMPRE e SOMENTE com JSON válido.'},
+            {'role': 'user', 'content': content}
+        ],
+        'temperature': 0.1
+    }
+    try:
+        req = urllib.request.Request(
+            'https://openrouter.ai/api/v1/chat/completions',
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {or_key}',
+                'HTTP-Referer': site_url,
+                'X-Title': app_name
+            },
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        choices = data.get('choices') or []
+        raw = (choices[0].get('message') or {}).get('content', '') if choices else ''
+        cleaned = raw.strip()
+        if cleaned.startswith('```'):
+            cleaned = cleaned.split('```')[1]
+            if cleaned.startswith('json'):
+                cleaned = cleaned[4:]
+        parsed = json.loads(cleaned.strip())
+        data_str = parsed.get('data')
+        valor = parsed.get('valor')
+        parsed_valor_cents = _reembolso_parse_value_to_cents(valor)
+        return {
+            'data': _reembolso_normalize_date_value(data_str) or local_result.get('data'),
+            'valor_cents': parsed_valor_cents if parsed_valor_cents is not None else local_result.get('valor_cents')
+        }
+    except Exception as e:
+        logger.warning(f'[Reembolsos][OpenRouter] Falha ao extrair comprovante: {e}')
+        return local_result
 
 
 def _relation_report_hex_to_color(value, fallback='#047857'):
@@ -4170,7 +4506,10 @@ def _itoca_extract_text_from_file(file_path_str):
                         try:
                             ocr_parts = []
                             for img in images:
-                                ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                                try:
+                                    ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                                except Exception:
+                                    ocr_text = pytesseract.image_to_string(img, lang='eng')
                                 if ocr_text.strip():
                                     ocr_parts.append(ocr_text.strip())
                             if ocr_parts:
@@ -12185,7 +12524,7 @@ def handle_unexpected_exception(error):
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
-                 'portfolio', 'config', 'home']
+                 'portfolio', 'config', 'home', 'reembolsos']
 
 
 def _load_route_modules():
@@ -12225,5 +12564,9 @@ if __name__ == '__main__':
     
     thread = threading.Thread(target=open_browser, daemon=True)
     thread.start()
-    
+
+    # Registra a extensão AutoToca para auto-instalação/atualização pelo navegador
+    # (hospedagem local; best-effort, só no Windows). Ver integrations/ext_autoupdate.py.
+    threading.Thread(target=ext_autoupdate.bootstrap, args=(port, EXT_LOCAL_DIR), daemon=True).start()
+
     app.run(host='localhost', port=port, debug=fixed_debug_mode, use_reloader=False)

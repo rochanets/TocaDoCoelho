@@ -1,0 +1,762 @@
+# -*- coding: utf-8 -*-
+"""Robô visual do submódulo Reembolsos.
+
+Abre o portal e-Reembolso (https://ereembolso.stefanini.com.br) num navegador
+controlado (Playwright) visível na máquina do usuário, preenche os campos dos
+fluxos "Deslocamento & Estacionamento" (/Reembolso/Deslocamentos.aspx) e
+"Almoço com Cliente" (/Reembolso/OutrasDespesas.aspx), e para no botão final
+para o usuário revisar e enviar manualmente — o robô nunca envia sozinho.
+
+Diferente do robô do Chamado Jurídico (Microsoft Forms, perguntas numeradas),
+este portal é ASP.NET com campos nomeados. Os campos são localizados por
+texto do label mais próximo, com fallback documentado quando o seletor não
+bate — os seletores exatos (id/name dos combos) foram parcialmente
+inspecionados e serão ajustados na primeira execução real junto com o
+usuário (ver docs/superpowers/specs/2026-07-14-autotoca-reembolsos-design.md,
+seção "Itens a confirmar ao vivo").
+"""
+
+import os
+import re
+import sys
+import threading
+import time
+import unicodedata
+import uuid
+from pathlib import Path
+
+_ROBOT_LOCK = threading.Lock()
+_ATTACHED_CONTEXT_IDS = set()
+
+LOGIN_TIMEOUT_SECONDS = 300
+REVIEW_TIMEOUT_SECONDS = 900
+TYPE_DELAY_MS = 30
+
+DESLOCAMENTOS_URL = 'https://ereembolso.stefanini.com.br/Reembolso/Deslocamentos.aspx'
+OUTRAS_DESPESAS_URL = 'https://ereembolso.stefanini.com.br/Reembolso/OutrasDespesas.aspx'
+
+
+class ReembolsoRobotError(Exception):
+    pass
+
+
+def _profile_dir():
+    base = (
+        Path.home() / 'AppData' / 'Roaming' / 'toca-do-coelho'
+        if sys.platform == 'win32'
+        else Path.home() / '.toca-do-coelho'
+    )
+    path = base / 'reembolso-robot-profile'
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def gerar_comprovante_corrompido(target_dir):
+    """Gera um arquivo de imagem propositalmente inválido (não é um JPEG real),
+    usado como anexo quando o campo de pedágio é exigido pelo site mas o
+    usuário não anexou nenhum comprovante próprio."""
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f'sem-comprovante-{uuid.uuid4().hex[:8]}.jpg'
+    path.write_bytes(b'\x00\x00\x00 nao-e-um-jpeg-valido \x00\x00\x00')
+    return path
+
+
+def _detect_default_browser_channel():
+    if sys.platform != 'win32':
+        return None
+    try:
+        import winreg
+        key_path = r'Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            prog_id = (winreg.QueryValueEx(key, 'ProgId')[0] or '').lower()
+        if 'chrome' in prog_id:
+            return 'chrome'
+        if 'edge' in prog_id:
+            return 'msedge'
+    except Exception:
+        pass
+    return None
+
+
+def _launch_context(pw, headless):
+    cdp_url = (os.environ.get('TOCA_ROBOT_CDP_URL') or '').strip()
+    if cdp_url:
+        try:
+            browser = pw.chromium.connect_over_cdp(cdp_url)
+            if not browser.contexts:
+                raise ReembolsoRobotError(
+                    'O navegador conectado via CDP não possui uma sessão disponível.'
+                )
+            context = browser.contexts[0]
+            _ATTACHED_CONTEXT_IDS.add(id(context))
+            return context
+        except ReembolsoRobotError:
+            raise
+        except Exception as e:
+            raise ReembolsoRobotError(
+                'Não foi possível conectar ao navegador já aberto. '
+                'Confirme TOCA_ROBOT_CDP_URL e a porta de depuração remota. '
+                f'Detalhe: {e}'
+            ) from e
+
+    profile = _profile_dir()
+    args = ['--disable-blink-features=AutomationControlled']
+    kwargs = dict(headless=headless, args=args)
+    if headless:
+        kwargs['viewport'] = {'width': 1280, 'height': 920}
+    else:
+        kwargs['viewport'] = None
+        args.append('--start-maximized')
+    last_error = None
+
+    channels = []
+    detected = _detect_default_browser_channel()
+    if detected:
+        channels.append(detected)
+    for channel in ('chrome', 'msedge'):
+        if channel not in channels:
+            channels.append(channel)
+    channels.append(None)
+
+    for channel in channels:
+        try:
+            if channel:
+                return pw.chromium.launch_persistent_context(profile, channel=channel, **kwargs)
+            return pw.chromium.launch_persistent_context(profile, **kwargs)
+        except Exception as e:
+            last_error = e
+    raise ReembolsoRobotError(f'Não foi possível abrir um navegador (Chrome/Edge). Detalhe: {last_error}')
+
+
+def _normalized_option_text(value):
+    text = unicodedata.normalize('NFKD', str(value or ''))
+    text = ''.join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r'[^a-zA-Z0-9]+', ' ', text).strip().casefold()
+
+
+def _option_numeric_code(value):
+    match = re.match(r'^\s*0*(\d+)(?:\s|[-–—]|$)', str(value or ''))
+    return int(match.group(1)) if match else None
+
+
+def _option_matches(option_text, requested_text):
+    requested = _normalized_option_text(requested_text)
+    option = _normalized_option_text(option_text)
+    requested_code = _option_numeric_code(requested_text)
+    option_code = _option_numeric_code(option_text)
+    if requested_code is not None and option_code == requested_code:
+        return True
+    return bool(requested and (requested == option or requested in option or option in requested))
+
+
+def _field_label(page, label_text):
+    labels = page.locator('label').filter(has_text=label_text)
+    if labels.count() > 0:
+        return labels.first
+    return page.get_by_text(label_text, exact=False).first
+
+
+_FIELD_ROOT_SELECTOR = (
+    'input, select, textarea, .select2-container, .select2-selection, '
+    '.select2-choice, .select2-input, '
+    '.chosen-container, .chosen-single, .bootstrap-select, '
+    '.ui-selectmenu-button, [role="combobox"], [data-select2-id]'
+)
+
+_FIELD_GLOBAL_SELECTOR = (
+    '.select2-container, .select2-selection, .select2-choice, '
+    '.chosen-container, .chosen-single, '
+    '.bootstrap-select, .ui-selectmenu-button, [role="combobox"], select, '
+    '[data-select2-id]'
+)
+
+
+def _field_container(page, label_text):
+    """Encontra o bloco do label, inclusive quando o combo é irmão distante."""
+    label = _field_label(page, label_text)
+    candidates = [
+        label,
+        label.locator('xpath=..').first,
+        label.locator('xpath=../..').first,
+        label.locator('xpath=../../..').first,
+        label.locator('xpath=ancestor::*[.//input or .//select or .//textarea][1]').first,
+        label.locator('xpath=following-sibling::*[1]').first,
+        label.locator('xpath=following-sibling::*[1]/..').first,
+    ]
+    for candidate in candidates:
+        try:
+            controls = candidate.locator(_FIELD_ROOT_SELECTOR)
+            if candidate.count() and (
+                any(controls.nth(index).is_visible() for index in range(controls.count()))
+                or candidate.evaluate(
+                    "el => el.matches('select, input, textarea, .select2-container, "
+                    ".select2-selection, .select2-choice, .chosen-container, .bootstrap-select, "
+                    ".ui-selectmenu-button, [role=combobox]')"
+                )
+            ):
+                return candidate
+        except Exception:
+            continue
+    for candidate in candidates:
+        try:
+            if candidate.count() and candidate.locator(
+                _FIELD_ROOT_SELECTOR
+            ).count() > 0:
+                return candidate
+        except Exception:
+            continue
+    return candidates[1]
+
+
+def _nearest_field_control(page, label_text):
+    """Fallback espacial para portais que renderizam o combo fora do wrapper."""
+    label = _field_label(page, label_text)
+    if label.count() == 0:
+        return page.locator(_FIELD_GLOBAL_SELECTOR).first
+    try:
+        label_box = label.bounding_box()
+    except Exception:
+        label_box = None
+    controls = page.locator(_FIELD_GLOBAL_SELECTOR)
+    best = None
+    best_score = None
+    for index in range(controls.count()):
+        candidate = controls.nth(index)
+        try:
+            if not candidate.is_visible():
+                continue
+            box = candidate.bounding_box()
+            if not box:
+                continue
+            if label_box:
+                score = (
+                    abs((box['x'] + box['width'] / 2) - (label_box['x'] + label_box['width'] / 2))
+                    + abs((box['y'] + box['height'] / 2) - (label_box['y'] + label_box['height']))
+                )
+            else:
+                score = index
+            if best_score is None or score < best_score:
+                best = candidate
+                best_score = score
+        except Exception:
+            continue
+    return best or controls.first
+
+
+def fill_text_field(page, label_text, value):
+    container = _field_container(page, label_text)
+    targets = container.locator('input[type="text"], textarea')
+    target = next(
+        (targets.nth(index) for index in range(targets.count()) if targets.nth(index).is_visible()),
+        targets.first,
+    )
+    target.click(timeout=8000)
+    target.fill('')
+    target.type(str(value), delay=TYPE_DELAY_MS)
+    actual = (target.input_value(timeout=4000) or '').strip()
+    if actual != str(value).strip():
+        raise ReembolsoRobotError(f'campo "{label_text}" não reteve o valor digitado (esperado "{value}", ficou "{actual}")')
+
+
+def select_native_option(page, label_text, option_text):
+    container = _field_container(page, label_text)
+    select = container.locator('select').first
+    options = select.locator('option')
+    for index in range(options.count()):
+        option = options.nth(index)
+        visible_text = option.inner_text(timeout=4000)
+        if _option_matches(visible_text, option_text):
+            value = option.get_attribute('value')
+            if value is not None:
+                select.select_option(value=value, timeout=8000)
+            else:
+                select.select_option(label=visible_text, timeout=8000)
+            return
+    raise ReembolsoRobotError(
+        f'Não encontrei a opção "{option_text}" no campo "{label_text}".'
+    )
+
+
+def _select2_control(page, label_text):
+    container = _field_container(page, label_text)
+    control = container.locator(
+        '.select2-choice, .select2-selection, .chosen-single, '
+        '.select2-container, .chosen-container, '
+        '.bootstrap-select, .ui-selectmenu-button, [role="combobox"], select, [data-select2-id]'
+    )
+    visible = []
+    for index in range(control.count()):
+        candidate = control.nth(index)
+        if candidate.is_visible():
+            visible.append(candidate)
+    if len(visible) == 1:
+        return visible[0]
+    if len(visible) > 1:
+        return _nearest_field_control(page, label_text)
+    select = container.locator('select').first
+    fallback = select.locator(
+        'xpath=following-sibling::*[1]//*[contains(@class,"select2-selection")]'
+    )
+    for index in range(fallback.count()):
+        candidate = fallback.nth(index)
+        if candidate.is_visible():
+            return candidate
+    nearest = _nearest_field_control(page, label_text)
+    return nearest if nearest.count() else fallback.first
+
+
+def _option_search_text(option_text):
+    code = _option_numeric_code(option_text)
+    if code is not None:
+        return str(code)
+    normalized = _normalized_option_text(option_text)
+    tokens = [token for token in normalized.split() if len(token) >= 3]
+    return tokens[0] if tokens else normalized
+
+
+def _field_diagnostics(page, label_text):
+    """Resumo curto do DOM para que uma falha real seja diagnosticável pelo log."""
+    try:
+        return page.evaluate(
+            r"""labelText => {
+                const normalize = value => String(value || '')
+                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                    .replace(/[^a-zA-Z0-9]+/g, ' ').trim().toLowerCase();
+                const wanted = normalize(labelText);
+                const labels = Array.from(document.querySelectorAll(
+                    'label, .control-label, [class*="label" i], th, dt'
+                )).filter(el => normalize(el.textContent).includes(wanted)).slice(0, 4);
+                const controls = Array.from(document.querySelectorAll(
+                    'select, [role="combobox"], .select2-container, .select2-choice, '
+                    '.select2-selection, .chosen-container, .chosen-single'
+                )).filter(el => {
+                    const style = getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' &&
+                        rect.width > 0 && rect.height > 0;
+                }).slice(0, 12);
+                const describe = el => ({
+                    tag: el.tagName,
+                    id: el.id || '',
+                    className: String(el.className || '').slice(0, 120),
+                    text: String(el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 100),
+                    disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true')
+                });
+                return {
+                    url: location.href,
+                    labels: labels.map(describe),
+                    visibleControls: controls.map(describe)
+                };
+            }""",
+            label_text,
+        )
+    except Exception as e:
+        return {'diagnostic_error': str(e)}
+
+
+def _wait_for_select_control(page, label_text, timeout_ms=20000):
+    """Espera o combo existir, reaparecer após postback e ficar habilitado."""
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while time.monotonic() < deadline:
+        if page.is_closed():
+            raise ReembolsoRobotError('A janela do robô foi fechada durante o preenchimento.')
+        try:
+            control = _select2_control(page, label_text)
+            if control.count() > 0 and control.is_visible() and control.is_enabled():
+                return control
+        except Exception:
+            # O ASP.NET substitui os nós do formulário durante o postback; um
+            # locator pode ficar obsoleto por alguns milissegundos nesse intervalo.
+            pass
+        page.wait_for_timeout(250)
+    diagnostics = _field_diagnostics(page, label_text)
+    raise ReembolsoRobotError(
+        f'Não encontrei o controle habilitado do campo "{label_text}" após aguardar '
+        f'o recarregamento do formulário. Diagnóstico: {diagnostics}'
+    )
+
+
+def _wait_for_select_results(page, timeout_ms=8000):
+    selector = (
+        '[role="option"]:visible, li.select2-results__option:visible, '
+        '.select2-result-selectable:visible, .select2-result-label:visible, '
+        '.chosen-results li:visible, .dropdown-menu li:visible'
+    )
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while time.monotonic() < deadline:
+        options = page.locator(selector)
+        if options.count() > 0:
+            return options
+        page.wait_for_timeout(200)
+    return page.locator(selector)
+
+
+def _wait_for_dependent_select(page, label_text, timeout_ms=20000):
+    """Aguarda o postback/AJAX que popula um combo dependente."""
+    try:
+        page.wait_for_load_state('networkidle', timeout=min(timeout_ms, 12000))
+    except Exception:
+        # UpdatePanel nem sempre produz um estado networkidle observável.
+        pass
+    return _wait_for_select_control(page, label_text, timeout_ms=timeout_ms)
+
+
+def choose_select2_option(page, label_text, option_text):
+    """Para combos Select2-like: clica para abrir, digita para filtrar,
+    clica na primeira opção visível que contenha o texto."""
+    control = _wait_for_select_control(page, label_text)
+
+    try:
+        if control.evaluate("el => el.tagName.toLowerCase()") == 'select':
+            options = control.locator('option')
+            for index in range(options.count()):
+                option = options.nth(index)
+                visible_text = option.inner_text(timeout=4000)
+                if _option_matches(visible_text, option_text):
+                    value = option.get_attribute('value')
+                    if value is not None:
+                        control.select_option(value=value, timeout=8000)
+                    else:
+                        control.select_option(label=visible_text, timeout=8000)
+                    return
+            raise ReembolsoRobotError(
+                f'Não encontrei a opção "{option_text}" no campo "{label_text}".'
+            )
+    except ReembolsoRobotError:
+        raise
+    except Exception:
+        pass
+
+    control.click(timeout=8000)
+    search_text = _option_search_text(option_text)
+    search = page.locator(
+        '.select2-input:visible, .select2-search__field:visible, .chosen-search input:visible, '
+        'input[type="search"]:visible, input[aria-controls]:visible'
+    ).last
+    if search.count():
+        search.fill(search_text)
+    else:
+        page.keyboard.type(search_text, delay=TYPE_DELAY_MS)
+    options = _wait_for_select_results(page)
+    for index in range(options.count()):
+        option = options.nth(index)
+        if _option_matches(option.inner_text(timeout=4000), option_text):
+            option.click(timeout=8000)
+            return
+
+    fallback = page.locator('li.select2-results__option:visible')
+    for index in range(fallback.count()):
+        option = fallback.nth(index)
+        if _option_matches(option.inner_text(timeout=4000), option_text):
+            option.click(timeout=8000)
+            return
+    raise ReembolsoRobotError(
+        f'Não encontrei a opção "{option_text}" no campo "{label_text}". '
+        f'Diagnóstico: {_field_diagnostics(page, label_text)}'
+    )
+
+
+def upload_files(page, label_text, file_paths):
+    container = _field_container(page, label_text)
+    file_input = container.locator('input[type="file"]').first
+    file_input.set_input_files(file_paths, timeout=20000)
+
+
+def _br_date(iso_value):
+    from datetime import datetime
+    return datetime.strptime(iso_value, '%Y-%m-%d').strftime('%d/%m/%Y')
+
+
+def _portal_form_ready(page, label_text):
+    try:
+        label = page.get_by_text(label_text, exact=False).first
+        if label.count() == 0:
+            return False
+        container = _field_container(page, label_text)
+        controls = container.locator(
+            _FIELD_ROOT_SELECTOR
+        )
+        if any(controls.nth(index).is_visible() for index in range(controls.count())):
+            return True
+        return _nearest_field_control(page, label_text).count() > 0
+    except Exception:
+        return False
+
+
+def _is_login_screen(page):
+    try:
+        url = (page.url or '').lower()
+        if any(token in url for token in ('login', 'signin', 'sign-in', 'logon', 'oauth', 'saml')):
+            return True
+        return page.locator('input[type="password"]').count() > 0
+    except Exception:
+        return False
+
+
+def _wait_for_login(page, target_url, ready_label, on_progress):
+    import time as _time
+    host = target_url.split('/')[2]
+    started_at = _time.time()
+    deadline = _time.time() + LOGIN_TIMEOUT_SECONDS
+    login_notified = False
+    saw_login = False
+    retried_target = False
+    while True:
+        if page.is_closed():
+            raise ReembolsoRobotError('A janela do robô foi fechada antes do preenchimento.')
+        if _portal_form_ready(page, ready_label):
+            if login_notified:
+                on_progress(26, 'Login confirmado. Preparando o formulário...')
+            return
+
+        login_screen = _is_login_screen(page)
+        saw_login = saw_login or login_screen
+        if not login_notified and (_time.time() - started_at >= 2 or login_screen):
+            on_progress(
+                20,
+                'Login necessário: entre no e-Reembolso na nova janela. '
+                'O robô continuará automaticamente após a autenticação.'
+            )
+            login_notified = True
+
+        current_url = page.url or ''
+        if saw_login and not login_screen and host in current_url and not retried_target:
+            # Alguns provedores de identidade retornam à página inicial do portal.
+            # Depois da autenticação, voltamos uma única vez ao formulário solicitado.
+            retried_target = True
+            try:
+                page.goto(target_url, wait_until='domcontentloaded', timeout=60000)
+            except Exception:
+                pass
+
+        if _time.time() > deadline:
+            raise ReembolsoRobotError(
+                'Tempo esgotado aguardando o login e o formulário do e-Reembolso. '
+                'Inicie novamente e conclua a autenticação na janela aberta.'
+            )
+        _time.sleep(1.0)
+
+
+def _finish_and_wait_submit(page, context, pw, on_progress):
+    import time as _time
+    on_progress(88, 'Campos preenchidos. Revise e clique em Enviar na janela do robô.')
+    submitted = False
+    try:
+        submit = page.get_by_role('button', name='Enviar').first
+        if submit.count() > 0:
+            submit.scroll_into_view_if_needed(timeout=8000)
+    except Exception:
+        pass
+    review_deadline = _time.time() + REVIEW_TIMEOUT_SECONDS
+    while _time.time() < review_deadline:
+        if page.is_closed():
+            break
+        _time.sleep(1.5)
+    # O robô não detecta confirmação de envio automaticamente neste site
+    # (sem uma "thank you page" fixa como no Forms) — fica com o usuário
+    # fechar a janela após confirmar visualmente que enviou.
+    return {'submitted': submitted}
+
+
+def _cleanup(pw, context):
+    try:
+        if context is not None and id(context) not in _ATTACHED_CONTEXT_IDS:
+            context.close()
+    except Exception:
+        pass
+    if context is not None:
+        _ATTACHED_CONTEXT_IDS.discard(id(context))
+    try:
+        pw.stop()
+    except Exception:
+        pass
+
+
+def _fill_outros_deslocamentos_common(page, quantidade, periodo_inicio, periodo_fim, valor_total, comprovantes, descricao):
+    select_native_option(page, 'QUANTIDADE', str(quantidade).zfill(2))
+    container = _field_container(page, 'PERIODO')
+    dates = container.locator('input').all()
+    if len(dates) >= 2:
+        dates[0].fill(_br_date(periodo_inicio))
+        dates[1].fill(_br_date(periodo_fim))
+    fill_text_field(page, 'VALOR TOTAL EM R$', f'{valor_total:.2f}'.replace('.', ','))
+    upload_files(page, 'COMPROVANTE', comprovantes)
+    fill_text_field(page, 'DESCRIÇÃO', descricao)
+
+
+def run_deslocamento_robot(payload, file_paths, on_progress):
+    """payload esperado:
+      {
+        'celula_custo': str, 'descricao_despesa': str,
+        'sub_fluxo': 'deslocamento' | 'estacionamento',
+        # sub_fluxo == 'deslocamento':
+        'origem': str, 'destino': str, 'data_deslocamento': 'YYYY-MM-DD',
+        'tipo_transporte': 'Carro da Empresa ou Alugado' | 'Carro Próprio',
+        'ida_e_volta': bool, 'conta': str,
+        'pedagio_valor_total': float | None,
+        # sub_fluxo == 'estacionamento':
+        'quantidade': int, 'periodo_inicio': 'YYYY-MM-DD', 'periodo_fim': 'YYYY-MM-DD',
+        'valor_total': float, 'descricao_estacionamento': str,
+      }
+    file_paths: {'data_deslocamento_comprovante': [str], 'pedagio_comprovantes': [str],
+                 'estacionamento_comprovantes': [str]}
+    on_progress(pct, step) alimenta a barra de progresso.
+    Retorna {'submitted': bool}.
+    """
+    if not _ROBOT_LOCK.acquire(blocking=False):
+        raise ReembolsoRobotError('Já existe um robô de Reembolsos em execução. Aguarde ele terminar.')
+    try:
+        return _run_deslocamento_locked(payload, file_paths, on_progress)
+    finally:
+        _ROBOT_LOCK.release()
+
+
+def _run_deslocamento_locked(payload, file_paths, on_progress):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        raise ReembolsoRobotError('Playwright não está instalado neste ambiente (pip install playwright).') from e
+
+    on_progress(8, 'Abrindo o navegador do robô...')
+    headless = os.environ.get('TOCA_ROBOT_HEADLESS') == '1'
+    pw = sync_playwright().start()
+    context = None
+    try:
+        context = _launch_context(pw, headless)
+        page = (
+            context.new_page()
+            if id(context) in _ATTACHED_CONTEXT_IDS
+            else (context.pages[0] if context.pages else context.new_page())
+        )
+
+        on_progress(15, 'Carregando o portal e-Reembolso...')
+        page.goto(DESLOCAMENTOS_URL, wait_until='domcontentloaded', timeout=60000)
+        _wait_for_login(page, DESLOCAMENTOS_URL, 'CÉLULA CUSTO', on_progress)
+
+        on_progress(30, 'Preenchendo Célula Custo...')
+        choose_select2_option(page, 'CÉLULA CUSTO', payload['celula_custo'])
+        _wait_for_dependent_select(page, 'CLIENTE')
+
+        on_progress(38, 'Preenchendo Cliente e Serviço...')
+        choose_select2_option(page, 'CLIENTE', 'Stefanini - Sao Paulo')
+        _wait_for_dependent_select(page, 'SERVIÇO')
+        choose_select2_option(page, 'SERVIÇO', 'Prospecção')
+        fill_text_field(page, 'DESCRIÇÃO DA DESPESA', payload['descricao_despesa'])
+
+        if payload['sub_fluxo'] == 'deslocamento':
+            on_progress(50, 'Preenchendo Origem e Destino...')
+            fill_text_field(page, 'ORIGEM', payload['origem'])
+            fill_text_field(page, 'DESTINO', payload['destino'])
+            fill_text_field(page, 'DATA DO DESLOCAMENTO', _br_date(payload['data_deslocamento']))
+            choose_select2_option(page, 'TIPO DO TRANSPORTE', payload['tipo_transporte'])
+            if payload.get('ida_e_volta'):
+                page.get_by_text('DESLOCAMENTO IDA E VOLTA', exact=False).first.click(timeout=8000)
+            descricao_deslocamento = (
+                f"Visita ao cliente {payload['conta']}, de {payload['origem']} à {payload['destino']}"
+            )
+            fill_text_field(page, 'DESCRIÇÃO DO DESLOCAMENTO', descricao_deslocamento)
+            on_progress(65, 'Adicionando deslocamento...')
+            page.get_by_role('button', name='adicionar').first.click(timeout=8000)
+            page.wait_for_timeout(500)
+
+            pedagio_paths = file_paths.get('pedagio_comprovantes') or []
+            if payload.get('pedagio_valor_total'):
+                on_progress(75, 'Preenchendo Pedágio...')
+                choose_select2_option(page, 'TIPO DO DESLOCAMENTO', 'Pedágio')
+                _fill_outros_deslocamentos_common(
+                    page, quantidade=len(pedagio_paths) or 1,
+                    periodo_inicio=payload['data_deslocamento'], periodo_fim=payload['data_deslocamento'],
+                    valor_total=payload['pedagio_valor_total'],
+                    comprovantes=pedagio_paths,
+                    descricao=f"Deslocamento para visitar cliente {payload['conta']}",
+                )
+                page.get_by_role('button', name='adicionar').first.click(timeout=8000)
+        else:  # estacionamento
+            on_progress(55, 'Preenchendo Estacionamento...')
+            choose_select2_option(page, 'TIPO DO DESLOCAMENTO', 'Estacionamento')
+            _fill_outros_deslocamentos_common(
+                page, quantidade=payload['quantidade'],
+                periodo_inicio=payload['periodo_inicio'], periodo_fim=payload['periodo_fim'],
+                valor_total=payload['valor_total'],
+                comprovantes=file_paths.get('estacionamento_comprovantes') or [],
+                descricao=payload['descricao_estacionamento'],
+            )
+            page.get_by_role('button', name='adicionar').first.click(timeout=8000)
+
+        return _finish_and_wait_submit(page, context, pw, on_progress)
+    except ReembolsoRobotError:
+        _cleanup(pw, context)
+        raise
+    except Exception as e:
+        _cleanup(pw, context)
+        raise ReembolsoRobotError(f'Falha no robô de Deslocamento: {e}') from e
+
+
+def run_almoco_robot(payload, comprovantes, on_progress):
+    """payload: {'celula_custo', 'descricao_despesa', 'quantidade',
+                 'periodo_inicio', 'periodo_fim', 'valor_total', 'descricao'}
+    comprovantes: [str] caminhos dos arquivos.
+    """
+    if not _ROBOT_LOCK.acquire(blocking=False):
+        raise ReembolsoRobotError('Já existe um robô de Reembolsos em execução. Aguarde ele terminar.')
+    try:
+        return _run_almoco_locked(payload, comprovantes, on_progress)
+    finally:
+        _ROBOT_LOCK.release()
+
+
+def _run_almoco_locked(payload, comprovantes, on_progress):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        raise ReembolsoRobotError('Playwright não está instalado neste ambiente (pip install playwright).') from e
+
+    on_progress(8, 'Abrindo o navegador do robô...')
+    headless = os.environ.get('TOCA_ROBOT_HEADLESS') == '1'
+    pw = sync_playwright().start()
+    context = None
+    try:
+        context = _launch_context(pw, headless)
+        page = (
+            context.new_page()
+            if id(context) in _ATTACHED_CONTEXT_IDS
+            else (context.pages[0] if context.pages else context.new_page())
+        )
+
+        on_progress(15, 'Carregando o portal e-Reembolso...')
+        page.goto(OUTRAS_DESPESAS_URL, wait_until='domcontentloaded', timeout=60000)
+        _wait_for_login(page, OUTRAS_DESPESAS_URL, 'CÉLULA CUSTO', on_progress)
+
+        on_progress(30, 'Preenchendo Célula Custo...')
+        choose_select2_option(page, 'CÉLULA CUSTO', payload['celula_custo'])
+        _wait_for_dependent_select(page, 'CLIENTE')
+
+        on_progress(38, 'Preenchendo Cliente e Serviço...')
+        choose_select2_option(page, 'CLIENTE', 'Stefanini - Sao Paulo')
+        _wait_for_dependent_select(page, 'SERVIÇO')
+        choose_select2_option(page, 'SERVIÇO', 'Prospecção')
+        fill_text_field(page, 'DESCRIÇÃO DA DESPESA', payload['descricao_despesa'])
+
+        on_progress(55, 'Preenchendo despesa de Almoço com Cliente...')
+        select_native_option(page, 'TIPO DE DESPESA', 'Gasto com cliente')
+        select_native_option(page, 'QUANTIDADE', str(payload['quantidade']).zfill(2))
+        container = _field_container(page, 'PERIODO')
+        dates = container.locator('input').all()
+        if len(dates) >= 2:
+            dates[0].fill(_br_date(payload['periodo_inicio']))
+            dates[1].fill(_br_date(payload['periodo_fim']))
+        fill_text_field(page, 'VALOR TOTAL EM R$', f"{payload['valor_total']:.2f}".replace('.', ','))
+        upload_files(page, 'COMPROVANTE', comprovantes)
+        fill_text_field(page, 'DESCRIÇÃO', payload['descricao'])
+
+        on_progress(75, 'Adicionando despesa...')
+        page.get_by_role('button', name='adicionar').first.click(timeout=8000)
+
+        return _finish_and_wait_submit(page, context, pw, on_progress)
+    except ReembolsoRobotError:
+        _cleanup(pw, context)
+        raise
+    except Exception as e:
+        _cleanup(pw, context)
+        raise ReembolsoRobotError(f'Falha no robô de Almoço com Cliente: {e}') from e

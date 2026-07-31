@@ -864,6 +864,7 @@
                 <button id="autoTocaBtn_mala-direta" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
                 <button id="autoTocaBtn_whatsapp-update" class="btn btn-auto-mapping" onclick="openWhatsappUpdateWithWarning()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
                 <button id="autoTocaBtn_sync-outlook" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('sync-outlook')"><span class="ai-star-icon">✦</span> Sync Outlook</button>
+                <button id="autoTocaBtn_reembolsos" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('reembolsos')"><span class="ai-star-icon">✦</span> Reembolsos</button>
             </div>
             <div id="autoTocaChamadoJuridico" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
                 <h3 style="margin-bottom:8px; color:#065f46;">Chamado Jurídico</h3>
@@ -1068,6 +1069,151 @@
                     <p id="outlookSyncHint" style="font-size:12px; color:#9ca3af; margin-bottom:8px;">Conecte sua conta Microsoft 365 acima para habilitar a sincronização.</p>
                     <div id="outlookImportStatus" style="font-size:13px;"></div>
                 </div>
+            </div>
+            <div id="autoTocaReembolsos" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
+                <h3 style="margin-bottom:8px; color:#065f46;">Reembolsos</h3>
+                <p style="margin-bottom:14px; color:#4b5563; font-size:13px;">Anexe os comprovantes e deixe o robô 🐇 preencher o e-Reembolso para você revisar e enviar.</p>
+
+                <div class="form-group" style="max-width:320px; margin-bottom:18px;">
+                    <label>Tipo de reembolso</label>
+                    <select id="reembTipo" onchange="onReembTipoChange()">
+                        <option value="deslocamento">Deslocamento &amp; Estacionamento</option>
+                        <option value="almoco">Almoço com Cliente</option>
+                    </select>
+                </div>
+
+                <form id="reembFormDeslocamento" onsubmit="return false;">
+                    <div style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:14px; margin-bottom:16px;">
+                        <div class="form-group">
+                            <label>Célula custo <span style="color:#dc2626;">*</span></label>
+                            <input id="reembCelulaCusto" type="text" required>
+                        </div>
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Descrição da Despesa <span style="color:#dc2626;">*</span></label>
+                            <input id="reembDescricaoDespesa" type="text" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Sub-fluxo <span style="color:#dc2626;">*</span></label>
+                            <select id="reembSubFluxo" required onchange="onReembSubFluxoChange()">
+                                <option value="deslocamento">Deslocamento (KM)</option>
+                                <option value="estacionamento">Estacionamento</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="reembBlocoDeslocamento" style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:14px; margin-bottom:16px;">
+                        <div class="form-group">
+                            <label>Conta (destino) <span style="color:#dc2626;">*</span></label>
+                            <select id="reembConta" required onchange="onReembContaChange()"></select>
+                        </div>
+                        <div class="form-group">
+                            <label>Destino <span style="color:#dc2626;">*</span></label>
+                            <input id="reembDestino" type="text" required placeholder="Endereço completo do cliente">
+                            <button type="button" class="btn btn-auto-mapping btn-small" onclick="reembBuscarEnderecoIA()" style="margin-top:6px; padding:4px 10px; font-size:11px;">
+                                <span class="ai-star-icon">✦</span> Buscar endereço com IA
+                            </button>
+                        </div>
+                        <div class="form-group">
+                            <label>Origem <span style="color:#dc2626;">*</span></label>
+                            <input id="reembOrigem" list="reembOrigemHistorico" type="text" required placeholder="Endereço de partida">
+                            <datalist id="reembOrigemHistorico"></datalist>
+                        </div>
+                        <div class="form-group">
+                            <label>Comprovante (para ler a data) <span style="color:#dc2626;">*</span></label>
+                            <input id="reembDataComprovante" type="file" accept="image/*,application/pdf,.pdf" onchange="reembOnDataComprovanteChange()">
+                            <div id="reembDataComprovanteList" class="reemb-file-list"></div>
+                            <div id="reembDataReceiptReview" class="reemb-receipt-review"></div>
+                            <div id="reembDataAnalysisProgress"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Data do Deslocamento <span style="color:#dc2626;">*</span></label>
+                            <input id="reembDataDeslocamento" type="date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Tipo de transporte <span style="color:#dc2626;">*</span></label>
+                            <select id="reembTipoTransporte" required>
+                                <option value="Carro da Empresa ou Alugado">Carro da Empresa ou Alugado</option>
+                                <option value="Carro Próprio">Carro Próprio</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label><input id="reembIdaVolta" type="checkbox"> Deslocamento ida e volta</label>
+                        </div>
+                        <div class="form-group" style="grid-column: span 3;">
+                            <label>Caso tenha pedágio, subir comprovante(s)</label>
+                            <input id="reembPedagioComprovantes" type="file" accept="image/*,application/pdf,.pdf" multiple onchange="reembOnPedagioChange()">
+                            <div id="reembPedagioComprovantesList" class="reemb-file-list"></div>
+                            <div id="reembPedagioReceiptReview" class="reemb-receipt-review"></div>
+                            <div id="reembPedagioValor" style="margin-top:6px; font-size:12px; color:#6b7280;"></div>
+                            <div id="reembPedagioAnalysisProgress"></div>
+                        </div>
+                    </div>
+
+                    <div id="reembBlocoEstacionamento" style="display:none; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:14px; margin-bottom:16px;">
+                        <div class="form-group" style="grid-column: span 3;">
+                            <label>Comprovantes <span style="color:#dc2626;">*</span></label>
+                            <input id="reembEstacComprovantes" type="file" accept="image/*,application/pdf,.pdf" multiple onchange="reembOnEstacComprovantesChange()">
+                            <div id="reembEstacComprovantesList" class="reemb-file-list"></div>
+                            <div id="reembEstacReceiptReview" class="reemb-receipt-review"></div>
+                            <div id="reembEstacResumo" style="margin-top:6px; font-size:12px; color:#6b7280;"></div>
+                            <div id="reembEstacAnalysisProgress"></div>
+                        </div>
+                        <div class="form-group" style="grid-column: span 3;">
+                            <label>Descrição <span style="color:#dc2626;">*</span></label>
+                            <textarea id="reembEstacDescricao" rows="2" required></textarea>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-auto-mapping" type="button" id="reembRobotBtn" onclick="runReembDeslocamentoRobot(event)" style="padding:10px 16px;">
+                        <span class="ai-star-icon">✦</span> Preencher com Robô 🐇
+                    </button>
+                    <div id="reembRobotProgress" style="display:none; padding:20px 4px 12px;">
+                        <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="reembRobotStep">Iniciando o robô...</div>
+                        <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                            <div id="reembRobotBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                            </div>
+                        </div>
+                        <div style="text-align:right; padding:0 16px; font-size:11px; color:#6b7280;" id="reembRobotPct">5%</div>
+                    </div>
+                </form>
+
+                <form id="reembFormAlmoco" style="display:none;" onsubmit="return false;">
+                    <div style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:14px; margin-bottom:16px;">
+                        <div class="form-group">
+                            <label>Célula custo <span style="color:#dc2626;">*</span></label>
+                            <input id="reembAlmCelulaCusto" type="text" required>
+                        </div>
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Descrição da Despesa <span style="color:#dc2626;">*</span></label>
+                            <input id="reembAlmDescricaoDespesa" type="text" required>
+                        </div>
+                        <div class="form-group" style="grid-column: span 3;">
+                            <label>Comprovantes <span style="color:#dc2626;">*</span></label>
+                            <input id="reembAlmComprovantes" type="file" accept="image/*,application/pdf,.pdf" multiple onchange="reembOnAlmComprovantesChange()">
+                            <div id="reembAlmComprovantesList" class="reemb-file-list"></div>
+                            <div id="reembAlmReceiptReview" class="reemb-receipt-review"></div>
+                            <div id="reembAlmResumo" style="margin-top:6px; font-size:12px; color:#6b7280;"></div>
+                            <div id="reembAlmAnalysisProgress"></div>
+                        </div>
+                        <div class="form-group" style="grid-column: span 3;">
+                            <label>Descrição <span style="color:#dc2626;">*</span></label>
+                            <textarea id="reembAlmDescricao" rows="2" required></textarea>
+                        </div>
+                    </div>
+                    <button class="btn btn-auto-mapping" type="button" id="reembAlmRobotBtn" onclick="runReembAlmocoRobot(event)" style="padding:10px 16px;">
+                        <span class="ai-star-icon">✦</span> Preencher com Robô 🐇
+                    </button>
+                    <div id="reembAlmRobotProgress" style="display:none; padding:20px 4px 12px;">
+                        <div style="font-size:13px; color:#6b7280; margin-bottom:12px; text-align:center;" id="reembAlmRobotStep">Iniciando o robô...</div>
+                        <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px 6px;">
+                            <div id="reembAlmRobotBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                            </div>
+                        </div>
+                        <div style="text-align:right; padding:0 16px; font-size:11px; color:#6b7280;" id="reembAlmRobotPct">5%</div>
+                    </div>
+                </form>
             </div>
             <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
                 <h3 style="margin-bottom:4px; color:#065f46;">Preparar Reunião via LinkedIn</h3>

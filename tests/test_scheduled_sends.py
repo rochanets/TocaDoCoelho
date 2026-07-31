@@ -152,7 +152,11 @@ def test_first_run_e_extensao(client, db_path):
     import app as toca
     toca._save_app_setting('extension_version_seen', '0.7.0')
     ext = client.get('/api/extension/update-status').get_json()
-    assert ext['update_available'] is True and ext['seen'] == '0.7.0'
+    assert ext['seen'] == '0.7.0'
+    # Onde o auto-update local está ativo (Windows + .crx assinado empacotado) o
+    # navegador atualiza a extensão sozinho e a rota suprime de propósito o aviso
+    # de download manual — ver extension_update_status() em routes/config.py.
+    assert ext['update_available'] is (not ext['auto_update'])
     # usuário instala e confirma
     assert client.post('/api/extension/update-status/seen').status_code == 200
     assert client.get('/api/extension/update-status').get_json()['update_available'] is False
