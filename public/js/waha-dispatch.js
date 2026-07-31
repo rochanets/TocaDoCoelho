@@ -201,9 +201,9 @@
                             <small class="toca-text-muted" style="font-size:11px;">Cada chave é substituída pelo dado real do contato no envio.</small>
                         </div>
                         <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap;">
-                            <button class="btn btn-secondary" onclick="quickContactOpenWeb(${clientId})" title="Abrir no WhatsApp Web/desktop (contingência)"><i class="fab fa-whatsapp"></i> Abrir no WhatsApp</button>
+                            <button class="btn btn-secondary" onclick="quickContactOpenWeb(${clientId})" title="Abrir no aplicativo WhatsApp para desktop"><i class="fab fa-whatsapp"></i> Abrir no WhatsApp</button>
                             <button class="btn btn-secondary" onclick="scheduleFromQuickContact(${clientId})" title="Agendar o envio para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
-                            <button class="btn btn-auto-mapping" onclick="quickContactSendWaha(${clientId})"><span class="ai-star-icon">✦</span> Enviar via WAHA</button>
+                            <button class="btn btn-auto-mapping" onclick="quickContactSendWaha(${clientId})"><span class="ai-star-icon">✦</span> Enviar</button>
                         </div>
                     </div>
                 </div>`;
@@ -255,6 +255,8 @@
             const client = window._quickContactClient || {};
             const phone = normalizePhoneForWhatsapp(client.phone || '');
             if (!phone) { showError('Este contato não tem telefone válido.'); return; }
-            const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
-            window.open(url, '_blank');
+            // Mesmo comportamento usado pelo Dashboard: abre o protocolo do
+            // WhatsApp Desktop e só usa a Web como contingência se o aplicativo
+            // não estiver instalado/registrado no Windows.
+            openWhatsAppDesktopWithFallback(phone, message);
         }

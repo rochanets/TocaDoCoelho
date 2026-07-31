@@ -69,6 +69,64 @@ def test_worker_envia_no_horario_e_missed_pergunta(client, sample_client_id, db_
     assert client.get('/api/scheduled-sends/missed').get_json() == []
 
 
+def test_worker_tenta_novamente_apos_falha_transitoria(client, sample_client_id, db_path, monkeypatch):
+    import app as toca
+
+    attempts = []
+
+    def flaky_send(chat_id, text):
+        attempts.append((chat_id, text))
+        return (False, 'WhatsApp temporariamente indisponível') if len(attempts) == 1 else (True, None)
+
+    monkeypatch.setattr(toca, '_waha_send_text', flaky_send)
+    sid = _schedule(client, sample_client_id).get_json()['ids'][0]
+    conn = toca.get_db()
+    due = (datetime.now() - timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M')
+    conn.execute('UPDATE scheduled_sends SET scheduled_for = ? WHERE id = ?', (due, sid))
+    conn.commit()
+    conn.close()
+
+    assert toca._scheduled_sends_worker_tick() == 1
+    conn = toca.get_db()
+    first = conn.execute('SELECT status, error FROM scheduled_sends WHERE id = ?', (sid,)).fetchone()
+    conn.close()
+    assert first[0] == 'pending'
+    assert 'temporariamente indisponível' in first[1]
+
+    assert toca._scheduled_sends_worker_tick() == 1
+    conn = toca.get_db()
+    second = conn.execute('SELECT status, error FROM scheduled_sends WHERE id = ?', (sid,)).fetchone()
+    conn.close()
+    assert second[0] == 'sent'
+    assert second[1] is None
+    assert len(attempts) == 2
+
+
+def test_worker_envia_email_agendado(client, sample_client_id, db_path, monkeypatch):
+    import app as toca
+
+    sent = []
+    monkeypatch.setattr(
+        toca,
+        '_outlook_send_mail',
+        lambda to, subject, body_html: sent.append((to, subject, body_html)),
+    )
+    sid = _schedule(client, sample_client_id, channel='email').get_json()['ids'][0]
+    conn = toca.get_db()
+    due = (datetime.now() - timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M')
+    conn.execute('UPDATE scheduled_sends SET scheduled_for = ? WHERE id = ?', (due, sid))
+    conn.commit()
+    conn.close()
+
+    assert toca._scheduled_sends_worker_tick() == 1
+    conn = toca.get_db()
+    row = conn.execute('SELECT status, error FROM scheduled_sends WHERE id = ?', (sid,)).fetchone()
+    conn.close()
+    assert row[0] == 'sent'
+    assert row[1] is None
+    assert sent == [('cliente@teste.com', 'Assunto teste', '<p>Mensagem agendada de teste</p>')]
+
+
 def test_cancelar_agendamento(client, sample_client_id, db_path):
     sid = _schedule(client, sample_client_id).get_json()['ids'][0]
     assert client.post(f'/api/scheduled-sends/{sid}/cancel').status_code == 200

@@ -344,6 +344,13 @@ def _start_waha_lite():
     waha_data = DATA_DIR / 'waha-sessions'
     waha_data.mkdir(parents=True, exist_ok=True)
 
+    # O servidor Flask também pode reiniciar o WAHA-lite quando detectar que ele
+    # caiu. Exponha no ambiente do launcher o mesmo diretório persistente usado no
+    # primeiro start; sem isso o restart caía em `.waha-sessions` ao lado do script
+    # e pedia um novo QR code mesmo com a sessão válida salva em AppData\Roaming.
+    os.environ['WAHA_PORT']         = str(WAHA_PORT)
+    os.environ['WAHA_DATA_DIR']     = str(waha_data)
+
     env = os.environ.copy()
     env['WAHA_PORT']         = str(WAHA_PORT)
     env['WAHA_API_KEY']      = WAHA_API_KEY_DEFAULT
