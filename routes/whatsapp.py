@@ -160,6 +160,122 @@ def whatsapp_connect():
     return jsonify({'ok': False, 'error': 'O QR code não apareceu a tempo. O Chrome pode estar demorando para abrir na primeira conexão — aguarde alguns instantes e clique em Tentar novamente.'}), 500
 
 
+def _waha_fetch_qr_dataurl(api_url, headers, session):
+    """Baixa o QR code da sessão como data URL (PNG base64). None se indisponível."""
+    try:
+        qr_resp = requests.get(f'{api_url}/api/{session}/auth/qr',
+                               headers=headers, params={'format': 'image'}, timeout=10)
+        if qr_resp.status_code == 200 and qr_resp.content:
+            ctype = qr_resp.headers.get('Content-Type', 'image/png')
+            return f'data:{ctype};base64,' + base64.b64encode(qr_resp.content).decode('ascii')
+    except Exception as e:
+        logger.debug(f'[WhatsApp] Falha ao baixar QR: {e}')
+    return None
+
+
+@app.route('/api/whatsapp/qr', methods=['GET'])
+def whatsapp_qr():
+    """Estado da sessão + QR code em uma única resposta imediata.
+
+    Diferente de /api/whatsapp/connect (que bloqueia até 90s esperando o QR
+    aparecer), esta rota responde na hora com o estado atual e o front faz o
+    polling. É o que a verificação de inicialização e o modal de sincronização
+    das Configurações usam — um request que trava 90s deixaria a tela do
+    usuário pendurada logo na abertura do sistema.
+
+    ?start=1 cria/inicia a sessão quando ela está ausente ou parada (é o que
+    faz o WAHA gerar o QR). Sem esse parâmetro a rota apenas observa, sem
+    acordar o Chrome.
+    """
+    start = request.args.get('start') in ('1', 'true', 'yes')
+    api_url, api_key, session = _waha_settings()
+    if not api_url:
+        return jsonify({'ok': True, 'connected': False, 'state': 'not_configured',
+                        'error': 'WAHA não configurado.'})
+    headers = _waha_headers(api_key)
+    try:
+        resp = requests.get(f'{api_url}/api/sessions/{session}', headers=headers, timeout=5)
+        if resp.status_code == 401:
+            return jsonify({'ok': False, 'connected': False, 'state': 'unauthorized',
+                            'error': 'API Key inválida.'})
+        if resp.status_code == 404:
+            if start:
+                requests.post(f'{api_url}/api/sessions/', headers=headers,
+                              json={'name': session, 'start': True}, timeout=20)
+                return jsonify({'ok': True, 'connected': False, 'state': 'starting',
+                                'error': 'Criando a sessão do WhatsApp (abrindo o Chrome)... aguarde.'})
+            return jsonify({'ok': True, 'connected': False, 'state': 'no_session'})
+
+        body = resp.json() or {}
+        raw = (body.get('status') or 'STOPPED').upper()
+        waha_err = body.get('error')
+
+        if raw == 'WORKING':
+            return jsonify({'ok': True, 'connected': True, 'state': 'connected'})
+        if raw == 'SCAN_QR_CODE':
+            qr = _waha_fetch_qr_dataurl(api_url, headers, session)
+            if qr:
+                return jsonify({'ok': True, 'connected': False, 'state': 'scan_qr', 'qr': qr})
+            return jsonify({'ok': True, 'connected': False, 'state': 'starting',
+                            'error': 'QR code sendo gerado... aguarde.'})
+        if raw == 'STARTING':
+            return jsonify({'ok': True, 'connected': False, 'state': 'starting',
+                            'error': 'WhatsApp conectando (abrindo o Chrome e restaurando a sessão)... aguarde.'})
+        # STOPPED / FAILED
+        if start and not waha_err:
+            requests.post(f'{api_url}/api/sessions/{session}/start', headers=headers, timeout=15)
+            return jsonify({'ok': True, 'connected': False, 'state': 'starting',
+                            'error': 'Iniciando a sessão do WhatsApp... aguarde.'})
+        return jsonify({'ok': not waha_err, 'connected': False,
+                        'state': 'offline' if waha_err else 'stopped',
+                        'error': waha_err or 'Sessão do WhatsApp parada.'})
+    except requests.exceptions.ConnectionError:
+        if _waha_deps_missing():
+            return jsonify({'ok': False, 'connected': False, 'state': 'offline',
+                            'error': 'WAHA-lite não pôde iniciar: dependências (node_modules) ausentes. '
+                                     'Reinstale o Toca do Coelho (ou rode "npm install" na pasta waha-lite).'})
+        started_at = float(os.environ.get('WAHA_STARTED_AT', '0'))
+        if time.time() - started_at < 90:
+            return jsonify({'ok': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite está inicializando. Aguarde alguns instantes...'})
+        if start and _restart_waha_lite():
+            return jsonify({'ok': True, 'connected': False, 'state': 'starting',
+                            'error': 'WAHA-lite foi reiniciado. Aguarde alguns instantes...'})
+        return jsonify({'ok': False, 'connected': False, 'state': 'offline',
+                        'error': 'Serviço do WhatsApp (WAHA-lite) offline. Reinicie o Toca do Coelho.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/whatsapp/qr: {e}')
+        return jsonify({'ok': False, 'connected': False, 'state': 'error', 'error': str(e)})
+
+
+@app.route('/api/whatsapp/startup-check', methods=['GET'])
+def whatsapp_startup_check_get():
+    """Preferência 'avisar no início quando o WhatsApp estiver desconectado'.
+
+    Fica em app_settings (e não no localStorage) para que o 'não perguntar
+    mais' sobreviva a limpeza de cache do navegador e apareça também no card
+    de Integrações das Configurações.
+    """
+    value = (_load_app_settings_map(['waha_startup_check_enabled'])
+             .get('waha_startup_check_enabled') or '1').strip()
+    return jsonify({'enabled': value != '0'})
+
+
+@app.route('/api/whatsapp/startup-check', methods=['PUT'])
+def whatsapp_startup_check_put():
+    data = request.get_json(force=True) or {}
+    enabled = '1' if data.get('enabled', True) else '0'
+    db = get_db()
+    db.cursor().execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+        ('waha_startup_check_enabled', enabled)
+    )
+    db.commit()
+    db.close()
+    return jsonify({'ok': True, 'enabled': enabled != '0'})
+
+
 @app.route('/api/whatsapp/sync', methods=['POST'])
 def whatsapp_sync_start():
     data = request.get_json(force=True) or {}
