@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import logging
 import os
 import shutil
+import struct
+import zipfile
 from pathlib import Path
 
 logger = logging.getLogger('toca-do-coelho')
@@ -70,6 +73,44 @@ def _manifest_version(path: Path) -> str:
         return ''
 
 
+# Cache de (mtime, tamanho) -> versão, para não reabrir o .crx a cada updates.xml.
+_crx_version_cache: tuple[tuple[int, int], str] | None = None
+
+
+def crx_version() -> str:
+    """Versão do manifest que está DENTRO do ``.crx`` efetivamente servido.
+
+    É essa a versão que o ``updates.xml`` precisa anunciar — não a do manifest fonte.
+    Se alguém sobe a versão em ``autotoca-chrome-extension/manifest.json`` sem rodar
+    ``scripts/build_extension_crx.py``, o navegador vê "existe update", baixa o ``.crx``,
+    encontra uma versão menor do que a anunciada e tenta de novo pra sempre.
+    """
+    global _crx_version_cache
+    try:
+        stat = CRX_PATH.stat()
+    except OSError:
+        return ''
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    if _crx_version_cache and _crx_version_cache[0] == stamp:
+        return _crx_version_cache[1]
+
+    version = ''
+    try:
+        raw = CRX_PATH.read_bytes()
+        if raw[:4] != b'Cr24':
+            raise ValueError('assinatura "Cr24" ausente')
+        crx_format, header_len = struct.unpack('<II', raw[4:12])
+        if crx_format != 3:
+            raise ValueError(f'formato CRX{crx_format} não suportado (esperado CRX3)')
+        with zipfile.ZipFile(io.BytesIO(raw[12 + header_len:])) as zf:
+            version = (json.loads(zf.read('manifest.json')).get('version') or '').strip()
+    except Exception as exc:  # pragma: no cover - defensivo
+        logger.warning(f'[ExtAutoUpdate] Não foi possível ler a versão de dentro do .crx: {exc}')
+
+    _crx_version_cache = (stamp, version)
+    return version
+
+
 def publish_unpacked(dest_dir: Path) -> Path | None:
     """Publica os arquivos da extensão numa pasta ESTÁVEL, sempre na versão atual.
 
@@ -100,7 +141,15 @@ def publish_unpacked(dest_dir: Path) -> Path | None:
 def updates_xml(crx_url: str) -> str:
     """Manifesto de update no protocolo Omaha lido pelo Chrome/Edge."""
     ext_id = extension_id() or ''
-    version = bundled_version() or '0.0.0'
+    served = crx_version()
+    bundled = bundled_version()
+    if served and bundled and served != bundled:
+        logger.warning(
+            f'[ExtAutoUpdate] O .crx empacotado está na versão {served}, mas o manifest fonte '
+            f'está em {bundled}. Anunciando {served} para o navegador não entrar em laço de '
+            'update — rode scripts/build_extension_crx.py para reempacotar o .crx.'
+        )
+    version = served or bundled or '0.0.0'
     return (
         "<?xml version='1.0' encoding='UTF-8'?>\n"
         "<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>\n"
