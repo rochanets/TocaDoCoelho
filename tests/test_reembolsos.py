@@ -6,6 +6,11 @@ from unittest.mock import patch, MagicMock
 
 import app as toca
 
+_EXTENSION_DIR = (
+    Path(__file__).resolve().parents[1]
+    / 'public' / 'autotoca-extension' / 'autotoca-chrome-extension'
+)
+
 
 def test_schema_reembolsos_tabelas_existem(db_path):
     conn = toca.get_db()
@@ -543,9 +548,11 @@ def test_extensao_reembolso_retoma_fluxo_apos_postback():
     manifest = _json.loads((extension_dir / 'manifest.json').read_text(encoding='utf-8'))
     core_source = (Path(__file__).parents[1] / 'public' / 'js' / 'core.js').read_text(encoding='utf-8')
 
-    assert manifest['version'] == '0.9.5'
+    # Versão mínima aceita pelo gate do core.js — sem fixar o número exato, que
+    # muda a cada correção da extensão e deixava este teste vermelho sem motivo.
+    version = tuple(int(part) for part in manifest['version'].split('.'))
+    assert version >= (0, 9, 6), manifest['version']
     assert 'https://ereembolso.stefanini.com.br/*' in manifest['host_permissions']
-    assert robot_source.count('if (optionMatches(selectedText, requested)) return;') == 3
     assert "setCheckpoint(task, 'deslocamento-added')" in robot_source
     assert robot_source.count("setCheckpoint(task, 'final-added')") >= 3
     assert "task.checkpoint === 'final-added'" in robot_source
@@ -559,6 +566,59 @@ def test_extensao_reembolso_retoma_fluxo_apos_postback():
     assert "ids ? clickByIdInPage(ids.attach)" in robot_source
     assert "attachmentsConfirmed(files, ids)" in robot_source
     assert "tableSignature('gvOutrosDeslocamentos')" in robot_source
-    assert "await fillExpenseFields(payload, payload.descricao)" in robot_source
     assert "await completeTask(task)" in robot_source
-    assert "(versionParts[2] || 0) >= 5" in core_source
+    assert "(versionParts[2] || 0) >= 6" in core_source
+
+
+def test_extensao_reembolso_usa_eventos_que_os_widgets_escutam():
+    """Chosen (OutrasDespesas.aspx) e Select2 (Deslocamentos.aspx) abrem e
+    selecionam em mousedown/mouseup e ignoram `click`. Verificado ao vivo no
+    portal: `.chosen-single`.click() não abre nada e o robô ficava preso no
+    primeiro combo (CÉLULA CUSTO) até estourar o timeout."""
+    robot_source = _EXTENSION_DIR.joinpath('reembolso.js').read_text(encoding='utf-8')
+
+    assert 'function pressPointer(el)' in robot_source
+    for event in ('mouseover', 'mousedown', 'mouseup', 'click'):
+        assert f"new MouseEvent('{event}', init)" in robot_source
+
+    # Nenhum combo/opção pode voltar a ser acionado só por .click().
+    assert 'control.click();' not in robot_source
+    assert 'match.click();' not in robot_source
+    assert 'pressPointer(control);' in robot_source
+    assert 'pressPointer(match);' in robot_source
+
+
+def test_extensao_reembolso_mira_campos_por_id_do_portal():
+    """As duas descrições convivem na mesma página. Buscar por rótulo fazia
+    "DESCRIÇÃO" casar com "Descrição da despesa" (que vem antes no DOM), então a
+    descrição do reembolso ia para o campo errado — o sintoma "preenche tudo
+    menos a descrição". Cada campo agora é endereçado pelo ID do ASP.NET."""
+    robot_source = _EXTENSION_DIR.joinpath('reembolso.js').read_text(encoding='utf-8')
+
+    # Rótulo exato tem precedência sobre o que apenas começa com o termo.
+    assert 'candidates.find(el => normalize(el.textContent) === wanted) ||' in robot_source
+
+    # Campos confirmados por inspeção ao vivo do portal logado.
+    for control_id in (
+        'ddlCelulaCusto', 'ddlCliente', 'ddlServico', 'txtDescricaoAtividade',
+        'ddlDespesaTipo', 'ddlDespesaQuantidade', 'txtDespesaPeriodoDe',
+        'txtDespesaPeriodoA', 'txtDespesaValor', 'txtDespesaDescricao',
+        'fuDespesaFile', 'lkAnexarArquivos', 'btnInserirDeslocamentos',
+        'txtCombustivelOrigem', 'txtCombustivelDestino', 'txtCombustivelData',
+        'ddlCombustivelKmUnidade', 'ccbIdaVolta', 'txtCombustivelDescricao',
+        'btnInserirDeslocamentoCombustivel',
+    ):
+        assert f"'{control_id}'" in robot_source, control_id
+
+    # As duas descrições vão para controles DIFERENTES.
+    assert "fillTextById('txtDescricaoAtividade', payload.descricao_despesa)" in robot_source
+    assert "fillTextById('txtDespesaDescricao', payload.descricao)" in robot_source
+
+    # Nenhum campo do fluxo pode voltar a ser localizado por rótulo.
+    for banned in (
+        "fillText('DESCRIÇÃO'", "fillText('DESCRIÇÃO DA DESPESA'",
+        "chooseOption('CÉLULA CUSTO'", "chooseOption('CLIENTE'",
+        "chooseOption('SERVIÇO'", "chooseNative('TIPO DE DESPESA'",
+        "chooseNative('QUANTIDADE'", 'fillPeriod(payload',
+    ):
+        assert banned not in robot_source, banned

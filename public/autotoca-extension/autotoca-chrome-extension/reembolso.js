@@ -65,15 +65,18 @@
     task.checkpoint = checkpoint;
   }
 
+  // O rótulo EXATO tem precedência sobre o que apenas começa com o termo. Sem isso,
+  // "DESCRIÇÃO" casava com "Descrição da despesa" (que vem antes no DOM das duas
+  // páginas do portal) e a descrição do reembolso era escrita no campo errado —
+  // exatamente o sintoma "preenche tudo menos a descrição".
   function findLabel(labelText) {
     const wanted = normalize(labelText);
     const candidates = Array.from(document.querySelectorAll(
       'label, .control-label, [class*="label" i], th, dt, span, strong'
     ));
-    return candidates.find(el => {
-      const text = normalize(el.textContent);
-      return text === wanted || text.startsWith(`${wanted} `);
-    }) || candidates.find(el => normalize(el.textContent).includes(wanted)) || null;
+    return candidates.find(el => normalize(el.textContent) === wanted) ||
+      candidates.find(el => normalize(el.textContent).startsWith(`${wanted} `)) ||
+      candidates.find(el => normalize(el.textContent).includes(wanted)) || null;
   }
 
   function controlCandidates(kind = 'combo') {
@@ -176,6 +179,19 @@
     }
   }
 
+  // Os combos do portal são widgets jQuery — Chosen em OutrasDespesas.aspx e Select2
+  // em Deslocamentos.aspx. Os DOIS abrem e selecionam em mousedown/mouseup; nenhum
+  // escuta `click`. Como `element.click()` dispara SÓ o evento click, o robô abria
+  // coisa nenhuma e ficava girando até o timeout no primeiro combo (CÉLULA CUSTO).
+  // O robô Playwright antigo não sofria disso porque o clique dele é um gesto real.
+  function pressPointer(el) {
+    const init = { bubbles: true, cancelable: true, view: window, button: 0 };
+    el.dispatchEvent(new MouseEvent('mouseover', init));
+    el.dispatchEvent(new MouseEvent('mousedown', init));
+    el.dispatchEvent(new MouseEvent('mouseup', init));
+    el.dispatchEvent(new MouseEvent('click', init));
+  }
+
   async function chooseOption(labelText, requested) {
     let control = await waitForField(labelText, 'combo');
     const selectedText = control.tagName === 'SELECT'
@@ -199,7 +215,7 @@
     // Fecha um dropdown anterior que tenha ficado aberto antes de abrir este campo.
     _closeOpenSelectDropdowns();
     await delay(150);
-    control.click();
+    pressPointer(control);
 
     const deadline = Date.now() + 10000;
     let options = [];
@@ -225,7 +241,7 @@
       )).filter(isVisible);
       const match = options.find(item => optionMatches(item.textContent, requested));
       if (match) {
-        match.click();
+        pressPointer(match);
         return;
       }
       await delay(250);
@@ -269,16 +285,40 @@
     throw new Error(`Não encontrei o controle externo "${idSuffix}".`);
   }
 
-  async function chooseNativeById(idSuffix, requested) {
+  // Escolhe pelo <select> nativo em vez de dirigir o widget. Vale para as duas páginas:
+  // o Select2 redesenha sozinho ao ouvir o `change`, o Chosen é reconstruído pelo
+  // servidor no postback, e o AutoPostBack do ASP.NET mora num atributo `onchange`
+  // inline — que um evento sintético dispara igual. Muito mais estável do que abrir
+  // dropdown, digitar na busca e caçar a opção certa na lista renderizada.
+  //
+  // Espera a opção aparecer: CÉLULA CUSTO → CLIENTE → SERVIÇO é uma cascata, e o
+  // combo seguinte fica com zero opções até o postback anterior voltar.
+  async function chooseNativeById(idSuffix, requested, timeoutMs = 15000) {
     const control = await waitForControlById(idSuffix);
     if (control.tagName !== 'SELECT') throw new Error(`O controle "${idSuffix}" não é uma lista de opções.`);
-    const selectedText = control.options?.[control.selectedIndex]?.textContent;
-    if (optionMatches(selectedText, requested)) return;
-    const option = Array.from(control.options).find(item => optionMatches(item.textContent, requested));
-    if (!option) throw new Error(`Não encontrei a opção "${requested}" no controle "${idSuffix}".`);
+    if (optionMatches(control.options?.[control.selectedIndex]?.textContent, requested)) return;
+
+    const deadline = Date.now() + timeoutMs;
+    let option = null;
+    while (Date.now() < deadline) {
+      option = Array.from(control.options).find(item => optionMatches(item.textContent, requested));
+      if (option) break;
+      await delay(250);
+    }
+    if (!option) {
+      const seen = Array.from(control.options).map(item => item.textContent.trim()).slice(0, 10);
+      throw new Error(
+        `Não encontrei a opção "${requested}" no controle "${idSuffix}". ` +
+        `Opções vistas: ${seen.join(' | ') || 'nenhuma'}.`
+      );
+    }
+
     control.value = option.value;
     control.dispatchEvent(new Event('input', { bubbles: true }));
     control.dispatchEvent(new Event('change', { bubbles: true }));
+    if (control.value !== option.value) {
+      throw new Error(`O controle "${idSuffix}" não reteve a opção "${requested}".`);
+    }
   }
 
   async function fillTextById(idSuffix, value) {
@@ -409,17 +449,21 @@
     const payload = data.payload;
     await updateTask(task, { status: 'processing', progress: 30, step: 'Preenchendo Célula Custo...' });
     showStatus('AutoToca: preenchendo Célula Custo...');
-    await chooseOption('CÉLULA CUSTO', payload.celula_custo);
+    // Cada um destes três dispara um postback COMPLETO: a página recarrega e este
+    // script morre no meio. Na volta o init() reentra, os combos já preenchidos são
+    // pulados pelo early-return do chooseNativeById e a cascata avança um passo por
+    // recarga até chegar na DESCRIÇÃO DA DESPESA.
+    await chooseNativeById('ddlCelulaCusto', payload.celula_custo);
     await delay(800);
-    await waitForField('CLIENTE', 'combo');
+    await waitForControlById('ddlCliente');
 
     await updateTask(task, { status: 'processing', progress: 38, step: 'Preenchendo Cliente e Serviço...' });
     showStatus('AutoToca: preenchendo Cliente e Serviço...');
-    await chooseOption('CLIENTE', 'Stefanini - Sao Paulo');
+    await chooseNativeById('ddlCliente', 'Stefanini - Sao Paulo');
     await delay(800);
-    await waitForField('SERVIÇO', 'combo');
-    await chooseOption('SERVIÇO', 'Prospecção');
-    await fillText('DESCRIÇÃO DA DESPESA', payload.descricao_despesa);
+    await waitForControlById('ddlServico');
+    await chooseNativeById('ddlServico', 'Prospecção');
+    await fillTextById('txtDescricaoAtividade', payload.descricao_despesa);
   }
 
   async function completeTask(task) {
@@ -430,11 +474,14 @@
     });
   }
 
+  // Tudo por ID: "DESCRIÇÃO" e "DESCRIÇÃO DA DESPESA" convivem nesta página, e o
+  // período são dois campos irmãos que a heurística geométrica confundia.
   async function fillExpenseFields(payload, description) {
-    await chooseNative('QUANTIDADE', String(payload.quantidade).padStart(2, '0'));
-    await fillPeriod(payload.periodo_inicio, payload.periodo_fim);
-    await fillText('VALOR TOTAL EM R$', Number(payload.valor_total).toFixed(2).replace('.', ','));
-    if (description !== null) await fillText('DESCRIÇÃO', description);
+    await chooseNativeById('ddlDespesaQuantidade', String(payload.quantidade).padStart(2, '0'));
+    await fillTextById('txtDespesaPeriodoDe', formatDate(payload.periodo_inicio));
+    await fillTextById('txtDespesaPeriodoA', formatDate(payload.periodo_fim));
+    await fillTextById('txtDespesaValor', Number(payload.valor_total).toFixed(2).replace('.', ','));
+    if (description !== null) await fillTextById('txtDespesaDescricao', description);
   }
 
   async function fillOtherTravelFields(payload, description, travelType) {
@@ -491,27 +538,25 @@
       await fillCommon(task, data);
       await updateTask(task, { status: 'processing', progress: 58, step: 'Preenchendo Almoço com Cliente...' });
       showStatus('AutoToca: preenchendo Almoço com Cliente...');
-      await chooseNative('TIPO DE DESPESA', 'Gasto com cliente');
+      await chooseNativeById('ddlDespesaTipo', 'Gasto com cliente');
       await fillExpenseFields(payload, null);
-      if (await attachFiles(task, data.files.comprovantes, 'expense-files-attached-v093')) return;
+      if (await attachFiles(task, data.files.comprovantes, 'expense-files-attached-v093', {
+        file: 'fuDespesaFile', attach: 'lkAnexarArquivos',
+      })) return;
       await updateTask(task, { status: 'processing', progress: 84, step: 'Preenchendo a descrição do reembolso...' });
       showStatus('AutoToca: preenchendo a descrição do reembolso...');
-      await fillText('DESCRIÇÃO', payload.descricao);
+      await fillTextById('txtDespesaDescricao', payload.descricao);
       await updateTask(task, { status: 'processing', progress: 94, step: 'Adicionando o reembolso...' });
       await setCheckpoint(task, 'final-added');
       showStatus('AutoToca: adicionando o reembolso...');
-      const descriptionControl = await waitForField('DESCRIÇÃO', 'text');
-      const descriptionControlId = descriptionControl.id;
       await clickAndConfirmPortalUpdate(
         task,
-        () => clickByTextInPage('adicionar', 'DESCRIÇÃO'),
+        () => clickByIdInPage('btnInserirDeslocamentos'),
         'expense-files-attached-v093',
         'adicionar o reembolso',
         () => {
-          const currentDescription = descriptionControlId
-            ? document.getElementById(descriptionControlId)
-            : descriptionControl;
-          return !currentDescription || String(currentDescription.value || '').trim() === '';
+          const description = findControlByIdSuffix('txtDespesaDescricao');
+          return !description || String(description.value || '').trim() === '';
         }
       );
       await completeTask(task);
@@ -548,19 +593,20 @@
       if (!['deslocamento-added', 'outros-files-attached', 'outros-files-attached-v093'].includes(task.checkpoint)) {
         await fillCommon(task, data);
         await updateTask(task, { status: 'processing', progress: 52, step: 'Preenchendo Origem e Destino...' });
-        await fillText('ORIGEM', payload.origem);
-        await fillText('DESTINO', payload.destino);
-        await fillText('DATA DO DESLOCAMENTO', formatDate(payload.data_deslocamento));
-        await chooseOption('TIPO DO TRANSPORTE', payload.tipo_transporte);
+        await fillTextById('txtCombustivelOrigem', payload.origem);
+        await fillTextById('txtCombustivelDestino', payload.destino);
+        await fillTextById('txtCombustivelData', formatDate(payload.data_deslocamento));
+        await chooseNativeById('ddlCombustivelKmUnidade', payload.tipo_transporte);
         if (payload.ida_e_volta) {
-          const checkboxLabel = findLabel('DESLOCAMENTO IDA E VOLTA');
-          const checkbox = checkboxLabel?.querySelector('input[type="checkbox"]') ||
-            checkboxLabel?.parentElement?.querySelector('input[type="checkbox"]');
-          if (checkbox && !checkbox.checked) checkboxLabel.click();
+          const checkbox = findControlByIdSuffix('ccbIdaVolta');
+          if (checkbox && !checkbox.checked) checkbox.click();
         }
-        await fillText('DESCRIÇÃO DO DESLOCAMENTO', `Visita ao cliente ${payload.conta}, de ${payload.origem} à ${payload.destino}`);
+        await fillTextById(
+          'txtCombustivelDescricao',
+          `Visita ao cliente ${payload.conta}, de ${payload.origem} à ${payload.destino}`
+        );
         await setCheckpoint(task, 'deslocamento-added');
-        clickByText('adicionar', 'DESCRIÇÃO DO DESLOCAMENTO');
+        await clickByIdInPage('btnInserirDeslocamentoCombustivel');
         await delay(900);
       }
       if (payload.pedagio_valor_total) {
