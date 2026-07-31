@@ -95,12 +95,12 @@ Gestão de Conta > botão **✦ Account Planning**.
 
 | # | Teste | Como fazer | Resultado esperado |
 |---|---|---|---|
-| 8.1 | Contato rápido | Perfil do contato > **Contato rápido** > escolher template > **Enviar via WAHA** | Mensagem chega no WhatsApp do contato SEM abrir janela; toast "atividade registrada — desfazer" |
+| 8.1 | Contato rápido | Perfil do contato > **Contato rápido** > escolher template > **Enviar** | Mensagem chega no WhatsApp do contato SEM abrir janela; toast "atividade registrada — desfazer" |
 | 8.2 | Desfazer | Clicar **Desfazer** no toast em até 10s | Atividade removida do histórico |
 | 8.3 | Variáveis | No Contato rápido, usar os BOTÕES de chave (`<nome do contato>`, `<conta>`, `<cargo>`, `<ultima atividade>`...) | Botões inserem a chave no cursor; no envio, substituídas pelos dados reais |
 | 8.4 | Lote | Mala Direta com ~5 contatos > **✦ Enviar todos via WAHA** | Barra 🐇 com progresso por contato; intervalo de 8–15s entre envios; falha em 1 não para a fila; resumo final |
 | 8.5 | Limite diário | Configurações: setar `waha_daily_send_limit` = 2 (ou enviar até o limite) | 3º envio recusado com aviso claro; contador "cota WAHA: x/y" no modal |
-| 8.6 | Contingência | Botão "Abrir no WhatsApp" continua funcionando | Abre web.whatsapp.com como antes |
+| 8.6 | Contingência | Botão "Abrir no WhatsApp" continua funcionando | Abre o aplicativo WhatsApp Desktop; se ele não estiver instalado, usa o WhatsApp Web como contingência |
 
 ## Bloco 9 — Gatilhos com IA
 

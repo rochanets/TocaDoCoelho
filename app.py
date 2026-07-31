@@ -10711,11 +10711,15 @@ def _restart_waha_lite():
         import threading as _th
         _th.Event().wait(timeout=1.5)  # aguarda o SO liberar a porta
         env = os.environ.copy()
-        api_url, api_key, session = _waha_settings()
+        _api_url, api_key, session = _waha_settings()
+        # Mantém o perfil autenticado criado pelo launcher. Em execução direta,
+        # usa o diretório persistente da aplicação e garante que ele exista.
+        waha_data_dir = (env.get('WAHA_DATA_DIR') or '').strip() or str(DATA_DIR / 'waha-sessions')
+        Path(waha_data_dir).mkdir(parents=True, exist_ok=True)
         env['WAHA_PORT'] = str(waha_port)
         env['WAHA_API_KEY'] = api_key
         env['WAHA_SESSION_NAME'] = session
-        env['WAHA_DATA_DIR'] = str(DATA_DIR / 'waha-sessions')
+        env['WAHA_DATA_DIR'] = waha_data_dir
         # Reaproveita o log do WAHA-lite definido pelo launcher (WAHA_LOG); sem ele, o
         # crash do Node ficaria invisível (DEVNULL), exatamente o que dificultou diagnosticar
         # a falha do WhatsApp Update em produção.

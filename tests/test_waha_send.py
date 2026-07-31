@@ -1,4 +1,7 @@
 """Envio via WAHA (Bloco 8): validação e limite diário."""
+from pathlib import Path
+import os
+import subprocess
 
 
 def test_send_valida_campos(client, db_path):
@@ -36,3 +39,43 @@ def test_send_quota_e_limite(client, sample_client_id, db_path, monkeypatch):
     })
     assert resp.status_code == 429
     assert 'Limite diário' in resp.get_json()['error']
+
+
+def test_waha_lite_implementa_endpoint_de_envio():
+    """Contrato entre o backend Flask e o mini-servidor distribuído no app."""
+    source = (Path(__file__).parents[1] / 'waha-lite' / 'waha-lite.js').read_text(encoding='utf-8')
+    assert "app.post('/api/sendText'" in source
+    assert 'waClient.sendMessage(chatId, text)' in source
+
+
+def test_restart_waha_preserva_diretorio_da_sessao(monkeypatch, tmp_path):
+    import app as toca
+
+    session_dir = tmp_path / 'sessao-waha'
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            captured['args'] = args
+            captured['env'] = kwargs['env']
+
+    monkeypatch.setattr(toca, '_waha_last_restart', 0.0)
+    monkeypatch.setattr(toca, '_waha_deps_missing', lambda: False)
+    monkeypatch.setattr(toca, '_waha_runtime_paths', lambda: ('node.exe', str(tmp_path / 'waha-lite.js')))
+    monkeypatch.setattr(
+        toca,
+        '_waha_settings',
+        lambda: ('http://localhost:3001', 'chave-teste', 'sessao-teste'),
+    )
+    monkeypatch.setattr(toca, '_kill_process_on_port', lambda port: False)
+    monkeypatch.setattr(toca.time, 'time', lambda: 1000.0)
+    monkeypatch.setattr(toca, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(subprocess, 'Popen', _FakePopen)
+    monkeypatch.setenv('WAHA_DATA_DIR', str(session_dir))
+    monkeypatch.delenv('WAHA_LOG', raising=False)
+
+    assert toca._restart_waha_lite() is True
+    assert captured['env']['WAHA_DATA_DIR'] == str(session_dir)
+    assert captured['env']['WAHA_PORT'] == os.environ.get('WAHA_PORT', '3001')
+    assert captured['env']['WAHA_API_KEY'] == 'chave-teste'
+    assert captured['env']['WAHA_SESSION_NAME'] == 'sessao-teste'

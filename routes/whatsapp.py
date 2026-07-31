@@ -731,6 +731,17 @@ def _scheduled_send_finish(c, send_id, ok, error):
                   ((error or '')[:300], send_id))
 
 
+def _scheduled_send_record_retry(c, send_id, error):
+    """Mantém o envio pendente para nova tentativa dentro da janela de graça.
+
+    Uma indisponibilidade momentânea do WhatsApp/Outlook não deve transformar o
+    agendamento imediatamente em um erro terminal. Depois da janela, ele passa a
+    aparecer na lista de envios pendentes para o usuário decidir o que fazer.
+    """
+    c.execute("UPDATE scheduled_sends SET error = ? WHERE id = ? AND status = 'pending'",
+              ((error or '')[:300], send_id))
+
+
 def _scheduled_sends_worker_tick():
     now = datetime.now()
     now_str = now.strftime('%Y-%m-%d %H:%M')
@@ -745,8 +756,13 @@ def _scheduled_sends_worker_tick():
     due = [dict_from_row(r) for r in c.fetchall()]
     for row in due:
         ok, error = _scheduled_send_execute(c, row)
-        _scheduled_send_finish(c, row['id'], ok, error)
-        logger.info(f'[Agendados] Envio {row["id"]} ({row["channel"]}): {"ok" if ok else error}')
+        if ok:
+            _scheduled_send_finish(c, row['id'], True, None)
+            logger.info(f'[Agendados] Envio {row["id"]} ({row["channel"]}): ok')
+        else:
+            _scheduled_send_record_retry(c, row['id'], error)
+            logger.warning(f'[Agendados] Envio {row["id"]} ({row["channel"]}) falhou; '
+                           f'nova tentativa será feita dentro da janela de graça: {error}')
     conn.commit()
     conn.close()
     return len(due)

@@ -8,6 +8,7 @@
  * Endpoints implementados:
  *   GET  /api/sessions/:session
  *   POST /api/sessions
+ *   POST /api/sendText
  *   GET  /api/:session/auth/qr?format=image
  *   GET  /api/:session/chats/:chatId/messages
  *   GET  /ping
@@ -449,6 +450,44 @@ app.post('/api/sessions/:session/start', (_req, res) => {
     waClient      = createWaClient();
   }
   res.json({ name: SESSION_NAME, status: clientStatus });
+});
+
+/** POST /api/sendText — envia uma mensagem de texto (compat WAHA).
+ *
+ * O backend do Toca usa este endpoint tanto para o envio imediato quanto para
+ * todos os envios agendados. A primeira versão do WAHA-lite implementava apenas
+ * leitura/status, por isso esses fluxos recebiam "Cannot POST /api/sendText".
+ */
+app.post('/api/sendText', async (req, res) => {
+  if (!waClient || clientStatus !== 'WORKING') {
+    return res.status(503).json({ error: 'WhatsApp não conectado', status: clientStatus });
+  }
+
+  const chatId  = String(req.body?.chatId || '').trim();
+  const text    = String(req.body?.text || '').trim();
+  const session = String(req.body?.session || SESSION_NAME).trim();
+
+  if (!chatId || !text) {
+    return res.status(400).json({ error: 'chatId e text são obrigatórios' });
+  }
+  if (session !== SESSION_NAME) {
+    return res.status(404).json({ error: `Sessão '${session}' não encontrada` });
+  }
+
+  try {
+    const message = await waClient.sendMessage(chatId, text);
+    log('INFO', `Mensagem enviada para ${chatId}.`);
+    return res.status(201).json({
+      id: message?.id?._serialized || message?.id?.id || null,
+      timestamp: message?.timestamp || Math.floor(Date.now() / 1000),
+      fromMe: true,
+      to: chatId,
+    });
+  } catch (err) {
+    const error = (err && err.message) || String(err);
+    log('ERROR', `Falha ao enviar mensagem para ${chatId}: ${error}`);
+    return res.status(502).json({ error });
+  }
 });
 
 /** GET /api/:session/auth/qr — QR code (format=image → PNG binário) */
