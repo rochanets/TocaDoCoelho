@@ -1354,6 +1354,36 @@
                         </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar Integrações</button>
                     </form>
+
+                    <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0 14px;">
+                    <p style="margin-bottom:12px; color:#4b5563; font-size:13px;"><strong>Conexões de contas</strong><br>Sincronize o WhatsApp (WAHA) e a conta Microsoft 365 usadas pelas automações.</p>
+
+                    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:10px;">
+                        <span style="font-size:20px;"><i class="fab fa-whatsapp" style="color:#25d366;"></i></span>
+                        <div style="flex:1; min-width:150px;">
+                            <div style="font-weight:600; font-size:13.5px; color:#111827;">WhatsApp</div>
+                            <div id="connWhatsappStatus" style="margin-top:2px;"></div>
+                        </div>
+                        <button type="button" class="btn btn-auto-mapping btn-small" onclick="openWhatsappConnectModal()">
+                            <span class="ai-star-icon">✦</span> Sincronizar WhatsApp
+                        </button>
+                    </div>
+
+                    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:10px;">
+                        <span style="font-size:20px;"><i class="fas fa-cloud" style="color:#2563eb;"></i></span>
+                        <div style="flex:1; min-width:150px;">
+                            <div style="font-weight:600; font-size:13.5px; color:#111827;">Microsoft 365</div>
+                            <div id="connMicrosoftStatus" style="margin-top:2px;"></div>
+                        </div>
+                        <button type="button" class="btn btn-auto-mapping btn-small" onclick="openMicrosoft365Modal()">
+                            <span class="ai-star-icon">✦</span> Conexão Microsoft 365
+                        </button>
+                    </div>
+
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; font-size:13px; color:#4b5563;">
+                        <input type="checkbox" id="waStartupCheckToggle" onchange="onWaStartupCheckToggle(this.checked)" style="width:17px; height:17px; cursor:pointer; accent-color:#10b981;">
+                        Avisar na abertura do sistema quando o WhatsApp estiver desconectado
+                    </label>
                 </section>
 
                 <!-- 11. Logs de Depuração -->
@@ -2216,6 +2246,7 @@
     </div>
 
     <script src="/js/init.js"></script>
+    <script src="/js/connection-check.js"></script>
 
     <!-- Background Task Indicator -->
     <div id="bgTaskDoneList"></div>

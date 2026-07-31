@@ -555,6 +555,7 @@
             setupSettingsCards();
             await Promise.all([loadStatusConfig(), loadUserProfile(), loadPositions(), loadPositionGroupings(), loadMessageTemplates(), loadUiConfig(), loadIntegrationConfig(), loadUpdateSourceConfig(), loadStartupConfig(), loadThemeConfig()]);
             loadDebugLogsConfig();
+            if (typeof loadConnectionsCard === 'function') loadConnectionsCard();
             renderSettings();
         }
 
