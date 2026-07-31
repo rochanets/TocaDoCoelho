@@ -12,9 +12,12 @@ Este script é executado no BUILD/RELEASE (não em runtime). Ele:
    esse arquivo em runtime para derivar o ID da extensão sem precisar de nenhuma
    biblioteca de criptografia.
 
-A chave PRIVADA nunca deve ir para o repositório. Se ela for perdida, o único efeito
-é o ID da extensão mudar: o app reescreve a política de auto-instalação sozinho e o
-navegador reinstala a extensão uma vez.
+A chave PRIVADA nunca deve ir para o repositório (``secrets/`` está no .gitignore) —
+mas PRECISA ser guardada em algum lugar durável e reusada em todo build. Ela é a
+identidade da extensão: perdê-la muda o ID, e aí TODOS os usuários já instalados
+precisam reinstalar o plugin. Isso já aconteceu uma vez aqui (a chave original foi
+gerada num ambiente efêmero e se perdeu), e é por isso que criar uma chave nova exige
+o ``--init-key`` explícito em vez de acontecer sozinho.
 
 Requisitos: ``pip install cryptography`` (só na máquina de build).
 
@@ -75,9 +78,17 @@ def _pb_field(field_number: int, data: bytes) -> bytes:
     return tag + _pb_varint(len(data)) + data
 
 
-def load_or_create_key(key_path: Path) -> rsa.RSAPrivateKey:
+def load_or_create_key(key_path: Path, allow_create: bool = False) -> rsa.RSAPrivateKey:
     if key_path.exists():
         return serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    if not allow_create:
+        raise SystemExit(
+            f'[build-crx] chave privada não encontrada em {key_path}.\n'
+            '  Gerar outra MUDA o ID da extensão e força TODOS os usuários já instalados\n'
+            '  a reinstalar o plugin. Isso já aconteceu uma vez neste projeto.\n'
+            '  - Se a chave existe em outro lugar, aponte com --key ou TOCA_EXT_KEY.\n'
+            '  - Se ela foi mesmo perdida e você aceita o ID novo, rode com --init-key.'
+        )
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     key_path.parent.mkdir(parents=True, exist_ok=True)
     key_path.write_bytes(
@@ -153,9 +164,15 @@ def main() -> int:
         default=os.environ.get('TOCA_EXT_UPDATE_URL', DEFAULT_UPDATE_URL),
         help='update_url gravado no manifest da extensão.',
     )
+    parser.add_argument(
+        '--init-key',
+        action='store_true',
+        help='Cria a chave privada quando ela não existe. Use só na primeira geração '
+             'ou se a chave foi perdida — o ID da extensão muda e todos reinstalam.',
+    )
     args = parser.parse_args()
 
-    key = load_or_create_key(Path(args.key))
+    key = load_or_create_key(Path(args.key), allow_create=args.init_key)
     pub_der = public_key_der(key)
     ext_id = extension_id(pub_der)
 

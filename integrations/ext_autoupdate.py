@@ -197,10 +197,19 @@ def _write_forcelist(ext_id: str, update_url: str) -> None:
                 index += 1
 
             already = any(str(v) == entry for v in existing.values())
+            # Remove entradas NOSSAS que ficaram para trás. Além do mesmo ID apontando
+            # para outra URL, isto precisa pegar o ID ANTIGO apontando para a nossa
+            # update_url: trocar a chave de assinatura muda o ID, e sem essa limpeza o
+            # navegador ficaria para sempre tentando instalar uma extensão que o
+            # updates.xml não anuncia mais.
             for name, value in list(existing.items()):
-                if str(value).startswith(f'{ext_id};') and str(value) != entry:
+                value = str(value)
+                if value == entry:
+                    continue
+                if value.startswith(f'{ext_id};') or value.endswith(f';{update_url}'):
                     winreg.DeleteValue(key, name)
                     existing.pop(name, None)
+                    logger.info(f'[ExtAutoUpdate] {browser}: entrada obsoleta removida ({value}).')
 
             if not already:
                 used = {int(n) for n in existing if str(n).isdigit()}
