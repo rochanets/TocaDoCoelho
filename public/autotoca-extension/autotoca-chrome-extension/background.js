@@ -67,15 +67,43 @@ async function _checkForUpdate() {
   }
 }
 
+// Verificação ao acordar, no máximo uma vez a cada 5 minutos. O service worker é
+// efêmero e acorda a cada mensagem (o handshake de content script, por exemplo);
+// sem o limite isso viraria um fetch a cada page load.
+const _UPDATE_CHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const _LAST_UPDATE_CHECK_KEY = 'autotoca-last-update-check';
+
+async function _checkForUpdateThrottled() {
+  try {
+    const stored = await chrome.storage.local.get(_LAST_UPDATE_CHECK_KEY);
+    if (Date.now() - Number(stored[_LAST_UPDATE_CHECK_KEY] || 0) < _UPDATE_CHECK_MIN_INTERVAL_MS) return;
+    await chrome.storage.local.set({ [_LAST_UPDATE_CHECK_KEY]: Date.now() });
+    await _checkForUpdate();
+  } catch (_) {
+    // Sem storage disponível: o check em onStartup/onInstalled ainda cobre o caso comum.
+  }
+}
+
 chrome.runtime.onStartup.addListener(_checkForUpdate);
 try {
-  chrome.alarms.create(_UPDATE_ALARM, { periodInMinutes: 30 });
+  // Só cria o alarme se ainda não existir. `alarms.create` com um nome já usado
+  // CANCELA e substitui o alarme anterior, e este bloco roda toda vez que o service
+  // worker acorda — recriar aqui zerava a contagem, e na prática o alarme quase
+  // nunca chegava aos 30 minutos em quem navega com frequência. Era por isso que a
+  // extensão ficava parada numa versão antiga mesmo com o app já atualizado.
+  chrome.alarms.get(_UPDATE_ALARM).then(alarm => {
+    if (!alarm) chrome.alarms.create(_UPDATE_ALARM, { periodInMinutes: 30 });
+  }).catch(() => chrome.alarms.create(_UPDATE_ALARM, { periodInMinutes: 30 }));
   chrome.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === _UPDATE_ALARM) _checkForUpdate();
   });
 } catch (_) {
   // Ambiente sem chrome.alarms — o check em onStartup/onInstalled ainda cobre o caso comum.
 }
+
+// O app pode ter sido atualizado enquanto o navegador estava aberto: o alarme sozinho
+// não cobre isso de forma confiável, então checamos também ao acordar.
+_checkForUpdateThrottled();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'start_reembolso_task') {
