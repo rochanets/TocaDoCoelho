@@ -34,6 +34,13 @@ const DATA_DIR     = process.env.WAHA_DATA_DIR     || path.join(__dirname, '.wah
 const READY_TIMEOUT_MS = parseInt(process.env.WAHA_READY_TIMEOUT_MS || '75000', 10);
 // Quantas vezes recriar o cliente automaticamente antes de desistir.
 const MAX_RECREATE     = parseInt(process.env.WAHA_MAX_RECREATE || '3', 10);
+const GATEWAY_VERSION  = 4;
+const GATEWAY_CAPABILITIES = [
+  'chat-list-match',
+  'sync-diagnostics',
+  'cached-message-fetch',
+  'bounded-history-fetch',
+];
 
 // Versão do WhatsApp Web a fixar — workaround para o bug "trava em 99% → LOGOUT" do
 // whatsapp-web.js com as versões 2.3000.x (issue upstream #5758). Fixar uma versão
@@ -42,7 +49,8 @@ const MAX_RECREATE     = parseInt(process.env.WAHA_MAX_RECREATE || '3', 10);
 //
 // Pode ser configurada SEM editar este arquivo, por (em ordem de prioridade):
 //   1) variável de ambiente WAHA_WEB_VERSION
-//   2) arquivo "web-version.txt" ao lado deste script (1 linha com a versão)
+//   2) arquivo "web-version.txt" ao lado deste script (linhas iniciadas por # são
+//      comentários; a primeira linha útil é a versão)
 // Ex. de versão: 2.3000.1041467552-alpha  (lista em github.com/wppconnect-team/wa-version)
 function resolveWebVersion() {
   const fromEnv = (process.env.WAHA_WEB_VERSION || '').trim();
@@ -50,8 +58,10 @@ function resolveWebVersion() {
   try {
     const f = path.join(__dirname, 'web-version.txt');
     if (fs.existsSync(f)) {
-      const v = fs.readFileSync(f, 'utf8').trim();
-      if (v && !v.startsWith('#')) return v;
+      for (const line of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
+        const v = line.trim();
+        if (v && !v.startsWith('#')) return v; // primeira linha não-comentário = versão
+      }
     }
   } catch (_) { /* sem arquivo = sem fixar */ }
   return '';
@@ -68,6 +78,16 @@ function log(level, ...args) {
   if (level === 'ERROR')      console.error(line);
   else if (level === 'WARN')  console.warn(line);
   else                        console.log(line);
+}
+
+function safeError(err) {
+  const name = err && err.name ? err.name : 'Error';
+  const message = err && err.message ? err.message : String(err || '');
+  const redacted = message
+    .replace(/(?<!\d)\d{10,15}(?:@(c\.us|lid))?/gi, '<contato>')
+    .replace(/(x-api-key|authorization)(\s*[:=]\s*)([^\s,;]+)/gi, '$1$2<redigido>')
+    .slice(0, 600);
+  return redacted ? `${name}: ${redacted}` : name;
 }
 
 const app = express();
@@ -389,8 +409,14 @@ function createWaClient() {
 // Rotas
 // ---------------------------------------------------------------------------
 
-/** GET /ping — healthcheck */
-app.get('/ping', (_req, res) => res.json({ ok: true, status: clientStatus, pid: process.pid }));
+/** GET /ping — healthcheck e negociação de compatibilidade com o AutoToca */
+app.get('/ping', (_req, res) => res.json({
+  ok: true,
+  status: clientStatus,
+  pid: process.pid,
+  gatewayVersion: GATEWAY_VERSION,
+  capabilities: GATEWAY_CAPABILITIES,
+}));
 
 /** GET /api/sessions/:session — status da sessão */
 app.get('/api/sessions/:session', (_req, res) => {
@@ -481,42 +507,221 @@ app.get('/api/:session/auth/qr', async (req, res) => {
   res.json({ value: currentQr });
 });
 
-/** GET /api/:session/chats/:chatId/messages — mensagens filtradas por timestamp */
-app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
-  if (!waClient || clientStatus !== 'WORKING') {
-    return res.status(503).json({ error: 'WhatsApp não conectado', status: clientStatus });
+// Cache curto dos chats já sincronizados. Consultar getChats() para cada contato
+// deixa o WhatsApp Update muito lento, mas depender apenas de getChatById(numero@c.us)
+// falha nas contas migradas para LID. O cache é renovado entre execuções longas.
+let chatsCache = null;
+let chatsCacheAt = 0;
+const CHATS_CACHE_MS = 60000;
+
+async function getChatsCached() {
+  const now = Date.now();
+  if (chatsCache && (now - chatsCacheAt) < CHATS_CACHE_MS) return chatsCache;
+  chatsCache = await waClient.getChats();
+  chatsCacheAt = now;
+  log('INFO', `Cache de conversas renovado: ${chatsCache.length} chat(s) disponíveis.`);
+  return chatsCache;
+}
+
+/** Variantes brasileiras com e sem o 9º dígito, sem registrar o telefone. */
+function phoneVariants(digits) {
+  const variants = new Set([digits]);
+  const withNine = digits.match(/^55(\d{2})9(\d{8})$/);
+  if (withNine) variants.add(`55${withNine[1]}${withNine[2]}`);
+  const withoutNine = digits.match(/^55(\d{2})(\d{8})$/);
+  if (withoutNine) variants.add(`55${withoutNine[1]}9${withoutNine[2]}`);
+  return variants;
+}
+
+/**
+ * Localiza um chat sem depender exclusivamente do WID numérico adivinhado.
+ * Retorna também a estratégia para que o log explique como o contato foi casado.
+ */
+async function findChat(rawChatId) {
+  const digits = rawChatId.split('@')[0];
+  const variants = phoneVariants(digits);
+  let availableChats = 0;
+
+  try {
+    const chats = await getChatsCached();
+    availableChats = chats.length;
+    for (const chat of chats) {
+      if (chat.isGroup) continue;
+      const user = chat.id && chat.id.user;
+      if (user && variants.has(user)) {
+        return { chatId: chat.id._serialized, strategy: 'chat-list', availableChats };
+      }
+    }
+  } catch (err) {
+    log('WARN', `Busca na lista de chats falhou (${safeError(err)}).`);
   }
 
-  const { chatId } = req.params;
-  const limit = Math.min(parseInt(req.query.limit || '500', 10), 2000);
+  try {
+    const numberId = await waClient.getNumberId(digits);
+    const wid = numberId && numberId._serialized;
+    if (wid) {
+      // Não chama getChatById aqui: além de repetir uma ida ao Puppeteer, ele
+      // serializa o modelo inteiro do chat. O endpoint abaixo usa o WID resolvido
+      // para ler somente as mensagens recentes em uma única avaliação.
+      return { chatId: wid, strategy: 'number-id', availableChats };
+    }
+  } catch (err) {
+    log('WARN', `Resolução por number-id falhou (${safeError(err)}).`);
+  }
+
+  return { chatId: null, strategy: 'not-found', availableChats };
+}
+
+function syncLogTag(req) {
+  const raw = String(req.headers['x-toca-sync-id'] || '');
+  return /^[a-zA-Z0-9_-]{1,32}$/.test(raw) ? `[sync:${raw}] ` : '';
+}
+
+/**
+ * Lê apenas o cache recente do chat em uma única chamada ao Puppeteer.
+ * Não usa Chat.fetchMessages(limit), pois esse método baixa páginas antigas até
+ * preencher o limite solicitado e pode bloquear o Chrome por vários minutos.
+ */
+async function fetchCachedMessages(chatId, gteTs, lteTs, limit) {
+  return await waClient.pupPage.evaluate(
+    async ({ chatId, gteTs, lteTs, limit }) => {
+      const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+      if (!chat) return { found: false, cachedCount: 0, historyPages: 0, messages: [] };
+
+      let all = chat.msgs.getModelsArray().filter((msg) => !msg.isNotification);
+      let historyPages = 0;
+      const maxHistoryPages = 2;
+
+      // Carrega no máximo duas páginas adicionais, somente quando a mensagem
+      // mais antiga em cache ainda está dentro do período solicitado. Isso traz
+      // contexto suficiente para o resumo sem tentar completar 500 mensagens.
+      while (gteTs && all.length && historyPages < maxHistoryPages) {
+        const oldestTs = Math.min(...all.map((msg) => Number(msg.t || 0)).filter(Boolean));
+        if (!oldestTs || oldestTs <= gteTs) break;
+        const loaded = await window
+          .require('WAWebChatLoadMessages')
+          .loadEarlierMsgs({ chat });
+        if (!loaded || !loaded.length) break;
+        historyPages += 1;
+        const byId = new Map();
+        for (const msg of [...loaded, ...all]) {
+          if (msg.isNotification) continue;
+          const key = msg.id && (msg.id._serialized || msg.id.id);
+          if (key) byId.set(key, msg);
+        }
+        all = [...byId.values()];
+      }
+
+      const inPeriod = all
+        .filter((msg) => {
+          const ts = Number(msg.t || 0);
+          return (!gteTs || ts >= gteTs) && (!lteTs || ts <= lteTs);
+        })
+        .sort((a, b) => Number(a.t || 0) - Number(b.t || 0))
+        .slice(-limit);
+
+      const serialized = inPeriod.map((msg) => {
+        const id = msg.id || {};
+        const serializeWid = (wid) => {
+          if (!wid) return '';
+          return typeof wid === 'object' ? (wid._serialized || '') : String(wid);
+        };
+        return {
+          id: {
+            id: id.id || '',
+            fromMe: Boolean(id.fromMe),
+            _serialized: id._serialized || '',
+          },
+          body: msg.directPath
+            ? (msg.caption || '')
+            : (msg.body || msg.pollName || msg.eventName || ''),
+          type: msg.type || '',
+          timestamp: Number(msg.t || 0),
+          from: serializeWid(msg.from),
+          to: serializeWid(msg.to),
+          fromMe: Boolean(id.fromMe),
+          hasMedia: Boolean(msg.directPath),
+        };
+      });
+
+      return {
+        found: true,
+        cachedCount: all.length,
+        historyPages,
+        messages: serialized,
+      };
+    },
+    { chatId, gteTs, lteTs, limit },
+  );
+}
+
+/** GET /api/:session/chats/:chatId/messages — mensagens filtradas por timestamp */
+app.get('/api/:session/chats/:chatId/messages', async (req, res) => {
+  const tag = syncLogTag(req);
+  const startedAt = Date.now();
+
+  if (!waClient || clientStatus !== 'WORKING') {
+    log('WARN', `${tag}Consulta recusada: sessão em estado ${clientStatus}.`);
+    return res.status(503).json({
+      error: 'WhatsApp não conectado',
+      code: 'SESSION_NOT_WORKING',
+      status: clientStatus,
+    });
+  }
+
+  const { chatId: rawChatId } = req.params;
+  const requestedLimit = parseInt(req.query.limit || '500', 10);
+  const limit = Math.min(Number.isFinite(requestedLimit) ? Math.max(requestedLimit, 1) : 500, 2000);
   const gteTs = parseInt(req.query['filter.timestamp.gte'] || '0', 10);
   const lteTs = parseInt(req.query['filter.timestamp.lte'] || String(Math.floor(Date.now() / 1000)), 10);
 
   try {
-    const chat     = await waClient.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit });
+    const match = await findChat(rawChatId);
+    res.setHeader('X-WAHA-Match-Strategy', match.strategy);
+    res.setHeader('X-WAHA-Available-Chats', String(match.availableChats));
 
-    const filtered = messages
-      .filter((m) => {
-        const ts = m.timestamp;
-        return (!gteTs || ts >= gteTs) && (!lteTs || ts <= lteTs);
-      })
-      .map((m) => ({
-        id:       { id: m.id.id, fromMe: m.fromMe, _serialized: m.id._serialized },
-        body:     m.body || m._data?.caption || '',
-        type:     m.type,
-        timestamp: m.timestamp,
-        from:     m.from,
-        to:       m.to,
-        fromMe:   m.fromMe,
-        hasMedia: m.hasMedia,
-      }));
+    if (!match.chatId) {
+      log(
+        'INFO',
+        `${tag}Conversa não localizada; chats disponíveis=${match.availableChats}; ` +
+        `estratégia=${match.strategy}; duração=${Date.now() - startedAt}ms.`
+      );
+      return res.status(404).json({
+        error: 'Sem conversa sincronizada para este contato.',
+        code: 'CHAT_NOT_FOUND',
+        diagnostics: { availableChats: match.availableChats, strategy: match.strategy },
+      });
+    }
 
-    log('INFO', `Mensagens de ${chatId}: ${filtered.length} no intervalo.`);
-    res.json(filtered);
-  } catch (_err) {
-    // Chat inexistente = sem conversa com este contato
-    res.status(404).json({ error: _err.message });
+    const result = await fetchCachedMessages(match.chatId, gteTs, lteTs, limit);
+    if (!result.found) {
+      return res.status(404).json({
+        error: 'Conversa registrada, mas não carregada no WhatsApp Web.',
+        code: 'CHAT_NOT_LOADED',
+      });
+    }
+    const filtered = result.messages;
+
+    res.setHeader('X-WAHA-Fetched-Messages', String(result.cachedCount));
+    res.setHeader('X-WAHA-Filtered-Messages', String(filtered.length));
+    res.setHeader('X-WAHA-History-Pages', String(result.historyPages));
+    log(
+      'INFO',
+      `${tag}Consulta concluída: estratégia=${match.strategy}; cache=${result.cachedCount}; ` +
+      `páginas_adicionais=${result.historyPages}; no período=${filtered.length}; ` +
+      `duração=${Date.now() - startedAt}ms.`
+    );
+    return res.json(filtered);
+  } catch (err) {
+    log(
+      'ERROR',
+      `${tag}Falha ao consultar mensagens (${safeError(err)}); ` +
+      `duração=${Date.now() - startedAt}ms.`
+    );
+    return res.status(500).json({
+      error: 'Falha interna ao consultar a conversa.',
+      code: 'MESSAGE_LOOKUP_FAILED',
+    });
   }
 });
 

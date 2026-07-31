@@ -238,7 +238,13 @@ def _find_node():
     if bundled.exists():
         return str(bundled)
     found = shutil.which('node') or shutil.which('node.exe')
-    return found
+    if found:
+        return found
+    if sys.platform == 'win32':
+        installed = Path(os.environ.get('LOCALAPPDATA') or '') / 'TocaDoCoelho' / 'node.exe'
+        if installed.is_file():
+            return str(installed)
+    return None
 
 
 def _waha_node_modules_ok(script):
@@ -448,8 +454,13 @@ print(f"[INFO] Log do servidor: {LOG_PATH}")
 
 log_file = open(LOG_PATH, 'w', encoding='utf-8')
 
+server_command = (
+    [sys.executable, '--serve']
+    if getattr(sys, 'frozen', False)
+    else [sys.executable, str(Path(__file__).resolve()), '--serve']
+)
 server_process = subprocess.Popen(
-    [sys.executable, '--serve'],
+    server_command,
     stdout=log_file,
     stderr=log_file,
     cwd=str(APP_DIR),

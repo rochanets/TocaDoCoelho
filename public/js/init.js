@@ -24,6 +24,8 @@
     let _waSelectedPeriod = 7;
     let _waQrPollInterval = null;
     let _waReviewItems = [];
+    let _waLastDiagnosticsRunId = '';
+    let _waLastDiagnosticText = '';
 
     function openWhatsappUpdateWithWarning() {
       setActiveAutoTocaModuleButton('autoTocaBtn_whatsapp-update');
@@ -95,7 +97,7 @@
           _waShowSection('offline');
           return;
         }
-        if (d.connected) { _waShowSection('form'); return; }
+        if (d.connected) { _waShowConnectedForm(); return; }
         // not connected but configured → get QR
         _waGetQrCode();
       }).catch(()=>{ _waShowSection('offline'); document.getElementById('waSyncOfflineMsg').textContent = 'Não foi possível contatar o servidor.'; });
@@ -118,14 +120,14 @@
       fetch('/api/whatsapp/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
         .then(r=>r.json()).then(d=>{
           if (!d.ok) { document.getElementById('waSyncOfflineMsg').textContent = d.error || 'Falha ao obter QR code.'; _waShowSection('offline'); return; }
-          if (d.connected) { _waShowSection('form'); return; }
+          if (d.connected) { _waShowConnectedForm(); return; }
           if (d.qr) {
             document.getElementById('waSyncQrImg').src = d.qr;
             _waShowSection('qr');
             if (_waQrPollInterval) clearInterval(_waQrPollInterval);
             _waQrPollInterval = setInterval(()=>{
               fetch('/api/whatsapp/status').then(r=>r.json()).then(s=>{
-                if (s.connected) { clearInterval(_waQrPollInterval); _waQrPollInterval = null; _waShowSection('form'); }
+                if (s.connected) { clearInterval(_waQrPollInterval); _waQrPollInterval = null; _waShowConnectedForm(); }
               });
             }, 3000);
           } else {
@@ -158,13 +160,14 @@
         .then(r=>r.json()).then(d=>{
           if (!d.task_id) { alert('Erro ao iniciar sincronização.'); _waResetToForm(); return; }
           const taskId = d.task_id;
+          _waLastDiagnosticsRunId = taskId.substring(0, 12);
           // Botões Minimizar / Cancelar — permite usar o sistema enquanto processa
           _attachBgTaskControls(
             document.getElementById('waSyncProgressArea'), taskId,
             () => { closeWhatsappSyncModal(); },   // minimizar: fecha o modal, a tarefa segue no background
             () => { _waResetToForm(); }             // cancelar: volta ao formulário
           );
-          const sourceTab = (typeof _currentTab !== 'undefined') ? _currentTab : 'auto-toca';
+          const sourceTab = (typeof _currentTab !== 'undefined') ? _currentTab : 'autotoca';
           BgTaskManager.register(
             taskId,
             '/api/whatsapp/tasks/' + taskId,
@@ -245,11 +248,127 @@
         noItemsFooter.style.display = 'none';
         _waUpdateReviewCounter();
       } else {
+        const diagnostics = (result && result.diagnostics) || {};
+        _waLastDiagnosticsRunId = diagnostics.run_id || '';
+        const countLabels = {
+          invalid_phone: 'Telefone inválido',
+          unauthorized: 'API Key recusada',
+          session_not_working: 'Sessão desconectada',
+          chat_not_found: 'Conversa não localizada',
+          waha_http_error: 'Erro HTTP do WAHA',
+          waha_unavailable: 'WAHA indisponível',
+          not_checked_after_timeout: 'Não verificado após timeout',
+          invalid_response: 'Resposta inválida',
+          no_messages_in_period: 'Sem mensagens no período',
+          no_supported_content: 'Sem conteúdo importável',
+          already_processed: 'Já importada'
+        };
+        const reasonLines = Object.entries(diagnostics.counts || {})
+          .filter(function(entry){ return entry[1] > 0 && entry[0] !== 'ready_for_review'; })
+          .map(function(entry){
+            return '<li><strong>' + entry[1] + '</strong> — ' +
+              escapeHtml(countLabels[entry[0]] || entry[0]) + '</li>';
+          }).join('');
+        const scope = diagnostics.scope || {};
+        const scopeHtml = scope.total !== undefined
+          ? '<div style="margin-top:7px; color:#64748b;">Escopo do banco: ' +
+              '<strong>' + (scope.active_with_phone || 0) + '</strong> ativos com telefone de ' +
+              (scope.total || 0) + ' contatos totais; ' +
+              (scope.active_without_phone || 0) + ' ativos sem telefone; ' +
+              (scope.archived_with_phone || 0) + ' arquivados com telefone.</div>'
+          : '';
+        const diagnosticHtml = diagnostics.summary
+          ? '<div style="margin-top:12px; padding:10px 12px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; color:#78350f; font-size:12px;">' +
+              '<strong>Diagnóstico:</strong> ' + escapeHtml(diagnostics.summary) +
+              (reasonLines ? '<ul style="margin:7px 0 0 18px; padding:0;">' + reasonLines + '</ul>' : '') +
+              scopeHtml +
+            '</div>' +
+            '<button type="button" class="btn btn-secondary btn-small" onclick="_waLoadDiagnostics()" style="margin-top:10px;">' +
+              '<i class="fas fa-file-lines"></i> Ver log técnico do WAHA' +
+            '</button>' +
+            '<div id="waTechnicalDiagnostics" style="display:none; margin-top:10px;"></div>'
+          : '';
         box.style.background = '#f9fafb';
         box.style.border = '1px solid #e5e7eb';
-        box.innerHTML = `<div style="font-weight:700; color:#374151; margin-bottom:8px;"><i class="fas fa-check" style="margin-right:6px; color:#6b7280;"></i>Verificação concluída</div><div style="color:#6b7280;">${(result && result.message) || 'Nenhuma novidade encontrada no período.'}</div>`;
+        box.innerHTML = `<div style="font-weight:700; color:#374151; margin-bottom:8px;"><i class="fas fa-check" style="margin-right:6px; color:#6b7280;"></i>Verificação concluída</div><div style="color:#6b7280;">${escapeHtml((result && result.message) || 'Nenhuma novidade encontrada no período.')}</div>${diagnosticHtml}`;
         reviewContainer.style.display = 'none';
         noItemsFooter.style.display = '';
+      }
+    }
+
+    function _waShowConnectedForm() {
+      _waShowSection('form');
+      const scopeEl = document.getElementById('waSyncScopeInfo');
+      if (!scopeEl) return;
+      scopeEl.textContent = 'Calculando contatos que serão verificados...';
+      fetch('/api/whatsapp/scope')
+        .then(function(response){ return response.json(); })
+        .then(function(data){
+          if (!data.ok) throw new Error(data.error || 'Falha ao calcular escopo.');
+          const scope = data.scope || {};
+          scopeEl.innerHTML =
+            '<strong>' + (scope.active_with_phone || 0) + ' contato(s) ativo(s) com telefone serão verificados.</strong> ' +
+            (scope.active_without_phone || 0) + ' ativo(s) sem telefone e ' +
+            (scope.archived_with_phone || 0) + ' arquivado(s) com telefone ficam fora da sincronização.';
+        })
+        .catch(function(){
+          scopeEl.textContent = 'Não foi possível calcular previamente o escopo da sincronização.';
+        });
+    }
+
+    async function _waLoadDiagnostics() {
+      const panel = document.getElementById('waTechnicalDiagnostics');
+      if (!panel) return;
+      panel.style.display = '';
+      panel.innerHTML = '<div style="color:#6b7280; font-size:12px;"><i class="fas fa-circle-notch fa-spin"></i> Carregando logs...</div>';
+      try {
+        const query = _waLastDiagnosticsRunId
+          ? '?run_id=' + encodeURIComponent(_waLastDiagnosticsRunId) + '&limit=250'
+          : '?limit=250';
+        const response = await fetch('/api/whatsapp/diagnostics' + query);
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Falha ao carregar diagnóstico.');
+
+        const health = data.health || {};
+        const sections = [
+          'DIAGNÓSTICO WHATSAPP UPDATE',
+          'Gerado em: ' + (data.generated_at || ''),
+          'Execução: ' + (data.run_id || 'não informada'),
+          'WAHA acessível: ' + (health.reachable ? 'sim' : 'não'),
+          'Estado da sessão: ' + (health.session_state || health.gateway_state || 'desconhecido'),
+          'Versão do gateway: ' + (health.gateway_version || (health.gateway_outdated ? 'antiga/incompatível' : 'não informada')),
+          health.gateway_outdated ? 'ALERTA: o processo WAHA-lite ainda é antigo e precisa ser reiniciado.' : '',
+          health.session_error ? 'Erro da sessão: ' + health.session_error : '',
+          health.ping_error ? 'Erro de conexão: ' + health.ping_error : '',
+          '',
+          'LOG DO AUTOTOCA',
+          ...(data.app_log || ['(sem linhas para esta execução)']),
+          '',
+          'LOG DO WAHA-LITE',
+          ...(data.waha_log || ['(arquivo de log ainda não disponível)'])
+        ].filter(function(line){ return line !== null && line !== undefined; });
+        _waLastDiagnosticText = sections.join('\n');
+        panel.innerHTML =
+          '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px;">' +
+            '<strong style="font-size:12px; color:#374151;">Log técnico (telefones e chaves ocultados)</strong>' +
+            '<button type="button" class="btn btn-secondary btn-small" onclick="_waCopyDiagnostics()"><i class="fas fa-copy"></i> Copiar</button>' +
+          '</div>' +
+          '<pre style="max-height:280px; overflow:auto; margin:0; padding:10px; border-radius:7px; background:#111827; color:#d1fae5; white-space:pre-wrap; word-break:break-word; font-size:10.5px; line-height:1.45;">' +
+            escapeHtml(_waLastDiagnosticText) +
+          '</pre>';
+      } catch (error) {
+        panel.innerHTML = '<div style="color:#991b1b; font-size:12px;">Não foi possível carregar o log: ' +
+          escapeHtml(error && error.message ? error.message : String(error)) + '</div>';
+      }
+    }
+
+    async function _waCopyDiagnostics() {
+      if (!_waLastDiagnosticText) return;
+      try {
+        await navigator.clipboard.writeText(_waLastDiagnosticText);
+        showInfo('Diagnóstico do WhatsApp copiado.');
+      } catch (_) {
+        showInfo('Não foi possível copiar automaticamente. Selecione o texto do log.');
       }
     }
 
@@ -369,7 +488,7 @@
       const noItemsFooter = document.getElementById('waNoItemsFooter');
       box.style.background = '#fef2f2';
       box.style.border = '1px solid #fca5a5';
-      box.innerHTML = `<div style="font-weight:700; color:#991b1b; margin-bottom:8px;"><i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>Erro durante sincronização</div><div style="color:#374151; font-size:13px;">${error || 'Erro desconhecido.'}</div>`;
+      box.innerHTML = `<div style="font-weight:700; color:#991b1b; margin-bottom:8px;"><i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>Erro durante sincronização</div><div style="color:#374151; font-size:13px;">${escapeHtml(error || 'Erro desconhecido.')}</div><button type="button" class="btn btn-secondary btn-small" onclick="_waLoadDiagnostics()" style="margin-top:10px;"><i class="fas fa-file-lines"></i> Ver log técnico do WAHA</button><div id="waTechnicalDiagnostics" style="display:none; margin-top:10px;"></div>`;
       if (reviewContainer) reviewContainer.style.display = 'none';
       if (noItemsFooter) noItemsFooter.style.display = '';
     }

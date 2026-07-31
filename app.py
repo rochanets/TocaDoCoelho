@@ -26,6 +26,7 @@ import base64
 import mimetypes
 import uuid
 import hashlib
+from collections import deque
 from datetime import datetime, timedelta, date
 from io import BytesIO
 from urllib.parse import urlparse, quote_plus
@@ -48,11 +49,11 @@ from integrations.outlook_graph import (
     OutlookOAuthError,
     OutlookSyncError,
     build_authorize_url as outlook_graph_build_authorize_url,
+    consume_oauth_state as outlook_graph_consume_oauth_state,
     ensure_schema as outlook_graph_ensure_schema,
     exchange_code_and_store as outlook_graph_exchange_code_and_store,
     fetch_messages as outlook_graph_fetch_messages,
     get_valid_access_token as outlook_graph_get_valid_access_token,
-    parse_state as outlook_graph_parse_state,
     send_mail as outlook_graph_send_mail,
 )
 try:
@@ -10603,6 +10604,15 @@ def _waha_runtime_paths():
             script = str(candidate)
     if not node:
         node = shutil.which('node') or shutil.which('node.exe') or ''
+    if not node and sys.platform == 'win32':
+        # Execução de app.py pelo código-fonte pode coexistir com o sidecar da
+        # instalação. Nesse cenário o node.exe portátil não está no PATH.
+        local_app_data = Path(os.environ.get('LOCALAPPDATA') or '')
+        candidates = [
+            Path(__file__).resolve().parent / 'node.exe',
+            local_app_data / 'TocaDoCoelho' / 'node.exe',
+        ]
+        node = next((str(candidate) for candidate in candidates if candidate.is_file()), '')
     return node, script
 
 
@@ -10701,16 +10711,21 @@ def _restart_waha_lite():
         import threading as _th
         _th.Event().wait(timeout=1.5)  # aguarda o SO liberar a porta
         env = os.environ.copy()
-        # Mantém o mesmo perfil autenticado do start feito pelo launcher. Em
-        # execução direta do código-fonte, DATA_DIR fornece o fallback correto.
-        waha_data_dir = (env.get('WAHA_DATA_DIR') or str(DATA_DIR / 'waha-sessions')).strip()
+        _api_url, api_key, session = _waha_settings()
+        # Mantém o perfil autenticado criado pelo launcher. Em execução direta,
+        # usa o diretório persistente da aplicação e garante que ele exista.
+        waha_data_dir = (env.get('WAHA_DATA_DIR') or '').strip() or str(DATA_DIR / 'waha-sessions')
         Path(waha_data_dir).mkdir(parents=True, exist_ok=True)
         env['WAHA_PORT'] = str(waha_port)
+        env['WAHA_API_KEY'] = api_key
+        env['WAHA_SESSION_NAME'] = session
         env['WAHA_DATA_DIR'] = waha_data_dir
         # Reaproveita o log do WAHA-lite definido pelo launcher (WAHA_LOG); sem ele, o
         # crash do Node ficaria invisível (DEVNULL), exatamente o que dificultou diagnosticar
         # a falha do WhatsApp Update em produção.
-        _waha_log = os.environ.get('WAHA_LOG', '').strip()
+        _waha_log = os.environ.get('WAHA_LOG', '').strip() or str(DATA_DIR / 'waha-lite.log')
+        env['WAHA_LOG'] = _waha_log
+        os.environ['WAHA_LOG'] = _waha_log
         try:
             _out = open(_waha_log, 'a', encoding='utf-8', buffering=1) if _waha_log else _sp.DEVNULL
         except Exception:
@@ -10765,25 +10780,232 @@ def _waha_extract_text(msg, client_name):
     return None, sender
 
 
+def _waha_redact_diagnostic_text(value):
+    """Remove telefones, IDs de chat e chaves de linhas exibidas no diagnóstico."""
+    text = str(value or '')
+    text = re.sub(r'(?<!\d)\d{10,15}(?:@(c\.us|lid))?', '<contato>', text, flags=re.IGNORECASE)
+    text = re.sub(
+        r'(?i)(x-api-key|authorization)(\s*[:=]\s*)([^\s,;]+)',
+        r'\1\2<redigido>',
+        text,
+    )
+    return text
+
+
+def _waha_log_file_path():
+    """Localiza o log criado pelo launcher, inclusive após restart do WAHA-lite."""
+    configured = (os.environ.get('WAHA_LOG') or '').strip()
+    if configured:
+        return Path(configured)
+    return DATA_DIR / 'waha-lite.log'
+
+
+def _tail_diagnostic_file(path, lines_limit=250, contains=None):
+    try:
+        path = Path(path)
+        if not path.is_file():
+            return []
+        bounded_limit = max(1, min(int(lines_limit), 1000))
+        lines = deque(maxlen=bounded_limit)
+        with open(path, 'r', encoding='utf-8', errors='replace') as handle:
+            for line in handle:
+                if not contains or contains in line:
+                    lines.append(line)
+        return [
+            _waha_redact_diagnostic_text(line.rstrip('\r\n'))
+            for line in lines
+        ]
+    except Exception as exc:
+        logger.warning('[WhatsApp Diagnóstico] Falha ao ler %s (%s).', Path(path).name, type(exc).__name__)
+        return []
+
+
+def _whatsapp_sync_diagnostic_summary(counts, total):
+    """Traduz os contadores técnicos para uma hipótese prática, sem dados pessoais."""
+    counts = counts or {}
+    if not total:
+        return 'Não há contatos ativos com telefone cadastrado no CRM.'
+    if counts.get('unauthorized'):
+        return 'O WAHA recusou a API Key. Revise a chave configurada.'
+    if counts.get('session_not_working'):
+        return 'A sessão do WhatsApp deixou de estar conectada durante a consulta.'
+    if counts.get('waha_unavailable'):
+        return 'O AutoToca não conseguiu alcançar o WAHA-lite.'
+    if counts.get('chat_not_found') == total:
+        return (
+            'O WhatsApp foi acessado, mas nenhuma conversa correspondeu aos telefones do CRM. '
+            'O log informa se isso veio de LID/9º dígito ou de números sem conversa sincronizada.'
+        )
+    if counts.get('no_messages_in_period') == total:
+        return 'As conversas foram localizadas, mas não há mensagens dentro do período escolhido.'
+    if counts.get('already_processed') and counts.get('already_processed') + counts.get('invalid_phone', 0) == total:
+        return 'Todas as conversas encontradas já haviam sido importadas anteriormente.'
+    if counts.get('no_supported_content') and counts.get('no_supported_content') + counts.get('invalid_phone', 0) == total:
+        return 'Só foram encontradas notificações do WhatsApp ou mensagens sem conteúdo importável.'
+    return 'Consulte o detalhamento abaixo para ver por que cada grupo de contatos foi ignorado.'
+
+
+def _whatsapp_sync_scope(cursor=None):
+    """Contabiliza exatamente quem entra no WhatsApp Update."""
+    own_connection = None
+    if cursor is None:
+        own_connection = get_db()
+        cursor = own_connection.cursor()
+    try:
+        row = cursor.execute(
+            '''SELECT
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN COALESCE(is_archived, 0) = 0 THEN 1 ELSE 0 END) AS active_total,
+                   SUM(CASE WHEN COALESCE(is_archived, 0) = 0
+                                  AND TRIM(COALESCE(phone, '')) != ''
+                            THEN 1 ELSE 0 END) AS active_with_phone,
+                   SUM(CASE WHEN COALESCE(is_archived, 0) = 0
+                                  AND TRIM(COALESCE(phone, '')) = ''
+                            THEN 1 ELSE 0 END) AS active_without_phone,
+                   SUM(CASE WHEN COALESCE(is_archived, 0) = 1
+                                  AND TRIM(COALESCE(phone, '')) != ''
+                            THEN 1 ELSE 0 END) AS archived_with_phone
+               FROM clients'''
+        ).fetchone()
+        values = list(row) if row else [0, 0, 0, 0, 0]
+        return {
+            'total': int(values[0] or 0),
+            'active_total': int(values[1] or 0),
+            'active_with_phone': int(values[2] or 0),
+            'active_without_phone': int(values[3] or 0),
+            'archived_with_phone': int(values[4] or 0),
+        }
+    finally:
+        if own_connection is not None:
+            own_connection.close()
+
+
+def _waha_ensure_sync_gateway(api_url, headers, session, task_id, log_prefix):
+    """Atualiza um WAHA-lite local antigo antes do sync e aguarda a sessão voltar."""
+    try:
+        ping_resp = requests.get(f'{api_url}/ping', timeout=5)
+        ping_body = ping_resp.json() if ping_resp.ok else {}
+    except Exception:
+        return False
+
+    if not isinstance(ping_body, dict) or not ping_body.get('pid'):
+        # Pode ser WAHA oficial/remoto; não tentar controlar um serviço que não é
+        # reconhecidamente o sidecar local do Toca.
+        return False
+
+    capabilities = set(ping_body.get('capabilities') or [])
+    required_capabilities = {
+        'chat-list-match',
+        'cached-message-fetch',
+        'bounded-history-fetch',
+    }
+    if required_capabilities.issubset(capabilities):
+        return False
+
+    parsed_url = urlparse(api_url)
+    if (parsed_url.hostname or '').lower() not in {'localhost', '127.0.0.1', '::1'}:
+        logger.warning(
+            '%s Gateway sem suporte a LID detectado em endereço não local; atualização automática ignorada.',
+            log_prefix,
+        )
+        return False
+
+    logger.warning(
+        '%s WAHA-lite incompatível detectado (capacidades ausentes: %s). '
+        'Reiniciando o sidecar com a versão atual.',
+        log_prefix,
+        ','.join(sorted(required_capabilities - capabilities)),
+    )
+    _bg_task_set(task_id, {
+        'step': '🔄 Atualizando o gateway do WhatsApp para compatibilidade com LID...',
+        'progress': 7,
+    })
+    if not _restart_waha_lite():
+        raise RuntimeError(
+            'O WAHA-lite em execução é uma versão antiga e não pôde ser atualizado automaticamente. '
+            'Encerre completamente o Toca do Coelho e abra novamente.'
+        )
+
+    deadline = time.time() + 120
+    last_state = 'STARTING'
+    while time.time() < deadline:
+        try:
+            new_ping = requests.get(f'{api_url}/ping', timeout=5)
+            new_body = new_ping.json() if new_ping.ok else {}
+            new_capabilities = set(new_body.get('capabilities') or []) if isinstance(new_body, dict) else set()
+            last_state = str(new_body.get('status') or last_state) if isinstance(new_body, dict) else last_state
+            if required_capabilities.issubset(new_capabilities):
+                status_resp = requests.get(
+                    f'{api_url}/api/sessions/{session}',
+                    headers=headers,
+                    timeout=5,
+                )
+                status_body = status_resp.json() if status_resp.ok else {}
+                last_state = str(status_body.get('status') or last_state)
+                if last_state == 'WORKING':
+                    logger.info('%s WAHA-lite atualizado e sessão restaurada (WORKING).', log_prefix)
+                    return True
+                if last_state == 'SCAN_QR_CODE':
+                    raise RuntimeError(
+                        'O WAHA-lite foi atualizado, mas o WhatsApp solicitou uma nova leitura do QR Code. '
+                        'Feche esta tela e conecte novamente.'
+                    )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+        threading.Event().wait(timeout=2)
+
+    raise RuntimeError(
+        f'O WAHA-lite foi atualizado, mas a sessão não voltou a WORKING em 120 segundos '
+        f'(estado final: {_waha_redact_diagnostic_text(last_state)}).'
+    )
+
+
 def _whatsapp_sync_async(task_id, period_days):
+    run_id = re.sub(r'[^a-zA-Z0-9_-]', '', str(task_id))[:12] or uuid.uuid4().hex[:12]
+    log_prefix = f'[WhatsApp Sync][sync:{run_id}]'
+    db = None
     try:
         _bg_task_set(task_id, {'step': '📋 Carregando clientes...', 'progress': 5})
 
         api_url, api_key, session = _waha_settings()
-        headers = _waha_headers(api_key)
+        headers = dict(_waha_headers(api_key))
+        headers['X-Toca-Sync-Id'] = run_id
+        _waha_ensure_sync_gateway(api_url, headers, session, task_id, log_prefix)
 
         db = get_db()
         c = db.cursor()
-        c.execute("SELECT id, name, phone FROM clients WHERE phone IS NOT NULL AND phone != '' AND is_archived = 0")
+        scope = _whatsapp_sync_scope(c)
+        c.execute(
+            """SELECT id, name, phone FROM clients
+               WHERE TRIM(COALESCE(phone, '')) != ''
+                 AND COALESCE(is_archived, 0) = 0
+               ORDER BY id"""
+        )
         clients = c.fetchall()
+        total = len(clients)
+        logger.info(
+            '%s Início: período=%s dia(s), escopo=%s.',
+            log_prefix, period_days, json.dumps(scope, ensure_ascii=False, sort_keys=True),
+        )
 
         if not clients:
             _bg_task_set(task_id, {
                 'status': 'done', 'progress': 100,
                 'step': '✅ Concluído',
                 'result': {'imported': 0, 'skipped': 0, 'total_clients': 0,
-                           'message': 'Nenhum cliente com telefone cadastrado.'}
+                           'message': 'Nenhum cliente com telefone cadastrado.',
+                           'diagnostics': {
+                               'run_id': run_id,
+                               'counts': {},
+                               'scope': scope,
+                               'summary': _whatsapp_sync_diagnostic_summary({}, 0),
+                           }}
             })
+            logger.info('%s Encerrado: nenhum contato elegível.', log_prefix)
+            db.close()
+            db = None
             _bg_task_cleanup(task_id)
             return
 
@@ -10797,11 +11019,25 @@ def _whatsapp_sync_async(task_id, period_days):
 
         imported = 0
         skipped = 0
-        total = len(clients)
         pending_items = []
+        diagnostic_counts = {
+            'invalid_phone': 0,
+            'unauthorized': 0,
+            'session_not_working': 0,
+            'chat_not_found': 0,
+            'waha_http_error': 0,
+            'waha_unavailable': 0,
+            'not_checked_after_timeout': 0,
+            'invalid_response': 0,
+            'no_messages_in_period': 0,
+            'no_supported_content': 0,
+            'already_processed': 0,
+            'ready_for_review': 0,
+        }
         period_label = {1: '1 dia', 3: '3 dias', 7: '1 semana', 15: '15 dias', 30: '30 dias'}.get(period_days, f'{period_days} dias')
 
         for i, (client_id, client_name, phone) in enumerate(clients):
+            contact_ref = f'{i + 1}/{total}'
             progress = 10 + int((i / total) * 78)
             _bg_task_set(task_id, {
                 'step': f'📱 Verificando {client_name}... ({i + 1}/{total})',
@@ -10811,6 +11047,8 @@ def _whatsapp_sync_async(task_id, period_days):
             chat_id = _phone_to_waha_chatid(phone)
             if not chat_id:
                 skipped += 1
+                diagnostic_counts['invalid_phone'] += 1
+                logger.info('%s Contato %s ignorado: telefone inválido.', log_prefix, contact_ref)
                 continue
 
             # Deduplicação incremental: só resumimos mensagens MAIS NOVAS do que a
@@ -10834,16 +11072,100 @@ def _whatsapp_sync_async(task_id, period_days):
                     timeout=25
                 )
                 if msg_resp.status_code != 200:
+                    logger.debug(f'[WhatsApp Sync] {client_name}: HTTP {msg_resp.status_code} do WAHA '
+                                 f'(chat={chat_id}) — {msg_resp.text[:200]}')
                     skipped += 1
+                    try:
+                        error_body = msg_resp.json() or {}
+                    except Exception:
+                        error_body = {}
+                    if not isinstance(error_body, dict):
+                        error_body = {}
+                    error_code = str(error_body.get('code') or '').upper()
+                    if msg_resp.status_code == 401:
+                        reason = 'unauthorized'
+                    elif msg_resp.status_code == 503 or error_code == 'SESSION_NOT_WORKING':
+                        reason = 'session_not_working'
+                    elif msg_resp.status_code == 404 or error_code == 'CHAT_NOT_FOUND':
+                        reason = 'chat_not_found'
+                    else:
+                        reason = 'waha_http_error'
+                    diagnostic_counts[reason] += 1
+                    match_strategy = _waha_redact_diagnostic_text(
+                        msg_resp.headers.get('X-WAHA-Match-Strategy', 'não informado')
+                    )
+                    available_chats = _waha_redact_diagnostic_text(
+                        msg_resp.headers.get('X-WAHA-Available-Chats', 'não informado')
+                    )
+                    logger.warning(
+                        '%s Contato %s ignorado: motivo=%s, HTTP=%s, '
+                        'estratégia=%s, chats_disponíveis=%s.',
+                        log_prefix, contact_ref, reason, msg_resp.status_code,
+                        match_strategy, available_chats,
+                    )
                     continue
-                raw = msg_resp.json()
+                try:
+                    raw = msg_resp.json()
+                except Exception as exc:
+                    skipped += 1
+                    diagnostic_counts['invalid_response'] += 1
+                    logger.warning(
+                        '%s Contato %s ignorado: resposta JSON inválida do WAHA (%s).',
+                        log_prefix, contact_ref, type(exc).__name__,
+                    )
+                    continue
                 messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
-            except Exception:
+                if not isinstance(messages, list):
+                    skipped += 1
+                    diagnostic_counts['invalid_response'] += 1
+                    logger.warning(
+                        '%s Contato %s ignorado: formato inesperado do WAHA (%s).',
+                        log_prefix, contact_ref, type(messages).__name__,
+                    )
+                    continue
+            except requests.exceptions.RequestException as exc:
                 skipped += 1
+                diagnostic_counts['waha_unavailable'] += 1
+                logger.warning(
+                    '%s Contato %s ignorado: WAHA indisponível (%s: %s).',
+                    log_prefix, contact_ref, type(exc).__name__,
+                    _waha_redact_diagnostic_text(str(exc))[:240],
+                )
+                if isinstance(exc, requests.exceptions.ReadTimeout):
+                    remaining = total - (i + 1)
+                    if remaining:
+                        skipped += remaining
+                        diagnostic_counts['not_checked_after_timeout'] += remaining
+                    logger.error(
+                        '%s Sincronização interrompida após timeout para evitar acumular '
+                        'consultas no Puppeteer; contatos_não_consultados=%s.',
+                        log_prefix, remaining,
+                    )
+                    break
+                continue
+            except Exception as exc:
+                skipped += 1
+                diagnostic_counts['invalid_response'] += 1
+                logger.warning(
+                    '%s Contato %s ignorado: falha inesperada (%s).',
+                    log_prefix, contact_ref, type(exc).__name__,
+                )
                 continue
 
             if not messages:
                 skipped += 1
+                diagnostic_counts['no_messages_in_period'] += 1
+                logger.info(
+                    '%s Contato %s ignorado: conversa localizada, zero mensagens no período '
+                    '(estratégia=%s, carregadas=%s).',
+                    log_prefix, contact_ref,
+                    _waha_redact_diagnostic_text(
+                        msg_resp.headers.get('X-WAHA-Match-Strategy', 'não informado')
+                    ),
+                    _waha_redact_diagnostic_text(
+                        msg_resp.headers.get('X-WAHA-Fetched-Messages', 'não informado')
+                    ),
+                )
                 continue
 
             # Ordena por timestamp (segundos). WAHA já filtra pelo período, mas garantimos o range.
@@ -10868,6 +11190,11 @@ def _whatsapp_sync_async(task_id, period_days):
 
             if not texts:
                 skipped += 1
+                diagnostic_counts['no_supported_content'] += 1
+                logger.info(
+                    '%s Contato %s ignorado: %s mensagem(ns), nenhuma com conteúdo importável.',
+                    log_prefix, contact_ref, len(messages),
+                )
                 continue
 
             content_hash = hashlib.sha256('|'.join(texts).encode('utf-8', errors='replace')).hexdigest()[:40]
@@ -10875,6 +11202,11 @@ def _whatsapp_sync_async(task_id, period_days):
                       (client_id, content_hash))
             if c.fetchone():
                 skipped += 1
+                diagnostic_counts['already_processed'] += 1
+                logger.info(
+                    '%s Contato %s ignorado: conversa já processada anteriormente.',
+                    log_prefix, contact_ref,
+                )
                 continue
 
             conversation_text = '\n'.join(texts[-60:])
@@ -10961,7 +11293,18 @@ def _whatsapp_sync_async(task_id, period_days):
                 'followup_title': followup_title or (f'Retorno combinado com {client_name}' if followup_date else ''),
             })
             imported += 1
+            diagnostic_counts['ready_for_review'] += 1
+            logger.info(
+                '%s Contato %s pronto para revisão: mensagens_importáveis=%s.',
+                log_prefix, contact_ref, len(texts),
+            )
 
+        diagnostic_summary = _whatsapp_sync_diagnostic_summary(diagnostic_counts, total)
+        logger.info(
+            '%s Fim: total=%s, para_revisão=%s, ignorados=%s, motivos=%s.',
+            log_prefix, total, imported, skipped,
+            json.dumps(diagnostic_counts, ensure_ascii=False, sort_keys=True),
+        )
         _bg_task_set(task_id, {
             'status': 'done', 'progress': 100,
             'step': '✅ Análise concluída — revise os resumos!',
@@ -10970,14 +11313,29 @@ def _whatsapp_sync_async(task_id, period_days):
                 'skipped': skipped,
                 'total_clients': total,
                 'items': pending_items,
-                'message': f'{imported} conversa(s) para revisar, {skipped} sem novidade.'
+                'message': f'{imported} conversa(s) para revisar, {skipped} sem novidade.',
+                'diagnostics': {
+                    'run_id': run_id,
+                    'counts': diagnostic_counts,
+                    'scope': scope,
+                    'summary': diagnostic_summary,
+                },
             }
         })
+        db.close()
+        db = None
         _bg_task_cleanup(task_id)
     except Exception as exc:
-        logger.exception(f'[WhatsApp Sync] Erro: {exc}')
+        logger.exception('%s Erro não tratado (%s): %s', log_prefix, type(exc).__name__,
+                         _waha_redact_diagnostic_text(str(exc)))
         _bg_task_set(task_id, {'status': 'error', 'progress': 0, 'step': f'Erro: {exc}', 'error': str(exc)})
         _bg_task_cleanup(task_id)
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 # Servir arquivos estaticos

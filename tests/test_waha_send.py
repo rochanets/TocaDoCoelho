@@ -62,6 +62,11 @@ def test_restart_waha_preserva_diretorio_da_sessao(monkeypatch, tmp_path):
     monkeypatch.setattr(toca, '_waha_last_restart', 0.0)
     monkeypatch.setattr(toca, '_waha_deps_missing', lambda: False)
     monkeypatch.setattr(toca, '_waha_runtime_paths', lambda: ('node.exe', str(tmp_path / 'waha-lite.js')))
+    monkeypatch.setattr(
+        toca,
+        '_waha_settings',
+        lambda: ('http://localhost:3001', 'chave-teste', 'sessao-teste'),
+    )
     monkeypatch.setattr(toca, '_kill_process_on_port', lambda port: False)
     monkeypatch.setattr(toca.time, 'time', lambda: 1000.0)
     monkeypatch.setattr(toca, 'DATA_DIR', tmp_path)
@@ -72,3 +77,5 @@ def test_restart_waha_preserva_diretorio_da_sessao(monkeypatch, tmp_path):
     assert toca._restart_waha_lite() is True
     assert captured['env']['WAHA_DATA_DIR'] == str(session_dir)
     assert captured['env']['WAHA_PORT'] == os.environ.get('WAHA_PORT', '3001')
+    assert captured['env']['WAHA_API_KEY'] == 'chave-teste'
+    assert captured['env']['WAHA_SESSION_NAME'] == 'sessao-teste'

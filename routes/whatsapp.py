@@ -173,6 +173,117 @@ def whatsapp_sync_start():
     return jsonify({'task_id': task_id}), 202
 
 
+@app.route('/api/whatsapp/diagnostics', methods=['GET'])
+def whatsapp_diagnostics():
+    """Consolida saúde do WAHA-lite e logs correlacionados, sem telefones/chaves."""
+    try:
+        run_id = re.sub(r'[^a-zA-Z0-9_-]', '', request.args.get('run_id', ''))[:32]
+        try:
+            lines_limit = int(request.args.get('limit', 250))
+        except (TypeError, ValueError):
+            lines_limit = 250
+        lines_limit = max(50, min(lines_limit, 500))
+
+        api_url, api_key, session = _waha_settings()
+        headers = _waha_headers(api_key)
+        health = {
+            'reachable': False,
+            'session_state': 'unknown',
+            'ping_status': None,
+            'session_http_status': None,
+        }
+
+        try:
+            ping = requests.get(f'{api_url}/ping', timeout=5)
+            health['ping_status'] = ping.status_code
+            health['reachable'] = bool(ping.ok)
+            if ping.ok:
+                ping_body = ping.json() or {}
+                health['gateway_state'] = _waha_redact_diagnostic_text(
+                    ping_body.get('status') or 'unknown'
+                )
+                health['gateway_version'] = ping_body.get('gatewayVersion')
+                health['capabilities'] = ping_body.get('capabilities') or []
+                health['gateway_outdated'] = bool(
+                    ping_body.get('pid')
+                    and not {
+                        'chat-list-match',
+                        'cached-message-fetch',
+                        'bounded-history-fetch',
+                    }.issubset(
+                        set(health['capabilities'])
+                    )
+                )
+        except Exception as exc:
+            health['ping_error'] = (
+                f'{type(exc).__name__}: '
+                f'{_waha_redact_diagnostic_text(str(exc))[:240]}'
+            )
+
+        try:
+            status_resp = requests.get(
+                f'{api_url}/api/sessions/{session}',
+                headers=headers,
+                timeout=5,
+            )
+            health['session_http_status'] = status_resp.status_code
+            if status_resp.status_code == 401:
+                health['session_state'] = 'unauthorized'
+            elif status_resp.ok:
+                status_body = status_resp.json() or {}
+                health['session_state'] = _waha_redact_diagnostic_text(
+                    status_body.get('status') or 'unknown'
+                )
+                if status_body.get('error'):
+                    health['session_error'] = _waha_redact_diagnostic_text(
+                        status_body.get('error')
+                    )[:500]
+        except Exception as exc:
+            health['session_error'] = (
+                f'{type(exc).__name__}: '
+                f'{_waha_redact_diagnostic_text(str(exc))[:240]}'
+            )
+
+        app_filter = f'[sync:{run_id}]' if run_id else '[WhatsApp Sync]'
+        waha_log_path = _waha_log_file_path()
+        waha_log = (
+            _tail_diagnostic_file(
+                waha_log_path,
+                lines_limit,
+                contains=f'[sync:{run_id}]' if run_id else None,
+            )
+            if run_id else []
+        )
+        if not waha_log:
+            # Gateway antigo ou falha antes da primeira consulta: o tail geral ainda
+            # mostra STARTING/QR/auth_failure/crash e permite fechar o diagnóstico.
+            waha_log = _tail_diagnostic_file(waha_log_path, lines_limit)
+        return jsonify({
+            'ok': True,
+            'generated_at': datetime.now().isoformat(timespec='seconds'),
+            'run_id': run_id,
+            'health': health,
+            'app_log': _tail_diagnostic_file(LOG_FILE, lines_limit, contains=app_filter),
+            'waha_log': waha_log,
+            'sources': {
+                'app_log': str(LOG_FILE),
+                'waha_log': str(waha_log_path),
+            },
+        })
+    except Exception as exc:
+        logger.exception('[WhatsApp Diagnóstico] Falha ao montar diagnóstico: %s', exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/whatsapp/scope', methods=['GET'])
+def whatsapp_sync_scope():
+    try:
+        return jsonify({'ok': True, 'scope': _whatsapp_sync_scope()})
+    except Exception as exc:
+        logger.exception('[WhatsApp] Falha ao calcular escopo da sincronização: %s', exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
 @app.route('/api/whatsapp/tasks/<task_id>', methods=['GET'])
 def whatsapp_task_poll(task_id):
     task = _bg_task_get(task_id)
