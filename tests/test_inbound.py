@@ -54,3 +54,55 @@ def test_respond_manual(client, db_path):
     item = client.get('/api/inbound/pending').get_json()[0]
     assert client.post(f"/api/inbound/{item['id']}/respond").status_code == 200
     assert client.get('/api/inbound/pending').get_json() == []
+
+
+def test_scan_sem_conversas_registra_o_motivo(client, db_path, monkeypatch, caplog):
+    """O scan precisa dizer POR QUE ficou em zero.
+
+    Num chamado real de produção o app.log só mostrava 'Scan WhatsApp: 0 conversas
+    verificadas' repetido por dias, sem nada que distinguisse WAHA fora do ar de
+    telefone inválido — impossível diagnosticar sem acesso à máquina do usuário.
+    """
+    import logging
+
+    import requests
+
+    import app as toca
+
+    _mk_client_with_phone(client)
+
+    def _waha_fora_do_ar(*_args, **_kwargs):
+        raise requests.exceptions.ConnectionError('conexao recusada')
+
+    monkeypatch.setattr(toca.requests, 'get', _waha_fora_do_ar)
+
+    with caplog.at_level(logging.WARNING):
+        resultado = toca._inbound_scan_whatsapp()
+
+    assert resultado['scanned'] == 0
+    assert resultado['motivos'] == {'waha_inacessivel': 1}
+    assert any('waha_inacessivel=1' in r.message for r in caplog.records)
+
+
+def test_scan_bem_sucedido_nao_emite_alerta(client, db_path, monkeypatch, caplog):
+    import logging
+
+    import app as toca
+
+    _mk_client_with_phone(client)
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return []
+
+    monkeypatch.setattr(toca.requests, 'get', lambda *a, **k: _Resp())
+
+    with caplog.at_level(logging.WARNING):
+        resultado = toca._inbound_scan_whatsapp()
+
+    assert resultado['scanned'] == 1
+    assert resultado['motivos'] == {}
+    assert not [r for r in caplog.records if 'motivos' in r.message]

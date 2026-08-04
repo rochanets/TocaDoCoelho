@@ -17,6 +17,29 @@ echo [OK] Executavel encontrado
 echo.
 
 :: ---------------------------------------------------------------------------
+:: Credenciais embarcadas: se o PyInstaller rodar sem
+::   --add-data "bundled_credentials.py;."  --hidden-import bundled_credentials
+:: o arquivo fica de fora e a falha e SILENCIOSA: o instalador sai normal, mas
+:: toda instalacao nova abre o Account Planning com "A chave da Tavily nao esta
+:: configurada". Melhor quebrar aqui do que descobrir no PC do usuario.
+:: ---------------------------------------------------------------------------
+if not exist "dist\TocaDoCoelho\_internal\bundled_credentials.py" (
+    echo [ERRO] bundled_credentials.py nao foi embarcado no build.
+    echo        A chave da Tavily nao chegaria ao usuario final.
+    echo.
+    echo        Confira se o arquivo existe na raiz do projeto:
+    echo            copy bundled_credentials.example.py bundled_credentials.py
+    echo        e refaca o PyInstaller com as flags da secao 3.1 do
+    echo        PASSO_A_PASSO_BUILD_CMD.md:
+    echo            --add-data "bundled_credentials.py;." --hidden-import bundled_credentials
+    pause
+    exit /b 1
+)
+
+echo [OK] Credenciais embarcadas encontradas
+echo.
+
+:: ---------------------------------------------------------------------------
 :: WAHA-lite: node.exe portavel + dependencias npm
 :: ---------------------------------------------------------------------------
 echo [INFO] Verificando Node.js portavel (node.exe)...

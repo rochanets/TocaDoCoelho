@@ -1,6 +1,10 @@
 # Credenciais locais (não versionar — remover desta lista se quiser versionar com bypass)
 secrets.py
 
+# Chaves embarcadas no build (Tavily etc.) — o repositório é PÚBLICO, uma chave
+# commitada aqui vira chave vazada. O modelo versionado é bundled_credentials.example.py
+bundled_credentials.py
+
 # Chave privada de assinatura da extensão AutoToca (.crx) — NUNCA versionar
 secrets/
 *.pem

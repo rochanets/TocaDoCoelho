@@ -131,9 +131,11 @@ def test_migracao_reembolsos_para_banco_existente(tmp_path, monkeypatch):
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    version = conn.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]
+    applied = {row[0] for row in conn.execute('SELECT version FROM schema_version').fetchall()}
     conn.close()
-    assert version == 14
+    # Confere que a migração dos reembolsos rodou — sem amarrar o teste ao total
+    # de migrações, que cresce a cada mudança de schema.
+    assert 14 in applied
     assert {'reembolso_origem_historico', 'account_reembolso_enderecos', 'reembolsos_history'} <= tables
 
 

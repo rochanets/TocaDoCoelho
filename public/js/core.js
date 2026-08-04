@@ -4413,7 +4413,7 @@
             }
             html += `<div class="filter-group"><label class="filter-label">Cliente</label><select class="filter-select" onchange="set${prefix}Filter('company', this.value)"><option value="">Todos os clientes</option>${companies.map(c=>`<option value="${escapeHtml(c)}" ${c===currentCompany?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>`;
             if (prefix === 'Clients') {
-                html += `<div class="filter-group"><label class="filter-label">Pesquisar Nome</label><input class="filter-input" type="text" placeholder="Digite o nome do cliente" value="${escapeHtml(currentSearch)}" oninput="setClientsNameSearch(this.value)"></div>`;
+                html += `<div class="filter-group"><label class="filter-label">Pesquisar Nome</label><input class="filter-input" type="text" placeholder="Digite o nome do contato" value="${escapeHtml(currentSearch)}" oninput="setClientsNameSearch(this.value)"></div>`;
             }
             html += `<div class="filter-group"><label class="filter-label">Cargo</label><select class="filter-select" onchange="set${prefix}Filter('position', this.value)"><option value="">Todos os cargos</option>${positions.map(p=>`<option value="${escapeHtml(p)}" ${p===currentPosition?'selected':''}>${escapeHtml(p)}</option>`).join('')}</select></div>`;
             if (prefix === 'Dashboard') {

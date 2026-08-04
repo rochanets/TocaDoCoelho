@@ -1355,6 +1355,42 @@ SCHEMA_MIGRATIONS = [
         )''',
         'CREATE INDEX IF NOT EXISTS idx_reembolsos_history_created_at ON reembolsos_history(created_at)',
     ]),
+    # Cura as tabelas que foram parar dentro do init_db() depois que a baseline
+    # (migração 1) já havia sido aplicada nos bancos existentes. Como o init_db só
+    # roda uma vez, elas nunca chegaram a ser criadas em quem já usava o app:
+    #   - outlook_oauth_attempts   (21/07) → "Conectar Microsoft 365" estourava
+    #                                        "no such table: outlook_oauth_attempts";
+    #   - chamado_juridico_history (13/07) → histórico do Chamado Jurídico.
+    # O ensure_schema do Outlook entra como callable para não duplicar o DDL dele.
+    # Ver test_schema_migrations.py, que impede novos casos como estes.
+    (15, 'cura_tabelas_pos_baseline', [
+        '''CREATE TABLE IF NOT EXISTS chamado_juridico_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conta TEXT NOT NULL,
+            proposta_original_name TEXT,
+            payload_json TEXT NOT NULL,
+            files_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_chamado_juridico_history_created_at ON chamado_juridico_history(created_at)',
+        outlook_graph_ensure_schema,
+    ]),
+    # Mesmo caso: a tabela nasceu dentro do init_db() junto com o módulo de
+    # Feedback, então em banco já existente o envio quebrava com
+    # "no such table: feedback" (visto no app.log de produção em 04/08).
+    (16, 'feedback', [
+        '''CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT NOT NULL,
+            user_nickname TEXT,
+            app_version TEXT,
+            status TEXT DEFAULT 'pending',
+            error TEXT,
+            sent_to TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sent_at TIMESTAMP
+        )''',
+    ]),
 ]
 
 
@@ -1370,18 +1406,27 @@ def _run_schema_migrations():
             applied_at TEXT
         )''')
         conn.commit()
-        c.execute('SELECT MAX(version) FROM schema_version')
-        row = c.fetchone()
-        current = row[0] if row and row[0] else 0
+        # Cada versão é conferida individualmente, e não por MAX(version). Bancos
+        # que passaram por outra linhagem de build (a numeração da branch Live vai
+        # até 32) ficariam com MAX(version) acima das migrações desta linhagem, e
+        # toda migração nova seria pulada em silêncio — foi assim que a tabela do
+        # OAuth do Outlook nunca chegou a ser criada.
+        c.execute('SELECT version FROM schema_version')
+        applied = {row[0] for row in c.fetchall()}
         for version, name, statements in SCHEMA_MIGRATIONS:
-            if version <= current:
+            if version in applied:
                 continue
             if statements is None:
                 # Baseline legada: init_db() usa a própria conexão.
                 init_db()
             else:
                 for stmt in statements:
-                    c.execute(stmt)
+                    # Um item pode ser um callable (ex.: o ensure_schema de um
+                    # conector) para não duplicar aqui um DDL que já vive no módulo.
+                    if callable(stmt):
+                        stmt(conn)
+                    else:
+                        c.execute(stmt)
             c.execute(
                 'INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)',
                 (version, name, datetime.now().isoformat(timespec='seconds'))
@@ -1470,6 +1515,33 @@ def _resolve_setting(secret_key, env_key):
     if db_value:
         return db_value
     return (os.environ.get(env_key, '') or '').strip()
+
+
+# Chaves embarcadas na distribuição (bundled_credentials.py, não versionado — o
+# repositório é público). Sem isto, instalação nova caía direto no erro "A chave
+# da Tavily não está configurada": o app só olhava o banco e o ambiente, e num PC
+# novo nenhum dos dois vem preenchido.
+try:
+    import bundled_credentials as _bundled_credentials
+except ImportError:
+    _bundled_credentials = None
+
+
+def _resolve_bundled_setting(secret_key, env_key, bundled_attr):
+    """Igual ao _resolve_setting, com a chave embarcada como último recurso.
+
+    Precedência: o que o usuário salvou em Configurações > Integrações vence,
+    depois a variável de ambiente, e só então a chave que veio no build.
+    """
+    value = _resolve_setting(secret_key, env_key)
+    if value:
+        return value
+    return (getattr(_bundled_credentials, bundled_attr, '') or '').strip()
+
+
+def _tavily_api_key():
+    """Chave da Tavily — usada por Account Planning, Mapeamento de Ambiente e campanhas."""
+    return _resolve_bundled_setting('tavily_api_key', 'TAVILY_API_KEY', 'TAVILY_API_KEY')
 
 
 def _sai_execute_question_template(base_url, template_id, api_key, question, log_tag):
@@ -2755,7 +2827,7 @@ def _relation_report_fetch_market_context(account_name: str) -> str | None:
     # primeiro buscamos fontes via Tavily e/ou OpenRouter Web, e só usamos SAI para sintetizar
     # quando já houver evidências externas no prompt.
     evidence_lines = []
-    tavily_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+    tavily_key = _tavily_api_key()
     if tavily_key:
         try:
             results = _run_tavily_request(tavily_key, search, max_results=5)
@@ -6037,7 +6109,7 @@ def _run_tavily_request(api_key, query, max_results=6):
 
 
 def _run_tavily_search(company, country, industry):
-    api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+    api_key = _tavily_api_key()
     if not api_key:
         raise RuntimeError('A chave da Tavily não está configurada. Configure em Configurações > Integrações ou defina TAVILY_API_KEY no ambiente.')
 
@@ -8585,7 +8657,7 @@ def _environment_autofill_process_async(task_id, account_id):
             _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhum card de mapeamento cadastrado. Crie cards antes de usar o Auto-preencher.'})
             return
 
-        api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+        api_key = _tavily_api_key()
         if not api_key:
             _bg_task_set(task_id, {'status': 'error', 'error': 'Chave Tavily não configurada. Configure em Configurações > Integrações.'})
             return
@@ -10790,9 +10862,15 @@ def _inbound_scan_whatsapp():
     conn.close()
     since_ts = int((datetime.now() - timedelta(days=14)).timestamp())
     scanned = pending = 0
+    # Sem isto o scan só sabia dizer "0 conversas verificadas", sem a causa: num
+    # chamado real de produção o app.log do usuário não permitiu distinguir WAHA
+    # fora do ar de telefone inválido ou de sessão desconectada. Só os motivos
+    # agregados são registrados — nada de telefone ou nome de contato no log.
+    motivos = {}
     for row in clients:
         chat_id = _phone_to_waha_chatid(row['phone'])
         if not chat_id:
+            motivos['telefone_invalido'] = motivos.get('telefone_invalido', 0) + 1
             continue
         try:
             resp = requests.get(
@@ -10802,10 +10880,15 @@ def _inbound_scan_whatsapp():
                 timeout=20
             )
             if resp.status_code != 200:
+                motivos[f'http_{resp.status_code}'] = motivos.get(f'http_{resp.status_code}', 0) + 1
                 continue
             raw = resp.json()
             messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
+        except requests.exceptions.ConnectionError:
+            motivos['waha_inacessivel'] = motivos.get('waha_inacessivel', 0) + 1
+            continue
         except Exception as e:
+            motivos[type(e).__name__] = motivos.get(type(e).__name__, 0) + 1
             logger.debug(f'[Inbound] WAHA indisponível para {row["name"]}: {e}')
             continue
         scanned += 1
@@ -10845,7 +10928,13 @@ def _inbound_scan_whatsapp():
             w_conn.commit()
             w_conn.close()
     logger.info(f'[Inbound] Scan WhatsApp: {scanned} conversas verificadas, {pending} pendências registradas')
-    return {'scanned': scanned, 'pending': pending}
+    if clients and not scanned:
+        detalhe = ', '.join(f'{k}={v}' for k, v in sorted(motivos.items())) or 'nenhum motivo registrado'
+        logger.warning(
+            f'[Inbound] Nenhuma das {len(clients)} conversas pôde ser lida — motivos: {detalhe}. '
+            'Confira o WhatsApp em Configurações > Integrações.'
+        )
+    return {'scanned': scanned, 'pending': pending, 'motivos': motivos}
 
 
 def _inbound_feed_from_outlook(c, emails_data, clients_map):
@@ -12048,7 +12137,7 @@ def _campaign_market_insight(account_name, sector, challenge, areas, offer_title
     Ordem: Tavily (dados reais) → LLM sintetiza com base nas evidências. Sem Tavily, o LLM faz
     uma leitura objetiva do setor. Retorna (insight_text, sources_list)."""
     evidence, sources = [], []
-    api_key = _resolve_setting('tavily_api_key', 'TAVILY_API_KEY')
+    api_key = _tavily_api_key()
     if api_key:
         try:
             areas_str = ', '.join(areas) if areas else ''
