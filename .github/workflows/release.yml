@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Versão do release (ex: 5.5.1.0)'
+        description: 'Versão do release (ex: 5.3.0.1)'
         required: true
-        default: '5.5.1.0'
+        default: '5.3.0.1'
       release_notes:
         description: 'Notas do release (opcional — usa padrão se vazio)'
         required: false
@@ -40,25 +40,6 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "Versão: $VERSION"
-
-      - name: Gerar credenciais embarcadas
-        shell: powershell
-        env:
-          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:TAVILY_API_KEY)) {
-            Write-Host '[ERRO] O secret TAVILY_API_KEY não está configurado no repositório.'
-            Write-Host '       Configure-o em Settings > Secrets and variables > Actions.'
-            exit 1
-          }
-
-          $encodedKey = $env:TAVILY_API_KEY.Trim() | ConvertTo-Json -Compress
-          @"
-          """Credenciais geradas pelo pipeline de release. Não versionar."""
-
-          TAVILY_API_KEY = $encodedKey
-          "@ | Set-Content -Path 'bundled_credentials.py' -Encoding utf8
-          Write-Host '[OK] bundled_credentials.py gerado sem expor o secret.'
 
       # -----------------------------------------------------------------------
       # 2. Python
@@ -120,12 +101,10 @@ jobs:
             --add-data "public;public" ^
             --add-data "integrations;integrations" ^
             --add-data "graph_credentials.py;." ^
-            --add-data "bundled_credentials.py;." ^
             --add-data "README.md;." ^
             --add-data "coelho_icon_transparent.ico;." ^
             --hidden-import app ^
             --hidden-import graph_credentials ^
-            --hidden-import bundled_credentials ^
             --hidden-import win32timezone ^
             --hidden-import win32api ^
             --hidden-import win32con ^
@@ -153,17 +132,6 @@ jobs:
             exit 1
           }
           Write-Host '[OK] Driver do Playwright presente no bundle.'
-
-      - name: Verificar credenciais embarcadas no bundle
-        shell: powershell
-        run: |
-          $credentials = 'dist\TocaDoCoelho\_internal\bundled_credentials.py'
-          if (-not (Test-Path $credentials)) {
-            Write-Host "[ERRO] Credenciais embarcadas ausentes em $credentials"
-            Write-Host '       O instalador não pode ser publicado sem bundled_credentials.py.'
-            exit 1
-          }
-          Write-Host '[OK] bundled_credentials.py presente no bundle.'
 
       - name: Escrever version.txt
         shell: cmd
@@ -230,8 +198,6 @@ jobs:
         run: |
           if [ -n "$CUSTOM_NOTES" ]; then
             printf '%s' "$CUSTOM_NOTES" > release_notes.md
-          elif [ -f "RELEASE_NOTES_${VERSION}.md" ]; then
-            cp "RELEASE_NOTES_${VERSION}.md" release_notes.md
           else
             cat > release_notes.md << 'ENDOFNOTES'
           ## 🐇 Toca do Coelho
