@@ -179,6 +179,30 @@ o arquivo inteiro num ícone de 48 px. O original permanece onde está.
 
 ---
 
+## Descobertas durante a implementação
+
+Três coisas apareceram na verificação contra o app rodando e mudaram o plano:
+
+1. **`saveActivity` é substituído em tempo de execução.** O `itoca-autotoca.js`
+   redefine a função inteira (`saveActivity = async function...`), e é essa
+   versão que roda. O gancho do follow-up precisou ir nas duas, com a lógica
+   compartilhada em `takePendingFollowup()` + `linkFollowupActivity()`. Detalhe
+   que custa um bug silencioso: a flag tem que ser lida **antes** de
+   `closeActivityModal()`, que a zera.
+
+2. **`_graph_redirect_uri()` quebrava fora de request** (bug pré-existente).
+   Usava `request.scheme`/`request.host` direto, então qualquer envio de e-mail
+   disparado por thread — feedback, **briefing matinal**, revisão semanal —
+   morria com "Working outside of request context". Passou a persistir o
+   endereço observado em `app_settings.outlook_graph_redirect_uri` durante
+   requests reais e a reusá-lo quando não há contexto.
+
+3. **`formatDateBr` mostrava um dia a menos** (bug pré-existente). `new
+   Date('2026-02-10')` é meia-noite UTC; em BRT (UTC-3) voltava para 09/02.
+   A lista da agenda discordava do próprio calendário, e o texto pré-preenchido
+   do follow-up gravaria a data errada no histórico do contato. Datas no
+   formato `YYYY-MM-DD` passaram a ser formatadas sem `Date`.
+
 ## Testes
 
 Ambas as partes são verificadas contra o app rodando localmente:

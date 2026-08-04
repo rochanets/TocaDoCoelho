@@ -191,6 +191,7 @@ def get_agenda():
         c = conn.cursor()
 
         query = '''SELECT CAST(cm.id AS TEXT) as id, cm.client_id, cm.activity_id, cm.title, cm.notes, cm.due_date, cm.due_time, cm.source_type,
+                          cm.followup_activity_id,
                           cl.name as client_name, cl.company as client_company, cl.position as client_position, cl.email as client_email, cl.photo_url as client_photo
                    FROM commitments cm
                    JOIN clients cl ON cm.client_id = cl.id'''
@@ -201,6 +202,7 @@ def get_agenda():
             params.extend([start_date, end_date])
 
         query += ''' UNION ALL SELECT "acc-" || CAST(ev.id AS TEXT) as id, NULL as client_id, NULL as activity_id, ev.title, ev.title as notes, ev.due_date, ev.due_time, "account_presence" as source_type,
+                          NULL as followup_activity_id,
                           ac.name as client_name, ac.name as client_company, "Conta" as client_position, NULL as client_email, ac.logo_url as client_photo
                    FROM account_renewal_events ev
                    JOIN accounts ac ON ev.account_id = ac.id'''
@@ -270,6 +272,47 @@ def update_agenda_time(commitment_id):
         return jsonify({'message': 'Horário atualizado'})
     except Exception as e:
         logger.exception(f'[ERROR] PUT /api/agenda/{commitment_id}/time: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agenda/<int:commitment_id>/followup', methods=['POST'])
+def link_agenda_followup(commitment_id):
+    """Vincula uma atividade já criada ao compromisso, marcando-o como
+    trabalhado. A atividade em si é criada pelo POST /api/atividades — aqui
+    só guardamos o vínculo, depois de conferir que ela é do mesmo contato."""
+    try:
+        data = request.get_json() or {}
+        activity_id = data.get('activity_id')
+        if not activity_id:
+            return jsonify({'error': 'activity_id é obrigatório'}), 400
+
+        conn = get_db()
+        c = conn.cursor()
+
+        c.execute('SELECT client_id FROM commitments WHERE id = ?', (commitment_id,))
+        commitment = c.fetchone()
+        if not commitment:
+            conn.close()
+            return jsonify({'error': 'Compromisso não encontrado'}), 404
+
+        c.execute('SELECT client_id FROM activities WHERE id = ?', (activity_id,))
+        activity = c.fetchone()
+        if not activity:
+            conn.close()
+            return jsonify({'error': 'Atividade não encontrada'}), 400
+        if activity['client_id'] != commitment['client_id']:
+            conn.close()
+            return jsonify({'error': 'A atividade pertence a outro contato'}), 400
+
+        c.execute('UPDATE commitments SET followup_activity_id = ? WHERE id = ?',
+                  (activity_id, commitment_id))
+        conn.commit()
+        conn.close()
+
+        logger.info(f'[Agenda] Follow-up: atividade {activity_id} vinculada ao compromisso {commitment_id}')
+        return jsonify({'message': 'Follow-up registrado', 'followup_activity_id': activity_id})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/agenda/{commitment_id}/followup: {e}')
         return jsonify({'error': str(e)}), 500
 
 

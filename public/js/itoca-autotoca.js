@@ -1472,8 +1472,11 @@
                 const response = await fetch(url, { method: currentEditingActivityId ? 'PUT' : 'POST', body: formData });
                 const payload = await response.json();
                 if (!response.ok) { showError(payload.error || 'Erro ao salvar atividade'); return; }
-                showSuccess(currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!');
+                // Lido antes de fechar o modal, que zera a flag de follow-up.
+                const followupId = takePendingFollowup();
+                showSuccess(followupId ? 'Follow-up registrado!' : (currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!'));
                 closeActivityModal();
+                await linkFollowupActivity(followupId, payload.id);
                 await Promise.all([loadActivities(), loadDashboard(), loadAgenda()]);
                 if (!currentEditingActivityId && payload.commitments_created?.length) {
                     await askOutlookForCommitments(payload.commitments_created);
