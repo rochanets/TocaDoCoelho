@@ -38,16 +38,42 @@ GRAPH_CLIENT_SECRET = 'seu-client-secret'
 
 > **Nota:** solicite o arquivo completo com as credenciais ao administrador do projeto.
 
+### 3.1) Chaves embarcadas (`bundled_credentials.py`)
+
+Guarda os segredos que vão junto no instalador — hoje a **chave da Tavily**, usada
+pelo Account Planning, pelo Mapeamento de Ambiente e pelos insights de campanha.
+Sem este arquivo no momento do build, instalação nova abre o Account Planning já
+com o erro *"A chave da Tavily não está configurada"*.
+
+Também **não é versionado**: o repositório `rochanets/TocaDoCoelho` é público e uma
+chave commitada seria varrida por robôs em minutos. Copie o modelo e preencha:
+
+```cmd
+copy bundled_credentials.example.py bundled_credentials.py
+```
+
+```python
+TAVILY_API_KEY = 'tvly-...'
+```
+
+> Em tempo de execução a precedência é: chave que o usuário salvou em
+> Configurações > Integrações → variável de ambiente → esta chave embarcada.
+> Ou seja, quem já configurou a própria chave não é afetado.
+> Para rotacionar: edite aqui e gere um build novo — o valor não fica preso no
+> banco de cada usuário.
+
 ## 4) Gerar o executável (PyInstaller) **sem abrir janela de terminal**
 
 ```cmd
-pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "routes;routes" --add-data "public;public" --add-data "integrations;integrations" --add-data "graph_credentials.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --collect-all playwright --hidden-import win32com.client --hidden-import pywintypes --hidden-import app --hidden-import graph_credentials launcher.py
+pyinstaller --noconfirm --onedir --windowed --name TocaDoCoelho --icon coelho_icon_transparent.ico --add-data "app.py;." --add-data "routes;routes" --add-data "public;public" --add-data "integrations;integrations" --add-data "graph_credentials.py;." --add-data "bundled_credentials.py;." --collect-binaries imageio_ffmpeg --collect-all faster_whisper --collect-all ctranslate2 --collect-all win32com --collect-all playwright --hidden-import win32com.client --hidden-import pywintypes --hidden-import app --hidden-import graph_credentials --hidden-import bundled_credentials launcher.py
 ```
 
 > **Novo em relação à versão anterior:**
 > - `--add-data "integrations;integrations"` — inclui o pacote de integrações (Microsoft Graph)
 > - `--add-data "graph_credentials.py;."` — inclui as credenciais do Microsoft 365
 > - `--hidden-import graph_credentials` — garante que o módulo é reconhecido pelo PyInstaller
+> - `--add-data "bundled_credentials.py;."` + `--hidden-import bundled_credentials` — embarca a
+>   chave da Tavily, para instalação nova já funcionar sem configuração manual
 > - `--collect-all playwright` — inclui o driver do Playwright (usado pelo robô do Chamado
 >   Jurídico em `integrations/forms_robot.py`); sem essa flag o import de `playwright.sync_api`
 >   falha em runtime porque o driver fica de fora do bundle
