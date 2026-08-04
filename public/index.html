@@ -86,6 +86,9 @@
                 <button id="weekCommitmentsBell" class="topbar-bell" onclick="openWeekCommitmentsModal()" title="Compromissos da semana">
                     <i class="fas fa-bell"></i>
                 </button>
+                <button id="topbarFeedbackButton" class="topbar-bell" onclick="openFeedbackModal()" title="Enviar feedback">
+                    <i class="fas fa-tools"></i>
+                </button>
                 <button id="topbarSettingsButton" class="topbar-settings-btn" onclick="switchTab(event, 'configuracoes')" title="Configurações">
                     <i class="fas fa-cog"></i>
                 </button>
@@ -1758,6 +1761,49 @@
                     <button type="submit" class="btn btn-primary">Salvar</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Feedback Modal -->
+    <div id="feedbackModal" class="modal">
+        <div class="modal-content" style="max-width:560px;">
+            <div class="modal-header">
+                <h2 style="display:flex; align-items:center; gap:12px;">
+                    <img src="/images/coelho-sugestoes.png" alt="" style="width:48px; height:48px; object-fit:contain; flex:none;">
+                    Feedback
+                </h2>
+                <button class="modal-close" onclick="closeFeedbackModal()">×</button>
+            </div>
+
+            <div id="feedbackFormArea" style="padding:0 20px 20px;">
+                <p style="color:#6b7280; margin-bottom:14px;">
+                    Encontrou um problema ou tem uma sugestão? Escreva abaixo — sua mensagem vai direto para o administrador do Toca.
+                </p>
+                <div class="form-group">
+                    <label>Sua mensagem *</label>
+                    <textarea id="feedbackMessage" rows="6" maxlength="5000" placeholder="Descreva o que aconteceu, o que esperava que acontecesse ou a sua sugestão..." oninput="updateFeedbackCounter()"></textarea>
+                    <div id="feedbackCounter" style="font-size:11px; color:#9ca3af; text-align:right; margin-top:4px;">0 / 5000</div>
+                </div>
+                <p style="font-size:12px; color:#9ca3af; margin-bottom:16px;">
+                    <i class="fas fa-file-alt"></i> O log técnico do sistema é enviado junto para ajudar no diagnóstico.
+                </p>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeFeedbackModal()">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="feedbackSendBtn" onclick="submitFeedback()">
+                        <i class="fas fa-paper-plane"></i> Enviar
+                    </button>
+                </div>
+            </div>
+
+            <div id="feedbackProgressArea" style="display:none; padding:10px 20px 24px;">
+                <div id="feedbackProgressStep" style="font-size:13px; color:#6b7280; margin-bottom:10px;">Enviando...</div>
+                <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 18px 6px 0;">
+                    <div id="feedbackProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .5s ease;">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div id="feedbackProgressPct" style="font-size:11px; color:#6b7280; text-align:right;">5%</div>
+            </div>
         </div>
     </div>
 

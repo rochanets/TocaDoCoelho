@@ -32,7 +32,7 @@ from io import BytesIO
 from urllib.parse import urlparse, quote_plus
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context, redirect, has_request_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 try:
@@ -269,6 +269,8 @@ APP_VERSION = _resolve_app_version()
 DEFAULT_GITHUB_OWNER = os.environ.get('TOCA_UPDATE_GITHUB_OWNER', 'rochanets').strip()
 DEFAULT_GITHUB_REPO = os.environ.get('TOCA_UPDATE_GITHUB_REPO', 'TocaDoCoelho').strip()
 DEFAULT_GITHUB_BRANCH = os.environ.get('TOCA_UPDATE_GITHUB_BRANCH', 'version5').strip()
+# Destino do módulo de Feedback. Configurável em app_settings.feedback_admin_email.
+DEFAULT_FEEDBACK_EMAIL = os.environ.get('TOCA_FEEDBACK_EMAIL', 'hfnetto@stefanini.com').strip()
 
 logger.info('[Transcription] Backend faster-whisper será carregado sob demanda (lazy).')
 
@@ -706,9 +708,26 @@ def init_db():
         due_date TEXT NOT NULL,
         due_time TEXT,
         source_type TEXT DEFAULT 'activity',
+        followup_activity_id INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
-        FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
+        FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL,
+        FOREIGN KEY(followup_activity_id) REFERENCES activities(id) ON DELETE SET NULL
+    )''')
+
+    # Feedbacks enviados pelo usuário ao administrador. O log técnico não é
+    # duplicado aqui — vai como anexo do e-mail e continua vivendo no app.log.
+    # A tabela existe para que nada se perca quando o envio falha.
+    c.execute('''CREATE TABLE IF NOT EXISTS feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message TEXT NOT NULL,
+        user_nickname TEXT,
+        app_version TEXT,
+        status TEXT DEFAULT 'pending',
+        error TEXT,
+        sent_to TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        sent_at TIMESTAMP
     )''')
 
     # Tabela de atividades
@@ -941,6 +960,8 @@ def init_db():
         c.execute('ALTER TABLE commitments ADD COLUMN due_time TEXT')
     if 'source_type' not in commitment_columns:
         c.execute('ALTER TABLE commitments ADD COLUMN source_type TEXT DEFAULT "activity"')
+    if 'followup_activity_id' not in commitment_columns:
+        c.execute('ALTER TABLE commitments ADD COLUMN followup_activity_id INTEGER')
 
     c.execute("PRAGMA table_info(account_presences)")
     account_presence_columns = [col[1] for col in c.fetchall()]
@@ -974,6 +995,7 @@ def init_db():
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_repo', DEFAULT_GITHUB_REPO))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_github_token', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('update_snooze_until', ''))
+    c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('feedback_admin_email', DEFAULT_FEEDBACK_EMAIL))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_snapshot', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_base_updated_at', ''))
     c.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', ('itoca_sai_api_key', ''))
@@ -7019,7 +7041,21 @@ except ImportError:
 
 
 def _graph_redirect_uri():
-    return f"{request.scheme}://{request.host}/api/outlook/oauth/callback"
+    """URI de callback do OAuth do Graph.
+
+    Threads e jobs agendados (briefing matinal, feedback, envios agendados)
+    chamam isso fora de um request, onde `request` não existe. Nesse caso
+    usamos o último endereço observado, persistido em app_settings sempre que
+    um request de verdade passa por aqui."""
+    if has_request_context():
+        uri = f"{request.scheme}://{request.host}/api/outlook/oauth/callback"
+        try:
+            if (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip() != uri:
+                _save_app_setting('outlook_graph_redirect_uri', uri)
+        except Exception as e:
+            logger.debug(f'[Graph] Não foi possível persistir o redirect_uri: {e}')
+        return uri
+    return (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip()
 
 
 def _graph_make_settings(redirect_uri=''):
@@ -12524,7 +12560,7 @@ def handle_unexpected_exception(error):
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
-                 'portfolio', 'config', 'home', 'reembolsos']
+                 'portfolio', 'config', 'home', 'reembolsos', 'feedback']
 
 
 def _load_route_modules():

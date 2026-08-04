@@ -1694,6 +1694,9 @@
 
         // Close Activity Modal
         function closeActivityModal() {
+            // Cancelar não pode deixar o follow-up pendente contaminando a próxima atividade.
+            _pendingFollowupCommitmentId = null;
+
             // Reabilitar o select de cliente caso tenha sido bloqueado
             const clientSelect = document.getElementById('clientSelect');
             if (clientSelect) {
@@ -2541,8 +2544,11 @@
                 });
 
                 if (response.ok) {
-                    showSuccess(currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!');
-                    
+                    const saved = await response.json().catch(() => ({}));
+                    const followupId = takePendingFollowup();
+
+                    showSuccess(followupId ? 'Follow-up registrado!' : (currentEditingActivityId ? 'Atividade atualizada!' : 'Atividade registrada!'));
+
                     // Verificar se foi uma sugestão de contato atrasado (apenas ao criar nova atividade)
                     if (!currentEditingActivityId && window.currentSuggestion && window.currentSuggestion.type === 'contact_overdue') {
                         const clientId = parseInt(formData.get('client_id'));
@@ -2553,6 +2559,9 @@
                     }
                     
                     closeActivityModal();
+
+                    if (await linkFollowupActivity(followupId, saved.id)) await loadAgenda();
+
                     loadActivities();
                     loadDashboard();
                     if (_profileModalOpenClientId) {
@@ -4107,6 +4116,9 @@
         }
 
         let agendaMapByDay = {};
+        // Índice plano do mês corrente: permite abrir o follow-up a partir do id
+        // do compromisso, tanto da lista quanto do modal do dia.
+        let agendaItemsById = {};
 
         async function loadAgenda() {
             const { start, end } = monthRange(agendaCurrentMonth);
@@ -4118,9 +4130,11 @@
                 const items = await response.json();
 
                 agendaMapByDay = {};
+                agendaItemsById = {};
                 items.forEach(item => {
                     agendaMapByDay[item.due_date] = agendaMapByDay[item.due_date] || [];
                     agendaMapByDay[item.due_date].push(item);
+                    agendaItemsById[String(item.id)] = item;
                 });
 
                 const monthLabel = agendaCurrentMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
@@ -4145,13 +4159,99 @@
                 html += '<div class="agenda-list">';
                 if (!items.length) html += '<div class="empty-state" style="padding:20px 8px;"><p>Nenhum compromisso neste mês.</p></div>';
                 items.forEach(item => {
-                    html += `<div class=\"history-item\"><div class=\"history-meta\">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company?` (${escapeHtml(item.client_company)})`:''}</div><div style=\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\"><span>${escapeHtml(item.title || item.notes || '-')}</span><button class=\"btn btn-auto-mapping btn-small\" onclick=\"openBriefingModal(${item.id}, '${escapeHtml((item.client_name || '').replace(/'/g, ''))}')\" title=\"Briefing pré-reunião gerado por IA\"><span class=\"ai-star-icon\">✦</span> Briefing</button></div><div id=\"briefingArea_${item.id}\"></div></div>`;
+                    html += `<div class=\"history-item\"><div class=\"history-meta\">${formatDateBr(item.due_date)}${item.due_time ? ' '+escapeHtml(item.due_time) : ''} • ${escapeHtml(item.client_name || '-')}${item.client_company?` (${escapeHtml(item.client_company)})`:''}${agendaFollowupBadgeHtml(item)}</div><div style=\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\"><span>${escapeHtml(item.title || item.notes || '-')}</span><div style=\"display:flex; gap:8px; flex-wrap:wrap;\">${agendaFollowupButtonHtml(item)}<button class=\"btn btn-auto-mapping btn-small\" onclick=\"openBriefingModal(${item.id}, '${escapeHtml((item.client_name || '').replace(/'/g, ''))}')\" title=\"Briefing pré-reunião gerado por IA\"><span class=\"ai-star-icon\">✦</span> Briefing</button></div></div><div id=\"briefingArea_${item.id}\"></div></div>`;
                 });
                 html += '</div></div>';
 
                 document.getElementById('agendaContent').innerHTML = html;
             } catch (error) {
                 showError('Erro ao carregar agenda');
+            }
+        }
+
+        // Eventos de renovação de conta (id "acc-N") não têm contato associado,
+        // então não podem receber follow-up.
+        function agendaItemAcceptsFollowup(item) {
+            return !String(item.id).startsWith('acc-')
+                && (item.source_type || '') !== 'account_presence'
+                && !!item.client_id;
+        }
+
+        function agendaFollowupBadgeHtml(item) {
+            if (!agendaItemAcceptsFollowup(item) || !item.followup_activity_id) return '';
+            return ' • <span style="color:#047857; font-weight:700;">✓ Follow-up registrado</span>';
+        }
+
+        function agendaFollowupButtonHtml(item) {
+            if (!agendaItemAcceptsFollowup(item)) return '';
+            const label = item.followup_activity_id ? 'Novo follow-up' : 'Follow-up';
+            return `<button class="btn btn-secondary btn-small" onclick="openFollowupModal('${escapeHtml(String(item.id))}')" title="Registrar atividade de follow-up para este contato"><i class="fas fa-clipboard-check"></i> ${label}</button>`;
+        }
+
+        // Compromisso aguardando vínculo: preenchido ao abrir o follow-up e
+        // consumido por saveActivity() quando a atividade é criada com sucesso.
+        let _pendingFollowupCommitmentId = null;
+
+        async function openFollowupModal(commitmentId) {
+            const item = agendaItemsById[String(commitmentId)];
+            if (!item) {
+                showError('Compromisso não encontrado. Recarregue a agenda e tente novamente.');
+                return;
+            }
+            if (!agendaItemAcceptsFollowup(item)) {
+                showError('Este evento não tem contato associado para registrar follow-up.');
+                return;
+            }
+
+            closeDayActivitiesModal();
+            await openQuickActivityModal(item.client_id, item.client_name, item.client_company);
+
+            _pendingFollowupCommitmentId = String(item.id);
+
+            const titleEl = document.getElementById('activityModalTitle');
+            if (titleEl) titleEl.textContent = `Follow-up — ${item.client_name || ''}`;
+
+            const form = document.getElementById('activityForm');
+            if (form && form.contact_type) form.contact_type.value = 'Reunião';
+
+            const textarea = document.getElementById('activityInformation');
+            if (textarea) {
+                const assunto = (item.title || item.notes || '').trim();
+                textarea.value = `Follow-up do compromisso "${assunto}" (${formatDateBr(item.due_date)}): `;
+                textarea.focus();
+                textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+            }
+        }
+
+        // Devolve e limpa o follow-up pendente. Precisa ser lido antes de
+        // closeActivityModal(), que zera a flag.
+        function takePendingFollowup() {
+            const id = _pendingFollowupCommitmentId;
+            _pendingFollowupCommitmentId = null;
+            return id;
+        }
+
+        // Vincula a atividade recém-criada ao compromisso. Usada pelo
+        // saveActivity — inclusive pela versão que o itoca-autotoca.js instala
+        // por cima. Quem chama é responsável por recarregar a agenda.
+        async function linkFollowupActivity(commitmentId, activityId) {
+            if (!commitmentId || !activityId) return false;
+
+            try {
+                const response = await fetch(`${API_BASE}/agenda/${commitmentId}/followup`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ activity_id: activityId })
+                });
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    showError(error.error || 'Atividade salva, mas não foi possível marcar o compromisso.');
+                    return false;
+                }
+                return true;
+            } catch (error) {
+                showError('Atividade salva, mas não foi possível marcar o compromisso.');
+                return false;
             }
         }
 
@@ -4172,7 +4272,7 @@
             });
 
             let html = `<div class="modal active" id="dayActivitiesModal" onclick="if(event.target === this) closeDayActivitiesModal()">`;
-            html += '<div class="modal-content" style="max-width: 300px;">';
+            html += '<div class="modal-content" style="max-width: 440px;">';
             html += `<h2 style="color: #047857; margin-bottom: 10px; text-transform: capitalize;">Atividades de ${dateFormatted}</h2>`;
             html += `<p style="color: #6b7280; margin-bottom: 20px;">${activities.length} compromisso(s) programado(s)</p>`;
 
@@ -4186,9 +4286,9 @@
                 
                 // Informações da atividade
                 html += '<div style="flex: 1;">';
-                html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})</div>`;
+                html += `<div class="history-meta">${escapeHtml(activity.client_name)} (${escapeHtml(activity.client_company)})${agendaFollowupBadgeHtml(activity)}</div>`;
                 html += `<div style="color: #6b7280; font-size: 13px; margin-top: 4px;">${escapeHtml(activity.title || activity.notes || '-')}</div>`;
-                if ((activity.source_type || '') !== 'account_presence') { html += `<div style=\"margin-top: 8px;\"><button class=\"btn btn-danger btn-small\" onclick=\"deleteAgendaItem('${activity.id}')\"><i class=\"fas fa-trash\"></i> Excluir evento</button></div>`; }
+                if ((activity.source_type || '') !== 'account_presence') { html += `<div style=\"margin-top: 8px; display:flex; gap:8px; flex-wrap:wrap;\">${agendaFollowupButtonHtml(activity)}<button class=\"btn btn-danger btn-small\" onclick=\"deleteAgendaItem('${activity.id}')\"><i class=\"fas fa-trash\"></i> Excluir evento</button></div>`; }
                 html += '</div>';
                 html += '</div>';
             });
@@ -4920,6 +5020,12 @@
 
         function formatDateBr(dateValue) {
             if (!dateValue) return '-';
+            // 'YYYY-MM-DD' puro é interpretado como meia-noite UTC pelo JS; em
+            // fusos negativos (BRT) isso voltava um dia — a agenda mostrava
+            // 09/02 para um compromisso de 10/02. Datas sem hora são formatadas
+            // direto, sem passar por Date.
+            const somenteData = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateValue).trim());
+            if (somenteData) return `${somenteData[3]}/${somenteData[2]}/${somenteData[1]}`;
             return new Date(dateValue).toLocaleDateString('pt-BR');
         }
 

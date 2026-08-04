@@ -4516,6 +4516,96 @@
 
         function closeWeekCommitmentsModal() { const m = document.getElementById('weekCommitmentsModal'); if (m) m.remove(); }
 
+        // ------------------------------------------------------------------
+        // Feedback: mensagem do usuário + log técnico enviados ao administrador
+        // por e-mail (Microsoft Graph). Envio assíncrono com barra de progresso.
+        // ------------------------------------------------------------------
+        function openFeedbackModal() {
+            const modal = document.getElementById('feedbackModal');
+            if (!modal) return;
+            document.getElementById('feedbackFormArea').style.display = '';
+            document.getElementById('feedbackProgressArea').style.display = 'none';
+            const textarea = document.getElementById('feedbackMessage');
+            textarea.value = '';
+            updateFeedbackCounter();
+            const btn = document.getElementById('feedbackSendBtn');
+            if (btn) btn.disabled = false;
+            modal.classList.add('active');
+            textarea.focus();
+        }
+
+        function closeFeedbackModal() {
+            const modal = document.getElementById('feedbackModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        function updateFeedbackCounter() {
+            const textarea = document.getElementById('feedbackMessage');
+            const counter = document.getElementById('feedbackCounter');
+            if (textarea && counter) counter.textContent = `${textarea.value.length} / 5000`;
+        }
+
+        function _feedbackSetProgress(pct, step) {
+            const bar = document.getElementById('feedbackProgressBar');
+            const stepEl = document.getElementById('feedbackProgressStep');
+            const pctEl = document.getElementById('feedbackProgressPct');
+            if (bar) bar.style.width = Math.max(5, Math.min(100, pct)) + '%';
+            if (stepEl && step) stepEl.textContent = step;
+            if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+        }
+
+        async function submitFeedback() {
+            const textarea = document.getElementById('feedbackMessage');
+            const message = (textarea.value || '').trim();
+            if (!message) {
+                showError('Escreva sua mensagem antes de enviar.');
+                textarea.focus();
+                return;
+            }
+
+            const btn = document.getElementById('feedbackSendBtn');
+            if (btn) btn.disabled = true;
+            document.getElementById('feedbackFormArea').style.display = 'none';
+            document.getElementById('feedbackProgressArea').style.display = '';
+            _feedbackSetProgress(10, 'Registrando seu feedback...');
+
+            try {
+                const startResp = await fetch(`${API_BASE}/feedback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                const startData = await startResp.json().catch(() => ({}));
+                if (!startResp.ok || !startData.task_id) {
+                    throw new Error(startData.error || 'Falha ao iniciar o envio do feedback.');
+                }
+
+                let task = {};
+                while (true) {
+                    await new Promise(r => setTimeout(r, 800));
+                    const pollResp = await fetch(`${API_BASE}/feedback/tasks/${startData.task_id}`);
+                    task = await pollResp.json().catch(() => ({}));
+                    _feedbackSetProgress(Number(task.progress || 10), task.step || 'Enviando...');
+                    if (task.status === 'done' || task.status === 'error') break;
+                }
+
+                if (task.status === 'error') throw new Error(task.error || 'Falha ao enviar o feedback.');
+
+                _feedbackSetProgress(100, task.step || 'Feedback enviado! Obrigado 🐇');
+                setTimeout(() => {
+                    closeFeedbackModal();
+                    showSuccess('Feedback enviado! Obrigado por ajudar a melhorar o Toca 🐇');
+                }, 900);
+            } catch (error) {
+                // Devolve o formulário com o texto intacto para o usuário tentar de novo.
+                document.getElementById('feedbackProgressArea').style.display = 'none';
+                document.getElementById('feedbackFormArea').style.display = '';
+                showError(error.message || 'Falha ao enviar o feedback.');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
         async function renderDashboardGreeting() {
             const greetingEl = document.getElementById('dashboardGreeting');
             if (!greetingEl) return;
