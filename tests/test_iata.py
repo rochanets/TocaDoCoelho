@@ -316,6 +316,54 @@ def test_reconcile_conta_com_grafia_levemente_diferente_nao_duplica():
     assert opp['previous_status'] == 'Proposta enviada'
 
 
+def test_reconcile_conta_com_sufixo_de_forma_juridica_nao_duplica():
+    """Variação de forma jurídica ('Ambev S.A.' vs 'Ambev') não é erro de
+    digitação — o SequenceMatcher penaliza a diferença de comprimento
+    (ratio 0.71, abaixo do cutoff de fuzzy de conta) e nunca casaria via
+    fuzzy sem afrouxar o cutoff a ponto de arriscar fundir contas de fato
+    diferentes. É um mecanismo à parte: remover o sufixo jurídico do fim do
+    nome antes de comparar."""
+    anterior = [{'name': 'Ana', 'accounts': [{'name': 'Ambev S.A.', 'opportunities': [
+        {'id': 1, 'name': 'Migração SAP', 'update_text': 'Proposta enviada'}]}]}]
+    atual = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Migração SAP', 'update_text': 'Fechado', 'responsible': 'Ana'}]}]}]
+
+    result = iata_lib.reconcile(atual, anterior)
+
+    contas = [a['name'] for m in result for a in m['accounts']]
+    assert contas == ['Ambev']
+    opp = result[0]['accounts'][0]['opportunities'][0]
+    assert opp['prev_opportunity_id'] == 1
+    assert opp['previous_status'] == 'Proposta enviada'
+    assert opp['match_confidence'] == 'alta'
+
+
+def test_reconcile_contas_com_nome_parecido_por_conter_uma_a_outra_continuam_distintas():
+    """Contraexemplo do sufixo jurídico: 'Vale' e 'Vale Verde' são contas
+    diferentes. A regra de sufixo é restrita a formas jurídicas conhecidas
+    e não pode virar um subset match genérico que as funda."""
+    anterior = [{'name': 'Ana', 'accounts': [
+        {'name': 'Vale', 'opportunities': [
+            {'id': 1, 'name': 'Data Lake', 'update_text': 'POC em andamento'}]},
+        {'name': 'Vale Verde', 'opportunities': [
+            {'id': 2, 'name': 'Consultoria ESG', 'update_text': 'Proposta enviada'}]},
+    ]}]
+    atual = [{'name': 'Ana', 'accounts': [
+        {'name': 'Vale', 'opportunities': [
+            {'name': 'Data Lake', 'update_text': 'Fechado', 'responsible': 'Ana'}]},
+    ]}]
+
+    result = iata_lib.reconcile(atual, anterior)
+
+    contas = {a['name'] for m in result for a in m['accounts']}
+    assert contas == {'Vale', 'Vale Verde'}
+    vale = [a for m in result for a in m['accounts'] if a['name'] == 'Vale'][0]
+    assert vale['opportunities'][0]['prev_opportunity_id'] == 1
+    vale_verde = [a for m in result for a in m['accounts'] if a['name'] == 'Vale Verde'][0]
+    assert vale_verde['opportunities'][0]['update_text'] == iata_lib.SEM_UPDATE
+    assert vale_verde['opportunities'][0]['prev_opportunity_id'] == 2
+
+
 def test_reconcile_resolver_com_id_none_no_candidato_nao_casa_sem_decisao_explicita():
     """I3: resolver devolvendo {} (sem decisão) não pode casar com um
     candidato cujo id também é None — None de 'não decidi' e None de 'id
@@ -374,7 +422,7 @@ def test_reconcile_resolver_com_chaves_string_no_retorno_e_normalizado():
     casada = [o for o in result[0]['accounts'][0]['opportunities']
               if o['name'] == 'Migração SAP fase II'][0]
     assert casada['prev_opportunity_id'] == 8
-    assert casada['match_confidence'] == 'alta'
+    assert casada['match_confidence'] == 'media'
 
 
 def test_reconcile_resolver_que_lanca_excecao_nao_propaga_e_e_registrado(caplog):

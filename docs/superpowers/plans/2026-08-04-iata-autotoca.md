@@ -493,6 +493,48 @@ def test_reconcile_conta_com_grafia_levemente_diferente_nao_duplica():
     assert result[0]['accounts'][0]['opportunities'][0]['prev_opportunity_id'] == 1
 
 
+def test_reconcile_conta_com_sufixo_de_forma_juridica_nao_duplica():
+    """Variação de forma jurídica ('Ambev S.A.' vs 'Ambev') não é erro de
+    digitação — o SequenceMatcher penaliza diferença de comprimento (ratio
+    0.71, abaixo do cutoff de fuzzy de conta) e nunca casaria via fuzzy sem
+    afrouxar o cutoff a ponto de arriscar fundir contas diferentes. É um
+    mecanismo à parte: remover o sufixo jurídico do fim do nome antes de
+    comparar — determinístico, não fuzzy."""
+    anterior = [{'name': 'Ana', 'accounts': [{'name': 'Ambev S.A.', 'opportunities': [
+        {'id': 1, 'name': 'Migração SAP', 'update_text': 'Proposta enviada'}]}]}]
+    atual = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Migração SAP', 'update_text': 'Fechado', 'responsible': 'Ana'}]}]}]
+
+    result = iata_lib.reconcile(atual, anterior)
+
+    contas = [a['name'] for m in result for a in m['accounts']]
+    assert contas == ['Ambev']
+    opp = result[0]['accounts'][0]['opportunities'][0]
+    assert opp['prev_opportunity_id'] == 1
+    assert opp['match_confidence'] == 'alta'
+
+
+def test_reconcile_contas_com_nome_parecido_por_conter_uma_a_outra_continuam_distintas():
+    """Contraexemplo do sufixo jurídico: 'Vale' e 'Vale Verde' são contas
+    diferentes. A regra de sufixo é restrita a formas jurídicas conhecidas
+    e não pode virar um subset match genérico que as funda."""
+    anterior = [{'name': 'Ana', 'accounts': [
+        {'name': 'Vale', 'opportunities': [
+            {'id': 1, 'name': 'Data Lake', 'update_text': 'POC em andamento'}]},
+        {'name': 'Vale Verde', 'opportunities': [
+            {'id': 2, 'name': 'Consultoria ESG', 'update_text': 'Proposta enviada'}]},
+    ]}]
+    atual = [{'name': 'Ana', 'accounts': [
+        {'name': 'Vale', 'opportunities': [
+            {'name': 'Data Lake', 'update_text': 'Fechado', 'responsible': 'Ana'}]},
+    ]}]
+
+    result = iata_lib.reconcile(atual, anterior)
+
+    contas = {a['name'] for m in result for a in m['accounts']}
+    assert contas == {'Vale', 'Vale Verde'}
+
+
 def test_reconcile_resolver_com_id_none_no_candidato_nao_casa_sem_decisao_explicita():
     """{} do resolver ('sem decisão') não pode casar com um candidato cujo
     id também é None — são coisas diferentes."""
@@ -544,6 +586,7 @@ def test_reconcile_resolver_com_chaves_string_no_retorno_e_normalizado():
     casada = [o for o in result[0]['accounts'][0]['opportunities']
               if o['name'] == 'Migração SAP fase II'][0]
     assert casada['prev_opportunity_id'] == 8
+    assert casada['match_confidence'] == 'media'  # julgamento do resolver, não match exato
 
 
 def test_reconcile_resolver_que_lanca_excecao_nao_propaga_e_e_registrado(caplog):
@@ -604,10 +647,10 @@ GERENTE_NAO_IDENTIFICADO = 'Gerente não identificado'
 _LIMIAR_AMBIGUIDADE = 0.75
 
 # Cutoff para casar CONTA anterior por similaridade quando não há match exato
-# de nome normalizado. Deliberadamente alto: um falso positivo aqui funde
-# duas contas de fato diferentes no mesmo bloco da ata, o que é pior do que
-# exibi-las duplicadas — preferimos perder alguns matches de grafia muito
-# distinta a arriscar fundir contas distintas.
+# de nome normalizado nem match por sufixo de forma jurídica. Deliberadamente
+# alto: um falso positivo aqui funde duas contas de fato diferentes no mesmo
+# bloco da ata, o que é pior do que exibi-las duplicadas — preferimos perder
+# alguns matches de grafia muito distinta a arriscar fundir contas distintas.
 _LIMIAR_CONTA = 0.85
 
 # Prefixo de chave sintética para contas cujo nome não normaliza para nada
@@ -617,7 +660,37 @@ _LIMIAR_CONTA = 0.85
 # simplesmente descartada.
 _SYNTHETIC_ACCOUNT_PREFIX = '\x00__conta_sem_nome__'
 
+# Tokens de forma jurídica removidos do FIM do nome normalizado de uma conta
+# para casamento por sufixo (ex.: "Ambev S.A." == "Ambev"). Isto é
+# deliberadamente restrito a forma jurídica — não é um subset match genérico:
+# "Vale" e "Vale Verde" continuam contas diferentes porque nenhuma delas
+# termina com um destes tokens. Ordenado por número de tokens, do maior para
+# o menor, para que "s a s" seja tentado antes de "s a".
+_SUFIXOS_FORMA_JURIDICA = (
+    ('s', 'a', 's'),
+    ('s', 'a'),
+    ('sa',),
+    ('ltda',),
+    ('me',),
+    ('eireli',),
+    ('epp',),
+)
+
 _logger = logging.getLogger(__name__)
+
+
+def _strip_legal_suffix(conta_norm):
+    """Remove um único token/sequência de forma jurídica do fim do nome
+    normalizado, se houver — nunca deixa o resultado ficar vazio (se o nome
+    inteiro for o sufixo, a regra é ignorada e o nome original é devolvido)."""
+    if not conta_norm:
+        return conta_norm
+    tokens = conta_norm.split(' ')
+    for sufixo in _SUFIXOS_FORMA_JURIDICA:
+        n = len(sufixo)
+        if len(tokens) > n and tuple(tokens[-n:]) == sufixo:
+            return ' '.join(tokens[:-n])
+    return conta_norm
 
 
 def normalize_name(value):
@@ -684,15 +757,22 @@ def _index_anterior(previous_managers):
     return por_opp, por_conta
 
 
-def _match_previous_account_key(conta_norm, por_conta, contas_nomeadas_norms):
+def _match_previous_account_key(conta_norm, por_conta, contas_nomeadas_norms, indice_sem_sufixo):
     """Acha a chave, em `por_conta`, da conta anterior correspondente à
-    conta atual `conta_norm`: nome normalizado exato primeiro; se não achar,
-    similaridade com cutoff conservador (`_LIMIAR_CONTA`).
+    conta atual `conta_norm`, em ordem de confiança decrescente:
+
+    (a) nome normalizado idêntico;
+    (b) nome sem sufixo de forma jurídica idêntico (determinístico — não é
+        fuzzy, é remover um token conhecido como "s a"/"ltda"/etc. do fim);
+    (c) similaridade com cutoff conservador — ver `_LIMIAR_CONTA`.
     """
     if not conta_norm:
         return None
     if conta_norm in por_conta:
         return conta_norm
+    sem_sufixo_atual = _strip_legal_suffix(conta_norm)
+    if sem_sufixo_atual in indice_sem_sufixo:
+        return indice_sem_sufixo[sem_sufixo_atual]
     matches = difflib.get_close_matches(
         conta_norm, contas_nomeadas_norms, n=1, cutoff=_LIMIAR_CONTA)
     return matches[0] if matches else None
@@ -718,10 +798,21 @@ def reconcile(current_managers, previous_managers, resolver=None):
     devolver o mesmo id para dois pares diferentes, só o primeiro é aceito —
     o segundo vira 'baixa'. Uma exceção do resolver é registrada via
     `logging` e tratada como "sem decisão para nenhum par", nunca propagada.
+    Um match confirmado pelo resolver recebe `match_confidence='media'` —
+    diferente do match exato ('alta'), é julgamento de um LLM sobre nomes
+    que não bateram sozinhos.
     """
     por_opp, por_conta = _index_anterior(previous_managers)
     contas_nomeadas_norms = [
         k for k in por_conta if not k.startswith(_SYNTHETIC_ACCOUNT_PREFIX)]
+    # Índice auxiliar para o passo (b) do casamento de conta: nome sem
+    # sufixo de forma jurídica -> chave original em por_conta. Primeira
+    # ocorrência vence em caso de colisão (duas contas anteriores distintas
+    # que colapsam para o mesmo nome sem sufixo é um cenário raro demais
+    # para justificar mais mecanismo aqui).
+    indice_sem_sufixo = {}
+    for k in contas_nomeadas_norms:
+        indice_sem_sufixo.setdefault(_strip_legal_suffix(k), k)
 
     usados_idx = set()
     ids_reivindicados = set()
@@ -735,7 +826,7 @@ def reconcile(current_managers, previous_managers, resolver=None):
         for account in (manager.get('accounts') or []):
             conta_norm = normalize_name(account.get('name'))
             conta_key = _match_previous_account_key(
-                conta_norm, por_conta, contas_nomeadas_norms)
+                conta_norm, por_conta, contas_nomeadas_norms, indice_sem_sufixo)
             anterior_conta = por_conta.get(conta_key) if conta_key else None
 
             opps_saida = []
@@ -848,7 +939,9 @@ def _resolver_ambiguos(pendentes, resolver, usados_idx, ids_reivindicados):
         ids_reivindicados.add(escolhido)
         saida['prev_opportunity_id'] = item['data'].get('id')
         saida['previous_status'] = (item['data'].get('update_text') or '').strip() or None
-        saida['match_confidence'] = 'alta'
+        # 'media', não 'alta': é julgamento de um LLM sobre nomes que não
+        # bateram sozinhos, diferente do match exato/determinístico acima.
+        saida['match_confidence'] = 'media'
 
 
 def _anexar_nao_citados(resultado, por_conta, usados_idx, matched_accounts):
