@@ -775,9 +775,17 @@
                     return `[${e.ts}] [CLIENT] [${e.tag}] ${e.message}${payload}`;
                 });
 
+                // Falha de WhatsApp quase nunca aparece no app.log — as rotas
+                // respondem 200 e escondem o motivo no corpo. A causa costuma estar
+                // só no log do WAHA-lite, por isso ele vem junto no export.
+                const wahaLines = Array.isArray(data.waha_lines) ? data.waha_lines : [];
+
                 const combined = [
                     '===== SERVIDOR (últimas ' + serverLines.length + ' linhas) =====',
                     ...serverLines,
+                    '',
+                    '===== WHATSAPP / WAHA-lite (últimas ' + wahaLines.length + ' linhas) =====',
+                    ...(wahaLines.length ? wahaLines : ['(sem log do WAHA-lite — o serviço pode nunca ter sido iniciado nesta máquina)']),
                     '',
                     '===== CLIENTE (buffer local — ' + clientBuffer.length + ' entradas) =====',
                     ...clientBuffer
@@ -787,7 +795,7 @@
 
                 if (meta) {
                     const sizeKb = data.size ? (data.size / 1024).toFixed(1) : '0.0';
-                    meta.textContent = `Servidor: ${data.total_lines || 0} linhas (${sizeKb} KB) • Cliente: ${clientBuffer.length} entradas`;
+                    meta.textContent = `Servidor: ${data.total_lines || 0} linhas (${sizeKb} KB) • WhatsApp: ${wahaLines.length} linhas • Cliente: ${clientBuffer.length} entradas`;
                 }
             } catch (e) {
                 viewer.textContent = 'Erro ao carregar logs: ' + (e.message || e);

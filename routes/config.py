@@ -284,12 +284,25 @@ def get_debug_logs():
             all_lines = f.readlines()
 
         tail = all_lines[-lines_limit:] if len(all_lines) > lines_limit else all_lines
+
+        # O log do WAHA-lite vai junto porque o app.log sozinho não explica falha
+        # de WhatsApp: as rotas respondem 200 com o motivo dentro do corpo JSON, que
+        # não é registrado. Em três chamados seguidos a causa real (lock órfão do
+        # Chrome, migração LID, sessão parada) só existia aqui, e cada diagnóstico
+        # exigiu acesso à máquina do usuário. _tail_diagnostic_file já redige
+        # telefone, id de chat e chave de API linha a linha.
+        waha_path = _waha_log_file_path()
+        waha_lines = _tail_diagnostic_file(waha_path, lines_limit=min(lines_limit, 300))
+
         return jsonify({
             'lines': [line.rstrip('\n') for line in tail],
             'path': str(LOG_FILE),
             'total_lines': len(all_lines),
             'returned_lines': len(tail),
-            'size': LOG_FILE.stat().st_size
+            'size': LOG_FILE.stat().st_size,
+            'waha_lines': waha_lines,
+            'waha_path': str(waha_path),
+            'waha_available': bool(waha_lines),
         })
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/config/logs: {e}')

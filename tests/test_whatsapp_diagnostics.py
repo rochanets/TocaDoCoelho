@@ -219,3 +219,60 @@ def test_status_nao_reinicia_sozinho(client, db_path, monkeypatch):
     client.get('/api/whatsapp/qr')  # sem start=1
 
     assert not chamadas, 'sem start=1 a rota deve apenas observar'
+
+
+def test_export_de_logs_inclui_o_waha_lite(client, db_path, tmp_path, monkeypatch):
+    """O log do WAHA-lite precisa vir no export de depuração.
+
+    Em três chamados seguidos a causa da falha de WhatsApp (lock órfão do Chrome,
+    migração LID, sessão parada) só existia no waha-lite.log, que ficava de fora —
+    o app.log responde 200 e esconde o motivo no corpo JSON. Cada diagnóstico
+    exigiu acesso à máquina do usuário.
+    """
+    import app as toca
+
+    waha_log = tmp_path / 'waha-lite.log'
+    waha_log.write_text(
+        '[2026-08-05T17:29:04Z] [WARN] Chrome travado da sessao anterior\n'
+        '[2026-08-05T17:29:17Z] [ERROR] Nao foi possivel conectar apos 3 tentativas\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(toca, '_waha_log_file_path', lambda: waha_log)
+
+    payload = client.get('/api/config/logs?limit=200').get_json()
+
+    assert payload['waha_available'] is True
+    assert any('lock' in l.lower() or 'travado' in l.lower() for l in payload['waha_lines'])
+    assert any('3 tentativas' in l for l in payload['waha_lines'])
+
+
+def test_export_de_logs_redige_telefone_e_chave(client, db_path, tmp_path, monkeypatch):
+    """O export é enviado por e-mail/chat — não pode vazar contato nem API key."""
+    import app as toca
+
+    waha_log = tmp_path / 'waha-lite.log'
+    waha_log.write_text(
+        '[INFO] Buscando chat 5511987654321@c.us do cliente\n'
+        '[INFO] headers x-api-key: minha-chave-secreta-123\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(toca, '_waha_log_file_path', lambda: waha_log)
+
+    linhas = '\n'.join(client.get('/api/config/logs').get_json()['waha_lines'])
+
+    assert '5511987654321' not in linhas
+    assert 'minha-chave-secreta-123' not in linhas
+    assert '<contato>' in linhas and '<redigido>' in linhas
+
+
+def test_export_sem_waha_log_nao_quebra(client, db_path, tmp_path, monkeypatch):
+    """Máquina que nunca subiu o WAHA-lite continua conseguindo exportar."""
+    import app as toca
+
+    monkeypatch.setattr(toca, '_waha_log_file_path', lambda: tmp_path / 'nao-existe.log')
+
+    payload = client.get('/api/config/logs').get_json()
+
+    assert payload['waha_available'] is False
+    assert payload['waha_lines'] == []
+    assert 'lines' in payload  # o log do servidor continua vindo
