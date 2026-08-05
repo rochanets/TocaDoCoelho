@@ -127,9 +127,11 @@ def _http_form_post(url, form_data):
         err = body.get('error_description') or body.get('error') or str(e)
         if 'AADSTS65001' in str(err) or 'consent' in str(err).lower() or 'interaction_required' in str(body.get('error') or ''):
             raise OutlookOAuthError(
-                'A permissão de envio de e-mail (Mail.Send) ainda não foi concedida. '
-                'Vá em Configurações > Integrações > Outlook, clique em DESCONECTAR e '
-                'depois em CONECTAR novamente para aprovar a nova permissão.'
+                'As permissões de e-mail ainda não foram concedidas para esta conta. '
+                'Use o botão "Tentar de novo pedindo consentimento" nesta tela. '
+                'Se a empresa exigir aprovação do administrador, peça que ele conceda '
+                'o consentimento para o aplicativo no Azure (Mail.Read, Mail.Send, '
+                'offline_access e User.Read).'
             ) from e
         logger.error(f'[OutlookGraph] Falha OAuth no token endpoint: {err}')
         raise OutlookOAuthError(
@@ -387,7 +389,19 @@ def _oauth_config(settings=None):
     }
 
 
-def build_authorize_url(conn, user_id: int, settings=None):
+def build_authorize_url(conn, user_id: int, settings=None, force_consent: bool = False):
+    """Monta a URL de autorização OAuth.
+
+    `force_consent` (prompt=consent) só deve ser usado como último recurso, a
+    pedido explícito do usuário. Ele pede um consentimento NOVO do usuário e
+    ignora o consentimento de administrador já concedido para o tenant — em
+    empresas onde o consentimento de usuário é bloqueado (o padrão corporativo),
+    isso leva à tela "Aprovação necessária / Solicitar aprovação" mesmo com as
+    permissões já liberadas pelo admin no Azure, travando a conexão para sempre.
+    Sem ele, o Azure reconhece o consentimento do admin e devolve o código
+    direto. Quando o consentimento de fato estiver faltando (escopo novo em
+    tenant sem admin consent), o token endpoint devolve AADSTS65001 e aí sim
+    vale reiniciar o fluxo com force_consent=True."""
     cfg = _oauth_config(settings)
     verifier = _pkce_make_verifier()
     state = _create_oauth_attempt(conn, user_id, verifier)
@@ -400,10 +414,9 @@ def build_authorize_url(conn, user_id: int, settings=None):
         'state': state,
         'code_challenge': _pkce_make_challenge(verifier),
         'code_challenge_method': 'S256',
-        # Garante a tela de consentimento — obrigatório quando o escopo muda
-        # (ex.: Mail.Send adicionado), senão o token endpoint devolve AADSTS65001.
-        'prompt': 'consent',
     }
+    if force_consent:
+        params['prompt'] = 'consent'
     return f"{cfg['authorize_url']}?{urllib.parse.urlencode(params)}"
 
 

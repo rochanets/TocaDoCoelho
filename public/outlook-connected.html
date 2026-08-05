@@ -73,6 +73,7 @@
     <div id="errorState" class="hidden">
       <h1>Não foi possível conectar</h1>
       <div class="error" id="errorMsg"></div>
+      <button class="btn btn-primary" onclick="retryWithConsent()">Tentar de novo pedindo consentimento</button>
       <button class="btn btn-ghost" onclick="window.close()">Fechar janela</button>
     </div>
 
@@ -116,6 +117,22 @@
     ['errorState', 'successState', 'loadingState'].forEach(function (id) {
       document.getElementById(id).classList.toggle('hidden', id !== state);
     });
+  }
+
+  // Reinicia o OAuth forçando a tela de consentimento (prompt=consent). Só faz
+  // sentido quando o consentimento realmente está faltando: em tenants que
+  // bloqueiam o consentimento de usuário, isso cai na tela "Aprovação
+  // necessária" mesmo com o admin já tendo liberado as permissões no Azure.
+  function retryWithConsent() {
+    fetch('/api/outlook/oauth/start?force_consent=1')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.auth_url) { window.location.href = data.auth_url; }
+        else { document.getElementById('errorMsg').textContent = (data && data.error) || 'Não foi possível reiniciar a autorização.'; }
+      })
+      .catch(function () {
+        document.getElementById('errorMsg').textContent = 'Não foi possível reiniciar a autorização.';
+      });
   }
 
   function startSync() {
