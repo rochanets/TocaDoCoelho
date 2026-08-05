@@ -742,17 +742,7 @@ def init_db():
     c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_prev ON iata_opportunities(prev_opportunity_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_norm ON iata_opportunities(name_norm)')
 
-    for _col, _ddl in (
-        ('previous_record_id', 'INTEGER'),
-        ('body_markdown', 'TEXT'),
-        ('body_edited', 'INTEGER DEFAULT 0'),
-        ('reparse_failed', 'INTEGER DEFAULT 0'),
-        ('format_version', 'INTEGER DEFAULT 1'),
-    ):
-        try:
-            c.execute(f'ALTER TABLE iata_records ADD COLUMN {_col} {_ddl}')
-        except sqlite3.OperationalError:
-            pass  # coluna já existe
+    _iata_add_record_columns(conn)
 
     # Tabela de compromissos (agenda)
     c.execute('''CREATE TABLE IF NOT EXISTS commitments (
@@ -1293,7 +1283,7 @@ def _iata_add_record_columns(conn):
         if col not in existentes:
             c.execute(f'ALTER TABLE iata_records ADD COLUMN {col} {ddl}')
 
-
+# ---------------------------------------------------------------------------
 SCHEMA_MIGRATIONS = [
     (1, 'baseline_legacy_init', None),  # None => roda init_db()
     (2, 'indices_consultas_frequentes', [
