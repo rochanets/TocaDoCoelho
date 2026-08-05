@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import sqlite3
 
 import app as toca
@@ -459,3 +460,180 @@ def test_reconcile_match_exato_recebe_confianca_alta():
 
     opp = result[0]['accounts'][0]['opportunities'][0]
     assert opp['match_confidence'] == 'alta'
+
+
+# --- Task 3: prompt e parsing da hierarquia --------------------------------
+
+
+def test_parse_hierarchy_aceita_json_em_bloco_markdown():
+    payload = {
+        'title': 'Pipeline Semanal', 'meeting_date': '04/08/2026',
+        'meeting_time': '10:00', 'topic': 'Revisão de funil',
+        'participants': [{'name': 'Ana', 'role': 'Gerente'}],
+        'managers': [{'name': 'Ana', 'accounts': [
+            {'name': 'Ambev', 'opportunities': [
+                {'name': 'Migração SAP', 'update': 'Proposta enviada', 'responsible': 'Bruno'}]}]}],
+    }
+    raw = '```json\n' + json.dumps(payload, ensure_ascii=False) + '\n```'
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed['header']['title'] == 'Pipeline Semanal'
+    assert parsed['header']['participants'] == [{'name': 'Ana', 'role': 'Gerente'}]
+    opp = parsed['managers'][0]['accounts'][0]['opportunities'][0]
+    assert opp['update_text'] == 'Proposta enviada'
+    assert opp['responsible'] == 'Bruno'
+
+
+def test_parse_hierarchy_gerente_vazio_vira_nao_identificado():
+    raw = json.dumps({'title': 'X', 'managers': [
+        {'name': '', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Op', 'update': 'algo'}]}]}]})
+    parsed = iata_lib.parse_hierarchy(raw)
+    assert parsed['managers'][0]['name'] == iata_lib.GERENTE_NAO_IDENTIFICADO
+
+
+def test_parse_hierarchy_sem_titulo_retorna_none():
+    assert iata_lib.parse_hierarchy('{"managers": []}') is None
+    assert iata_lib.parse_hierarchy('') is None
+    assert iata_lib.parse_hierarchy('desculpe, não consegui') is None
+
+
+def test_parse_hierarchy_participantes_em_lista_de_strings():
+    raw = json.dumps({'title': 'X', 'participants': ['Ana', 'Bruno'], 'managers': []})
+    parsed = iata_lib.parse_hierarchy(raw)
+    assert parsed['header']['participants'] == [
+        {'name': 'Ana', 'role': ''}, {'name': 'Bruno', 'role': ''}]
+
+
+def test_build_extraction_prompt_inclui_texto_e_pede_json():
+    prompt = iata_lib.build_extraction_prompt('Ana falou da Ambev')
+    assert 'Ana falou da Ambev' in prompt
+    assert 'JSON' in prompt
+    assert 'managers' in prompt
+
+
+def test_build_extraction_prompt_trunca_texto_gigante():
+    prompt = iata_lib.build_extraction_prompt('x' * 60000)
+    assert len(prompt) < 45000
+
+
+# --- Defeitos e robustez adicionais investigados na Task 3 -----------------
+
+
+def test_parse_hierarchy_conta_com_nome_vazio_nao_descarta_oportunidades():
+    """Descartar a conta inteira (name vazio) apagaria a oportunidade real
+    que veio junto — pior do que exibi-la sem nome de conta."""
+    raw = json.dumps({'title': 'X', 'managers': [
+        {'name': 'Ana', 'accounts': [{'name': '   ', 'opportunities': [
+            {'name': 'Migração SAP', 'update': 'Proposta enviada'}]}]}]})
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    contas = parsed['managers'][0]['accounts']
+    assert len(contas) == 1
+    assert contas[0]['name'] == ''
+    assert contas[0]['opportunities'][0]['name'] == 'Migração SAP'
+
+
+def test_parse_hierarchy_oportunidade_sem_nome_preserva_update_e_responsavel():
+    """Uma oportunidade sem 'name' ainda carrega update/responsável reais —
+    descartá-la silenciosamente apagaria a única menção àquele negócio."""
+    raw = json.dumps({'title': 'X', 'managers': [
+        {'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'update': 'Cliente pediu desconto', 'responsible': 'Bruno'}]}]}]})
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    opp = parsed['managers'][0]['accounts'][0]['opportunities'][0]
+    assert opp['name'] == ''
+    assert opp['update_text'] == 'Cliente pediu desconto'
+    assert opp['responsible'] == 'Bruno'
+
+
+def test_parse_hierarchy_managers_como_dict_unico_nao_apaga_hierarquia():
+    """Se o LLM devolver 'managers' como um objeto único em vez de lista de
+    um elemento, iterar o dict cru percorreria suas CHAVES como se fossem
+    itens — o filtro de isinstance(dict) seguinte descartaria tudo em
+    silêncio, apagando a ata inteira."""
+    raw = json.dumps({'title': 'X', 'managers': {
+        'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Migração SAP', 'update': 'Fechado'}]}]}})
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert len(parsed['managers']) == 1
+    assert parsed['managers'][0]['name'] == 'Ana'
+    assert parsed['managers'][0]['accounts'][0]['name'] == 'Ambev'
+
+
+def test_parse_hierarchy_accounts_e_opportunities_como_string_solta():
+    """Um LLM pode devolver uma lista de strings soltas em vez de objetos —
+    vira item com aquele nome em vez de ser silenciosamente descartado."""
+    raw = json.dumps({'title': 'X', 'managers': [
+        {'name': 'Ana', 'accounts': ['Ambev']}]})
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed['managers'][0]['accounts'][0]['name'] == 'Ambev'
+
+
+def test_parse_hierarchy_campos_em_portugues_sao_aceitos():
+    """O prompt pede chaves em inglês, mas um LLM pode ignorar e devolver em
+    português mesmo assim — perder a ata inteira por causa disso é pior do
+    que tolerar as duas variantes de chave."""
+    raw = json.dumps({'titulo': 'Pipeline', 'gerentes': [
+        {'nome': 'Ana', 'contas': [{'nome': 'Ambev', 'oportunidades': [
+            {'nome': 'Migração SAP', 'atualizacao': 'Proposta enviada',
+             'responsavel': 'Bruno'}]}]}]}, ensure_ascii=False)
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed['header']['title'] == 'Pipeline'
+    opp = parsed['managers'][0]['accounts'][0]['opportunities'][0]
+    assert opp['name'] == 'Migração SAP'
+    assert opp['update_text'] == 'Proposta enviada'
+    assert opp['responsible'] == 'Bruno'
+
+
+def test_parse_hierarchy_json_com_texto_explicativo_ao_redor():
+    payload = json.dumps({'title': 'X', 'managers': []})
+    raw = 'Aqui está a extração da reunião:\n' + payload + '\nQualquer dúvida, me avise!'
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed['header']['title'] == 'X'
+
+
+def test_parse_hierarchy_json_truncado_retorna_none_sem_lancar():
+    raw = '{"title": "X", "managers": [{"name": "Ana", "accounts": ['
+    assert iata_lib.parse_hierarchy(raw) is None
+
+
+def test_parse_hierarchy_bloco_de_fence_sem_tag_json():
+    payload = json.dumps({'title': 'X', 'managers': []})
+    raw = '```\n' + payload + '\n```'
+    parsed = iata_lib.parse_hierarchy(raw)
+    assert parsed['header']['title'] == 'X'
+
+
+def test_parse_hierarchy_aspas_curvas_sao_reparadas():
+    raw = '{\u201ctitle\u201d: \u201cPipeline\u201d, \u201cmanagers\u201d: []}'
+    parsed = iata_lib.parse_hierarchy(raw)
+    assert parsed is not None
+    assert parsed['header']['title'] == 'Pipeline'
+
+
+def test_parse_hierarchy_null_literal_em_string_vira_none():
+    raw = json.dumps({'title': 'X', 'meeting_date': 'null', 'managers': []})
+    parsed = iata_lib.parse_hierarchy(raw)
+    assert parsed['header']['meeting_date'] is None
+
+
+def test_parse_hierarchy_participantes_como_string_unica_nao_vira_caracteres():
+    """Iterar uma string caractere a caractere (em vez de tratar como uma
+    lista separada por vírgula) produziria 'A', 'n', 'a'... como nomes."""
+    raw = json.dumps({'title': 'X', 'participants': 'Ana, Bruno', 'managers': []})
+    parsed = iata_lib.parse_hierarchy(raw)
+    assert parsed['header']['participants'] == [
+        {'name': 'Ana', 'role': ''}, {'name': 'Bruno', 'role': ''}]

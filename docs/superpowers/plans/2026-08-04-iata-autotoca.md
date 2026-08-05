@@ -1076,7 +1076,34 @@ Expected: FAIL com `AttributeError: module 'integrations.iata' has no attribute 
 
 - [ ] **Step 3: Implementar**
 
-Acrescentar a `integrations/iata.py`:
+**A versão abaixo já corrige três descartes silenciosos que a primeira
+implementação de referência tinha** (achados na auto-revisão da Task 3, com
+testes próprios em `tests/test_iata.py`) — não reintroduza nas tasks
+seguintes:
+
+1. **Conta com `name` vazio era descartada com `continue`** — apagava
+   também as oportunidades reais daquele bloco. Corrigido: a conta é mantida
+   com `name: ''` (mesmo espírito de `reconcile()`, que já preserva conta
+   anterior sem nome — ver C3 na Task 2).
+2. **Oportunidade sem `name` era descartada** — apagava `update`/
+   `responsible` reais só porque o nome não veio. Corrigido: mantida com
+   `name: ''`.
+3. **`managers` (ou `accounts`/`opportunities`) vindo como objeto único em
+   vez de lista de um elemento apagava a ata inteira em silêncio** — iterar
+   um `dict` cru percorre suas *chaves* como strings, que o filtro
+   `isinstance(x, dict)` seguinte descarta todas. Corrigido com
+   `_as_item_list()`, que também aceita string solta num item de lista
+   (`["Ambev"]` → `[{"name": "Ambev"}]`) em vez de descartá-la.
+
+Também adicionados por robustez contra desvio real de LLM (sem inventar
+feature nova, só evitando perda de dado): aceitar chaves em português como
+fallback (`titulo`/`gerentes`/`contas`/`oportunidades`/`nome`/`atualizacao`/
+`responsavel` — via `_field()`), reparo de aspas tipográficas como última
+tentativa de parse, e tratar `participants` como string única
+(`"Ana, Bruno"`) sem iterar caractere a caractere.
+
+Acrescentar a `integrations/iata.py` (ver arquivo real para a versão
+completa e comentada — este bloco é o resumo funcional):
 
 ```python
 import json
@@ -1120,21 +1147,34 @@ def _strip_code_fence(raw):
     return texto
 
 
-def _loads_tolerante(raw):
-    texto = _strip_code_fence(raw)
-    if not texto:
-        return None
+_ASPAS_CURVAS = str.maketrans({
+    '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
+})
+
+
+def _tentar_json(texto):
     try:
         return json.loads(texto)
     except Exception:
-        pass
+        return None
+
+
+def _loads_tolerante(raw):
+    """Bloco de código markdown, texto explicativo antes/depois do objeto, e
+    aspas tipográficas como delimitador — tudo tolerado. JSON truncado não é
+    recuperado: devolve None (falha de extração, não dado inventado)."""
+    texto = _strip_code_fence(raw)
+    if not texto:
+        return None
+    resultado = _tentar_json(texto)
+    if resultado is not None:
+        return resultado
     inicio, fim = texto.find('{'), texto.rfind('}')
-    if inicio == -1 or fim <= inicio:
-        return None
-    try:
-        return json.loads(texto[inicio:fim + 1])
-    except Exception:
-        return None
+    trecho = texto[inicio:fim + 1] if inicio != -1 and fim > inicio else texto
+    resultado = _tentar_json(trecho)
+    if resultado is not None:
+        return resultado
+    return _tentar_json(trecho.translate(_ASPAS_CURVAS))
 
 
 def _clean_null(value):
@@ -1142,65 +1182,89 @@ def _clean_null(value):
     return None if not v or v.lower() in ('null', 'none', 'n/a', '-') else v
 
 
-def _parse_participants(raw_list):
+def _field(d, *keys):
+    """Primeiro valor não vazio dentre `keys` — tolera chave em português."""
+    for k in keys:
+        v = d.get(k)
+        if v not in (None, ''):
+            return v
+    return None
+
+
+def _as_item_list(value, name_key='name'):
+    """Normaliza para lista de dicts: dict único -> [dict]; item string
+    solta -> {name_key: item}; None/tipo inesperado -> []. Ver nota acima —
+    sem isso um `managers` devolvido como objeto único apaga a ata inteira."""
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
     saida = []
-    for p in (raw_list or []):
-        if isinstance(p, dict):
-            nome = str(p.get('name') or p.get('nome') or '').strip()
-            papel = str(p.get('role') or p.get('cargo') or p.get('empresa') or '').strip()
-            if nome:
-                saida.append({'name': nome, 'role': papel})
-        elif str(p or '').strip():
-            saida.append({'name': str(p).strip(), 'role': ''})
+    for item in value:
+        if isinstance(item, dict):
+            saida.append(item)
+        else:
+            texto = str(item or '').strip()
+            if texto:
+                saida.append({name_key: texto})
+    return saida
+
+
+def _parse_participants(raw_participants):
+    saida = []
+    if isinstance(raw_participants, str):
+        nomes = [n.strip() for n in re.split(r'[,;/]', raw_participants) if n.strip()]
+        return [{'name': n, 'role': ''} for n in nomes]
+    for p in _as_item_list(raw_participants):
+        nome = str(_field(p, 'name', 'nome') or '').strip()
+        papel = str(_field(p, 'role', 'cargo', 'papel', 'empresa') or '').strip()
+        if nome:
+            saida.append({'name': nome, 'role': papel})
     return saida
 
 
 def parse_hierarchy(raw):
-    """Converte a resposta da IA no formato canônico. None se inutilizável."""
+    """Converte a resposta da IA no formato canônico. None se inutilizável
+    (sem título — recusa, texto livre, JSON truncado)."""
     parsed = _loads_tolerante(raw)
     if not isinstance(parsed, dict):
         return None
-    titulo = str(parsed.get('title') or '').strip()
+    titulo = str(_field(parsed, 'title', 'titulo', 'título') or '').strip()
     if not titulo:
         return None
 
     managers = []
-    for manager in (parsed.get('managers') or []):
-        if not isinstance(manager, dict):
-            continue
+    for manager in _as_item_list(_field(parsed, 'managers', 'gerentes')):
         contas = []
-        for account in (manager.get('accounts') or []):
-            if not isinstance(account, dict):
-                continue
-            nome_conta = str(account.get('name') or '').strip()
-            if not nome_conta:
-                continue
+        for account in _as_item_list(_field(manager, 'accounts', 'contas')):
+            # Conta sem nome é mantida (name: '') — não descartada — para
+            # não apagar oportunidades reais junto com ela.
+            nome_conta = str(_field(account, 'name', 'nome') or '').strip()
             opps = []
-            for opp in (account.get('opportunities') or []):
-                if not isinstance(opp, dict):
-                    continue
-                nome_opp = str(opp.get('name') or '').strip()
-                if not nome_opp:
-                    continue
+            for opp in _as_item_list(_field(account, 'opportunities', 'oportunidades')):
                 opps.append({
-                    'name': nome_opp,
-                    'update_text': str(opp.get('update') or opp.get('update_text') or '').strip(),
-                    'responsible': str(opp.get('responsible') or '').strip(),
+                    'name': str(_field(opp, 'name', 'nome') or '').strip(),
+                    'update_text': str(_field(opp, 'update', 'update_text', 'atualizacao',
+                                               'atualização') or '').strip(),
+                    'responsible': str(_field(opp, 'responsible', 'responsavel',
+                                               'responsável') or '').strip(),
                 })
             contas.append({'name': nome_conta, 'account_id': None,
                            'match_confidence': None, 'opportunities': opps})
         managers.append({
-            'name': str(manager.get('name') or '').strip() or GERENTE_NAO_IDENTIFICADO,
+            'name': str(_field(manager, 'name', 'nome') or '').strip() or GERENTE_NAO_IDENTIFICADO,
             'accounts': contas,
         })
 
     return {
         'header': {
             'title': titulo,
-            'meeting_date': _clean_null(parsed.get('meeting_date')),
-            'meeting_time': _clean_null(parsed.get('meeting_time')),
-            'topic': str(parsed.get('topic') or '').strip() or titulo,
-            'participants': _parse_participants(parsed.get('participants')),
+            'meeting_date': _clean_null(_field(parsed, 'meeting_date', 'data_reuniao', 'data')),
+            'meeting_time': _clean_null(_field(parsed, 'meeting_time', 'horario', 'horário', 'hora')),
+            'topic': str(_field(parsed, 'topic', 'tema') or '').strip() or titulo,
+            'participants': _parse_participants(_field(parsed, 'participants', 'participantes')),
         },
         'managers': managers,
     }
