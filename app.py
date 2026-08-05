@@ -697,7 +697,63 @@ def init_db():
         raw_text TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
-    
+
+    c.execute('''CREATE TABLE IF NOT EXISTS iata_managers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        display_order INTEGER DEFAULT 0,
+        FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS iata_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        manager_id INTEGER NOT NULL,
+        account_id INTEGER,
+        name TEXT NOT NULL,
+        name_norm TEXT NOT NULL,
+        match_confidence TEXT,
+        match_confirmed INTEGER DEFAULT 0,
+        display_order INTEGER DEFAULT 0,
+        FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+        FOREIGN KEY(manager_id) REFERENCES iata_managers(id) ON DELETE CASCADE,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS iata_opportunities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        iata_account_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_norm TEXT NOT NULL,
+        previous_status TEXT,
+        update_text TEXT,
+        responsible TEXT,
+        carried_over INTEGER DEFAULT 0,
+        prev_opportunity_id INTEGER,
+        display_order INTEGER DEFAULT 0,
+        FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+        FOREIGN KEY(iata_account_id) REFERENCES iata_accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY(prev_opportunity_id) REFERENCES iata_opportunities(id) ON DELETE SET NULL
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_acc_record ON iata_accounts(record_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_record ON iata_opportunities(record_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_prev ON iata_opportunities(prev_opportunity_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_norm ON iata_opportunities(name_norm)')
+
+    for _col, _ddl in (
+        ('previous_record_id', 'INTEGER'),
+        ('body_markdown', 'TEXT'),
+        ('body_edited', 'INTEGER DEFAULT 0'),
+        ('reparse_failed', 'INTEGER DEFAULT 0'),
+        ('format_version', 'INTEGER DEFAULT 1'),
+    ):
+        try:
+            c.execute(f'ALTER TABLE iata_records ADD COLUMN {_col} {_ddl}')
+        except sqlite3.OperationalError:
+            pass  # coluna já existe
+
     # Tabela de compromissos (agenda)
     c.execute('''CREATE TABLE IF NOT EXISTS commitments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1218,7 +1274,26 @@ def run_automatic_db_backup(interval_days=3):
 # binários mas mantém o .db em %AppData%). Novas mudanças de schema devem ser
 # adicionadas como entradas numeradas em SCHEMA_MIGRATIONS — nunca mais como
 # ALTER TABLE ad-hoc no init_db.
-# ---------------------------------------------------------------------------
+def _iata_add_record_columns(conn):
+    """Colunas novas de iata_records (ALTER TABLE não aceita IF NOT EXISTS)."""
+    c = conn.cursor()
+    existentes = {r[1] for r in c.execute('PRAGMA table_info(iata_records)')}
+    if not existentes:
+        # iata_records nasce no init_db (migração 1/baseline); em bancos de teste
+        # sintéticos que pulam a baseline a tabela pode não existir ainda — nesse
+        # caso não há coluna para adicionar.
+        return
+    for col, ddl in (
+        ('previous_record_id', 'INTEGER'),
+        ('body_markdown', 'TEXT'),
+        ('body_edited', 'INTEGER DEFAULT 0'),
+        ('reparse_failed', 'INTEGER DEFAULT 0'),
+        ('format_version', 'INTEGER DEFAULT 1'),
+    ):
+        if col not in existentes:
+            c.execute(f'ALTER TABLE iata_records ADD COLUMN {col} {ddl}')
+
+
 SCHEMA_MIGRATIONS = [
     (1, 'baseline_legacy_init', None),  # None => roda init_db()
     (2, 'indices_consultas_frequentes', [
@@ -1390,6 +1465,50 @@ SCHEMA_MIGRATIONS = [
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             sent_at TIMESTAMP
         )''',
+    ]),
+    (17, 'iata_hierarquia', [
+        '''CREATE TABLE IF NOT EXISTS iata_managers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            display_order INTEGER DEFAULT 0,
+            FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE
+        )''',
+        '''CREATE TABLE IF NOT EXISTS iata_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id INTEGER NOT NULL,
+            manager_id INTEGER NOT NULL,
+            account_id INTEGER,
+            name TEXT NOT NULL,
+            name_norm TEXT NOT NULL,
+            match_confidence TEXT,
+            match_confirmed INTEGER DEFAULT 0,
+            display_order INTEGER DEFAULT 0,
+            FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+            FOREIGN KEY(manager_id) REFERENCES iata_managers(id) ON DELETE CASCADE,
+            FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS iata_opportunities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id INTEGER NOT NULL,
+            iata_account_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            name_norm TEXT NOT NULL,
+            previous_status TEXT,
+            update_text TEXT,
+            responsible TEXT,
+            carried_over INTEGER DEFAULT 0,
+            prev_opportunity_id INTEGER,
+            display_order INTEGER DEFAULT 0,
+            FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+            FOREIGN KEY(iata_account_id) REFERENCES iata_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY(prev_opportunity_id) REFERENCES iata_opportunities(id) ON DELETE SET NULL
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_iata_acc_record ON iata_accounts(record_id)',
+        'CREATE INDEX IF NOT EXISTS idx_iata_opp_record ON iata_opportunities(record_id)',
+        'CREATE INDEX IF NOT EXISTS idx_iata_opp_prev ON iata_opportunities(prev_opportunity_id)',
+        'CREATE INDEX IF NOT EXISTS idx_iata_opp_norm ON iata_opportunities(name_norm)',
+        _iata_add_record_columns,
     ]),
 ]
 
