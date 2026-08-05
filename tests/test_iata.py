@@ -749,3 +749,78 @@ def test_parse_hierarchy_json_com_chave_solta_antes_e_depois():
 
     assert parsed is not None
     assert parsed['header']['title'] == 'X'
+
+
+# --- Task 4: render_markdown -----------------------------------------------
+
+
+def _header_exemplo():
+    return {'title': 'Pipeline Semanal', 'meeting_date': '04/08/2026',
+            'meeting_time': '10:00', 'topic': 'Revisão de funil',
+            'participants': [{'name': 'Ana', 'role': 'Gerente'}, {'name': 'Bruno', 'role': ''}]}
+
+
+def _managers_exemplo():
+    return [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Migração SAP', 'previous_status': 'Proposta enviada',
+         'update_text': 'Cliente pediu desconto', 'responsible': 'Bruno',
+         'carried_over': False}]}]}]
+
+
+def test_render_markdown_segue_o_formato_acordado():
+    texto = iata_lib.render_markdown(_header_exemplo(), _managers_exemplo())
+    assert 'Título da Reunião: Pipeline Semanal' in texto
+    assert 'Data e horário: 04/08/2026 10:00' in texto
+    assert 'Participantes: Ana, Bruno' in texto
+    assert 'Tema: Revisão de funil' in texto
+    assert 'Gerente Comercial: Ana' in texto
+    assert 'Ambev' in texto
+    assert 'Migração SAP: Proposta enviada' in texto
+    assert 'Update: Cliente pediu desconto' in texto
+    assert 'Responsável: Bruno' in texto
+
+
+def test_render_markdown_oportunidade_sem_status_anterior_nao_mostra_dois_pontos_vazio():
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Programa de IA', 'previous_status': None, 'update_text': 'Kickoff',
+         'responsible': 'Ana', 'carried_over': False}]}]}]
+    texto = iata_lib.render_markdown(_header_exemplo(), managers)
+    assert 'Programa de IA\n' in texto
+    assert 'Programa de IA:' not in texto
+
+
+def test_render_markdown_inclui_secoes_opcionais_no_fim():
+    extras = {'decisions': ['Aprovar desconto de 5%'],
+              'next_steps': [{'action': 'Enviar proposta', 'responsible': 'Bruno',
+                              'deadline': '10/08/2026'}],
+              'insights': [{'pain': 'Custo alto de licença',
+                            'matched_offer': 'FinOps', 'observation': 'Aderente'}]}
+    texto = iata_lib.render_markdown(_header_exemplo(), _managers_exemplo(), extras)
+    assert 'Decisões' in texto and 'Aprovar desconto de 5%' in texto
+    assert 'Próximos passos' in texto and 'Enviar proposta' in texto
+    assert 'Insights de negócio' in texto and 'FinOps' in texto
+    assert texto.index('Gerente Comercial: Ana') < texto.index('Decisões')
+
+
+def test_render_markdown_sem_extras_nao_cria_secoes_vazias():
+    texto = iata_lib.render_markdown(_header_exemplo(), _managers_exemplo(), None)
+    assert 'Decisões' not in texto and 'Insights de negócio' not in texto
+
+
+def test_render_markdown_conta_e_oportunidade_sem_nome_ganham_rotulo():
+    """Task 3 decidiu deliberadamente preservar conta/oportunidade sem nome
+    em vez de descartar o bloco (update/responsável podem ser dado real) —
+    a decisão de rótulo ficou para a renderização. Um bullet vazio não deixa
+    claro pro usuário que existe algo ali."""
+    managers = [{'name': 'Ana', 'accounts': [{'name': '', 'opportunities': [
+        {'name': '', 'previous_status': None, 'update_text': 'Kickoff',
+         'responsible': 'Ana', 'carried_over': False}]}]}]
+    texto = iata_lib.render_markdown(_header_exemplo(), managers)
+    assert '  * Conta sem nome' in texto
+    assert '     * Oportunidade sem nome' in texto
+
+
+def test_render_markdown_gerente_sem_nome_usa_rotulo_padrao():
+    managers = [{'name': '', 'accounts': []}]
+    texto = iata_lib.render_markdown(_header_exemplo(), managers)
+    assert 'Gerente Comercial: Gerente não identificado' in texto

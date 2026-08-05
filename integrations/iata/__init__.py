@@ -28,6 +28,9 @@ from .llm import (
     parse_hierarchy,
     _loads_tolerante,
 )
+from .render import (
+    render_markdown,
+)
 
 __all__ = [
     'GERENTE_NAO_IDENTIFICADO',
@@ -37,4 +40,5 @@ __all__ = [
     'MAX_TRANSCRICAO_CHARS',
     'build_extraction_prompt',
     'parse_hierarchy',
+    'render_markdown',
 ]
