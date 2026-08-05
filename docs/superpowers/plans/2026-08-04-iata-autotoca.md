@@ -4,7 +4,7 @@
 
 **Goal:** Mover o iAta do Portfolio para o AutoToca e trocar o formato da ata por uma estrutura hierárquica Gerente Comercial → Conta → Oportunidade, com continuidade entre atas, edição do texto e envio por e-mail.
 
-**Architecture:** A extração da hierarquia é feita por IA (`_llm_prompt`, SAI → OpenRouter); a reconciliação com a ata anterior é feita em Python puro, para que a garantia "nada da ata anterior some" seja código e não promessa do modelo. A lógica pura (normalização, parsing, reconciliação, renderização) vive em `integrations/iata.py`, testável sem Flask e sem banco. A orquestração (thread, banco, rotas) vive em `routes/autotoca_iata.py`, que é executado no namespace do `app.py` por `_load_route_modules()` e portanto enxerga `get_db`, `logger`, `_llm_prompt` e `_outlook_send_mail`.
+**Architecture:** A extração da hierarquia é feita por IA (`_llm_prompt`, SAI → OpenRouter); a reconciliação com a ata anterior é feita em Python puro, para que a garantia "nada da ata anterior some" seja código e não promessa do modelo. A lógica pura (normalização, parsing, reconciliação, renderização) vive no pacote `integrations/iata/` (`reconcile.py`, `llm.py`, `render.py`, reexportados por `__init__.py` — ver "Estrutura de arquivos" abaixo), testável sem Flask e sem banco. A orquestração (thread, banco, rotas) vive em `routes/autotoca_iata.py`, que é executado no namespace do `app.py` por `_load_route_modules()` e portanto enxerga `get_db`, `logger`, `_llm_prompt` e `_outlook_send_mail`. Todo o resto do projeto continua importando `from integrations import iata as iata_lib` e chamando `iata_lib.reconcile`/`iata_lib.parse_hierarchy`/etc. num namespace só — dividir em pacote (Task 3) não muda esse contrato.
 
 **Tech Stack:** Python 3 + Flask, SQLite (`get_db()`), pytest, JS vanilla no `public/js/`.
 
@@ -16,7 +16,7 @@
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `integrations/iata.py` (criar) | Lógica pura: normalização, prompts, parsing do JSON da IA, reconciliação com a ata anterior, render markdown, render HTML de e-mail. Sem Flask, sem SQLite, sem chamadas de rede. |
+| `integrations/iata/` (criar, pacote — dividido a partir da Task 3) | Lógica pura: normalização, prompts, parsing do JSON da IA, reconciliação com a ata anterior, render markdown, render HTML de e-mail. Sem Flask, sem SQLite, sem chamadas de rede. `__init__.py` reexporta tudo, então `from integrations import iata as iata_lib` continua funcionando sem mudança em quem consome. Ver detalhe dos arquivos internos na Task 3. |
 | `routes/autotoca_iata.py` (criar) | Rotas `/api/autotoca/iata*`, persistência da hierarquia, task assíncrona, envio de e-mail. |
 | `public/js/autotoca-iata.js` (criar) | Painel, modal, visualização, edição e envio no frontend. |
 | `tests/test_iata.py` (criar) | Testes da lógica pura + testes de rota. |
@@ -1281,12 +1281,78 @@ Expected: PASS.
 git add integrations/iata.py tests/test_iata.py && git commit -m "feat(iata): prompt e parsing da hierarquia"
 ```
 
+**Addendum pós-revisão (mesma Task 3, commit seguinte):** a revisão de
+qualidade encontrou mais um descarte silencioso total de dado e dois
+ajustes menores, e pediu a divisão em pacote antes da Task 4. Registrado
+aqui para as tasks seguintes não reintroduzirem nenhum dos dois:
+
+1. **CRITICAL — coleção como mapa nome→objeto colapsava a hierarquia
+   inteira**, sem virar `None` e sem logar. `_as_item_list` tratava
+   qualquer `dict` recebido como "um item único" (`[value]`), sem
+   distinguir do caso, igualmente plausível num LLM sem grammar estrita,
+   de a coleção vir mapeada por nome: `{"Ana": {...}, "Bruno": {...}}` em
+   vez de `[{"name": "Ana", ...}, {"name": "Bruno", ...}]`. Reproduzido
+   nos três níveis (`managers`, `accounts`, `opportunities`). Corrigido
+   distinguindo os dois formatos por `item_keys` (parâmetro novo de
+   `_as_item_list`): se o dict tem alguma chave de item conhecida daquele
+   nível (`name`/`nome`, ou uma chave estrutural como `accounts`/
+   `contas`), é item único; senão, se todos os *valores* do dict são eles
+   próprios dicts, é mapa — a chave do mapa vira o `name` do item que não
+   tiver nome próprio. Ver a versão final de `_as_item_list` no arquivo
+   real (`integrations/iata/llm.py`).
+2. **IMPORTANT — `_loads_tolerante` rejeitava JSON válido por causa de
+   chave solta no texto ao redor.** O recorte do primeiro `{` ao último
+   `}` engole qualquer chave solta no texto explicativo antes ou depois
+   do JSON ("Segue conforme {template} solicitado: {...json...}"),
+   fazendo o parse do objeto central, perfeitamente válido, falhar
+   inteiro. Corrigido trocando o recorte por `json.JSONDecoder().raw_decode()`
+   a partir de cada posição de `{` (limitado a `_MAX_TENTATIVAS_RAW_DECODE
+   = 20` tentativas para não virar varredura quadrática), aceitando a
+   primeira que decodificar um `dict` válido — `raw_decode` para no fim do
+   objeto e ignora o que vem depois, então resolve lixo antes e depois ao
+   mesmo tempo.
+3. **MINOR — documentada a limitação do split de `participants` como
+   string única** (fragmenta "Bruno Costa, Diretor Comercial da Ambev" em
+   dois participantes falsos): aceita como está, só o docstring de
+   `_parse_participants` ganhou o aviso — não é perda de dado, o custo de
+   errar é um participante espúrio, não uma oportunidade desaparecendo.
+4. **Divisão em pacote, antes da Task 4** — ver "Estrutura de arquivos" no
+   topo do plano e a nota abaixo.
+
+```bash
+git add integrations/iata tests/test_iata.py docs/superpowers/plans/2026-08-04-iata-autotoca.md && git rm integrations/iata.py && git commit -m "fix(iata): mapa nome->objeto e raw_decode tolerante; divide em pacote"
+```
+
+**`integrations/iata.py` vira o pacote `integrations/iata/`** — motivo:
+`integrations/iata.py` já estava em ~560 linhas com duas responsabilidades
+ortogonais (reconciliação da Task 2, parsing/prompt da Task 3), e as Tasks
+4-5 adicionam uma terceira (renderização). Dividir agora, enquanto é
+barato, evita um arquivo de 800+ linhas nas Tasks seguintes. Estrutura:
+
+| Arquivo | Contém |
+|---|---|
+| `integrations/iata/__init__.py` | Reexporta tudo que é público (e `_loads_tolerante`, privado mas consumido diretamente pelas rotas nas Tasks 7-8) — `from integrations import iata as iata_lib` e `iata_lib.<qualquer coisa>` continuam funcionando sem mudança em quem consome. |
+| `integrations/iata/reconcile.py` | `normalize_name`, `reconcile`, `SEM_UPDATE`, `GERENTE_NAO_IDENTIFICADO` e helpers privados — conteúdo da Task 2. |
+| `integrations/iata/llm.py` | `build_extraction_prompt`, `parse_hierarchy`, `MAX_TRANSCRICAO_CHARS`, `_loads_tolerante` e helpers privados — conteúdo desta Task 3. Importa `GERENTE_NAO_IDENTIFICADO` de `.reconcile`. |
+| `integrations/iata/render.py` | Vazio (só docstring) — lar das Tasks 4 (`render_markdown`) e 5 (`render_email_html`, `email_subject`). |
+
+Nenhum import em `tests/test_iata.py` precisou mudar — `from integrations
+import iata as iata_lib` já resolve para o pacote automaticamente.
+
+**Tasks 4, 5, 6, 7, 8 e 9 abaixo foram atualizadas** para apontar para o
+arquivo certo dentro do pacote em vez do antigo `integrations/iata.py`
+monolítico — Task 4 e 5 modificam `integrations/iata/render.py`
+especificamente (não os outros dois arquivos do pacote).
+
 ---
 
 ### Task 4: Renderização em texto (markdown)
 
 **Files:**
-- Modify: `integrations/iata.py`
+- Modify: `integrations/iata/render.py` (o pacote agora divide o antigo
+  `integrations/iata.py` — ver nota de divisão ao final da Task 3;
+  `render_markdown` importa `GERENTE_NAO_IDENTIFICADO` de `.reconcile` e
+  `_clean_null` de `.llm`, e precisa ser reexportado em `__init__.py`)
 - Test: `tests/test_iata.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1421,7 +1487,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add integrations/iata.py tests/test_iata.py && git commit -m "feat(iata): render da ata em texto"
+git add integrations/iata/render.py integrations/iata/__init__.py tests/test_iata.py && git commit -m "feat(iata): render da ata em texto"
 ```
 
 ---
@@ -1429,7 +1495,8 @@ git add integrations/iata.py tests/test_iata.py && git commit -m "feat(iata): re
 ### Task 5: HTML do e-mail
 
 **Files:**
-- Modify: `integrations/iata.py`
+- Modify: `integrations/iata/render.py` (mesmo arquivo da Task 4, dentro do
+  pacote; `email_subject` provavelmente usa `_clean_null` de `.llm` também)
 - Test: `tests/test_iata.py`
 
 Cliente de e-mail descarta `<style>` no `<head>` e ignora indentação de texto — por isso o HTML sai com `<ul>` aninhado de verdade e estilo inline em cada elemento.
@@ -1577,7 +1644,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add integrations/iata.py tests/test_iata.py && git commit -m "feat(iata): html do e-mail com ul aninhado e estilo inline"
+git add integrations/iata/render.py integrations/iata/__init__.py tests/test_iata.py && git commit -m "feat(iata): html do e-mail com ul aninhado e estilo inline"
 ```
 
 ---
@@ -2315,7 +2382,9 @@ git add routes/autotoca_iata.py tests/test_iata.py && git commit -m "feat(iata):
 
 **Files:**
 - Modify: `routes/autotoca_iata.py`
-- Modify: `integrations/iata.py` (prompt de re-parse)
+- Modify: `integrations/iata/llm.py` (prompt de re-parse — mesmo arquivo de
+  `build_extraction_prompt`/`parse_hierarchy`; reexportar `build_reparse_prompt`
+  em `integrations/iata/__init__.py`)
 - Test: `tests/test_iata.py`
 
 Regra do desenho: o texto do usuário é gravado **antes** do re-parse. Se o
@@ -2385,7 +2454,7 @@ def test_put_body_vazio_retorna_400(client, db_path):
 Run: `python -m pytest tests/test_iata.py -k put_body -v`
 Expected: FAIL — 405/404 (rota inexistente).
 
-- [ ] **Step 3: Implementar o prompt de re-parse em `integrations/iata.py`**
+- [ ] **Step 3: Implementar o prompt de re-parse em `integrations/iata/llm.py`**
 
 ```python
 def build_reparse_prompt(body_markdown):
@@ -2492,7 +2561,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add routes/autotoca_iata.py integrations/iata.py tests/test_iata.py && git commit -m "feat(iata): edicao do texto com reparse tolerante a falha"
+git add routes/autotoca_iata.py integrations/iata/llm.py integrations/iata/__init__.py tests/test_iata.py && git commit -m "feat(iata): edicao do texto com reparse tolerante a falha"
 ```
 
 ---

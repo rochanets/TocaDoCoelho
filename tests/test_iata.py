@@ -637,3 +637,102 @@ def test_parse_hierarchy_participantes_como_string_unica_nao_vira_caracteres():
     parsed = iata_lib.parse_hierarchy(raw)
     assert parsed['header']['participants'] == [
         {'name': 'Ana', 'role': ''}, {'name': 'Bruno', 'role': ''}]
+
+
+# --- Achados da revisão de qualidade: coleção como mapa nome->objeto -------
+
+
+def test_parse_hierarchy_managers_como_mapa_nao_colapsa_a_ata():
+    """CRITICAL: 'managers' devolvido como {"Ana": {...}, "Bruno": {...}}
+    (mapa nome->objeto) é tão plausível quanto objeto único sem grammar
+    estrita. Tratá-lo como item único produziria UM gerente vazio
+    'Gerente não identificado' com accounts: [] — a ata inteira some, sem
+    virar None e sem logar nada."""
+    raw = json.dumps({'title': 'X', 'managers': {
+        'Ana': {'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Migração SAP', 'update': 'Proposta enviada'}]}]},
+        'Bruno': {'accounts': [{'name': 'Vale', 'opportunities': [
+            {'name': 'Data Lake', 'update': 'POC em andamento'}]}]},
+    }})
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    nomes = {m['name'] for m in parsed['managers']}
+    assert nomes == {'Ana', 'Bruno'}
+    ana = [m for m in parsed['managers'] if m['name'] == 'Ana'][0]
+    assert ana['accounts'][0]['name'] == 'Ambev'
+    bruno = [m for m in parsed['managers'] if m['name'] == 'Bruno'][0]
+    assert bruno['accounts'][0]['name'] == 'Vale'
+
+
+def test_parse_hierarchy_accounts_como_mapa_nao_apaga_contas_e_oportunidades():
+    """CRITICAL: 'accounts' como mapa {"Ambev": {...}, "Vale": {...}} vira
+    UMA conta vazia se tratado como item único — as contas reais e todas as
+    oportunidades delas somem."""
+    raw = json.dumps({'title': 'X', 'managers': [{'name': 'Ana', 'accounts': {
+        'Ambev': {'opportunities': [{'name': 'Migração SAP', 'update': 'Fechado'}]},
+        'Vale': {'opportunities': [{'name': 'Data Lake', 'update': 'POC'}]},
+    }}]})
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    contas = {a['name']: a for a in parsed['managers'][0]['accounts']}
+    assert set(contas) == {'Ambev', 'Vale'}
+    assert contas['Ambev']['opportunities'][0]['name'] == 'Migração SAP'
+    assert contas['Vale']['opportunities'][0]['name'] == 'Data Lake'
+
+
+def test_parse_hierarchy_opportunities_como_mapa_usa_chave_como_nome():
+    """CRITICAL: 'opportunities' como mapa nome->objeto some se tratado como
+    item único. A chave do mapa deve preencher o `name` quando o objeto
+    interno não tiver nome próprio, para não perder nem esse dado."""
+    raw = json.dumps({'title': 'X', 'managers': [{'name': 'Ana', 'accounts': [
+        {'name': 'Ambev', 'opportunities': {
+            'Migração SAP': {'update': 'Proposta enviada', 'responsible': 'Bruno'},
+            'Observabilidade': {'update': 'Aguardando budget'},
+        }}]}]})
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    opps = {o['name']: o for o in parsed['managers'][0]['accounts'][0]['opportunities']}
+    assert set(opps) == {'Migração SAP', 'Observabilidade'}
+    assert opps['Migração SAP']['update_text'] == 'Proposta enviada'
+    assert opps['Migração SAP']['responsible'] == 'Bruno'
+    assert opps['Observabilidade']['update_text'] == 'Aguardando budget'
+
+
+# --- Achados da revisão de qualidade: raw_decode em vez de recorte ingênuo -
+
+
+def test_parse_hierarchy_json_com_chave_solta_no_texto_antes():
+    """IMPORTANT: recortar do primeiro '{' ao último '}' engole uma chave
+    solta no texto explicativo antes do JSON, quebrando o parse do objeto
+    perfeitamente válido que vem depois."""
+    payload = json.dumps({'title': 'X', 'managers': []})
+    raw = 'Segue conforme {template} solicitado:\n' + payload
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed is not None
+    assert parsed['header']['title'] == 'X'
+
+
+def test_parse_hierarchy_json_com_chave_solta_no_texto_depois():
+    payload = json.dumps({'title': 'X', 'managers': []})
+    raw = payload + '\n(obs: aguardando retorno da {diretoria})'
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed is not None
+    assert parsed['header']['title'] == 'X'
+
+
+def test_parse_hierarchy_json_com_chave_solta_antes_e_depois():
+    payload = json.dumps({'title': 'X', 'managers': []})
+    raw = ('Segue conforme {template} solicitado:\n' + payload +
+           '\n(obs: aguardando retorno da {diretoria})')
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed is not None
+    assert parsed['header']['title'] == 'X'
