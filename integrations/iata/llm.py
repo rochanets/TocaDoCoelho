@@ -70,8 +70,12 @@ def _tentar_json(texto):
 
 # Limite de posições de '{' tentadas por _raw_decode_a_partir_de — evita
 # varredura quadrática (uma tentativa de parse por posição) em uma resposta
-# de LLM anormalmente longa cheia de chaves soltas.
-_MAX_TENTATIVAS_RAW_DECODE = 20
+# de LLM anormalmente longa cheia de chaves soltas. O valor é folgado de
+# propósito: um modelo que ecoa o schema pedido no prompt antes de responder
+# já produz várias chaves soltas, e o custo medido de tentar centenas de
+# posições fica na casa dos microssegundos — um cap apertado rejeitaria uma
+# resposta boa, que é o erro caro aqui.
+_MAX_TENTATIVAS_RAW_DECODE = 500
 
 _decoder_json = json.JSONDecoder()
 

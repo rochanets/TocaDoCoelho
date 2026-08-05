@@ -717,6 +717,19 @@ def test_parse_hierarchy_json_com_chave_solta_no_texto_antes():
     assert parsed['header']['title'] == 'X'
 
 
+def test_parse_hierarchy_json_apos_muitas_chaves_soltas():
+    """Um modelo que ecoa o schema pedido no prompt antes de responder produz
+    dezenas de chaves soltas: o cap de tentativas do raw_decode não pode ser
+    apertado a ponto de rejeitar o JSON bom que vem logo depois."""
+    payload = json.dumps({'title': 'X', 'managers': []})
+    raw = ''.join('{campo%d} ' % i for i in range(30)) + payload
+
+    parsed = iata_lib.parse_hierarchy(raw)
+
+    assert parsed is not None
+    assert parsed['header']['title'] == 'X'
+
+
 def test_parse_hierarchy_json_com_chave_solta_no_texto_depois():
     payload = json.dumps({'title': 'X', 'managers': []})
     raw = payload + '\n(obs: aguardando retorno da {diretoria})'
