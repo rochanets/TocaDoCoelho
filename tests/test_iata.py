@@ -894,3 +894,21 @@ def test_render_email_subject_usa_titulo_e_data():
 def test_render_email_subject_sem_data():
     header = dict(_header_exemplo(), meeting_date=None)
     assert iata_lib.email_subject(header) == 'Ata — Pipeline Semanal'
+
+
+def test_render_extras_com_item_fora_do_formato_nao_some_da_ata():
+    """A IA às vezes devolve next_steps/insights como string solta em vez do
+    objeto estruturado. Descartar o item silenciosamente esconde do usuário
+    uma ação real combinada na reunião — entra como texto cru."""
+    extras = {'next_steps': ['Enviar proposta até sexta',
+                             {'action': 'Agendar POC', 'responsible': 'Ana'}],
+              'insights': ['Cliente reclamou do custo de licença']}
+
+    texto = iata_lib.render_markdown(_header_exemplo(), _managers_exemplo(), extras)
+    assert 'Enviar proposta até sexta' in texto
+    assert 'Agendar POC' in texto
+    assert 'Cliente reclamou do custo de licença' in texto
+
+    html = iata_lib.render_email_html(_header_exemplo(), _managers_exemplo(), extras)
+    assert 'Enviar proposta até sexta' in html
+    assert 'Cliente reclamou do custo de licença' in html

@@ -21,6 +21,46 @@ def _clean_null(value):
     return None if not v or v.lower() in ('null', 'none', 'n/a', '-') else v
 
 
+def _linhas_de_passos(passos):
+    """Texto de cada item de 'Próximos passos'.
+
+    Um item que não veio como dict (a IA às vezes devolve `["Enviar proposta
+    até sexta"]` em vez do objeto com action/responsible/deadline) entra como
+    texto cru em vez de sumir da ata — mesmo princípio do rótulo de conta sem
+    nome: melhor exibir algo imperfeito do que descartar em silêncio."""
+    saida = []
+    for passo in (passos or []):
+        if not isinstance(passo, dict):
+            texto = str(passo).strip()
+            if texto:
+                saida.append(texto)
+            continue
+        prazo = _clean_null(passo.get('deadline'))
+        sufixo = f" (prazo: {prazo})" if prazo else ''
+        saida.append(
+            f"{(passo.get('action') or '').strip()} — "
+            f"{(passo.get('responsible') or 'A definir').strip()}{sufixo}"
+        )
+    return saida
+
+
+def _linhas_de_insights(insights):
+    """Texto de cada insight. Item fora do formato entra como texto cru, pelo
+    mesmo motivo de `_linhas_de_passos`."""
+    saida = []
+    for insight in (insights or []):
+        if not isinstance(insight, dict):
+            texto = str(insight).strip()
+            if texto:
+                saida.append(texto)
+            continue
+        oferta = _clean_null(insight.get('matched_offer')) or 'sem solução mapeada'
+        obs = (insight.get('observation') or '').strip()
+        saida.append(f"{(insight.get('pain') or '').strip()} → {oferta}"
+                     + (f" — {obs}" if obs else ''))
+    return saida
+
+
 def render_markdown(header, managers, extras=None):
     """Renderiza a ata em texto plano com bullets aninhados: conta com `*`,
     oportunidade indentada, Update e Responsável mais indentados ainda."""
@@ -58,27 +98,12 @@ def render_markdown(header, managers, extras=None):
             linhas.extend(f'  * {i}' for i in itens)
             linhas.append('')
 
-    passos = [s for s in (extras.get('next_steps') or []) if isinstance(s, dict)]
-    if passos:
-        linhas.append('Próximos passos')
-        for s in passos:
-            prazo = _clean_null(s.get('deadline'))
-            sufixo = f" (prazo: {prazo})" if prazo else ''
-            linhas.append(
-                f"  * {(s.get('action') or '').strip()} — "
-                f"{(s.get('responsible') or 'A definir').strip()}{sufixo}"
-            )
-        linhas.append('')
-
-    insights = [i for i in (extras.get('insights') or []) if isinstance(i, dict)]
-    if insights:
-        linhas.append('Insights de negócio')
-        for i in insights:
-            oferta = _clean_null(i.get('matched_offer')) or 'sem solução mapeada'
-            obs = (i.get('observation') or '').strip()
-            linhas.append(f"  * {(i.get('pain') or '').strip()} → {oferta}"
-                          + (f" — {obs}" if obs else ''))
-        linhas.append('')
+    for titulo, itens in (('Próximos passos', _linhas_de_passos(extras.get('next_steps'))),
+                          ('Insights de negócio', _linhas_de_insights(extras.get('insights')))):
+        if itens:
+            linhas.append(titulo)
+            linhas.extend(f'  * {i}' for i in itens)
+            linhas.append('')
 
     return '\n'.join(linhas).rstrip() + '\n'
 
@@ -162,28 +187,13 @@ def render_email_html(header, managers, extras=None):
             partes.extend(f'<li style="{_ESTILO_LI}">{_escape(i)}</li>' for i in itens)
             partes.append('</ul>')
 
-    passos = [s for s in (extras.get('next_steps') or []) if isinstance(s, dict)]
-    if passos:
-        partes.append('<p style="margin:16px 0 4px;"><strong>Próximos passos</strong></p>')
-        partes.append(f'<ul style="{_ESTILO_UL}">')
-        for s in passos:
-            prazo = _clean_null(s.get('deadline'))
-            texto = (f"{(s.get('action') or '').strip()} — "
-                     f"{(s.get('responsible') or 'A definir').strip()}"
-                     + (f" (prazo: {prazo})" if prazo else ''))
-            partes.append(f'<li style="{_ESTILO_LI}">{_escape(texto)}</li>')
-        partes.append('</ul>')
-
-    insights = [i for i in (extras.get('insights') or []) if isinstance(i, dict)]
-    if insights:
-        partes.append('<p style="margin:16px 0 4px;"><strong>Insights de negócio</strong></p>')
-        partes.append(f'<ul style="{_ESTILO_UL}">')
-        for i in insights:
-            oferta = _clean_null(i.get('matched_offer')) or 'sem solução mapeada'
-            obs = (i.get('observation') or '').strip()
-            texto = f"{(i.get('pain') or '').strip()} → {oferta}" + (f" — {obs}" if obs else '')
-            partes.append(f'<li style="{_ESTILO_LI}">{_escape(texto)}</li>')
-        partes.append('</ul>')
+    for titulo, itens in (('Próximos passos', _linhas_de_passos(extras.get('next_steps'))),
+                          ('Insights de negócio', _linhas_de_insights(extras.get('insights')))):
+        if itens:
+            partes.append(f'<p style="margin:16px 0 4px;"><strong>{titulo}</strong></p>')
+            partes.append(f'<ul style="{_ESTILO_UL}">')
+            partes.extend(f'<li style="{_ESTILO_LI}">{_escape(i)}</li>' for i in itens)
+            partes.append('</ul>')
 
     partes.append('</div>')
     return ''.join(partes)
