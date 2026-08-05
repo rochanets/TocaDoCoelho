@@ -1,18 +1,38 @@
 # -*- coding: utf-8 -*-
-"""Lógica pura do iAta: normalização, parsing da resposta da IA, reconciliação
-com a ata anterior e renderização. Sem Flask, sem SQLite, sem rede — tudo aqui
-é testável isoladamente."""
+"""Lógica pura do iAta: normalização de nomes e reconciliação da hierarquia
+extraída de uma reunião com a da ata anterior. Sem Flask, sem SQLite, sem
+rede — tudo aqui é testável isoladamente. Parsing da resposta da IA e
+renderização (texto/e-mail) chegam em tasks futuras e vão crescer neste mesmo
+arquivo."""
 
 import difflib
+import logging
 import re
 import unicodedata
 
 SEM_UPDATE = 'Sem update nesta reunião'
 GERENTE_NAO_IDENTIFICADO = 'Gerente não identificado'
 
-# Acima deste ponto de similaridade dois nomes são considerados candidatos ao
-# mesmo negócio — mas não match automático: quem decide é o resolver.
+# Acima deste ponto de similaridade dois nomes de OPORTUNIDADE são
+# considerados candidatos ao mesmo negócio — mas não match automático: quem
+# decide é o resolver.
 _LIMIAR_AMBIGUIDADE = 0.75
+
+# Cutoff para casar CONTA anterior por similaridade quando não há match exato
+# de nome normalizado (I2). Deliberadamente alto: um falso positivo aqui
+# funde duas contas de fato diferentes no mesmo bloco da ata, o que é pior
+# do que exibi-las duplicadas — preferimos perder alguns matches de grafia
+# muito distinta a arriscar fundir contas distintas.
+_LIMIAR_CONTA = 0.85
+
+# Prefixo de chave sintética para contas cujo nome não normaliza para nada
+# (nome vazio/só pontuação vindo de uma extração ruidosa da IA). Cada
+# ocorrência recebe uma chave própria — nunca colide com uma conta nomeada
+# — para que a conta ainda seja recuperada como carried over (C3) em vez de
+# simplesmente descartada.
+_SYNTHETIC_ACCOUNT_PREFIX = '\x00__conta_sem_nome__'
+
+_logger = logging.getLogger(__name__)
 
 
 def normalize_name(value):
@@ -24,42 +44,105 @@ def normalize_name(value):
 
 
 def _index_anterior(previous_managers):
-    """{(conta_norm, opp_norm): dados} + {conta_norm: (gerente, conta, [opps])}."""
+    """Indexa a ata anterior para consulta durante a reconciliação.
+
+    Retorna `(por_opp, por_conta)`:
+    - `por_conta`: chave de conta -> {'manager', 'name', 'account_id',
+      'opportunities': [{'idx': int, 'data': opp}, ...]}. A chave é o nome de
+      conta normalizado, ou uma chave sintética para contas sem nome (C3).
+    - `por_opp`: (chave_conta, nome_opp_normalizado) -> lista de
+      `{'idx': int, 'data': opp}` — lista, não item único, porque duas
+      oportunidades homônimas na mesma conta são um cenário real (C2) e não
+      podem se fundir numa só.
+
+    Cada oportunidade anterior recebe um `idx` sequencial único (não é o
+    `id` do banco, que pode ser `None`) — é essa identidade interna, e não o
+    nome, que controla o que já foi "consumido" durante a reconciliação.
+    """
     por_opp, por_conta = {}, {}
+    idx_counter = 0
+    contador_sem_nome = 0
     for manager in (previous_managers or []):
         gerente = (manager.get('name') or '').strip() or GERENTE_NAO_IDENTIFICADO
         for account in (manager.get('accounts') or []):
             conta_norm = normalize_name(account.get('name'))
-            if not conta_norm:
-                continue
-            opps = list(account.get('opportunities') or [])
-            por_conta.setdefault(conta_norm, {
-                'manager': gerente,
-                'name': (account.get('name') or '').strip(),
-                'account_id': account.get('account_id'),
-                'opportunities': opps,
-            })
-            for opp in opps:
-                chave = (conta_norm, normalize_name(opp.get('name')))
-                por_opp.setdefault(chave, opp)
+            if conta_norm:
+                conta_key = conta_norm
+            else:
+                conta_key = f'{_SYNTHETIC_ACCOUNT_PREFIX}{contador_sem_nome}'
+                contador_sem_nome += 1
+
+            entry = por_conta.get(conta_key)
+            if entry is None:
+                # C1: a mesma conta pode aparecer sob gerentes diferentes na
+                # ata anterior (ela pode ter trocado de dono entre reuniões).
+                # Mesclamos as oportunidades de todas as ocorrências em vez
+                # de perder as do segundo bloco — mantendo o primeiro
+                # gerente visto como dono "de fato" só para fins de
+                # posicionamento de itens carried over.
+                entry = {
+                    'manager': gerente,
+                    'name': (account.get('name') or '').strip(),
+                    'account_id': account.get('account_id'),
+                    'opportunities': [],
+                }
+                por_conta[conta_key] = entry
+            elif not entry.get('account_id') and account.get('account_id'):
+                entry['account_id'] = account.get('account_id')
+
+            for opp in (account.get('opportunities') or []):
+                item = {'idx': idx_counter, 'data': opp}
+                idx_counter += 1
+                entry['opportunities'].append(item)
+                chave = (conta_key, normalize_name(opp.get('name')))
+                por_opp.setdefault(chave, []).append(item)
     return por_opp, por_conta
+
+
+def _match_previous_account_key(conta_norm, por_conta, contas_nomeadas_norms):
+    """Acha a chave, em `por_conta`, da conta anterior correspondente à
+    conta atual `conta_norm`: nome normalizado exato primeiro; se não
+    achar, similaridade com cutoff conservador (I2) — ver `_LIMIAR_CONTA`.
+    """
+    if not conta_norm:
+        return None
+    if conta_norm in por_conta:
+        return conta_norm
+    matches = difflib.get_close_matches(
+        conta_norm, contas_nomeadas_norms, n=1, cutoff=_LIMIAR_CONTA)
+    return matches[0] if matches else None
 
 
 def reconcile(current_managers, previous_managers, resolver=None):
     """Casa a hierarquia extraída da reunião nova com a da ata anterior.
 
-    - match exato por nome normalizado (conta + oportunidade) -> carrega status;
+    - match exato por nome normalizado (conta + oportunidade) -> carrega
+      status, `match_confidence='alta'`;
     - nenhum candidato -> oportunidade nova;
-    - mais de um candidato parecido -> delega ao `resolver`, chamado UMA vez com
-      a lista de pares ambíguos; sem resolver, vira nova com confiança 'baixa';
+    - mais de um candidato parecido -> delega ao `resolver`, chamado UMA vez
+      com a lista de pares ambíguos; sem resolver (ou sem decisão para um
+      par), vira nova com confiança 'baixa';
     - o que estava na anterior e não apareceu -> entra com `carried_over` e
-      `update_text = SEM_UPDATE`.
+      `update_text = SEM_UPDATE`, na mesma conta/gerente que foi casada
+      (ou recriando o bloco, se a conta inteira sumiu da reunião nova).
 
     `resolver(pares) -> {indice_do_par: id_da_oportunidade_anterior | None}`.
+    Índices podem vir como string (ex.: de um JSON parseado) — são
+    normalizados para `int`. `None` (ou índice ausente do retorno) significa
+    "sem decisão", não "casou com uma oportunidade sem id" (I3). Se o
+    resolver devolver o mesmo id para dois pares diferentes, só o primeiro é
+    aceito — o segundo vira 'baixa' (I4). Uma exceção do resolver é
+    registrada via `logging` e tratada como "sem decisão para nenhum par",
+    nunca propagada (I6).
     """
     por_opp, por_conta = _index_anterior(previous_managers)
-    usados = set()
-    pendentes_ambiguos = []  # (opp_saida, conta_norm, candidatos)
+    contas_nomeadas_norms = [
+        k for k in por_conta if not k.startswith(_SYNTHETIC_ACCOUNT_PREFIX)]
+
+    usados_idx = set()
+    ids_reivindicados = set()
+    pendentes_ambiguos = []  # (opp_saida, candidatos)
+    matched_accounts = {}  # conta_key anterior -> dict de saída já criado
     resultado = []
 
     for manager in (current_managers or []):
@@ -67,7 +150,10 @@ def reconcile(current_managers, previous_managers, resolver=None):
         contas_saida = []
         for account in (manager.get('accounts') or []):
             conta_norm = normalize_name(account.get('name'))
-            anterior_conta = por_conta.get(conta_norm) or {}
+            conta_key = _match_previous_account_key(
+                conta_norm, por_conta, contas_nomeadas_norms)
+            anterior_conta = por_conta.get(conta_key) if conta_key else None
+
             opps_saida = []
             for opp in (account.get('opportunities') or []):
                 nome = (opp.get('name') or '').strip()
@@ -80,93 +166,144 @@ def reconcile(current_managers, previous_managers, resolver=None):
                     'prev_opportunity_id': None,
                     'match_confidence': None,
                 }
-                chave = (conta_norm, normalize_name(nome))
-                exato = por_opp.get(chave)
+                itens_candidatos = por_opp.get((conta_key, normalize_name(nome)), []) if conta_key else []
+                exato = next((it for it in itens_candidatos if it['idx'] not in usados_idx), None)
                 if exato is not None:
-                    usados.add(chave)
-                    saida['previous_status'] = (exato.get('update_text') or '').strip() or None
-                    saida['prev_opportunity_id'] = exato.get('id')
+                    usados_idx.add(exato['idx'])
+                    saida['previous_status'] = (exato['data'].get('update_text') or '').strip() or None
+                    saida['prev_opportunity_id'] = exato['data'].get('id')
+                    saida['match_confidence'] = 'alta'
                 else:
-                    candidatos = _candidatos_proximos(nome, anterior_conta.get('opportunities'))
+                    disponiveis = [
+                        it for it in (anterior_conta['opportunities'] if anterior_conta else [])
+                        if it['idx'] not in usados_idx
+                    ]
+                    candidatos = _candidatos_proximos(nome, disponiveis)
                     if candidatos:
-                        pendentes_ambiguos.append((saida, conta_norm, candidatos))
+                        pendentes_ambiguos.append((saida, candidatos))
                 opps_saida.append(saida)
-            contas_saida.append({
+
+            conta_saida = {
                 'name': (account.get('name') or '').strip(),
-                'account_id': account.get('account_id') or anterior_conta.get('account_id'),
+                'account_id': account.get('account_id') or (anterior_conta.get('account_id') if anterior_conta else None),
                 'match_confidence': account.get('match_confidence'),
                 'opportunities': opps_saida,
-            })
+            }
+            contas_saida.append(conta_saida)
+            if conta_key:
+                matched_accounts.setdefault(conta_key, conta_saida)
         resultado.append({'name': gerente, 'accounts': contas_saida})
 
-    _resolver_ambiguos(pendentes_ambiguos, resolver, usados)
-    _anexar_nao_citados(resultado, por_conta, usados)
+    _resolver_ambiguos(pendentes_ambiguos, resolver, usados_idx, ids_reivindicados)
+    _anexar_nao_citados(resultado, por_conta, usados_idx, matched_accounts)
     return resultado
 
 
-def _candidatos_proximos(nome, opps_anteriores):
+def _candidatos_proximos(nome, itens_anteriores):
     alvo = normalize_name(nome)
     if not alvo:
         return []
     achados = []
-    for opp in (opps_anteriores or []):
-        ratio = difflib.SequenceMatcher(None, alvo, normalize_name(opp.get('name'))).ratio()
+    for it in itens_anteriores:
+        ratio = difflib.SequenceMatcher(None, alvo, normalize_name(it['data'].get('name'))).ratio()
         if ratio >= _LIMIAR_AMBIGUIDADE:
-            achados.append(opp)
+            achados.append(it)
     return achados
 
 
-def _resolver_ambiguos(pendentes, resolver, usados):
+def _resolver_ambiguos(pendentes, resolver, usados_idx, ids_reivindicados):
     if not pendentes:
         return
     if resolver is None:
-        for saida, _conta_norm, _cands in pendentes:
+        for saida, _itens in pendentes:
             saida['match_confidence'] = 'baixa'
         return
+
     pares = [
         {'index': i, 'nome_novo': saida['name'],
-         'candidatos': [{'id': c.get('id'), 'nome': c.get('name')} for c in cands]}
-        for i, (saida, _cn, cands) in enumerate(pendentes)
+         'candidatos': [{'id': it['data'].get('id'), 'nome': it['data'].get('name')} for it in itens]}
+        for i, (saida, itens) in enumerate(pendentes)
     ]
     try:
         decisoes = resolver(pares) or {}
     except Exception:
+        # I6: uma queda do resolver (ex.: chamada de LLM) não pode ficar
+        # indistinguível de "não havia match" — registra o rastro e segue
+        # tratando todos os pares como sem decisão.
+        _logger.warning('resolver de reconciliação do iAta falhou; tratando '
+                         'pares ambíguos como novos', exc_info=True)
         decisoes = {}
-    for i, (saida, conta_norm, cands) in enumerate(pendentes):
-        escolhido = decisoes.get(i)
-        casado = next((c for c in cands if c.get('id') == escolhido), None)
-        if casado is None:
+
+    # I5: um resolver que parseia JSON devolve chaves string ("0"); sem essa
+    # normalização todos os pares cairiam em "sem decisão" silenciosamente.
+    decisoes_norm = {}
+    for k, v in decisoes.items():
+        try:
+            decisoes_norm[int(k)] = v
+        except (TypeError, ValueError):
+            continue
+
+    for i, (saida, itens) in enumerate(pendentes):
+        # I3: índice ausente ou valor None é "não decidi" — não deve ser
+        # tratado como "decidi casar com um candidato sem id".
+        if i not in decisoes_norm or decisoes_norm[i] is None:
             saida['match_confidence'] = 'baixa'
             continue
-        saida['prev_opportunity_id'] = casado.get('id')
-        saida['previous_status'] = (casado.get('update_text') or '').strip() or None
-        usados.add((conta_norm, normalize_name(casado.get('name'))))
+        escolhido = decisoes_norm[i]
+        # I4: o mesmo id não pode ser reivindicado por dois pares — o
+        # segundo a chegar vira 'baixa' em vez de duplicar o carregamento.
+        if escolhido in ids_reivindicados:
+            saida['match_confidence'] = 'baixa'
+            continue
+        item = next((it for it in itens
+                     if it['data'].get('id') == escolhido and it['idx'] not in usados_idx), None)
+        if item is None:
+            saida['match_confidence'] = 'baixa'
+            continue
+        usados_idx.add(item['idx'])
+        ids_reivindicados.add(escolhido)
+        saida['prev_opportunity_id'] = item['data'].get('id')
+        saida['previous_status'] = (item['data'].get('update_text') or '').strip() or None
+        saida['match_confidence'] = 'alta'
 
 
-def _anexar_nao_citados(resultado, por_conta, usados):
+def _anexar_nao_citados(resultado, por_conta, usados_idx, matched_accounts):
     """Tudo que estava na ata anterior e não apareceu na reunião nova entra
     como carried_over — garantido por código, não pelo modelo."""
-    por_gerente = {m['name']: m for m in resultado}
-    for conta_norm, dados in por_conta.items():
-        faltantes = [
-            opp for opp in dados['opportunities']
-            if (conta_norm, normalize_name(opp.get('name'))) not in usados
-        ]
+    # I1: gerentes são casados por nome normalizado, não por string exata —
+    # "ANA PAULA" e "Ana Paula" são a mesma pessoa. Duas pessoas distintas
+    # que por acaso normalizam para o mesmo nome colapsam no mesmo bloco;
+    # essa é uma decisão deliberada (o dado de entrada não nos dá como
+    # diferenciá-las de outra forma), não um efeito colateral de dict.
+    por_gerente = {}
+    for m in resultado:
+        por_gerente.setdefault(normalize_name(m['name']), m)
+
+    for conta_key, dados in por_conta.items():
+        faltantes = [it for it in dados['opportunities'] if it['idx'] not in usados_idx]
         if not faltantes:
             continue
-        gerente = por_gerente.get(dados['manager'])
-        if gerente is None:
-            gerente = {'name': dados['manager'], 'accounts': []}
-            por_gerente[dados['manager']] = gerente
-            resultado.append(gerente)
-        conta = next((a for a in gerente['accounts']
-                      if normalize_name(a['name']) == conta_norm), None)
-        if conta is None:
-            conta = {'name': dados['name'], 'account_id': dados.get('account_id'),
-                     'match_confidence': None, 'opportunities': []}
-            gerente['accounts'].append(conta)
-        for opp in faltantes:
-            conta['opportunities'].append({
+
+        destino = matched_accounts.get(conta_key)
+        if destino is None:
+            gerente_norm = normalize_name(dados['manager'])
+            gerente = por_gerente.get(gerente_norm)
+            if gerente is None:
+                gerente = {'name': dados['manager'], 'accounts': []}
+                por_gerente[gerente_norm] = gerente
+                resultado.append(gerente)
+            destino = {
+                'name': dados['name'],
+                'account_id': dados.get('account_id'),
+                'match_confidence': None,
+                'opportunities': [],
+            }
+            gerente['accounts'].append(destino)
+            matched_accounts[conta_key] = destino
+
+        for it in faltantes:
+            opp = it['data']
+            destino['opportunities'].append({
                 'name': (opp.get('name') or '').strip(),
                 'update_text': SEM_UPDATE,
                 'responsible': (opp.get('responsible') or '').strip() or dados['manager'],
