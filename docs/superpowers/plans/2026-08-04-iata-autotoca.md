@@ -1334,7 +1334,7 @@ barato, evita um arquivo de 800+ linhas nas Tasks seguintes. Estrutura:
 | `integrations/iata/__init__.py` | Reexporta tudo que é público (e `_loads_tolerante`, privado mas consumido diretamente pelas rotas nas Tasks 7-8) — `from integrations import iata as iata_lib` e `iata_lib.<qualquer coisa>` continuam funcionando sem mudança em quem consome. |
 | `integrations/iata/reconcile.py` | `normalize_name`, `reconcile`, `SEM_UPDATE`, `GERENTE_NAO_IDENTIFICADO` e helpers privados — conteúdo da Task 2. |
 | `integrations/iata/llm.py` | `build_extraction_prompt`, `parse_hierarchy`, `MAX_TRANSCRICAO_CHARS`, `_loads_tolerante` e helpers privados — conteúdo desta Task 3. Importa `GERENTE_NAO_IDENTIFICADO` de `.reconcile`. |
-| `integrations/iata/render.py` | Vazio (só docstring) — lar das Tasks 4 (`render_markdown`) e 5 (`render_email_html`, `email_subject`). |
+| `integrations/iata/render.py` | Tasks 4 e 5 concluídas — `render_markdown`, `render_email_html`, `email_subject`. |
 
 Nenhum import em `tests/test_iata.py` precisou mudar — `from integrations
 import iata as iata_lib` já resolve para o pacote automaticamente.
@@ -1355,7 +1355,7 @@ especificamente (não os outros dois arquivos do pacote).
   `_clean_null` de `.llm`, e precisa ser reexportado em `__init__.py`)
 - Test: `tests/test_iata.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def _header_exemplo():
@@ -1411,14 +1411,27 @@ def test_render_markdown_sem_extras_nao_cria_secoes_vazias():
     assert 'Decisões' not in texto and 'Insights de negócio' not in texto
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_iata.py -k render_markdown -v`
 Expected: FAIL — `has no attribute 'render_markdown'`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
+
+**Correção pós-revisão:** a versão original desta referência renderizava
+conta/oportunidade sem nome como `f"  * {account.get('name') or ''}"` — um
+bullet vazio (`"  * "`) que não deixa claro pro usuário que existe algo ali.
+A Task 3 preservou deliberadamente esses blocos sem nome em vez de
+descartá-los (podem ter update/responsável reais), e deixou a decisão de
+rótulo para a renderização — então a implementação final usa
+`CONTA_SEM_NOME = 'Conta sem nome'` e
+`OPORTUNIDADE_SEM_NOME = 'Oportunidade sem nome'` como fallback visível.
 
 ```python
+CONTA_SEM_NOME = 'Conta sem nome'
+OPORTUNIDADE_SEM_NOME = 'Oportunidade sem nome'
+
+
 def render_markdown(header, managers, extras=None):
     header = header or {}
     linhas = [
@@ -1437,10 +1450,10 @@ def render_markdown(header, managers, extras=None):
         linhas.append(f"Gerente Comercial: {manager.get('name') or GERENTE_NAO_IDENTIFICADO}")
         linhas.append('')
         for account in (manager.get('accounts') or []):
-            linhas.append(f"  * {account.get('name') or ''}")
+            linhas.append(f"  * {(account.get('name') or '').strip() or CONTA_SEM_NOME}")
             for opp in (account.get('opportunities') or []):
                 status = (opp.get('previous_status') or '').strip()
-                titulo = opp.get('name') or ''
+                titulo = (opp.get('name') or '').strip() or OPORTUNIDADE_SEM_NOME
                 linhas.append(f"     * {titulo}: {status}" if status else f"     * {titulo}")
                 linhas.append(f"        * Update: {(opp.get('update_text') or '').strip()}")
                 linhas.append(f"        * Responsável: {(opp.get('responsible') or '').strip()}")
@@ -1479,12 +1492,12 @@ def render_markdown(header, managers, extras=None):
     return '\n'.join(linhas).rstrip() + '\n'
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_iata.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add integrations/iata/render.py integrations/iata/__init__.py tests/test_iata.py && git commit -m "feat(iata): render da ata em texto"
@@ -1501,7 +1514,7 @@ git add integrations/iata/render.py integrations/iata/__init__.py tests/test_iat
 
 Cliente de e-mail descarta `<style>` no `<head>` e ignora indentação de texto — por isso o HTML sai com `<ul>` aninhado de verdade e estilo inline em cada elemento.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_render_email_html_usa_ul_aninhado_e_estilo_inline():
@@ -1528,12 +1541,19 @@ def test_render_email_subject_sem_data():
     assert iata_lib.email_subject(header) == 'Ata — Pipeline Semanal'
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_iata.py -k email -v`
 Expected: FAIL — `has no attribute 'render_email_html'`.
 
-- [ ] **Step 3: Implementar**
+**Correção pós-revisão:** pelo mesmo motivo do render de texto (Task 4), a
+versão original renderizava conta/oportunidade sem nome como
+`_escape(account.get("name") or "")` — resulta em `<strong></strong>` vazio,
+sem indicar pro usuário que existe algo ali. A implementação final reusa
+`CONTA_SEM_NOME`/`OPORTUNIDADE_SEM_NOME` (definidas em `render.py` pela
+Task 4) como fallback.
+
+- [x] **Step 3: Implementar**
 
 ```python
 from html import escape as _escape
@@ -1576,14 +1596,15 @@ def render_email_html(header, managers, extras=None):
         )
         partes.append(f'<ul style="{_ESTILO_UL}">')
         for account in (manager.get('accounts') or []):
+            nome_conta = (account.get('name') or '').strip() or CONTA_SEM_NOME
             partes.append(
                 f'<li style="{_ESTILO_LI}"><strong>'
-                f'{_escape(account.get("name") or "")}</strong>'
+                f'{_escape(nome_conta)}</strong>'
             )
             partes.append(f'<ul style="{_ESTILO_UL}">')
             for opp in (account.get('opportunities') or []):
                 status = (opp.get('previous_status') or '').strip()
-                rotulo = _escape(opp.get('name') or '')
+                rotulo = _escape((opp.get('name') or '').strip() or OPORTUNIDADE_SEM_NOME)
                 if status:
                     rotulo += ': ' + _escape(status)
                 partes.append(f'<li style="{_ESTILO_LI}">{rotulo}')
@@ -1636,12 +1657,12 @@ def render_email_html(header, managers, extras=None):
     return ''.join(partes)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_iata.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add integrations/iata/render.py integrations/iata/__init__.py tests/test_iata.py && git commit -m "feat(iata): html do e-mail com ul aninhado e estilo inline"
