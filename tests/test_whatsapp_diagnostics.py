@@ -163,3 +163,59 @@ def test_whatsapp_scope_matches_active_contacts_with_phone(client):
         'active_without_phone': 1,
         'archived_with_phone': 1,
     }
+
+
+def test_tentar_novamente_reinicia_sessao_mesmo_com_erro_fixado(client, db_path, monkeypatch):
+    """Regressão do impasse que matou a sincronia em produção (05/08).
+
+    Quando o sidecar esgota as 3 reciclagens ele fixa a mensagem de erro no
+    /api/sessions. A condição antiga (`start and not waha_err`) fazia essa
+    mensagem impedir o próprio /start que a limparia — o botão "Tentar
+    novamente" virava no-op e só reiniciar o app resolvia, mesmo depois de a
+    causa (Chrome órfão) já ter desaparecido.
+    """
+    import app as toca
+
+    erro_fixado = ('Não foi possível conectar após 3 tentativas (browser já estava '
+                   'rodando (lock órfão)). Abra o WhatsApp no celular...')
+    chamadas = []
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {'name': 'default', 'status': 'STOPPED', 'error': erro_fixado}
+
+    monkeypatch.setattr(toca.requests, 'get', lambda *a, **k: _Resp())
+    monkeypatch.setattr(toca.requests, 'post',
+                        lambda url, **k: chamadas.append(url) or _Resp())
+
+    resp = client.get('/api/whatsapp/qr?start=1')
+
+    assert resp.status_code == 200
+    assert resp.get_json()['state'] == 'starting'
+    assert any('/start' in url for url in chamadas), \
+        'o /start do sidecar precisa ser chamado mesmo com erro fixado'
+
+
+def test_status_nao_reinicia_sozinho(client, db_path, monkeypatch):
+    """Consulta passiva não pode disparar restart — senão o polling vira um laço."""
+    import app as toca
+
+    chamadas = []
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {'name': 'default', 'status': 'STOPPED', 'error': 'falhou'}
+
+    monkeypatch.setattr(toca.requests, 'get', lambda *a, **k: _Resp())
+    monkeypatch.setattr(toca.requests, 'post',
+                        lambda url, **k: chamadas.append(url) or _Resp())
+
+    client.get('/api/whatsapp/qr')  # sem start=1
+
+    assert not chamadas, 'sem start=1 a rota deve apenas observar'
