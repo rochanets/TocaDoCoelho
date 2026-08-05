@@ -30,6 +30,8 @@ from .llm import (
 )
 from .render import (
     render_markdown,
+    render_email_html,
+    email_subject,
 )
 
 __all__ = [
@@ -41,4 +43,6 @@ __all__ = [
     'build_extraction_prompt',
     'parse_hierarchy',
     'render_markdown',
+    'render_email_html',
+    'email_subject',
 ]

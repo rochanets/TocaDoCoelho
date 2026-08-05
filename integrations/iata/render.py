@@ -2,6 +2,8 @@
 """Renderização da ata em texto (markdown, Task 4) e e-mail (HTML, Task 5).
 Sem Flask, sem SQLite, sem rede — puro stdlib, testável isoladamente."""
 
+from html import escape as _escape
+
 from .reconcile import GERENTE_NAO_IDENTIFICADO
 
 # Task 3 decidiu deliberadamente preservar conta/oportunidade sem nome (uma
@@ -79,3 +81,109 @@ def render_markdown(header, managers, extras=None):
         linhas.append('')
 
     return '\n'.join(linhas).rstrip() + '\n'
+
+
+# Estilo inline em cada elemento — clientes de e-mail (Outlook em particular)
+# descartam <style> no <head> e ignoram indentação de texto puro, então o
+# aninhamento visual só sobrevive como <ul>/<li> aninhado de verdade.
+_ESTILO_BASE = "font-family:Segoe UI,Arial,sans-serif; font-size:14px; color:#111827;"
+_ESTILO_UL = "margin:4px 0 4px 0; padding-left:22px;"
+_ESTILO_LI = "margin:2px 0;"
+
+
+def email_subject(header):
+    header = header or {}
+    titulo = (header.get('title') or 'Ata de Reunião').strip()
+    data = _clean_null(header.get('meeting_date'))
+    return f"Ata — {titulo} — {data}" if data else f"Ata — {titulo}"
+
+
+def render_email_html(header, managers, extras=None):
+    """Renderiza a ata como HTML com `<ul>` aninhado de verdade e estilo
+    inline (sem `<style>`), para sobreviver a clientes de e-mail que
+    descartam CSS no `<head>`. Todo conteúdo vindo do LLM passa por
+    `html.escape` antes de entrar no markup."""
+    header = header or {}
+    partes = [f'<div style="{_ESTILO_BASE}">']
+
+    def campo(rotulo, valor):
+        if valor:
+            partes.append(
+                f'<p style="margin:2px 0;"><strong>{_escape(rotulo)}:</strong> '
+                f'{_escape(valor)}</p>'
+            )
+
+    campo('Título da Reunião', (header.get('title') or '').strip())
+    campo('Data e horário', ' '.join(
+        p for p in [header.get('meeting_date') or '', header.get('meeting_time') or ''] if p
+    ).strip())
+    campo('Participantes', ', '.join(
+        (p.get('name') or '') for p in (header.get('participants') or []) if p.get('name')))
+    campo('Tema', (header.get('topic') or '').strip())
+
+    for manager in (managers or []):
+        partes.append(
+            f'<p style="margin:16px 0 4px;"><strong>Gerente Comercial:</strong> '
+            f'{_escape(manager.get("name") or GERENTE_NAO_IDENTIFICADO)}</p>'
+        )
+        partes.append(f'<ul style="{_ESTILO_UL}">')
+        for account in (manager.get('accounts') or []):
+            nome_conta = (account.get('name') or '').strip() or CONTA_SEM_NOME
+            partes.append(
+                f'<li style="{_ESTILO_LI}"><strong>'
+                f'{_escape(nome_conta)}</strong>'
+            )
+            partes.append(f'<ul style="{_ESTILO_UL}">')
+            for opp in (account.get('opportunities') or []):
+                status = (opp.get('previous_status') or '').strip()
+                rotulo = _escape((opp.get('name') or '').strip() or OPORTUNIDADE_SEM_NOME)
+                if status:
+                    rotulo += ': ' + _escape(status)
+                partes.append(f'<li style="{_ESTILO_LI}">{rotulo}')
+                partes.append(f'<ul style="{_ESTILO_UL}">')
+                partes.append(
+                    f'<li style="{_ESTILO_LI}"><strong>Update:</strong> '
+                    f'{_escape((opp.get("update_text") or "").strip())}</li>'
+                )
+                partes.append(
+                    f'<li style="{_ESTILO_LI}"><strong>Responsável:</strong> '
+                    f'{_escape((opp.get("responsible") or "").strip())}</li>'
+                )
+                partes.append('</ul></li>')
+            partes.append('</ul></li>')
+        partes.append('</ul>')
+
+    extras = extras or {}
+    for chave, titulo in (('agenda', 'Pauta'), ('decisions', 'Decisões')):
+        itens = [str(i).strip() for i in (extras.get(chave) or []) if str(i).strip()]
+        if itens:
+            partes.append(f'<p style="margin:16px 0 4px;"><strong>{titulo}</strong></p>')
+            partes.append(f'<ul style="{_ESTILO_UL}">')
+            partes.extend(f'<li style="{_ESTILO_LI}">{_escape(i)}</li>' for i in itens)
+            partes.append('</ul>')
+
+    passos = [s for s in (extras.get('next_steps') or []) if isinstance(s, dict)]
+    if passos:
+        partes.append('<p style="margin:16px 0 4px;"><strong>Próximos passos</strong></p>')
+        partes.append(f'<ul style="{_ESTILO_UL}">')
+        for s in passos:
+            prazo = _clean_null(s.get('deadline'))
+            texto = (f"{(s.get('action') or '').strip()} — "
+                     f"{(s.get('responsible') or 'A definir').strip()}"
+                     + (f" (prazo: {prazo})" if prazo else ''))
+            partes.append(f'<li style="{_ESTILO_LI}">{_escape(texto)}</li>')
+        partes.append('</ul>')
+
+    insights = [i for i in (extras.get('insights') or []) if isinstance(i, dict)]
+    if insights:
+        partes.append('<p style="margin:16px 0 4px;"><strong>Insights de negócio</strong></p>')
+        partes.append(f'<ul style="{_ESTILO_UL}">')
+        for i in insights:
+            oferta = _clean_null(i.get('matched_offer')) or 'sem solução mapeada'
+            obs = (i.get('observation') or '').strip()
+            texto = f"{(i.get('pain') or '').strip()} → {oferta}" + (f" — {obs}" if obs else '')
+            partes.append(f'<li style="{_ESTILO_LI}">{_escape(texto)}</li>')
+        partes.append('</ul>')
+
+    partes.append('</div>')
+    return ''.join(partes)

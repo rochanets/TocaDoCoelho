@@ -824,3 +824,73 @@ def test_render_markdown_gerente_sem_nome_usa_rotulo_padrao():
     managers = [{'name': '', 'accounts': []}]
     texto = iata_lib.render_markdown(_header_exemplo(), managers)
     assert 'Gerente Comercial: Gerente não identificado' in texto
+
+
+# --- Task 5: render_email_html e email_subject ------------------------------
+
+
+def test_render_email_html_usa_ul_aninhado_e_estilo_inline():
+    html = iata_lib.render_email_html(_header_exemplo(), _managers_exemplo())
+    assert '<style' not in html.lower(), 'cliente de e-mail descarta <style>'
+    assert html.count('<ul') >= 3, 'conta, oportunidade e detalhes são níveis aninhados'
+    assert 'style="' in html
+    assert 'Migração SAP' in html
+
+
+def test_render_email_html_escapa_html_do_conteudo():
+    managers = [{'name': '<script>alert(1)</script>', 'accounts': []}]
+    html = iata_lib.render_email_html(_header_exemplo(), managers)
+    assert '<script>' not in html
+    assert '&lt;script&gt;' in html
+
+
+def test_render_email_html_escapa_status_da_oportunidade_sem_escape_duplo():
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': '<b>SAP</b>', 'previous_status': '<i>Proposta</i>',
+         'update_text': 'ok', 'responsible': 'Ana', 'carried_over': False}]}]}]
+    html = iata_lib.render_email_html(_header_exemplo(), managers)
+    assert '<b>' not in html and '<i>' not in html
+    assert '&lt;b&gt;SAP&lt;/b&gt;' in html
+    assert '&lt;i&gt;Proposta&lt;/i&gt;' in html
+    # sem escape duplo: '<' vira '&lt;' uma única vez, nunca '&amp;lt;'
+    assert '&amp;lt;' not in html
+
+
+def test_render_email_html_nome_vazio_de_conta_e_oportunidade_ganha_rotulo():
+    managers = [{'name': 'Ana', 'accounts': [{'name': '', 'opportunities': [
+        {'name': '', 'previous_status': None, 'update_text': 'Kickoff',
+         'responsible': 'Ana', 'carried_over': False}]}]}]
+    html = iata_lib.render_email_html(_header_exemplo(), managers)
+    assert '<strong>Conta sem nome</strong>' in html
+    assert 'Oportunidade sem nome' in html
+    assert '<strong></strong>' not in html
+
+
+def test_render_email_html_aninhamento_fecha_com_conta_sem_oportunidades():
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': []}]}]
+    html = iata_lib.render_email_html(_header_exemplo(), managers)
+    assert html.count('<ul') == html.count('</ul>')
+    assert html.count('<li') == html.count('</li>')
+
+
+def test_render_email_html_aninhamento_fecha_com_gerente_sem_contas():
+    managers = [{'name': 'Ana', 'accounts': []}]
+    html = iata_lib.render_email_html(_header_exemplo(), managers)
+    assert html.count('<ul') == html.count('</ul>')
+    assert html.count('<li') == html.count('</li>')
+
+
+def test_render_email_html_aninhamento_fecha_sem_managers():
+    html = iata_lib.render_email_html(_header_exemplo(), [])
+    assert html.count('<ul') == html.count('</ul>')
+    assert html.count('<li') == html.count('</li>')
+    assert '<ul' not in html
+
+
+def test_render_email_subject_usa_titulo_e_data():
+    assert iata_lib.email_subject(_header_exemplo()) == 'Ata — Pipeline Semanal — 04/08/2026'
+
+
+def test_render_email_subject_sem_data():
+    header = dict(_header_exemplo(), meeting_date=None)
+    assert iata_lib.email_subject(header) == 'Ata — Pipeline Semanal'
