@@ -3213,7 +3213,7 @@ git add public/index.html public/js/autotoca-iata.js public/js/itoca-autotoca.js
 **Files:**
 - Modify: `public/js/autotoca-iata.js`
 
-- [ ] **Step 1: Implementar o modal**
+- [x] **Step 1: Implementar o modal**
 
 Acrescentar a `public/js/autotoca-iata.js`. Passo 0 escolhe a base; o restante
 segue o padrão de progresso do projeto (barra verde + `coelho-correndo.webp`).
@@ -3301,7 +3301,7 @@ segue o padrão de progresso do projeto (barra verde + `coelho-correndo.webp`).
         }
 ```
 
-- [ ] **Step 2: Implementar o envio**
+- [x] **Step 2: Implementar o envio**
 
 ```javascript
         async function submitIAta() {
@@ -3376,7 +3376,7 @@ segue o padrão de progresso do projeto (barra verde + `coelho-correndo.webp`).
         }
 ```
 
-- [ ] **Step 3: Suportar `previous_file` no backend**
+- [x] **Step 3: Suportar `previous_file` no backend**
 
 O `previous_file` da opção (b) precisa virar hierarquia anterior. Em
 `routes/autotoca_iata.py`, na rota POST, ler o arquivo:
@@ -3433,23 +3433,52 @@ def test_ata_anterior_ilegivel_segue_como_ata_do_zero(db_path, monkeypatch):
 Atenção à ordem das respostas: a primeira chamada de `_llm_prompt` no pipeline
 com `prev_bytes` é a da ata anterior, a segunda é a extração da reunião nova.
 
-- [ ] **Step 4: Rodar os testes**
+- [x] **Step 4: Rodar os testes**
 
 Run: `python -m pytest tests/test_iata.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Verificar no navegador**
+- [x] **Step 5: Verificar no navegador**
 
 Abrir o AutoToca → iAta → **+ Nova Ata**, colar um texto curto de reunião de
 pipeline, gerar, e confirmar: barra verde com o coelho correndo, etapas
 mudando, ata aberta ao final. Conferir `read_console_messages` e
 `preview_logs` (o `app.log` traz `[iAta]`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add public/js/autotoca-iata.js routes/autotoca_iata.py tests/test_iata.py && git commit -m "feat(iata): modal com base da ata anterior"
 ```
+
+**Notas da execução (achados):**
+- `previous_file` **não existia no backend antes desta task** — a rota `POST
+  /api/autotoca/iata` só lia `meeting_file`/`raw_text`/`previous_record_id`.
+  Sem o Step 3, a opção (b) do modal ("Enviar o arquivo da ata anterior")
+  preencheria o campo e o formulário mandaria `previous_file` no `FormData`,
+  mas o backend simplesmente ignorava — geraria a ata do zero, calada, sem o
+  usuário saber que não teve a continuidade que pediu. Implementado como
+  descrito no plano: `_iata_process_async` ganhou `prev_bytes`/`prev_name`,
+  extrai o texto e reestrutura via `build_reparse_prompt`/`parse_hierarchy`
+  antes do `reconcile`; falha na leitura/reparse não derruba a task, vira
+  `warning`. Três testes novos em `tests/test_iata.py`.
+- `BgTaskManager.onComplete` (em `public/js/core.js`) descartava
+  `status.warning` — só repassava `status.result`. Sem isso, o aviso de "ata
+  anterior sumida/ilegível" que o backend manda (Step 3 acima e o
+  `previous_record_id` inexistente já existente) nunca chegaria à tela.
+  Corrigido passando `status` inteiro como segundo argumento em todos os
+  pontos de entrega (`_poll`, `claimTask`, `notifyTabActive`) — mudança
+  compatível com os outros ~10 callers existentes no projeto, que só declaram
+  1 parâmetro e ignoram o segundo.
+- `class="alert alert-warning"` sugerida pela referência do plano não é
+  estilada no CSS do projeto (só `.alert-success`/`.alert-error` existem em
+  `public/css/app.css`) — teria renderizado sem cor/borda. Banners de aviso
+  usam estilo inline próprio (âmbar, consistente com o bloco "contas
+  sugeridas" que já existia na referência da Task 13).
+- Verificado no navegador (porta 3050, ver Task 13 abaixo para o restante do
+  fluxo): barra verde com `/images/coelho-correndo.webp` classe `.coelho-run`
+  confirmada via rede (200) e via `img.className`; progresso e etapas mudando
+  corretamente.
 
 ---
 
@@ -3458,7 +3487,7 @@ git add public/js/autotoca-iata.js routes/autotoca_iata.py tests/test_iata.py &&
 **Files:**
 - Modify: `public/js/autotoca-iata.js`
 
-- [ ] **Step 1: Implementar a visualização**
+- [x] **Step 1: Implementar a visualização**
 
 ```javascript
         let _iataCurrent = null;
@@ -3545,7 +3574,7 @@ git add public/js/autotoca-iata.js routes/autotoca_iata.py tests/test_iata.py &&
         }
 ```
 
-- [ ] **Step 2: Implementar o modal de e-mail com preview**
+- [x] **Step 2: Implementar o modal de e-mail com preview**
 
 ```javascript
         async function openIAtaEmailModal(rid) {
@@ -3616,18 +3645,60 @@ git add public/js/autotoca-iata.js routes/autotoca_iata.py tests/test_iata.py &&
 
 O envio é ação externa e irreversível — daí o `uiConfirm` antes.
 
-- [ ] **Step 3: Verificar no navegador**
+- [x] **Step 3: Verificar no navegador**
 
 Abrir uma ata gerada, editar uma linha, salvar (confirmar o toast), reabrir e
 verificar que o texto persistiu. Abrir o modal de e-mail e conferir que o
 preview mostra a hierarquia com bullets aninhados. **Não enviar e-mail real**
 sem o usuário pedir.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add public/js/autotoca-iata.js && git commit -m "feat(iata): visualizacao, edicao e envio por email"
 ```
+
+**Notas da execução (achados — implementação de referência corrigida em 8 pontos):**
+- `positional_matches` do `PUT /body` era ignorado pela referência. Agora
+  `saveIAtaBody` monta um aviso por item rebaixado (conta/oportunidade casada
+  por posição) e reabre a ata (`viewIAtaFull`) com o banner visível — mesmo
+  mecanismo do aviso de continuidade da Task 12 (`_iataPendingWarning`).
+- `409`/`confirm_stale` não era tratado pela referência (caía no `catch`
+  genérico). `_iataSendEmailAttempt` trata o 409 explicitamente: explica que o
+  e-mail sairia com a estrutura anterior via `uiConfirm` (mensagem do próprio
+  backend) e só reenvia com `confirm_stale: true` depois de confirmação
+  explícita — nunca antecipado a partir só do `stale` do preview.
+- `422` (ata sem estrutura) usa a mensagem explicativa do backend via
+  `showError`, sem erro cru — confirmado no navegador contra as 6 atas legadas
+  reais do usuário (`format_version=1`): `GET .../email/preview` responde 422
+  com "Esta é uma ata em formato antigo..." e a UI mostra só o toast, sem abrir
+  modal nem travar.
+- Falha parcial de envio (`207`): ao contrário da referência, que deixava a
+  lista inteira no campo, o campo de destinatários passa a conter só quem
+  falhou — reenviar não duplica o e-mail de quem já recebeu.
+- `escapeHtml` no `<textarea>`: confirmado que não há dupla-escapagem — o
+  `.value` do textarea já devolve o texto decodificado pelo navegador
+  independente de como foi escapado na hora de montar o HTML.
+- Preview do e-mail (`${preview.html}`) inserido sem `escapeHtml` (é HTML já
+  montado pelo backend) — confirmado no navegador que não aparece `&lt;`
+  visível na tela e que os bullets aninhados (`<ul><li>`) renderizam de
+  verdade.
+- Atas legadas (`managers: []`, `body_markdown` vazio/nulo): confirmado que
+  `viewIAtaFull` abre sem exceção para as 6 atas reais do usuário.
+- `class="alert alert-warning"` da referência trocado por banners com estilo
+  inline próprio (ver nota da Task 12 — a classe não existe no CSS do
+  projeto).
+
+**Verificado no navegador (porta 3050, revertida para 3000 ao final):**
+abertura de uma das 6 atas legadas reais sem quebrar; preview de e-mail 422
+para ata legada mostrando mensagem clara via toast; modal "+ Nova Ata" com
+barra/coelho; geração de uma ata de teste (texto curto, sem `previous_record_id`,
+sem insights) para validar o caminho com hierarquia real — preview de e-mail
+com bullets aninhados e sem dupla-escapagem, edição do texto com rename de
+conta mostrando o banner de `positional_matches`, e o fluxo 409/`confirm_stale`
+exercitado diretamente (com `uiConfirm` stubado para recusar, sem enviar
+e-mail real). **A ata de teste (id 18, "Reunião de pipeline") foi apagada ao
+final** — as 6 atas legadas do usuário ficaram intocadas.
 
 ---
 
