@@ -2833,7 +2833,7 @@ git add routes/autotoca_iata.py integrations/iata/llm.py integrations/iata/__ini
 `_outlook_send_mail` (`app.py:7539`) aceita **um** destinatário; vários viram um
 envio por endereço, com relatório individual.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def _ata_para_email(db_path):
@@ -2894,12 +2894,12 @@ def test_email_sem_destinatario_retorna_400(client, db_path):
     assert client.post(f'/api/autotoca/iata/{rid}/email', json={'to': []}).status_code == 400
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_iata.py -k email -v`
 Expected: FAIL — rotas inexistentes.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 ```python
 def _iata_email_payload(record_id):
@@ -2955,16 +2955,70 @@ def send_iata_email(record_id):
         return jsonify({'error': str(e)}), 500
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_iata.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add routes/autotoca_iata.py tests/test_iata.py && git commit -m "feat(iata): preview e envio da ata por email"
 ```
+
+**Divergência da implementação de referência acima, decidida durante a Task 10**
+(a referência já se provou falível oito vezes em tasks anteriores — ver
+"Atenção especial" do prompt da Task 10). A questão central levantada pelo
+prompt era: **o e-mail reflete a ata EDITADA?** A referência renderiza sempre
+a partir da hierarquia (`registro['managers']`) — e a Task 9 deixou explícito
+que, quando o re-parse de uma edição de texto falha, a hierarquia gravada
+fica desatualizada em relação ao `body_markdown` que o usuário efetivamente
+escreveu (`reparse_failed=1`, texto preservado, estrutura antiga mantida).
+Sem tratamento, o e-mail sairia com conteúdo que o remetente não escreveu e
+não revisou, sem perceber — grave o bastante para não ser um "detalhe de
+UX". Correções em relação à referência:
+
+- **`_iata_email_payload` bloqueia atas legadas sem hierarquia, em vez de
+  gerar um e-mail vazio.** `registro['managers']` na referência é acessado
+  direto — para uma ata `format_version=1` (baseline anterior à Task 1/6,
+  sem nenhuma linha em `iata_managers`), isso produz uma lista vazia e o
+  e-mail sai só com o cabeçalho, sem nenhuma indicação de que faltou
+  conteúdo. A implementação real devolve `{'blocked': ...}` quando
+  `managers` está vazio E `format_version < 2`, e as duas rotas retornam
+  `422` com uma mensagem explicando que a ata é de um formato antigo sem
+  estrutura suficiente. Testado em
+  `test_preview_ata_legada_sem_hierarquia_bloqueia` e
+  `test_email_ata_legada_sem_hierarquia_bloqueia`.
+- **`reparse_failed=1` vira aviso explícito no preview e BLOQUEIO no envio,
+  não silêncio.** `_iata_email_payload` marca `stale=True` +
+  `warning` no payload quando `registro['reparse_failed']` está ligado (o
+  preview do frontend pode mostrar isso antes de qualquer envio). A rota de
+  envio recusa mandar (`409`, com `stale: true` no corpo) a menos que o
+  chamador passe `confirm_stale: true` explicitamente no JSON — só depois
+  dessa confirmação consciente o e-mail (com a hierarquia antiga, já que não
+  há outra fonte estruturada) é enviado. Testado em
+  `test_preview_avisa_quando_hierarquia_desatualizada`,
+  `test_email_bloqueia_quando_hierarquia_desatualizada` e
+  `test_email_envia_quando_confirma_hierarquia_desatualizada`.
+- **Destinatários duplicados são deduplicados preservando a ordem**, antes
+  de qualquer envio — `list(dict.fromkeys(...))` sobre a lista já com
+  strings vazias filtradas. A referência não tratava isso; o mesmo endereço
+  colado duas vezes no campo do frontend enviaria duas cópias reais do
+  e-mail. Testado em `test_email_dedup_destinatarios_repetidos`.
+- **Endereço malformado é validado ANTES de chamar `_outlook_send_mail`**,
+  com a mesma regex usada por `outlook_graph.send_mail`
+  (`_IATA_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')`) — a
+  referência delegava a validação inteira para dentro de
+  `_outlook_send_mail`/Graph, o que ainda funcionaria (o `try/except`
+  genérico capturaria o `OutlookSyncError`), mas gastaria uma tentativa real
+  de rede por um endereço que já se sabe inválido antes de tentar. Testado
+  em `test_email_endereco_invalido_nao_chama_outlook` (`chamadas == []`
+  confirma que `_outlook_send_mail` nem foi acionado).
+- **Log com a lista de destinatários mantido como na referência** (não é uma
+  divergência): `_outlook_send_mail` (`app.py`) já loga
+  `f'[Outlook] E-mail "{subject}" enviado para {recipient}'` por endereço, a
+  cada envio real do app — não é um precedente novo, é o padrão já
+  estabelecido para dado pessoal (e-mail) em log de envio.
 
 ---
 

@@ -2213,3 +2213,203 @@ def test_put_body_duas_oportunidades_ambiguas_remapeiam_cruzado_mas_sinalizadas(
     assert len(sinalizadas) == 2, (
         'as duas oportunidades casadas por posição precisam ser reportadas — '
         'sem esse sinal, o cruzamento do encadeamento fica invisível para o usuário')
+
+
+# ---------------------------------------------------------------------------
+# Task 10: preview e envio por e-mail
+# ---------------------------------------------------------------------------
+
+def _ata_para_email(db_path):
+    header = {'title': 'Pipeline Semanal', 'meeting_date': '04/08/2026',
+              'meeting_time': '10:00', 'topic': 'Funil', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': 'Proposta enviada',
+             'update_text': 'Desconto pedido', 'responsible': 'Bruno',
+             'carried_over': False, 'prev_opportunity_id': None}]}]}]
+    return toca._iata_save_record(header, managers, {}, 'texto', None)
+
+
+def test_preview_devolve_assunto_e_html(client, db_path):
+    rid = _ata_para_email(db_path)
+    resp = client.get(f'/api/autotoca/iata/{rid}/email/preview')
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['subject'] == 'Ata — Pipeline Semanal — 04/08/2026'
+    assert '<ul' in payload['html'] and 'Migração SAP' in payload['html']
+
+
+def test_preview_ata_nao_encontrada_retorna_404(client, db_path):
+    resp = client.get('/api/autotoca/iata/999999/email/preview')
+    assert resp.status_code == 404
+
+
+def test_email_envia_um_por_destinatario(client, db_path, monkeypatch):
+    rid = _ata_para_email(db_path)
+    enviados = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, html, attachments=None: enviados.append(to))
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email',
+                       json={'to': ['ana@x.com', 'bruno@x.com']})
+
+    assert resp.status_code == 200
+    assert enviados == ['ana@x.com', 'bruno@x.com']
+    assert all(r['ok'] for r in resp.get_json()['results'])
+
+
+def test_email_reporta_falha_por_destinatario(client, db_path, monkeypatch):
+    rid = _ata_para_email(db_path)
+
+    def fake_send(to, subject, html, attachments=None):
+        if to == 'quebra@x.com':
+            raise RuntimeError('caixa cheia')
+
+    monkeypatch.setattr(toca, '_outlook_send_mail', fake_send)
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email',
+                       json={'to': ['ok@x.com', 'quebra@x.com']})
+
+    assert resp.status_code == 207
+    resultados = {r['to']: r for r in resp.get_json()['results']}
+    assert resultados['ok@x.com']['ok'] is True
+    assert resultados['quebra@x.com']['ok'] is False
+    assert 'caixa cheia' in resultados['quebra@x.com']['error']
+
+
+def test_email_sem_destinatario_retorna_400(client, db_path):
+    rid = _ata_para_email(db_path)
+    assert client.post(f'/api/autotoca/iata/{rid}/email', json={'to': []}).status_code == 400
+
+
+def test_email_ata_nao_encontrada_retorna_404(client, db_path, monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError('não deveria enviar e-mail para ata inexistente')
+    monkeypatch.setattr(toca, '_outlook_send_mail', _boom)
+    resp = client.post('/api/autotoca/iata/999999/email', json={'to': ['a@x.com']})
+    assert resp.status_code == 404
+
+
+def test_email_dedup_destinatarios_repetidos(client, db_path, monkeypatch):
+    """O mesmo endereço, repetido na lista de destinatários (ex.: colado duas
+    vezes no campo de texto do frontend), não pode gerar dois envios reais —
+    duplicaria a caixa de entrada do destinatário sem nenhum benefício."""
+    rid = _ata_para_email(db_path)
+    enviados = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, html, attachments=None: enviados.append(to))
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email',
+                       json={'to': ['dup@x.com', 'outro@x.com', 'dup@x.com']})
+
+    assert resp.status_code == 200
+    assert enviados == ['dup@x.com', 'outro@x.com'], (
+        'endereço duplicado deve ser enviado uma única vez, preservando a primeira ordem')
+    assert [r['to'] for r in resp.get_json()['results']] == ['dup@x.com', 'outro@x.com']
+
+
+def test_email_endereco_invalido_nao_chama_outlook(client, db_path, monkeypatch):
+    """Endereço malformado deve ser rejeitado antes de qualquer chamada real
+    ao Graph — não faz sentido gastar uma tentativa de rede (e um possível
+    erro genérico do Outlook) num endereço que já sabemos ser inválido."""
+    rid = _ata_para_email(db_path)
+    chamadas = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, html, attachments=None: chamadas.append(to))
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email',
+                       json={'to': ['nao-e-um-email']})
+
+    assert resp.status_code == 207
+    assert chamadas == [], '_outlook_send_mail não deveria ter sido chamado'
+    resultado = resp.get_json()['results'][0]
+    assert resultado['ok'] is False
+    assert 'inválido' in resultado['error'].lower()
+
+
+def test_preview_avisa_quando_hierarquia_desatualizada(client, db_path, monkeypatch):
+    """Quando o re-parse de uma edição de texto falha, a hierarquia salva
+    fica desatualizada em relação ao body_markdown editado pelo usuário — o
+    e-mail (renderizado a partir da hierarquia) sairia com conteúdo antigo.
+    O preview precisa expor isso claramente."""
+    rid = _ata_para_email(db_path)
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'desculpe, não consegui')
+    put_resp = client.put(f'/api/autotoca/iata/{rid}/body',
+                          json={'body_markdown': 'texto editado que não foi reestruturado'})
+    assert put_resp.get_json()['reparse_failed'] is True
+
+    resp = client.get(f'/api/autotoca/iata/{rid}/email/preview')
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['stale'] is True
+    assert payload.get('warning')
+
+
+def test_email_bloqueia_quando_hierarquia_desatualizada(client, db_path, monkeypatch):
+    rid = _ata_para_email(db_path)
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'desculpe, não consegui')
+    client.put(f'/api/autotoca/iata/{rid}/body',
+              json={'body_markdown': 'texto editado que não foi reestruturado'})
+
+    chamadas = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, html, attachments=None: chamadas.append(to))
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email', json={'to': ['a@x.com']})
+
+    assert resp.status_code == 409
+    assert chamadas == [], 'não pode enviar e-mail com conteúdo desatualizado sem confirmação'
+    assert resp.get_json().get('stale') is True
+
+
+def test_email_envia_quando_confirma_hierarquia_desatualizada(client, db_path, monkeypatch):
+    rid = _ata_para_email(db_path)
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'desculpe, não consegui')
+    client.put(f'/api/autotoca/iata/{rid}/body',
+              json={'body_markdown': 'texto editado que não foi reestruturado'})
+
+    enviados = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, html, attachments=None: enviados.append(to))
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email',
+                       json={'to': ['a@x.com'], 'confirm_stale': True})
+
+    assert resp.status_code == 200
+    assert enviados == ['a@x.com']
+
+
+def _cria_ata_legada(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            '''INSERT INTO iata_records
+               (title, meeting_date, meeting_time, topic, participants, ata_json,
+                insights_json, raw_text, body_markdown, body_edited, reparse_failed,
+                format_version)
+               VALUES (?,?,?,?,?,?,?,?,?,0,0,1)''',
+            ('Ata legada', '01/01/2020', '09:00', '', '[]', '{}', '[]', 'texto cru', None))
+        conn.commit()
+        rid = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    finally:
+        conn.close()
+    return rid
+
+
+def test_preview_ata_legada_sem_hierarquia_bloqueia(client, db_path):
+    rid = _cria_ata_legada(db_path)
+    resp = client.get(f'/api/autotoca/iata/{rid}/email/preview')
+    assert resp.status_code == 422
+    assert resp.get_json().get('error')
+
+
+def test_email_ata_legada_sem_hierarquia_bloqueia(client, db_path, monkeypatch):
+    rid = _cria_ata_legada(db_path)
+    chamadas = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, html, attachments=None: chamadas.append(to))
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email', json={'to': ['a@x.com']})
+
+    assert resp.status_code == 422
+    assert chamadas == []

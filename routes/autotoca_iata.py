@@ -769,6 +769,136 @@ def update_iata_body(record_id):
         return jsonify({'error': str(e)}), 500
 
 
+_IATA_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+_IATA_AVISO_HIERARQUIA_DESATUALIZADA = (
+    'O texto desta ata foi editado, mas a última tentativa de reestruturação '
+    'automática falhou. O e-mail seria gerado com a estrutura de gerentes/contas/'
+    'oportunidades ANTERIOR, que pode não refletir o texto atual — confirme para '
+    'enviar mesmo assim, ou corrija o texto para que o re-parse funcione antes de '
+    'enviar.')
+
+_IATA_AVISO_ATA_LEGADA = (
+    'Esta é uma ata em formato antigo, sem a estrutura de gerentes/contas/'
+    'oportunidades necessária para montar o e-mail. Não é possível gerar o '
+    'e-mail automaticamente para este registro.')
+
+
+def _iata_email_payload(record_id):
+    """Monta assunto e HTML do e-mail para uma ata, ou sinaliza por que não é
+    seguro enviar ainda (`blocked`).
+
+    Dois casos precisam bloquear em vez de mandar algo enganoso:
+
+    1) Ata "legada" (`format_version` < 2) sem nenhuma hierarquia gravada —
+       não existe fonte de dado nenhuma para montar o e-mail (nem hierarquia,
+       nem garantia de que `ata_json['header']` segue o formato atual).
+
+    2) `reparse_failed=1`: a Task 9 permite editar o texto (`body_markdown`)
+       livremente, e o re-parse que atualiza a hierarquia pode falhar sem
+       apagar o texto editado (por decisão de produto: o texto do usuário
+       nunca se perde). Mas o e-mail é renderizado a partir da HIERARQUIA,
+       não do texto — se ela ficou desatualizada, o e-mail sairia com
+       conteúdo que o usuário não escreveu e não revisou, sem ele perceber.
+       Aqui isso não é bloqueio silencioso: o payload continua sendo
+       montado, só que marcado `stale=True` com um aviso explícito, e é a
+       rota de envio (`send_iata_email`) que exige confirmação explícita
+       antes de mandar."""
+    registro = _iata_load_record(record_id)
+    if not registro:
+        return None
+
+    managers = registro.get('managers') or []
+    try:
+        format_version = int(registro.get('format_version') or 1)
+    except (TypeError, ValueError):
+        format_version = 1
+    if not managers and format_version < 2:
+        return {'blocked': _IATA_AVISO_ATA_LEGADA}
+
+    header = registro.get('header') or {
+        'title': registro.get('title'), 'meeting_date': registro.get('meeting_date'),
+        'meeting_time': registro.get('meeting_time'), 'topic': registro.get('topic'),
+        'participants': registro.get('participants') or [],
+    }
+    extras = registro.get('extras') or {}
+    payload = {
+        'subject': iata_lib.email_subject(header),
+        'html': iata_lib.render_email_html(header, managers, extras),
+        'stale': bool(registro.get('reparse_failed')),
+    }
+    if payload['stale']:
+        payload['warning'] = _IATA_AVISO_HIERARQUIA_DESATUALIZADA
+    return payload
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/email/preview', methods=['GET'])
+def preview_iata_email(record_id):
+    try:
+        payload = _iata_email_payload(record_id)
+        if payload is None:
+            return jsonify({'error': 'Ata não encontrada.'}), 404
+        if 'blocked' in payload:
+            return jsonify({'error': payload['blocked']}), 422
+        return jsonify(payload)
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao montar preview de e-mail da ata {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/email', methods=['POST'])
+def send_iata_email(record_id):
+    """Envia a ata por e-mail, um envio por destinatário (`_outlook_send_mail`
+    só aceita um endereço por chamada) — cada um com seu próprio resultado,
+    para que a falha de um endereço não esconda o sucesso dos demais.
+
+    Nunca há destinatário implícito: sem `to` explícito e não-vazio, a rota
+    recusa antes de montar qualquer coisa (diferente de `_outlook_send_mail`
+    em outros pontos do app, que cai para o e-mail do próprio usuário quando
+    `to` vem vazio — isso aqui seria enviar a ata comercial de um cliente
+    para o endereço errado sem o usuário pedir)."""
+    try:
+        body = request.get_json(silent=True) or {}
+        brutos = [str(e).strip() for e in (body.get('to') or []) if str(e).strip()]
+        # Dedup preservando a ordem: o mesmo endereço colado duas vezes no
+        # campo do frontend não pode virar dois e-mails reais no destinatário.
+        destinatarios = list(dict.fromkeys(brutos))
+        if not destinatarios:
+            return jsonify({'error': 'Informe ao menos um destinatário.'}), 400
+
+        payload = _iata_email_payload(record_id)
+        if payload is None:
+            return jsonify({'error': 'Ata não encontrada.'}), 404
+        if 'blocked' in payload:
+            return jsonify({'error': payload['blocked']}), 422
+
+        if payload.get('stale') and not body.get('confirm_stale'):
+            return jsonify({'error': payload['warning'], 'stale': True}), 409
+
+        resultados = []
+        for destino in destinatarios:
+            if not _IATA_EMAIL_RE.match(destino):
+                # Validado aqui, sem chamar o Graph: um endereço malformado
+                # nunca vai ser aceito pela API, então não vale gastar uma
+                # tentativa de rede (nem arriscar um erro genérico) por isso.
+                resultados.append({'to': destino, 'ok': False,
+                                   'error': 'Endereço de destinatário inválido.'})
+                continue
+            try:
+                _outlook_send_mail(destino, payload['subject'], payload['html'])
+                resultados.append({'to': destino, 'ok': True})
+            except Exception as e:
+                logger.warning(f'[iAta] Falha ao enviar ata {record_id} para {destino}: {e}')
+                resultados.append({'to': destino, 'ok': False, 'error': str(e)})
+
+        status = 200 if all(r['ok'] for r in resultados) else 207
+        logger.info(f'[iAta] Ata {record_id} enviada por e-mail: {resultados}')
+        return jsonify({'results': resultados}), status
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao enviar ata {record_id} por e-mail: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/autotoca/iata/<int:record_id>/accounts/<int:iata_account_id>/link',
            methods=['POST'])
 def link_iata_account(record_id, iata_account_id):
