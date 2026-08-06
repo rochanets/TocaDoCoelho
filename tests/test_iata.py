@@ -1340,3 +1340,206 @@ def test_post_arquivo_vazio_falha_na_hora_com_400(client, db_path):
 
     assert resp.status_code == 400
     assert 'vazio' in resp.get_json()['error'].lower()
+
+
+# --- Task 8: sugestão de conta do CRM, confirmação e insights --------------
+
+def test_sugerir_contas_casa_por_nome_normalizado(db_path):
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
+    conn.commit()
+    account_id = conn.execute("SELECT id FROM accounts WHERE name = 'Ambev S.A.'").fetchone()[0]
+    conn.close()
+
+    managers = [{'name': 'Ana', 'accounts': [
+        {'name': 'AMBEV S/A', 'account_id': None, 'match_confidence': None,
+         'opportunities': []},
+        {'name': 'Empresa Que Não Existe', 'account_id': None, 'match_confidence': None,
+         'opportunities': []}]}]
+
+    toca._iata_sugerir_contas(managers)
+
+    casada, orfa = managers[0]['accounts']
+    assert casada['account_id'] == account_id
+    assert casada['match_confidence'] == 'alta'
+    assert casada.get('match_confirmed') is not True, 'sugestão não confirma sozinha'
+    assert orfa['account_id'] is None
+
+
+def test_sugerir_contas_casa_por_sufixo_juridico(db_path):
+    """'Ambev' (sem sufixo) citada na reunião precisa casar com 'Ambev S.A.'
+    cadastrada no CRM — o caso mais comum de uma reunião real, e o motivo de
+    reaproveitar `iata_lib.match_account_name` em vez de só exato + fuzzy
+    0.85 (SequenceMatcher dá ratio 0.71 para 'ambev' x 'ambev s a', abaixo
+    do cutoff, então nunca casaria sozinho)."""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
+    conn.commit()
+    account_id = conn.execute("SELECT id FROM accounts WHERE name = 'Ambev S.A.'").fetchone()[0]
+    conn.close()
+
+    managers = [{'name': 'Ana', 'accounts': [
+        {'name': 'Ambev', 'account_id': None, 'match_confidence': None, 'opportunities': []}]}]
+
+    toca._iata_sugerir_contas(managers)
+
+    conta = managers[0]['accounts'][0]
+    assert conta['account_id'] == account_id
+    assert conta['match_confidence'] == 'alta'
+
+
+def test_sugerir_contas_nao_sobrescreve_vinculo_confirmado_pelo_usuario(db_path):
+    """Uma conta que já veio com `match_confirmed=True` (herdado da ata
+    anterior via reconcile) não pode ser trocada por uma nova sugestão —
+    mesmo que o nome também case com outra conta do catálogo."""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
+    conn.commit()
+    account_id_ambev = conn.execute(
+        "SELECT id FROM accounts WHERE name = 'Ambev S.A.'").fetchone()[0]
+    conn.close()
+
+    managers = [{'name': 'Ana', 'accounts': [
+        {'name': 'Ambev', 'account_id': 999999, 'match_confidence': 'alta',
+         'match_confirmed': True, 'opportunities': []}]}]
+
+    toca._iata_sugerir_contas(managers)
+
+    conta = managers[0]['accounts'][0]
+    assert conta['account_id'] == 999999
+    assert conta['account_id'] != account_id_ambev
+
+
+def test_link_confirma_vinculo_da_conta(client, db_path):
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
+    conn.commit()
+    account_id = conn.execute("SELECT id FROM accounts WHERE name = 'Ambev S.A.'").fetchone()[0]
+    conn.close()
+
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': 'alta', 'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    conta_id = toca._iata_load_record(rid)['managers'][0]['accounts'][0]['id']
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/accounts/{conta_id}/link',
+                       json={'account_id': account_id})
+    assert resp.status_code == 200
+
+    conta = toca._iata_load_record(rid)['managers'][0]['accounts'][0]
+    assert conta['account_id'] == account_id
+    # _iata_read_hierarchy (Task 6) padronizou match_confirmed como bool na
+    # leitura — não int 0/1 como fica gravado na coluna do SQLite.
+    assert conta['match_confirmed'] is True
+
+
+def test_link_com_account_id_nulo_desfaz_o_vinculo(client, db_path):
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    conta_id = toca._iata_load_record(rid)['managers'][0]['accounts'][0]['id']
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/accounts/{conta_id}/link',
+                       json={'account_id': None})
+    assert resp.status_code == 200
+    assert toca._iata_load_record(rid)['managers'][0]['accounts'][0]['account_id'] is None
+
+
+def test_link_com_account_id_inexistente_retorna_erro(client, db_path):
+    """Vincular a uma conta que não existe mais em `accounts` (id chutado ou
+    apagado entre a sugestão e a confirmação) não pode ser aceito em silêncio."""
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    conta_id = toca._iata_load_record(rid)['managers'][0]['accounts'][0]['id']
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/accounts/{conta_id}/link',
+                       json={'account_id': 999999})
+    assert resp.status_code == 404
+    assert toca._iata_load_record(rid)['managers'][0]['accounts'][0]['account_id'] is None
+
+
+def test_link_record_id_que_nao_bate_com_a_conta_retorna_404(client, db_path):
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    outro_rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    conta_id = toca._iata_load_record(rid)['managers'][0]['accounts'][0]['id']
+
+    resp = client.post(f'/api/autotoca/iata/{outro_rid}/accounts/{conta_id}/link',
+                       json={'account_id': None})
+    assert resp.status_code == 404
+
+
+def test_insights_ofertas_sem_portfolio_nao_chama_llm(db_path, monkeypatch):
+    """Sem nenhuma oferta cadastrada no portfólio, não vale a pena gastar
+    uma chamada de LLM — devolve lista vazia direto."""
+    def _quebra(*a, **k):
+        raise AssertionError('não deveria chamar _llm_prompt sem ofertas cadastradas')
+    monkeypatch.setattr(toca, '_llm_prompt', _quebra)
+
+    header = {'title': 'X'}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Renovação', 'update_text': 'Em análise'}]}]}]
+    assert toca._iata_insights_ofertas(header, managers) == []
+
+
+def test_insights_ofertas_usa_colunas_reais_do_portfolio(db_path, monkeypatch):
+    """`portfolio_offers` não tem coluna `description` (tem `summary`) — um
+    SELECT errado derrubaria a geração inteira da ata com uma exceção de
+    SQLite. Confere que a função monta o prompt e devolve os insights sem
+    lançar."""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO portfolio_offers (title, summary) VALUES (?, ?)",
+                 ('Observabilidade 360', 'Monitoramento full-stack'))
+    conn.commit()
+    conn.close()
+
+    resposta_ia = json.dumps({'insights': [
+        {'pain': 'Falta de visibilidade de infra', 'matched_offer': 'Observabilidade 360',
+         'confidence': 'alta', 'observation': 'Bate direto com a dor relatada.'}]})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ia)
+
+    header = {'title': 'X'}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Renovação', 'update_text': 'Sem visibilidade de infra'}]}]}]
+    insights = toca._iata_insights_ofertas(header, managers)
+    assert insights == [{'pain': 'Falta de visibilidade de infra',
+                          'matched_offer': 'Observabilidade 360', 'confidence': 'alta',
+                          'observation': 'Bate direto com a dor relatada.'}]
+
+
+def test_insights_aceita_item_fora_do_formato_dict(db_path, monkeypatch):
+    """Mesma tolerância de `_linhas_de_passos`/`_linhas_de_insights` (Tasks
+    4/5): um item que não veio como dict entra como texto cru em vez de
+    sumir em silêncio, e um único dict solto em vez de lista também é aceito."""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO portfolio_offers (title, summary) VALUES (?, ?)",
+                 ('Oferta X', 'resumo'))
+    conn.commit()
+    conn.close()
+
+    resposta_ia = json.dumps({'insights': 'Só uma frase solta, fora do formato esperado'})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ia)
+
+    header = {'title': 'X'}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Renovação', 'update_text': 'Em análise'}]}]}]
+    # 'insights' como string (não list, não dict): sem itens estruturados
+    # utilizáveis -> lista vazia, mas sem lançar exceção.
+    assert toca._iata_insights_ofertas(header, managers) == []
+
+    resposta_ia_dict_unico = json.dumps({'insights': {
+        'pain': 'Dor única', 'matched_offer': None, 'confidence': 'baixa', 'observation': ''}})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ia_dict_unico)
+    insights = toca._iata_insights_ofertas(header, managers)
+    assert insights == [{'pain': 'Dor única', 'matched_offer': None, 'confidence': 'baixa',
+                          'observation': ''}]

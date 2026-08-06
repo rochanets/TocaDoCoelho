@@ -138,13 +138,96 @@ def _iata_load_record(record_id):
 
 
 def _iata_sugerir_contas(managers):
-    """Stub — cruzamento com contas do CRM entra na Task 8."""
+    """Sugere o vínculo de cada conta citada na ata com uma conta cadastrada
+    em `accounts`, por nome (reaproveita `iata_lib.match_account_name`: nome
+    exato -> sem sufixo de forma jurídica -> similaridade — a mesma lógica
+    já usada para casar com a ata anterior, em vez de duplicar aqui um
+    matching mais fraco de só exato + fuzzy 0.85, que não casaria "Ambev"
+    com "Ambev S.A.", o caso mais comum).
+
+    Isto é só SUGESTÃO — nunca marca `match_confirmed`; quem confirma o
+    vínculo é o usuário, pela rota `/link`. Uma conta que já veio com
+    `match_confirmed=True` (por exemplo herdada da ata anterior via
+    `reconcile`) é preservada como está: uma nova sugestão não pode
+    desfazer uma confirmação humana.
+    """
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT id, name FROM accounts')
+        catalogo = {}
+        for r in c.fetchall():
+            norm = iata_lib.normalize_name(r['name'])
+            if norm:
+                # Primeira conta cadastrada com este nome normalizado vence
+                # em caso de duas contas que colapsem para o mesmo nome —
+                # cenário raro demais para merecer mais mecanismo aqui.
+                catalogo.setdefault(norm, r['id'])
+    finally:
+        conn.close()
+
+    for manager in (managers or []):
+        for account in (manager.get('accounts') or []):
+            if account.get('match_confirmed'):
+                continue
+            account_id, confidence = iata_lib.match_account_name(account.get('name'), catalogo)
+            if account_id is not None:
+                account['account_id'] = account_id
+                account['match_confidence'] = confidence
     return managers
 
 
 def _iata_insights_ofertas(header, managers):
-    """Stub — geração de insights entra na Task 8."""
-    return []
+    """Cruza as oportunidades da ata com as ofertas do portfólio STF via IA."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        # portfolio_offers não tem coluna `description` — as colunas reais
+        # são title/summary (ver CREATE TABLE em app.py). Um SELECT com o
+        # nome errado derrubaria a geração inteira da ata com uma exceção.
+        c.execute('SELECT title, summary FROM portfolio_offers ORDER BY title')
+        ofertas = [dict_from_row(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+    if not ofertas:
+        return []
+
+    resumo = [
+        {'conta': a.get('name'), 'oportunidade': o.get('name'), 'update': o.get('update_text')}
+        for m in (managers or []) for a in (m.get('accounts') or [])
+        for o in (a.get('opportunities') or [])
+    ]
+    if not resumo:
+        return []
+
+    prompt = (
+        "Você é consultor de negócios. Para as oportunidades abaixo, identifique dores "
+        "e cruze com as soluções do portfólio.\n"
+        "Retorne EXCLUSIVAMENTE JSON: "
+        '{"insights":[{"pain":"dor","matched_offer":"título da oferta ou null",'
+        '"confidence":"alta/media/baixa","observation":"observação breve"}]}\n\n'
+        f"OPORTUNIDADES:\n{json.dumps(resumo, ensure_ascii=False)[:12000]}\n\n"
+        f"SOLUÇÕES STF:\n{json.dumps(ofertas, ensure_ascii=False)[:12000]}"
+    )
+    raw = _llm_prompt(prompt, log_tag='iAta/Insights')
+    parsed = iata_lib._loads_tolerante(raw) if raw else None
+    if not isinstance(parsed, dict):
+        logger.warning('[iAta] Insights sem resposta utilizável da IA.')
+        return []
+
+    insights = parsed.get('insights')
+    if isinstance(insights, dict):
+        # A IA às vezes devolve um objeto solto em vez de uma lista com um
+        # item — trata como lista de um elemento em vez de descartar.
+        insights = [insights]
+    if not isinstance(insights, list):
+        logger.warning('[iAta] Campo "insights" da IA não é lista nem objeto utilizável.')
+        return []
+    # Item fora do formato (string solta em vez de dict) entra como texto
+    # cru, mesmo princípio de `_linhas_de_passos`/`_linhas_de_insights` em
+    # integrations/iata/render.py: melhor exibir algo imperfeito do que
+    # descartar em silêncio.
+    return insights
 
 
 def _iata_resolver_ambiguidade(pares):
@@ -374,4 +457,42 @@ def delete_iata_record(record_id):
         return jsonify({'message': 'Ata removida com sucesso.'})
     except Exception as e:
         logger.exception(f'[iAta] Erro ao remover registro {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/accounts/<int:iata_account_id>/link',
+           methods=['POST'])
+def link_iata_account(record_id, iata_account_id):
+    """Confirma (ou desfaz, com `account_id: null`) o vínculo de uma conta
+    da ata com uma conta cadastrada em `accounts`. A sugestão automática
+    (`_iata_sugerir_contas`) nunca confirma sozinha — esta rota é o único
+    lugar que marca `match_confirmed`, por decisão explícita do usuário."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        account_id = payload.get('account_id')
+        conn = get_db()
+        c = conn.cursor()
+        try:
+            if account_id is not None:
+                try:
+                    account_id = int(account_id)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'account_id inválido.'}), 400
+                c.execute('SELECT 1 FROM accounts WHERE id = ?', (account_id,))
+                if not c.fetchone():
+                    return jsonify({'error': 'Conta do CRM não encontrada.'}), 404
+
+            c.execute('''UPDATE iata_accounts SET account_id = ?, match_confirmed = ?
+                         WHERE id = ? AND record_id = ?''',
+                      (account_id, 1 if account_id is not None else 0,
+                       iata_account_id, record_id))
+            alterados = c.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        if not alterados:
+            return jsonify({'error': 'Conta da ata não encontrada.'}), 404
+        return jsonify({'message': 'Vínculo atualizado.'})
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao vincular conta {iata_account_id}: {e}')
         return jsonify({'error': str(e)}), 500

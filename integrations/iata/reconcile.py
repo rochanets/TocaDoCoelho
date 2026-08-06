@@ -148,6 +148,34 @@ def _match_previous_account_key(conta_norm, por_conta, contas_nomeadas_norms, in
     return matches[0] if matches else None
 
 
+def match_account_name(nome, catalogo_por_norm):
+    """Casa o nome de uma conta citada na ata com um catálogo de contas do
+    CRM (`{nome_normalizado: id}`), reaproveitando o mesmo casamento em três
+    passos usado para achar a conta na ata anterior
+    (`_match_previous_account_key`): nome exato -> nome sem sufixo de forma
+    jurídica ("Ambev" == "Ambev S.A.") -> similaridade (cutoff conservador,
+    ver `_LIMIAR_CONTA`).
+
+    Devolve `(account_id, confidence)`, ou `(None, None)` se não houver
+    catálogo, nome, ou nenhum candidato. `confidence` é 'alta' para os dois
+    primeiros passos (determinísticos) e 'media' para o fuzzy match.
+    """
+    norm = normalize_name(nome)
+    if not norm or not catalogo_por_norm:
+        return None, None
+    nomes = list(catalogo_por_norm.keys())
+    indice_sem_sufixo = {}
+    for k in nomes:
+        indice_sem_sufixo.setdefault(_strip_legal_suffix(k), k)
+    chave = _match_previous_account_key(norm, catalogo_por_norm, nomes, indice_sem_sufixo)
+    if chave is None:
+        return None, None
+    # Determinístico (exato ou só diferindo por sufixo de forma jurídica) ->
+    # 'alta'; qualquer outra coisa só pode ter vindo do passo fuzzy -> 'media'.
+    deterministico = chave == norm or _strip_legal_suffix(chave) == _strip_legal_suffix(norm)
+    return catalogo_por_norm[chave], ('alta' if deterministico else 'media')
+
+
 def reconcile(current_managers, previous_managers, resolver=None):
     """Casa a hierarquia extraída da reunião nova com a da ata anterior.
 

@@ -19,6 +19,7 @@ porque rotas de tasks futuras (reparse da ata) chamam-na diretamente.
 from .reconcile import (
     GERENTE_NAO_IDENTIFICADO,
     SEM_UPDATE,
+    match_account_name,
     normalize_name,
     reconcile,
 )
@@ -42,6 +43,7 @@ __all__ = [
     'MAX_TRANSCRICAO_CHARS',
     'build_extraction_prompt',
     'parse_hierarchy',
+    'match_account_name',
     'render_markdown',
     'render_email_html',
     'email_subject',
