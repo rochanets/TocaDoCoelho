@@ -2438,6 +2438,57 @@ git add routes/autotoca_iata.py integrations/iata/reconcile.py integrations/iata
 git commit -m "feat(iata): sugestao de conta do CRM, confirmacao e insights"
 ```
 
+**Bug crítico pós-revisão (corrigido em commit separado): confirmação humana
+não sobrevivia à ata seguinte.**
+
+A revisão de qualidade reproduziu ponta a ponta: confirmar o vínculo na ata 1
+via `/link` → gerar a ata 2 pelo encadeamento real de `_iata_process_async`
+→ na ata 2 `match_confirmed` voltava `False`. Duas causas somadas:
+
+1. `_iata_sugerir_contas` rodava sobre `parsed['managers']` (fresco da
+   extração da IA) **antes** do `reconcile` — essa hierarquia nunca tem a
+   chave `match_confirmed` (só existe em managers já persistidos, lidos por
+   `_iata_read_hierarchy`), então o guard "não sobrescrever confirmado" do
+   Step 3 acima era código morto no caminho real: o teste
+   `test_sugerir_contas_nao_sobrescreve_vinculo_confirmado_pelo_usuario`
+   passava porque chamava a função isolada, fora do contexto real de uso —
+   não provava nada sobre o pipeline de verdade.
+2. `reconcile()` propagava `account_id` da conta anterior casada, mas não
+   `match_confirmed`/`match_confidence` — o campo nem existia no dict de
+   saída, e virava `0` na escrita (`1 if account.get('match_confirmed')
+   else 0`).
+
+Correção (`integrations/iata/reconcile.py`, `routes/autotoca_iata.py`):
+
+- `reconcile()` agora propaga `match_confirmed`/`match_confidence` da conta
+  anterior casada — em `_index_anterior` (indexação, incluindo o merge C1
+  quando a mesma conta aparece sob gerentes diferentes), na saída principal
+  do loop, e em `_anexar_nao_citados` (conta inteira não citada na reunião
+  nova). Um vínculo confirmado pelo usuário tem precedência sobre qualquer
+  sugestão nova.
+- `_iata_process_async` chama `_iata_sugerir_contas` **depois** do
+  `reconcile`, sobre os managers já reconciliados — é só ali que
+  `match_confirmed` de fato existe, então o guard passa a valer no caminho
+  real. A reordenação não quebra nada: `reconcile()` já tinha fallback
+  próprio para `account_id` da conta anterior quando a conta atual não trazia
+  um (`account.get('account_id') or anterior_conta.get('account_id')`), e a
+  sugestão automática de contas *novas* (sem correspondente anterior)
+  continua funcionando normalmente depois do reconcile.
+- Novo teste `test_confirmacao_de_vinculo_sobrevive_a_ata_seguinte`
+  percorre o **caminho real** (`_iata_process_async` → `/link` →
+  `_iata_process_async` de novo com `previous_record_id`), não a função
+  isolada — confirmado com `git stash` que falha sem a correção e passa
+  com ela.
+
+`python -m pytest -q` — 199 passed (a falha de fuso horário em
+`test_waha_send.py::test_send_quota_e_limite` é intermitente por horário do
+dia; não relacionada a esta task).
+
+```bash
+git add integrations/iata/reconcile.py routes/autotoca_iata.py tests/test_iata.py
+git commit -m "fix(iata): confirmacao de vinculo de conta sobrevive a ata seguinte"
+```
+
 ---
 
 ### Task 9: Edição do texto e re-parse
