@@ -3769,3 +3769,47 @@ git add app.py public/js/itoca-autotoca.js tests/ && git commit -m "refactor(iat
 - [ ] `grep -rn "portfolio/iata" public/ routes/ app.py` — nenhum resultado
 - [ ] Fluxo completo no navegador: nova ata a partir do histórico → hierarquia com status anterior → editar texto → preview de e-mail com bullets aninhados
 - [ ] `app.log` com as linhas `[iAta]` das etapas
+
+---
+
+## Correções pós-revisão final
+
+Depois das 14 tasks, uma revisão da branch inteira encontrou quatro defeitos que
+só aparecem no agregado — nenhum era visível olhando uma task isolada.
+
+**C1 — o status real sumia depois de duas atas sem update** (`integrations/iata/reconcile.py`).
+Ata 1 registra "Proposta enviada em 10/01"; a ata 2 não cita a conta e grava
+`update_text = SEM_UPDATE` com o status anterior preservado (correto); a ata 3
+também não cita e propagava o `SEM_UPDATE` da ata 2 como se fosse o status
+anterior. Resultado: `Migração SAP: Sem update nesta reunião` seguido de
+`Update: Sem update nesta reunião`, e o último status real do negócio perdido
+para sempre. Numa reunião mensal, todo negócio pulado duas vezes seguidas
+perdia o histórico em silêncio — exatamente a promessa central da feature.
+Corrigido com `_status_efetivo()`: o status a propagar é o último `update_text`
+que não seja `SEM_UPDATE`. Coberto por teste de três e de quatro atas
+encadeadas — a suíte só tinha duas, que é o caso em que o bug não aparece.
+
+**I1 — vínculo de CRM confirmado se perdia calado na edição** (`integrations/iata/edit.py`).
+O casamento de conta na edição usava só nome exato, enquanto o `reconcile` já
+casava por exato → sem sufixo de forma jurídica → fuzzy. Renomear "Ambev" para
+"Ambev S.A." e acrescentar uma conta fazia a confirmação humana evaporar sem
+nenhum aviso. Agora a edição reusa o mesmo casamento, e a perda de um vínculo
+confirmado entra no balde `positional_matches['lost']`, exibido pela tela.
+
+**I2 — as atas em formato antigo viraram tela em branco** (`public/js/autotoca-iata.js`).
+Registros anteriores a esta feature não têm `body_markdown` nem hierarquia: o
+conteúdo vive em `ata_json` no formato antigo. O visualizador que lia isso saiu
+na Task 14. Passam a ser renderizadas em modo somente leitura, com os botões de
+salvar e enviar escondidos. Decisão deliberada: **não** migrar os registros —
+são dados históricos do usuário e o problema era de exibição, não de dado.
+
+**I3 — conta acrescentada na edição nunca chegava ao CRM** (`routes/autotoca_iata.py`).
+`update_iata_body` não chamava `_iata_sugerir_contas`, então a conta ficava sem
+`account_id` e o bloco de confirmação da tela (que só mostra contas com
+`account_id`) nunca a exibia.
+
+Junto: `integrations/iata/edit.py` extraiu a lógica pura de casamento da edição
+(o arquivo de rotas caiu de 990 para ~870 linhas), e foram corrigidos o e-mail
+de ata v2 sem hierarquia, o vazamento de conexão no caminho de erro do
+`PUT /body`, o `previous_record_id` malformado que zerava a continuidade sem
+aviso, e a docstring/`__all__` do pacote.
