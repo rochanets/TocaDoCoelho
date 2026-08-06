@@ -1131,3 +1131,173 @@ def test_save_record_e_transacional_na_falha_da_hierarquia(db_path, monkeypatch)
     finally:
         conn.close()
     assert total == 0, 'INSERT sem commit não pode sobreviver a uma falha na hierarquia'
+
+
+# ---------------------------------------------------------------------------
+# Task 7: geração assíncrona da ata
+# ---------------------------------------------------------------------------
+
+def test_pipeline_gera_ata_com_continuidade(db_path, monkeypatch):
+    """A reunião nova cita só uma das duas oportunidades da ata anterior:
+    a outra precisa entrar como 'sem update'."""
+    header_ant = {'title': 'Ata Anterior', 'meeting_date': None, 'meeting_time': None,
+                  'topic': '', 'participants': []}
+    managers_ant = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': None, 'update_text': 'Proposta enviada',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': None},
+            {'name': 'Observabilidade', 'previous_status': None,
+             'update_text': 'Aguardando budget', 'responsible': 'Ana',
+             'carried_over': False, 'prev_opportunity_id': None}]}]}]
+    anterior_id = toca._iata_save_record(header_ant, managers_ant, {}, 'texto', None)
+
+    resposta_ia = json.dumps({
+        'title': 'Pipeline 04/08', 'meeting_date': '04/08/2026', 'meeting_time': '10:00',
+        'topic': 'Funil', 'participants': [{'name': 'Ana', 'role': 'Gerente'}],
+        'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Migração SAP', 'update': 'Cliente pediu desconto',
+             'responsible': 'Bruno'}]}]}]})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ia)
+
+    task_id = 'teste123'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'transcrição qualquer',
+                             previous_record_id=anterior_id, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    registro = toca._iata_load_record(task['result']['id'])
+    opps = {o['name']: o for o in registro['managers'][0]['accounts'][0]['opportunities']}
+    assert opps['Migração SAP']['previous_status'] == 'Proposta enviada'
+    assert opps['Migração SAP']['update_text'] == 'Cliente pediu desconto'
+    assert opps['Observabilidade']['update_text'] == toca.iata_lib.SEM_UPDATE
+    assert opps['Observabilidade']['carried_over'] is True
+    assert registro['previous_record_id'] == anterior_id
+
+
+def test_pipeline_falha_quando_llm_nao_responde(db_path, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: None)
+    task_id = 'teste_erro'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'texto', previous_record_id=None,
+                             with_insights=False)
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'error'
+    assert 'IA' in (task.get('error') or '')
+
+
+def test_post_inicia_task_e_retorna_202(client, db_path, monkeypatch):
+    monkeypatch.setattr(toca, '_iata_process_async', lambda *a, **k: None)
+    resp = client.post('/api/autotoca/iata', data={'raw_text': 'transcrição'})
+    assert resp.status_code == 202
+    assert resp.get_json().get('task_id')
+
+
+def test_post_sem_conteudo_retorna_400(client, db_path):
+    assert client.post('/api/autotoca/iata', data={}).status_code == 400
+
+
+def test_pipeline_raw_text_salvo_e_completo_mesmo_quando_prompt_trunca(db_path, monkeypatch):
+    """build_extraction_prompt() só embute os primeiros MAX_TRANSCRICAO_CHARS
+    caracteres no prompt da IA — mas o raw_text persistido no banco precisa
+    continuar sendo o texto INTEIRO. Perder a transcrição original seria
+    perda de dado real, não só uma limitação do prompt."""
+    texto_longo = 'Assunto discutido na reunião de pipeline. ' * 1000
+    assert len(texto_longo) > iata_lib.MAX_TRANSCRICAO_CHARS
+
+    resposta_ia = json.dumps({
+        'title': 'Pipeline Longo', 'meeting_date': None, 'meeting_time': None,
+        'topic': 'Funil', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': []}]})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ia)
+
+    task_id = 'teste_truncamento'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, texto_longo,
+                             previous_record_id=None, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    registro = toca._iata_load_record(task['result']['id'])
+    # _iata_process_async faz .strip() no texto de entrada (remove espaços
+    # nas pontas) — não é o truncamento em MAX_TRANSCRICAO_CHARS sob teste
+    # aqui, então comparamos contra o texto igualmente stripado.
+    assert registro['raw_text'] == texto_longo.strip()
+    assert len(registro['raw_text']) > iata_lib.MAX_TRANSCRICAO_CHARS
+
+
+def test_pipeline_previous_record_id_inexistente_gera_aviso_sem_referencia_fantasma(
+        db_path, monkeypatch):
+    """Um previous_record_id que não existe mais no banco (deletado entre a
+    escolha do usuário e o fim da geração, ou id inválido) não pode virar uma
+    ata 'do zero' sem que o usuário saiba: isso é perda de contexto silenciosa."""
+    resposta_ia = json.dumps({
+        'title': 'Ata Sem Continuidade', 'meeting_date': None, 'meeting_time': None,
+        'topic': '', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': []}]})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ia)
+
+    task_id = 'teste_prev_inexistente'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'texto qualquer',
+                             previous_record_id=999999, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    assert task.get('warning'), 'usuário pediu continuidade e não foi avisado que ela não aconteceu'
+    registro = toca._iata_load_record(task['result']['id'])
+    assert registro['previous_record_id'] is None
+
+
+def test_pipeline_resolver_de_ambiguidade_casa_oportunidade_com_confianca_media(
+        db_path, monkeypatch):
+    """`_iata_resolver_ambiguidade` devolve {indice: id_anterior}; confirma
+    fim a fim, pelo pipeline completo, que esse formato bate de fato com o
+    que `reconcile()` espera (ver integrations/iata/reconcile.py) — não só
+    isolado."""
+    header_ant = {'title': 'Ata Anterior', 'meeting_date': None, 'meeting_time': None,
+                  'topic': '', 'participants': []}
+    managers_ant = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Renovacao de contrato', 'previous_status': None,
+             'update_text': 'Em análise', 'responsible': 'Ana',
+             'carried_over': False, 'prev_opportunity_id': None}]}]}]
+    anterior_id = toca._iata_save_record(header_ant, managers_ant, {}, 'texto', None)
+    anterior = toca._iata_load_record(anterior_id)
+    opp_id_anterior = anterior['managers'][0]['accounts'][0]['opportunities'][0]['id']
+
+    # Nome parecido ("Renovacao contrato") — próximo o bastante para virar
+    # candidato ambíguo, mas não idêntico ao normalizar, então não é match
+    # exato: precisa passar pelo resolver.
+    resposta_ia = json.dumps({
+        'title': 'Pipeline Ambiguo', 'meeting_date': None, 'meeting_time': None,
+        'topic': '', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Renovacao contrato', 'update': 'Contrato assinado',
+             'responsible': 'Ana'}]}]}]})
+
+    chamadas = {'extracao': 0, 'resolver': 0}
+
+    def _llm_fake(prompt, log_tag='llm', **kwargs):
+        if log_tag == 'iAta/Ambiguidade':
+            chamadas['resolver'] += 1
+            assert str(opp_id_anterior) in prompt
+            return json.dumps({'decisoes': [{'index': 0, 'id_anterior': opp_id_anterior}]})
+        chamadas['extracao'] += 1
+        return resposta_ia
+
+    monkeypatch.setattr(toca, '_llm_prompt', _llm_fake)
+
+    task_id = 'teste_ambiguidade'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'transcrição qualquer',
+                             previous_record_id=anterior_id, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    assert chamadas['resolver'] == 1
+    registro = toca._iata_load_record(task['result']['id'])
+    opp = registro['managers'][0]['accounts'][0]['opportunities'][0]
+    assert opp['match_confidence'] == 'media'
+    assert opp['prev_opportunity_id'] == opp_id_anterior
+    assert opp['previous_status'] == 'Em análise'

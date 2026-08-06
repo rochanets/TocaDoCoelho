@@ -2004,7 +2004,51 @@ git add routes/autotoca_iata.py routes/portfolio.py app.py tests/test_iata.py &&
 - Modify: `routes/autotoca_iata.py`
 - Test: `tests/test_iata.py`
 
-- [ ] **Step 1: Write the failing test**
+> **Nota pós-implementação:** os helpers de extração de texto e de task
+> (`_iata_extract_file_text`, `_parse_vtt_text`, `_parse_srt_text`,
+> `_iata_extract_bytes`, `_BytesFS`, `_iata_task_set`, `_iata_task_get`,
+> `_iata_task_cleanup`) já existem em `app.py` a esta altura do plano —
+> **foram reutilizados diretamente**, não copiados para `routes/autotoca_iata.py`
+> (copiar criaria duas implementações divergentes; a decisão de onde eles
+> moram definitivamente é da Task 14).
+>
+> Dois defeitos reais foram achados e corrigidos em relação à implementação
+> de referência abaixo (testes cobrindo os dois em `tests/test_iata.py`):
+> 1. **`previous_record_id` inexistente no banco** (deletado entre a escolha
+>    do usuário e o fim da geração, ou id inválido) fazia `_iata_previous_managers`
+>    devolver silenciosamente `[]` e o registro final gravava
+>    `previous_record_id` apontando para um id fantasma — o usuário pedia
+>    continuidade e recebia uma ata do zero sem nenhum aviso. Corrigido:
+>    `_iata_previous_managers` agora devolve `(managers, aviso)`; quando a
+>    ata anterior não existe, `aviso` vira uma mensagem explícita no
+>    resultado da task (`task['warning']`) e `previous_record_id` é gravado
+>    como `None` em vez do id fantasma.
+> 2. **Truncamento do prompt vs. `raw_text` persistido**: confirmado por
+>    teste que `build_extraction_prompt()` só embute os primeiros
+>    `MAX_TRANSCRICAO_CHARS` no prompt da IA, mas o `raw_text` gravado no
+>    banco continua sendo o texto **completo** — não havia bug aqui na
+>    referência, só faltava um teste explícito provando isso (a perda de
+>    dado real teria sido salvar `raw_text[:MAX_TRANSCRICAO_CHARS]`, como o
+>    código legado do Portfolio fazia com `raw_text[:50000]`).
+>
+> Também revisados e confirmados como **corretos, sem mudança necessária**:
+> thread + SQLite (cada chamada a `get_db()` abre conexão própria, nada
+> compartilhado entre threads), `_iata_task_cleanup` (delay de 300s dá
+> folga de sobra pro polling do frontend ler o resultado antes do 404), e o
+> formato `{índice: id}` devolvido por `_iata_resolver_ambiguidade` (bate
+> exatamente com o que `reconcile()` espera — confirmado com um teste fim a
+> fim usando um par de nomes propositalmente parecido, não só a unidade).
+>
+> **Opinião registrada, sem correção implementada** (fora do escopo desta
+> task): se `_iata_save_record` falhar depois da IA já ter respondido, a
+> extração inteira (e o custo da chamada de LLM) se perde — o usuário só vê
+> `task['status'] == 'error'` e precisa recomeçar do zero. Isso é aceitável
+> para o volume de uso esperado do iAta, mas se `_iata_save_record` passar a
+> falhar com frequência (ex.: banco sob contenção), vale considerar
+> persistir a extração já feita separadamente para permitir um "tentar
+> salvar de novo" sem rechamar a IA.
+
+- [x] **Step 1: Write the failing test**
 
 ```python
 import json as _json
@@ -2070,18 +2114,18 @@ def test_post_sem_conteudo_retorna_400(client, db_path):
     assert client.post('/api/autotoca/iata', data={}).status_code == 400
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_iata.py -k "pipeline or post_" -v`
 Expected: FAIL — `_iata_process_async` não existe com essa assinatura.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Acrescentar a `routes/autotoca_iata.py`. Os helpers de extração de texto e de
-task vêm do bloco antigo do `app.py:9575-9950` — copiar `_iata_extract_file_text`,
-`_parse_vtt_text`, `_parse_srt_text`, `_iata_extract_bytes`, `_iata_task_set`,
-`_iata_task_get`, `_iata_task_cleanup` e a classe `_BytesFS` para cá **sem
-alterações** (a remoção do original acontece na Task 14).
+task já existem em `app.py` (`_iata_extract_file_text`, `_parse_vtt_text`,
+`_parse_srt_text`, `_iata_extract_bytes`, `_iata_task_set`, `_iata_task_get`,
+`_iata_task_cleanup`, `_BytesFS`) e são **reutilizados diretamente** — ver
+nota no topo da task; a remoção/consolidação definitiva acontece na Task 14.
 
 ```python
 def _iata_resolver_ambiguidade(pares):
@@ -2111,10 +2155,18 @@ def _iata_resolver_ambiguidade(pares):
 
 
 def _iata_previous_managers(previous_record_id):
+    """Devolve `(managers, aviso)`. Um `previous_record_id` que não existe
+    mais no banco não pode virar uma ata 'do zero' em silêncio — ver nota
+    de correção no topo desta task (defeito 1)."""
     if not previous_record_id:
-        return []
+        return [], None
     anterior = _iata_load_record(previous_record_id)
-    return (anterior or {}).get('managers') or []
+    if not anterior:
+        aviso = (f'A ata anterior selecionada (id {previous_record_id}) não foi '
+                 'encontrada; esta ata foi gerada sem continuidade com ela.')
+        logger.warning(f'[iAta] {aviso}')
+        return [], aviso
+    return (anterior.get('managers') or []), None
 
 
 def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
@@ -2130,12 +2182,15 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
                                      'error': 'Não foi possível extrair texto da reunião.'})
             return
 
+        # build_extraction_prompt() só embute os primeiros MAX_TRANSCRICAO_CHARS
+        # no prompt da IA — raw_text (persistido em _iata_save_record logo
+        # abaixo) continua sendo o texto INTEIRO. Ver nota de verificação no
+        # topo desta task (defeito 2 — confirmado sem bug, coberto por teste).
         if len(raw_text) > iata_lib.MAX_TRANSCRICAO_CHARS:
-            # O risco registrado no spec: transcrição longa demais para o contexto
-            # do modelo. Truncar é aceitável por ora, mas precisa ficar no log —
-            # é o sinal de que chegou a hora de dividir a extração por gerente.
-            logger.warning(f'[iAta][Task:{task_id}] Transcrição truncada de '
-                           f'{len(raw_text)} para {iata_lib.MAX_TRANSCRICAO_CHARS} caracteres.')
+            logger.warning(f'[iAta][Task:{task_id}] Transcrição com {len(raw_text)} '
+                           f'caracteres; o prompt de extração usa só os primeiros '
+                           f'{iata_lib.MAX_TRANSCRICAO_CHARS} (o texto completo continua '
+                           'sendo salvo em raw_text).')
 
         _iata_task_set(task_id, {'step': 'Extraindo contas e oportunidades...', 'progress': 35})
         raw = _llm_prompt(iata_lib.build_extraction_prompt(raw_text), log_tag='iAta/Extração')
@@ -2150,9 +2205,12 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
         _iata_sugerir_contas(parsed['managers'])
 
         _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 70})
+        previous_managers, aviso_continuidade = _iata_previous_managers(previous_record_id)
         managers = iata_lib.reconcile(
-            parsed['managers'], _iata_previous_managers(previous_record_id),
-            resolver=_iata_resolver_ambiguidade)
+            parsed['managers'], previous_managers, resolver=_iata_resolver_ambiguidade)
+        # Se a ata anterior pedida não existe mais, não grava uma referência
+        # fantasma em previous_record_id — o aviso abaixo já cobre o usuário.
+        effective_previous_id = None if aviso_continuidade else previous_record_id
 
         extras = {}
         if with_insights:
@@ -2161,10 +2219,13 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
 
         _iata_task_set(task_id, {'step': 'Salvando ata...', 'progress': 95})
         record_id = _iata_save_record(parsed['header'], managers, extras, raw_text,
-                                      previous_record_id)
+                                      effective_previous_id)
         registro = _iata_load_record(record_id)
-        _iata_task_set(task_id, {'step': 'Concluído!', 'progress': 100,
-                                 'status': 'done', 'result': registro})
+        updates_finais = {'step': 'Concluído!', 'progress': 100,
+                          'status': 'done', 'result': registro}
+        if aviso_continuidade:
+            updates_finais['warning'] = aviso_continuidade
+        _iata_task_set(task_id, updates_finais)
     except Exception as e:
         logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')
         _iata_task_set(task_id, {'status': 'error', 'error': str(e)})
@@ -2229,12 +2290,18 @@ def _iata_insights_ofertas(header, managers):
     return []
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+Quatro testes adicionais, além dos do Step 1, foram escritos para os
+defeitos/pontos suspeitos investigados (ver nota no topo da task):
+`test_pipeline_raw_text_salvo_e_completo_mesmo_quando_prompt_trunca`,
+`test_pipeline_previous_record_id_inexistente_gera_aviso_sem_referencia_fantasma`
+e `test_pipeline_resolver_de_ambiguidade_casa_oportunidade_com_confianca_media`.
+
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_iata.py -v`
-Expected: PASS.
+Expected: PASS. (83 passed)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add routes/autotoca_iata.py tests/test_iata.py && git commit -m "feat(iata): geracao assincrona com continuidade entre atas"

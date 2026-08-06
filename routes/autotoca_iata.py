@@ -137,6 +137,170 @@ def _iata_load_record(record_id):
         conn.close()
 
 
+def _iata_sugerir_contas(managers):
+    """Stub — cruzamento com contas do CRM entra na Task 8."""
+    return managers
+
+
+def _iata_insights_ofertas(header, managers):
+    """Stub — geração de insights entra na Task 8."""
+    return []
+
+
+def _iata_resolver_ambiguidade(pares):
+    """Desempata oportunidades parecidas em UMA chamada de IA, em lote."""
+    if not pares:
+        return {}
+    prompt = (
+        "Você recebe pares de oportunidades comerciais. Para cada par, diga se a "
+        "oportunidade nova é a MESMA da lista de candidatas anteriores.\n"
+        "Retorne EXCLUSIVAMENTE JSON: "
+        '{"decisoes":[{"index":0,"id_anterior":123}]}. '
+        "Use id_anterior null quando for uma oportunidade diferente.\n\n"
+        + json.dumps(pares, ensure_ascii=False)
+    )
+    raw = _llm_prompt(prompt, log_tag='iAta/Ambiguidade')
+    parsed = iata_lib._loads_tolerante(raw) if raw else None
+    if not isinstance(parsed, dict):
+        return {}
+    saida = {}
+    for d in (parsed.get('decisoes') or []):
+        if isinstance(d, dict) and d.get('index') is not None:
+            try:
+                saida[int(d['index'])] = d.get('id_anterior')
+            except Exception:
+                continue
+    return saida
+
+
+def _iata_previous_managers(previous_record_id):
+    """Carrega os gerentes da ata anterior indicada para servir de base à
+    reconciliação. Devolve `(managers, aviso)`.
+
+    Um `previous_record_id` que não existe mais no banco (apagado entre a
+    escolha do usuário e o fim da geração, ou um id inválido vindo do form)
+    NÃO derruba a tarefa inteira — a extração da IA já rodou e não deve ser
+    descartada por isso — mas também não pode passar em silêncio: o usuário
+    pediu continuidade com uma ata específica e ela não aconteceu. Isso vira
+    um aviso explícito no resultado da task e a ata é salva sem referenciar
+    um id fantasma.
+    """
+    if not previous_record_id:
+        return [], None
+    anterior = _iata_load_record(previous_record_id)
+    if not anterior:
+        aviso = (f'A ata anterior selecionada (id {previous_record_id}) não foi '
+                 'encontrada; esta ata foi gerada sem continuidade com ela.')
+        logger.warning(f'[iAta] {aviso}')
+        return [], aviso
+    return (anterior.get('managers') or []), None
+
+
+def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
+                        previous_record_id=None, with_insights=True):
+    try:
+        raw_text = (raw_text_input or '').strip()
+        if file_bytes:
+            _iata_task_set(task_id, {'step': 'Extraindo texto do arquivo...', 'progress': 15})
+            texto_arquivo = _iata_extract_bytes(file_bytes, filename)
+            raw_text = (texto_arquivo + '\n\n' + raw_text).strip() if raw_text else texto_arquivo
+        if not raw_text:
+            _iata_task_set(task_id, {'status': 'error',
+                                     'error': 'Não foi possível extrair texto da reunião.'})
+            return
+
+        # build_extraction_prompt() só embute os primeiros MAX_TRANSCRICAO_CHARS
+        # caracteres no prompt enviado à IA — raw_text (persistido abaixo em
+        # _iata_save_record) continua sendo o texto INTEIRO. Truncar o que vai
+        # para o banco seria perda de dado real, não só uma limitação de prompt.
+        if len(raw_text) > iata_lib.MAX_TRANSCRICAO_CHARS:
+            logger.warning(
+                f'[iAta][Task:{task_id}] Transcrição com {len(raw_text)} caracteres; '
+                f'o prompt de extração usa só os primeiros {iata_lib.MAX_TRANSCRICAO_CHARS} '
+                '(o texto completo continua sendo salvo em raw_text).')
+
+        _iata_task_set(task_id, {'step': 'Extraindo contas e oportunidades...', 'progress': 35})
+        raw = _llm_prompt(iata_lib.build_extraction_prompt(raw_text), log_tag='iAta/Extração')
+        parsed = iata_lib.parse_hierarchy(raw) if raw else None
+        if not parsed:
+            _iata_task_set(task_id, {
+                'status': 'error',
+                'error': 'A IA não retornou uma ata utilizável. Tente novamente.'})
+            return
+
+        _iata_task_set(task_id, {'step': 'Cruzando contas com o CRM...', 'progress': 55})
+        _iata_sugerir_contas(parsed['managers'])
+
+        _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 70})
+        previous_managers, aviso_continuidade = _iata_previous_managers(previous_record_id)
+        managers = iata_lib.reconcile(
+            parsed['managers'], previous_managers, resolver=_iata_resolver_ambiguidade)
+        # Se a ata anterior pedida não existe mais, não grava uma referência
+        # fantasma em previous_record_id — o aviso acima já cobre o usuário.
+        effective_previous_id = None if aviso_continuidade else previous_record_id
+
+        extras = {}
+        if with_insights:
+            _iata_task_set(task_id, {'step': 'Gerando insights de negócio...', 'progress': 85})
+            extras['insights'] = _iata_insights_ofertas(parsed['header'], managers)
+
+        _iata_task_set(task_id, {'step': 'Salvando ata...', 'progress': 95})
+        record_id = _iata_save_record(parsed['header'], managers, extras, raw_text,
+                                      effective_previous_id)
+        registro = _iata_load_record(record_id)
+        updates = {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': registro}
+        if aviso_continuidade:
+            updates['warning'] = aviso_continuidade
+        _iata_task_set(task_id, updates)
+    except Exception as e:
+        logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')
+        _iata_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _iata_task_cleanup(task_id)
+
+
+@app.route('/api/autotoca/iata', methods=['POST'])
+def create_iata_record():
+    try:
+        file_obj = request.files.get('meeting_file')
+        raw_text_input = (request.form.get('raw_text') or '').strip()
+        if not file_obj and not raw_text_input:
+            return jsonify({'error': 'Envie um arquivo de reunião ou cole o texto.'}), 400
+
+        file_bytes, filename = None, None
+        if file_obj and file_obj.filename:
+            file_bytes = file_obj.read()
+            filename = file_obj.filename
+
+        previous_record_id = request.form.get('previous_record_id') or None
+        if previous_record_id:
+            try:
+                previous_record_id = int(previous_record_id)
+            except ValueError:
+                previous_record_id = None
+        with_insights = (request.form.get('with_insights') or '1') != '0'
+
+        task_id = uuid.uuid4().hex
+        _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_iata_process_async,
+            args=(task_id, file_bytes, filename, raw_text_input),
+            kwargs={'previous_record_id': previous_record_id, 'with_insights': with_insights},
+            daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/tasks/<task_id>', methods=['GET'])
+def get_iata_task_status(task_id):
+    task = _iata_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
+    return jsonify(task)
+
+
 @app.route('/api/autotoca/iata', methods=['GET'])
 def list_iata_records():
     try:
