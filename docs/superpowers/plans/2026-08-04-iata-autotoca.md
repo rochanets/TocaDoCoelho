@@ -2315,7 +2315,7 @@ git add routes/autotoca_iata.py tests/test_iata.py && git commit -m "feat(iata):
 - Modify: `routes/autotoca_iata.py`
 - Test: `tests/test_iata.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_sugerir_contas_casa_por_nome_normalizado(db_path, monkeypatch):
@@ -2360,7 +2360,9 @@ def test_link_confirma_vinculo_da_conta(client, db_path):
 
     conta = toca._iata_load_record(rid)['managers'][0]['accounts'][0]
     assert conta['account_id'] == account_id
-    assert conta['match_confirmed'] == 1
+    # _iata_read_hierarchy (Task 6) padronizou match_confirmed como bool na
+    # leitura — não int 0/1 como fica gravado na coluna do SQLite.
+    assert conta['match_confirmed'] is True
 
 
 def test_link_com_account_id_nulo_desfaz_o_vinculo(client, db_path):
@@ -2377,119 +2379,63 @@ def test_link_com_account_id_nulo_desfaz_o_vinculo(client, db_path):
     assert toca._iata_load_record(rid)['managers'][0]['accounts'][0]['account_id'] is None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_iata.py -k "sugerir or link_" -v`
 Expected: FAIL — o stub de `_iata_sugerir_contas` não casa nada e a rota `/link` não existe.
 
-- [ ] **Step 3: Implementar (substituindo os stubs da Task 7)**
+- [x] **Step 3: Implementar (substituindo os stubs da Task 7)**
 
-```python
-def _iata_sugerir_contas(managers):
-    """Sugere o vínculo com `accounts` por nome normalizado. Nunca confirma
-    sozinho — quem confirma é o usuário, pela rota /link."""
-    conn = get_db()
-    try:
-        c = conn.cursor()
-        c.execute('SELECT id, name FROM accounts')
-        catalogo = {iata_lib.normalize_name(r['name']): r['id'] for r in c.fetchall()}
-    finally:
-        conn.close()
+**Divergência da implementação de referência acima, decidida durante a Task 8**
+(a referência já se provou falível em Tasks anteriores — ver "Atenção
+especial" do prompt da Task 8):
 
-    for manager in (managers or []):
-        for account in (manager.get('accounts') or []):
-            norm = iata_lib.normalize_name(account.get('name'))
-            if not norm:
-                continue
-            if norm in catalogo:
-                account['account_id'] = catalogo[norm]
-                account['match_confidence'] = 'alta'
-                continue
-            proximos = difflib.get_close_matches(norm, list(catalogo.keys()), n=1, cutoff=0.85)
-            if proximos:
-                account['account_id'] = catalogo[proximos[0]]
-                account['match_confidence'] = 'media'
-    return managers
+- `portfolio_offers` **não tem coluna `description`** — as colunas reais são
+  `title`/`summary` (confirmado em `app.py:668`). O `SELECT title,
+  description` acima derrubaria a geração inteira da ata com uma exceção de
+  SQLite; o código real usa `SELECT title, summary`.
+- `_iata_sugerir_contas` **não** reimplementa exato+fuzzy 0.85 na mão — isso
+  faria "Ambev" (citada na reunião) nunca casar com "Ambev S.A." (cadastrada
+  no CRM), porque `SequenceMatcher` dá ratio 0.71 para "ambev" x "ambev s a",
+  abaixo do cutoff. Em vez disso, `routes/autotoca_iata.py` reaproveita uma
+  nova função pura `iata_lib.match_account_name(nome, catalogo_por_norm)`
+  (`integrations/iata/reconcile.py`), que delega para o mesmo helper de três
+  passos já usado para casar conta com a ata anterior
+  (`_match_previous_account_key`: exato -> sem sufixo de forma jurídica ->
+  fuzzy 0.85). Reexportada em `integrations/iata/__init__.py`.
+- `_iata_sugerir_contas` **preserva** uma conta com `match_confirmed=True`
+  (por exemplo herdada da ata anterior via `reconcile`) em vez de
+  sobrescrever com uma nova sugestão — uma confirmação humana não pode ser
+  desfeita silenciosamente por uma nova rodada de sugestão automática.
+- `_iata_insights_ofertas` **não** filtra `isinstance(i, dict)` em silêncio.
+  Um `insights` que veio como dict único (em vez de lista) é tratado como
+  lista de um elemento; um item fora do formato entra como está — mesma
+  tolerância de `_linhas_de_passos`/`_linhas_de_insights` em
+  `integrations/iata/render.py` (Tasks 4/5): melhor exibir algo imperfeito
+  do que descartar sem avisar.
+- A rota `/link` valida que `account_id` existe em `accounts` antes de
+  gravar (404 se não existir) — sem isso, um id chutado ou de uma conta já
+  apagada seria aceito e viraria uma referência fantasma.
 
+Ver `routes/autotoca_iata.py` (`_iata_sugerir_contas`, `_iata_insights_ofertas`,
+`link_iata_account`) e `integrations/iata/reconcile.py` (`match_account_name`)
+para o código final.
 
-def _iata_insights_ofertas(header, managers):
-    """Cruza as oportunidades com as ofertas do portfólio STF."""
-    conn = get_db()
-    try:
-        c = conn.cursor()
-        c.execute('SELECT title, description FROM portfolio_offers ORDER BY title')
-        ofertas = [dict_from_row(r) for r in c.fetchall()]
-    finally:
-        conn.close()
-    if not ofertas:
-        return []
+- [x] **Step 4: Run test to verify it passes**
 
-    resumo = [
-        {'conta': a.get('name'), 'oportunidade': o.get('name'), 'update': o.get('update_text')}
-        for m in (managers or []) for a in (m.get('accounts') or [])
-        for o in (a.get('opportunities') or [])
-    ]
-    if not resumo:
-        return []
+`python -m pytest tests/test_iata.py -v` — 95 passed (84 pré-existentes + 11
+novos, incluindo testes para as três divergências acima: casamento por
+sufixo jurídico, preservação de vínculo confirmado, e-mail confirmando/
+desfazendo vínculo, `account_id` inexistente/de outra ata na rota `/link`,
+`insights` fora do formato). Suíte completa: 197 passed, 1 failed (falha
+conhecida e não relacionada de fuso horário em
+`test_waha_send.py::test_send_quota_e_limite`).
 
-    prompt = (
-        "Você é consultor de negócios. Para as oportunidades abaixo, identifique dores "
-        "e cruze com as soluções do portfólio.\n"
-        "Retorne EXCLUSIVAMENTE JSON: "
-        '{"insights":[{"pain":"dor","matched_offer":"título da oferta ou null",'
-        '"confidence":"alta/media/baixa","observation":"observação breve"}]}\n\n'
-        f"OPORTUNIDADES:\n{json.dumps(resumo, ensure_ascii=False)[:12000]}\n\n"
-        f"SOLUÇÕES STF:\n{json.dumps(ofertas, ensure_ascii=False)[:12000]}"
-    )
-    raw = _llm_prompt(prompt, log_tag='iAta/Insights')
-    parsed = iata_lib._loads_tolerante(raw) if raw else None
-    if not isinstance(parsed, dict):
-        logger.warning('[iAta] Insights sem resposta utilizável da IA.')
-        return []
-    return [i for i in (parsed.get('insights') or []) if isinstance(i, dict)]
-
-
-@app.route('/api/autotoca/iata/<int:record_id>/accounts/<int:iata_account_id>/link',
-           methods=['POST'])
-def link_iata_account(record_id, iata_account_id):
-    try:
-        payload = request.get_json(silent=True) or {}
-        account_id = payload.get('account_id')
-        if account_id is not None:
-            try:
-                account_id = int(account_id)
-            except (TypeError, ValueError):
-                return jsonify({'error': 'account_id inválido.'}), 400
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''UPDATE iata_accounts SET account_id = ?, match_confirmed = ?
-                     WHERE id = ? AND record_id = ?''',
-                  (account_id, 1 if account_id is not None else 0, iata_account_id, record_id))
-        alterados = c.rowcount
-        conn.commit()
-        conn.close()
-        if not alterados:
-            return jsonify({'error': 'Conta da ata não encontrada.'}), 404
-        return jsonify({'message': 'Vínculo atualizado.'})
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao vincular conta {iata_account_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-```
-
-Adicionar `import difflib` no topo de `routes/autotoca_iata.py`.
-Antes de escrever, confirmar as colunas reais de `portfolio_offers`
-(`app.py:668`) — se não houver `description`, ajustar o `SELECT`.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `python -m pytest tests/test_iata.py -v`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add routes/autotoca_iata.py tests/test_iata.py && git commit -m "feat(iata): sugestao de conta do crm e insights"
+git add routes/autotoca_iata.py integrations/iata/reconcile.py integrations/iata/__init__.py tests/test_iata.py
+git commit -m "feat(iata): sugestao de conta do CRM, confirmacao e insights"
 ```
 
 ---
