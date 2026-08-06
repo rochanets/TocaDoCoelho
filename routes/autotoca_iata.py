@@ -398,12 +398,23 @@ def create_iata_record():
             return jsonify({'error': 'O arquivo enviado está vazio. '
                                      'Envie a transcrição da reunião ou cole o texto.'}), 400
 
-        previous_record_id = request.form.get('previous_record_id') or None
-        if previous_record_id:
+        previous_record_id_raw = request.form.get('previous_record_id') or None
+        previous_record_id = None
+        # M3: um previous_record_id NÃO numérico (form corrompido/adulterado)
+        # era silenciosamente descartado aqui — a ata seguia "do zero" sem
+        # nenhum aviso, o único caminho em que a continuidade se perdia
+        # calada (o id numérico que simplesmente não existe mais já gera
+        # aviso em `_iata_previous_managers`). Trata igual: aviso explícito
+        # na task, sem derrubar a geração.
+        previous_record_id_aviso = None
+        if previous_record_id_raw:
             try:
-                previous_record_id = int(previous_record_id)
+                previous_record_id = int(previous_record_id_raw)
             except ValueError:
-                previous_record_id = None
+                previous_record_id_aviso = (
+                    f'O id da ata anterior selecionada ("{previous_record_id_raw}") não é '
+                    'válido; esta ata foi gerada sem continuidade com ela.')
+                logger.warning(f'[iAta] {previous_record_id_aviso}')
 
         prev_file = request.files.get('previous_file')
         prev_bytes, prev_name = None, None
@@ -418,7 +429,15 @@ def create_iata_record():
             in ('1', 'true', 'yes', 'on', 'sim')
 
         task_id = uuid.uuid4().hex
-        _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        initial_task = {'status': 'processing', 'step': 'Iniciando...', 'progress': 5}
+        if previous_record_id_aviso:
+            # `_iata_task_set` faz merge (dict.update), não substituição — este
+            # 'warning' inicial sobrevive até o fim da task a menos que
+            # `_iata_process_async` o substitua por um aviso mais específico
+            # (o que só acontece quando previous_record_id é truthy, e aqui
+            # ele é None por construção).
+            initial_task['warning'] = previous_record_id_aviso
+        _iata_task_set(task_id, initial_task)
         try:
             threading.Thread(
                 target=_iata_process_async,
@@ -505,150 +524,16 @@ def delete_iata_record(record_id):
         return jsonify({'error': str(e)}), 500
 
 
-def _iata_match_previous(old_items, new_items, name_of):
-    """Casa cada item de `new_items` com o item correspondente de
-    `old_items`, para carregar adiante campos que só existem no lado antigo
-    (`account_id`/`match_confirmed` de uma conta, `prev_opportunity_id` de
-    uma oportunidade) através de um re-parse.
-
-    Estratégia igual à do robô de formulário (`integrations/forms_robot.py`):
-    nome normalizado primeiro (resiliente a reordenação), posição como
-    fallback (resiliente a um typo corrigido ou nome levemente reescrito —
-    mas arriscado se o item realmente virou outra coisa). O fallback só
-    entra quando as duas listas têm o mesmo tamanho: é o sinal mais barato
-    de "provavelmente o mesmo conjunto, só com nomes ajustados" sem tentar
-    adivinhar mais que isso.
-
-    Devolve uma lista paralela a `new_items`: cada posição é `None` (sem
-    candidato) ou uma tupla `(item_antigo, via)`, `via` sendo `'name'` ou
-    `'position'` — o chamador usa `via` para decidir o que é seguro herdar
-    do item antigo (ver `_iata_carregar_campos_anteriores`: uma
-    confirmação humana NUNCA pode vir de um casamento `'position'`, só
-    `'name'`, porque `'position'` é um palpite, não uma identidade
-    confirmada)."""
-    usados = set()
-    old_by_norm = {}
-    for old in old_items:
-        norm = iata_lib.normalize_name(name_of(old))
-        old_by_norm.setdefault(norm, old)
-
-    resultado = [None] * len(new_items)
-    for i, novo in enumerate(new_items):
-        norm = iata_lib.normalize_name(name_of(novo))
-        candidato = old_by_norm.get(norm)
-        if candidato is not None and id(candidato) not in usados:
-            resultado[i] = (candidato, 'name')
-            usados.add(id(candidato))
-
-    if len(old_items) == len(new_items):
-        for i in range(len(new_items)):
-            if resultado[i] is None and id(old_items[i]) not in usados:
-                resultado[i] = (old_items[i], 'position')
-                usados.add(id(old_items[i]))
-
-    return resultado
-
-
-def _iata_carregar_campos_anteriores(managers_antigos, managers_novos):
-    """Depois de um re-parse bem-sucedido, preenche em `managers_novos` (in
-    place) os campos que a IA não devolve porque não fazem parte do texto:
-    `account_id`/`match_confirmed`/`match_confidence` de cada conta, e
-    `previous_status`/`prev_opportunity_id`/`carried_over` de cada
-    oportunidade — usando `_iata_match_previous` em cada nível da
-    hierarquia (gerente -> conta -> oportunidade).
-
-    Achado da revisão de qualidade da Task 9: quando o casamento de uma
-    CONTA veio por posição (o nome mudou e não há como confirmar que é a
-    mesma conta), `match_confirmed` NUNCA é herdado como True — mesmo que a
-    conta antiga estivesse confirmada via `/link`. Herdar cegamente
-    trocaria vínculos de CRM quando o usuário renomeia duas contas do mesmo
-    gerente e inverte a ordem em que digita (reproduzido na revisão:
-    "Ambev"/"Heineken" confirmadas, usuário reescreve como "Heineken
-    NV"/"Ambev Brasil" na ordem trocada — sem esta guarda, cada uma herdaria
-    o account_id CONFIRMADO da outra). `account_id`/`match_confidence`
-    continuam vindo como SUGESTÃO (o usuário pode reconfirmar em um clique
-    em vez de procurar a conta de novo), só `match_confirmed` é zerado.
-
-    Cada oportunidade recebe também uma chave temporária `_old_own_id` (o
-    id de banco da oportunidade ANTIGA desta mesma ata que foi casada, não
-    o `prev_opportunity_id` que ela carrega) — usada pelo chamador para
-    remapear referências de OUTRAS atas depois do DELETE+INSERT de
-    `_iata_write_hierarchy` (ver rota `update_iata_body`). Precisa ser
-    removida do dict antes de persistir em `ata_json`.
-
-    Devolve um dict `{'accounts': [...], 'opportunities': [...]}` com um
-    item por casamento feito por posição, para a rota reportar ao usuário
-    (nunca silencioso — mesmo princípio do campo `positional` no robô de
-    formulário: "uma resposta na pergunta errada é pior que uma pergunta em
-    branco")."""
-    positional = {'accounts': [], 'opportunities': []}
-    gerente_map = _iata_match_previous(
-        managers_antigos, managers_novos, lambda m: m.get('name'))
-    for manager, gm in zip(managers_novos, gerente_map):
-        antigo_manager = gm[0] if gm else {}
-        contas_antigas = (antigo_manager or {}).get('accounts') or []
-        conta_map = _iata_match_previous(
-            contas_antigas, manager.get('accounts') or [], lambda a: a.get('name'))
-        for account, cm in zip(manager.get('accounts') or [], conta_map):
-            antiga_conta = (cm[0] if cm else None) or {}
-            via_conta = cm[1] if cm else None
-            account['account_id'] = antiga_conta.get('account_id')
-            account['match_confidence'] = antiga_conta.get('match_confidence')
-            if via_conta == 'position':
-                account['match_confirmed'] = False
-                positional['accounts'].append({
-                    'manager': manager.get('name'), 'name': account.get('name'),
-                    'previous_name': antiga_conta.get('name')})
-            else:
-                account['match_confirmed'] = bool(antiga_conta.get('match_confirmed'))
-
-            opps_antigas = antiga_conta.get('opportunities') or []
-            opp_map = _iata_match_previous(
-                opps_antigas, account.get('opportunities') or [], lambda o: o.get('name'))
-            for opp, om in zip(account.get('opportunities') or [], opp_map):
-                antiga_opp = (om[0] if om else None) or {}
-                via_opp = om[1] if om else None
-                opp['previous_status'] = antiga_opp.get('previous_status')
-                opp['prev_opportunity_id'] = antiga_opp.get('prev_opportunity_id')
-                opp['carried_over'] = bool(antiga_opp.get('carried_over'))
-                opp['responsible'] = opp.get('responsible') or manager.get('name')
-                opp['_old_own_id'] = antiga_opp.get('id')
-                if via_opp == 'position':
-                    positional['opportunities'].append({
-                        'manager': manager.get('name'), 'account': account.get('name'),
-                        'name': opp.get('name'), 'previous_name': antiga_opp.get('name')})
-    return positional
-
-
-def _iata_flatten_opportunities(managers):
-    """Achata `managers` na mesma ordem gerente -> conta -> oportunidade em
-    que `_iata_write_hierarchy` insere (e `_iata_read_hierarchy` lê de
-    volta, por `display_order`) — usado para alinhar índice a índice a
-    oportunidade antiga com a nova linha física que a substitui."""
-    saida = []
-    for m in managers or []:
-        for a in m.get('accounts') or []:
-            for o in a.get('opportunities') or []:
-                saida.append(o)
-    return saida
-
-
-def _iata_titulo_apos_edicao(titulo_anterior, titulo_novo_ia, body_editado):
-    """Decide o título depois de um re-parse bem-sucedido.
-
-    Achado da revisão: a IA reformula o título mesmo quando o usuário só
-    corrigiu um typo no corpo ("Reunião Ambev - Q3" -> "Reunião comercial
-    Ambev" sem nenhuma intenção do usuário de renomear a ata). Mantém o
-    título anterior se ele (comparado por `normalize_name`, tolerante a
-    acento/caixa/pontuação) ainda aparece em algum lugar do texto editado —
-    só aceita o título novo da IA quando o antigo sumiu do corpo, sinal de
-    que a mudança foi uma decisão deliberada do usuário ao reescrever o
-    cabeçalho."""
-    antigo_norm = iata_lib.normalize_name(titulo_anterior or '')
-    corpo_norm = iata_lib.normalize_name(body_editado or '')
-    if antigo_norm and antigo_norm in corpo_norm:
-        return titulo_anterior
-    return (titulo_novo_ia or '').strip() or titulo_anterior
+# Refactor da revisão final: `_iata_match_previous`, `_iata_carregar_campos_anteriores`,
+# `_iata_flatten_opportunities` e `_iata_titulo_apos_edicao` eram lógica pura
+# (sem Flask/SQLite) morando neste arquivo de rotas — foram extraídas para
+# `integrations/iata/edit.py`, ao lado de `reconcile.py` (mesma classe de
+# problema: casar hierarquia velha com nova). Os nomes com prefixo `_iata_`
+# seguem existindo aqui como aliases para não mudar os call sites abaixo.
+_iata_match_previous = iata_lib.match_previous_items
+_iata_carregar_campos_anteriores = iata_lib.carregar_campos_anteriores
+_iata_flatten_opportunities = iata_lib.flatten_opportunities
+_iata_titulo_apos_edicao = iata_lib.titulo_apos_edicao
 
 
 # Um lock por ata em memória — este é um app local de processo único (sem
@@ -734,6 +619,19 @@ def update_iata_body(record_id):
             positional_matches = _iata_carregar_campos_anteriores(
                 atual['managers'], parsed['managers'])
 
+            # I3: uma conta ACRESCENTADA no texto editado (não existia na
+            # hierarquia antiga desta ata, então `_iata_carregar_campos_anteriores`
+            # não tem de onde herdar `account_id`) nunca era cruzada com o CRM —
+            # ficava para sempre sem `account_id`, o bloco "Contas sugeridas
+            # pela IA" da tela não mostra contas sem `account_id`, e a rota
+            # `/link` exige um `account_id` que a tela não tinha como oferecer.
+            # Mesmo princípio (e mesma ordem) de `_iata_process_async`: sugere
+            # DEPOIS do casamento com o passado, sobre os managers já com o que
+            # pôde ser herdado — o guard de `match_confirmed` dentro de
+            # `_iata_sugerir_contas` já protege as contas confirmadas acima de
+            # serem sobrescritas por uma sugestão.
+            _iata_sugerir_contas(parsed['managers'])
+
             # Título: mantém o anterior se ainda aparece no corpo editado —
             # ver `_iata_titulo_apos_edicao`.
             titulo_final = _iata_titulo_apos_edicao(
@@ -747,60 +645,66 @@ def update_iata_body(record_id):
             # dispara ON DELETE SET NULL em cascata sobre quem aponta para
             # essas linhas).
             old_ids = [o['id'] for o in _iata_flatten_opportunities(atual['managers'])]
+            # M2: a partir daqui a conexão só era fechada no caminho feliz —
+            # uma exceção no meio (write_hierarchy, remapeamento, UPDATE
+            # final) vazava a conexão, diferente do resto do arquivo, que
+            # sempre fecha sob `finally`.
             conn = get_db()
-            c = conn.cursor()
-            referencing = []
-            if old_ids:
-                placeholders = ','.join('?' * len(old_ids))
-                c.execute(
-                    f'SELECT id, prev_opportunity_id FROM iata_opportunities '
-                    f'WHERE record_id != ? AND prev_opportunity_id IN ({placeholders})',
-                    (record_id, *old_ids))
-                referencing = c.fetchall()
+            try:
+                c = conn.cursor()
+                referencing = []
+                if old_ids:
+                    placeholders = ','.join('?' * len(old_ids))
+                    c.execute(
+                        f'SELECT id, prev_opportunity_id FROM iata_opportunities '
+                        f'WHERE record_id != ? AND prev_opportunity_id IN ({placeholders})',
+                        (record_id, *old_ids))
+                    referencing = c.fetchall()
 
-            new_flat = _iata_flatten_opportunities(parsed['managers'])
-            # `_old_own_id` é temporário (ver `_iata_carregar_campos_anteriores`)
-            # — extraído aqui na mesma ordem de travessia, e removido do dict
-            # antes de ir para `ata_json` (não é dado de negócio real).
-            old_own_ids_in_order = [o.pop('_old_own_id', None) for o in new_flat]
+                new_flat = _iata_flatten_opportunities(parsed['managers'])
+                # `_old_own_id` é temporário (ver `_iata_carregar_campos_anteriores`)
+                # — extraído aqui na mesma ordem de travessia, e removido do dict
+                # antes de ir para `ata_json` (não é dado de negócio real).
+                old_own_ids_in_order = [o.pop('_old_own_id', None) for o in new_flat]
 
-            # extras (insights) não são reextraídos do texto editado — o
-            # re-parse só reestrutura Gerente/Conta/Oportunidade, então tanto
-            # `extras` quanto `insights_json` continuam sendo os da geração
-            # original. Se o usuário apagou uma seção de insight no texto,
-            # isso não se reflete aqui: é uma limitação aceita, não um bug —
-            # não há como o re-parse saber que a ausência foi intencional.
-            _iata_write_hierarchy(c, record_id, parsed['managers'])
+                # extras (insights) não são reextraídos do texto editado — o
+                # re-parse só reestrutura Gerente/Conta/Oportunidade, então tanto
+                # `extras` quanto `insights_json` continuam sendo os da geração
+                # original. Se o usuário apagou uma seção de insight no texto,
+                # isso não se reflete aqui: é uma limitação aceita, não um bug —
+                # não há como o re-parse saber que a ausência foi intencional.
+                _iata_write_hierarchy(c, record_id, parsed['managers'])
 
-            # Remapeia prev_opportunity_id de OUTRAS atas que apontavam para
-            # ids antigos desta ata: o DELETE+INSERT acima dá identidade
-            # física nova à mesma oportunidade lógica, e sem este remapeamento
-            # o ON DELETE SET NULL derrubaria silenciosamente o encadeamento
-            # de uma ata FUTURA mesmo que a oportunidade continue existindo
-            # (só com id novo). Onde a oportunidade antiga não tem
-            # correspondente nova (sumiu do texto editado), NULL — já
-            # aplicado pelo cascade — é o resultado honesto.
-            if referencing:
-                novos_flat = _iata_flatten_opportunities(_iata_read_hierarchy(c, record_id))
-                id_map = {}
-                for old_own_id, novo_row in zip(old_own_ids_in_order, novos_flat):
-                    if old_own_id is not None:
-                        id_map[old_own_id] = novo_row['id']
-                for other_opp_id, old_prev_id in referencing:
-                    novo_id = id_map.get(old_prev_id)
-                    if novo_id is not None:
-                        c.execute(
-                            'UPDATE iata_opportunities SET prev_opportunity_id = ? WHERE id = ?',
-                            (novo_id, other_opp_id))
+                # Remapeia prev_opportunity_id de OUTRAS atas que apontavam para
+                # ids antigos desta ata: o DELETE+INSERT acima dá identidade
+                # física nova à mesma oportunidade lógica, e sem este remapeamento
+                # o ON DELETE SET NULL derrubaria silenciosamente o encadeamento
+                # de uma ata FUTURA mesmo que a oportunidade continue existindo
+                # (só com id novo). Onde a oportunidade antiga não tem
+                # correspondente nova (sumiu do texto editado), NULL — já
+                # aplicado pelo cascade — é o resultado honesto.
+                if referencing:
+                    novos_flat = _iata_flatten_opportunities(_iata_read_hierarchy(c, record_id))
+                    id_map = {}
+                    for old_own_id, novo_row in zip(old_own_ids_in_order, novos_flat):
+                        if old_own_id is not None:
+                            id_map[old_own_id] = novo_row['id']
+                    for other_opp_id, old_prev_id in referencing:
+                        novo_id = id_map.get(old_prev_id)
+                        if novo_id is not None:
+                            c.execute(
+                                'UPDATE iata_opportunities SET prev_opportunity_id = ? WHERE id = ?',
+                                (novo_id, other_opp_id))
 
-            c.execute('''UPDATE iata_records SET reparse_failed = 0, title = ?, ata_json = ?
-                         WHERE id = ?''',
-                      (titulo_final or atual['title'],
-                       json.dumps({'header': parsed['header'], 'managers': parsed['managers'],
-                                   'extras': atual.get('extras') or {}}, ensure_ascii=False),
-                       record_id))
-            conn.commit()
-            conn.close()
+                c.execute('''UPDATE iata_records SET reparse_failed = 0, title = ?, ata_json = ?
+                             WHERE id = ?''',
+                          (titulo_final or atual['title'],
+                           json.dumps({'header': parsed['header'], 'managers': parsed['managers'],
+                                       'extras': atual.get('extras') or {}}, ensure_ascii=False),
+                           record_id))
+                conn.commit()
+            finally:
+                conn.close()
             return jsonify({'message': 'Ata atualizada.', 'reparse_failed': False,
                             'positional_matches': positional_matches})
     except Exception as e:
@@ -828,12 +732,16 @@ _IATA_AVISO_REPARSE_SEM_ESTRUTURA = (
     'Ajuste o texto e salve de novo — em especial as linhas de Gerente '
     'Comercial, conta e oportunidade — para conseguir enviar.')
 
+_IATA_AVISO_SEM_HIERARQUIA = (
+    'Esta ata não tem nenhum Gerente Comercial/conta/oportunidade registrado. '
+    'Não é possível montar o e-mail sem essa estrutura.')
+
 
 def _iata_email_payload(record_id):
     """Monta assunto e HTML do e-mail para uma ata, ou sinaliza por que não é
     seguro enviar ainda (`blocked`).
 
-    Dois casos precisam bloquear em vez de mandar algo enganoso:
+    Três casos precisam bloquear em vez de mandar algo enganoso:
 
     1) Ata "legada" (`format_version` < 2) sem nenhuma hierarquia gravada —
        não existe fonte de dado nenhuma para montar o e-mail (nem hierarquia,
@@ -848,7 +756,15 @@ def _iata_email_payload(record_id):
        Aqui isso não é bloqueio silencioso: o payload continua sendo
        montado, só que marcado `stale=True` com um aviso explícito, e é a
        rota de envio (`send_iata_email`) que exige confirmação explícita
-       antes de mandar."""
+       antes de mandar.
+
+    3) (Revisão final, M1) Ata NÃO legada (`format_version >= 2`), sem
+       `reparse_failed`, mas ainda assim com `managers` vazio — por exemplo o
+       usuário editou o texto removendo todos os blocos de Gerente Comercial
+       e o re-parse "funcionou" (devolveu uma hierarquia vazia, não uma
+       falha). Sem esta checagem, nenhuma das duas condições acima batia e o
+       e-mail saía montado só com o cabeçalho — sem nenhum aviso — porque
+       `render_email_html` simplesmente não tem nada para iterar."""
     registro = _iata_load_record(record_id)
     if not registro:
         return None
@@ -859,8 +775,8 @@ def _iata_email_payload(record_id):
     except (TypeError, ValueError):
         format_version = 1
     if not managers:
-        # A ordem destas duas checagens importa para o usuário: se ele acabou
-        # de escrever o texto à mão e o re-parse falhou, culpar o "formato
+        # A ordem destas checagens importa para o usuário: se ele acabou de
+        # escrever o texto à mão e o re-parse falhou, culpar o "formato
         # antigo" é enganoso — sugere limitação permanente do registro, quando
         # na verdade corrigir o texto resolve. Só é ata legada de fato quando
         # não há nem hierarquia nem texto editado por ele.
@@ -868,6 +784,10 @@ def _iata_email_payload(record_id):
             return {'blocked': _IATA_AVISO_REPARSE_SEM_ESTRUTURA}
         if format_version < 2:
             return {'blocked': _IATA_AVISO_ATA_LEGADA}
+        # M1: v2 (ou mais nova) sem hierarquia nenhuma e sem re-parse
+        # pendurado — bloqueia de todo jeito, independentemente do
+        # format_version, em vez de deixar cair para o e-mail só com cabeçalho.
+        return {'blocked': _IATA_AVISO_SEM_HIERARQUIA}
 
     header = registro.get('header') or {
         'title': registro.get('title'), 'meeting_date': registro.get('meeting_date'),

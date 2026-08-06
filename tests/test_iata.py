@@ -464,6 +464,57 @@ def test_reconcile_match_exato_recebe_confianca_alta():
     assert opp['match_confidence'] == 'alta'
 
 
+# --- Defeitos encontrados na revisão FINAL ---------------------------------
+
+
+def test_reconcile_C1_status_real_sobrevive_a_duas_atas_seguidas_sem_citacao():
+    """C1 (revisão final): a Ata 1 tem update real ("Proposta enviada em
+    10/01"). A Ata 2 não cita a conta -> carried over, `update_text` vira
+    SEM_UPDATE (correto: marca "não foi citada aqui") e `previous_status`
+    carrega o texto real da Ata 1. A Ata 3 TAMBÉM não cita -> antes da
+    correção, `previous_status` lia `update_text` da Ata 2 cegamente, que é
+    SEM_UPDATE — o texto real do negócio desaparecia da cadeia para sempre.
+    Com a correção, o status efetivo continua sendo o da Ata 1."""
+    ata1 = _hierarquia([{'id': 7, 'name': 'Migração SAP',
+                         'update_text': 'Proposta enviada em 10/01'}])
+
+    ata2 = iata_lib.reconcile(_hierarquia([]), ata1)
+    opp2 = ata2[0]['accounts'][0]['opportunities'][0]
+    assert opp2['carried_over'] is True
+    assert opp2['update_text'] == iata_lib.SEM_UPDATE
+    assert opp2['previous_status'] == 'Proposta enviada em 10/01'
+
+    ata3 = iata_lib.reconcile(_hierarquia([]), ata2)
+    opp3 = ata3[0]['accounts'][0]['opportunities'][0]
+    assert opp3['carried_over'] is True
+    assert opp3['update_text'] == iata_lib.SEM_UPDATE
+    assert opp3['previous_status'] == 'Proposta enviada em 10/01', (
+        'sem a correção C1, previous_status vira SEM_UPDATE na Ata 3 — o '
+        'último status REAL do negócio some da cadeia depois de duas atas '
+        'seguidas sem citar a oportunidade')
+
+
+def test_reconcile_C1_status_real_chega_ate_a_quarta_ata_quando_finalmente_citada():
+    """Extensão do teste acima cobrindo QUATRO atas: pulada duas vezes
+    seguidas (Atas 2 e 3) e finalmente citada de novo na Ata 4 — o
+    `previous_status` mostrado ao usuário na Ata 4 precisa ser o último
+    status REAL (da Ata 1), não o SEM_UPDATE que ficou pendurado no meio."""
+    ata1 = _hierarquia([{'id': 7, 'name': 'Migração SAP',
+                         'update_text': 'Proposta enviada em 10/01'}])
+    ata2 = iata_lib.reconcile(_hierarquia([]), ata1)
+    ata3 = iata_lib.reconcile(_hierarquia([]), ata2)
+
+    ata4_atual = _hierarquia([{'name': 'Migração SAP', 'update_text': 'Contrato assinado',
+                               'responsible': 'Ana'}])
+    ata4 = iata_lib.reconcile(ata4_atual, ata3)
+    opp4 = ata4[0]['accounts'][0]['opportunities'][0]
+    assert opp4['carried_over'] is False
+    assert opp4['update_text'] == 'Contrato assinado'
+    assert opp4['previous_status'] == 'Proposta enviada em 10/01', (
+        'o match exato na Ata 4 precisa mostrar o último status REAL do '
+        'negócio, não o SEM_UPDATE pendurado das atas em que ele foi pulado')
+
+
 # --- Task 3: prompt e parsing da hierarquia --------------------------------
 
 
@@ -1251,6 +1302,44 @@ def test_pipeline_previous_record_id_inexistente_gera_aviso_sem_referencia_fanta
     assert registro['previous_record_id'] is None
 
 
+def test_post_previous_record_id_malformado_gera_aviso_na_task(client, db_path, monkeypatch):
+    """M3 (revisão final): diferente de um id NUMÉRICO que não existe mais
+    (coberto pelo teste acima, aviso de `_iata_previous_managers`), um
+    `previous_record_id` NÃO numérico (form corrompido/adulterado) era
+    silenciosamente convertido para None na própria rota, ANTES de chegar em
+    `_iata_previous_managers` — o único caminho em que a perda de
+    continuidade ficava muda. A correção gera o aviso já na criação da task,
+    de onde ele sobrevive até o fim (o merge de `_iata_task_set` não apaga a
+    chave 'warning' setada aqui, e o fim do pipeline só a sobrescreve quando
+    `aviso_continuidade` for truthy — que não acontece aqui, pois
+    previous_record_id chega como None)."""
+    resposta_ia = json.dumps({
+        'title': 'Ata', 'meeting_date': None, 'meeting_time': None,
+        'topic': '', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': []}]})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ia)
+
+    resp = client.post('/api/autotoca/iata', data={
+        'raw_text': 'transcrição qualquer', 'previous_record_id': 'nao-e-um-numero'})
+    assert resp.status_code == 202
+    task_id = resp.get_json()['task_id']
+
+    import time
+    task = None
+    for _ in range(50):
+        task = toca._iata_task_get(task_id)
+        if task.get('status') in ('done', 'error'):
+            break
+        time.sleep(0.05)
+
+    assert task['status'] == 'done', task.get('error')
+    assert task.get('warning'), (
+        'sem a correção M3, um previous_record_id não numérico vira ata "do '
+        'zero" sem nenhum aviso ao usuário')
+    registro = toca._iata_load_record(task['result']['id'])
+    assert registro['previous_record_id'] is None
+
+
 def test_pipeline_resolver_de_ambiguidade_casa_oportunidade_com_confianca_media(
         db_path, monkeypatch):
     """`_iata_resolver_ambiguidade` devolve {indice: id_anterior}; confirma
@@ -1861,6 +1950,140 @@ def test_put_body_troca_cruzada_de_duas_contas_nao_inverte_vinculos_confirmados(
         'vínculo de "Ambev Brasil" não pode nascer confirmado de um palpite posicional'
 
 
+def test_put_body_rename_de_conta_por_sufixo_juridico_preserva_confirmacao(
+        client, db_path, monkeypatch):
+    """I1 (revisão final), cenário reproduzido pelo revisor: ata com "Ambev"
+    (vínculo CONFIRMADO via /link) e "Vale". Usuário renomeia "Ambev" para
+    "Ambev S.A." E acrescenta uma terceira conta — o tamanho das listas muda
+    (2 -> 3), então o fallback posicional (que exige listas do MESMO
+    tamanho) nunca entraria em jogo de qualquer forma. Antes da correção, o
+    casamento de conta na edição só usava nome EXATO — "ambev" != "ambev s
+    a" — e a confirmação evaporava em silêncio (account_id=None,
+    match_confirmed=False, positional_matches vazio). Com a correção
+    (reusar `match_account_name`, a mesma escada de `reconcile`: exato -> sem
+    sufixo de forma jurídica -> fuzzy), "Ambev S.A." casa deterministicamente
+    com "Ambev" pelo sufixo, e a confirmação sobrevive."""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev Brasil Ltda')")
+    conn.commit()
+    account_id = conn.execute(
+        "SELECT id FROM accounts WHERE name = 'Ambev Brasil Ltda'").fetchone()[0]
+    conn.close()
+
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [
+        {'name': 'Ambev', 'account_id': None, 'match_confidence': 'alta', 'opportunities': []},
+        {'name': 'Vale', 'account_id': None, 'match_confidence': None, 'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    contas = toca._iata_load_record(rid)['managers'][0]['accounts']
+    conta_ambev_id = next(a['id'] for a in contas if a['name'] == 'Ambev')
+
+    assert client.post(f'/api/autotoca/iata/{rid}/accounts/{conta_ambev_id}/link',
+                       json={'account_id': account_id}).status_code == 200
+    assert toca._iata_load_record(rid)['managers'][0]['accounts'][0]['match_confirmed'] is True
+
+    # Texto editado: "Ambev" -> "Ambev S.A." (sufixo jurídico), + terceira conta.
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'X', 'managers': [{'name': 'Ana', 'accounts': [
+            {'name': 'Ambev S.A.', 'opportunities': []},
+            {'name': 'Vale', 'opportunities': []},
+            {'name': 'Nova Conta', 'opportunities': []}]}]}))
+
+    resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': 'texto editado'})
+    assert resp.status_code == 200
+    corpo = resp.get_json()
+    assert corpo['positional_matches']['accounts'] == [], \
+        'casamento por sufixo jurídico é determinístico, não deve sinalizar como palpite'
+    assert corpo['positional_matches']['lost'] == [], \
+        'a conta casou (por sufixo) — não é uma confirmação perdida'
+
+    contas_depois = {a['name']: a for a in
+                     toca._iata_load_record(rid)['managers'][0]['accounts']}
+    ambev_sa = contas_depois['Ambev S.A.']
+    assert ambev_sa['account_id'] == account_id
+    assert ambev_sa['match_confirmed'] is True, (
+        'sem a correção I1, "Ambev S.A." não casa com "Ambev" (só nome exato '
+        'era tentado) e a confirmação humana evapora em silêncio')
+
+
+def test_put_body_conta_confirmada_removida_do_texto_vira_lost(client, db_path, monkeypatch):
+    """I1 fix #2 (revisão final): uma conta antiga com vínculo CONFIRMADO que
+    não casa com NADA na ata editada (nem nome, nem sufixo, nem fuzzy, nem
+    posição — aqui porque ela foi removida do texto e o tamanho das listas
+    mudou) é uma confirmação PERDIDA de verdade, diferente de um casamento
+    por palpite (que ao menos preserva o account_id como sugestão). Isso
+    precisa aparecer num balde próprio (`positional_matches['lost']`), não
+    ficar de fora do relatório."""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
+    conn.commit()
+    account_id = conn.execute(
+        "SELECT id FROM accounts WHERE name = 'Ambev S.A.'").fetchone()[0]
+    conn.close()
+
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [
+        {'name': 'Ambev', 'account_id': None, 'match_confidence': 'alta', 'opportunities': []},
+        {'name': 'Vale', 'account_id': None, 'match_confidence': None, 'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    contas = toca._iata_load_record(rid)['managers'][0]['accounts']
+    conta_ambev_id = next(a['id'] for a in contas if a['name'] == 'Ambev')
+
+    assert client.post(f'/api/autotoca/iata/{rid}/accounts/{conta_ambev_id}/link',
+                       json={'account_id': account_id}).status_code == 200
+
+    # Texto editado: o bloco inteiro da conta "Ambev" foi apagado.
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'X', 'managers': [{'name': 'Ana', 'accounts': [
+            {'name': 'Vale', 'opportunities': []}]}]}))
+
+    resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': 'texto editado'})
+    assert resp.status_code == 200
+    corpo = resp.get_json()
+    assert corpo['positional_matches']['lost'] == [
+        {'manager': 'Ana', 'name': 'Ambev'}], \
+        'a confirmação perdida sem nenhum casamento precisa aparecer no balde "lost"'
+
+
+def test_put_body_conta_acrescentada_no_texto_editado_e_cruzada_com_o_crm(
+        client, db_path, monkeypatch):
+    """I3 (revisão final): uma conta que não existia na hierarquia antiga
+    desta ata (foi ACRESCENTADA pelo usuário ao editar o texto) não tem de
+    onde `_iata_carregar_campos_anteriores` herdar um `account_id` — antes
+    da correção ela ficava para sempre sem vínculo (o bloco "Contas
+    sugeridas" da tela só mostra contas que JÁ têm `account_id`, e a rota
+    `/link` exige um `account_id` que a tela não tinha como oferecer). A
+    correção chama `_iata_sugerir_contas` sobre a hierarquia reestruturada,
+    depois do casamento com o passado."""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Heineken')")
+    conn.commit()
+    conn.close()
+
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': []}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    # Texto editado: usuário acrescenta a conta "Heineken" (cadastrada no CRM
+    # com o mesmo nome) que não existia na ata original.
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'X', 'managers': [{'name': 'Ana', 'accounts': [
+            {'name': 'Heineken', 'opportunities': []}]}]}))
+
+    resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': 'texto editado'})
+    assert resp.status_code == 200
+
+    conta = toca._iata_load_record(rid)['managers'][0]['accounts'][0]
+    assert conta['name'] == 'Heineken'
+    assert conta['account_id'] is not None, (
+        'sem a correção I3, uma conta acrescentada na edição nunca é '
+        'cruzada com o CRM e fica permanentemente sem account_id')
+    assert conta['match_confirmed'] is False, 'sugestão automática nunca confirma sozinha'
+
+
 def test_put_body_rename_de_oportunidade_mantem_encadeamento_por_posicao(
         client, db_path, monkeypatch):
     """Mesmo raciocínio para o nome da oportunidade: corrigir um typo no
@@ -1947,6 +2170,50 @@ def test_put_body_falha_inesperada_no_meio_nao_apaga_o_reparse_failed(
     assert registro['body_edited'] == 1
     assert registro['reparse_failed'] == 1, \
         'assume falho até prova em contrário — nunca "sucesso" por omissão'
+
+
+def test_put_body_falha_apos_segunda_conexao_nao_vaza_conexao_sqlite(
+        client, db_path, monkeypatch):
+    """M2 (revisão final): a partir do passo 2 (reparse bem-sucedido), a
+    SEGUNDA conexão SQLite do PUT /body (a que escreve a hierarquia nova,
+    remapeia encadeamento e faz o UPDATE final) só era fechada no caminho
+    feliz — diferente do resto do arquivo, que sempre fecha sob `finally`.
+    Uma exceção em qualquer ponto entre abrir essa conexão e o commit final
+    vazava a conexão."""
+    import pytest
+
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': []}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'X', 'managers': [{'name': 'Ana', 'accounts': []}]}))
+
+    conexoes_abertas = []
+    get_db_original = toca.get_db
+
+    def _rastreando_get_db():
+        conn = get_db_original()
+        conexoes_abertas.append(conn)
+        return conn
+    monkeypatch.setattr(toca, 'get_db', _rastreando_get_db)
+
+    def _explode(*a, **k):
+        raise RuntimeError('falha simulada na escrita da hierarquia')
+    monkeypatch.setattr(toca, '_iata_write_hierarchy', _explode)
+
+    resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': 'texto novo'})
+    assert resp.status_code == 500
+
+    # A primeira conexão (passo 1: grava o texto) sempre fechava, mesmo antes
+    # da correção — o que importa aqui é a SEGUNDA.
+    assert len(conexoes_abertas) >= 2, 'o PUT precisa ter aberto as duas conexões esperadas'
+    segunda_conexao = conexoes_abertas[1]
+    with pytest.raises(sqlite3.ProgrammingError):
+        # Uma conexão fechada levanta ProgrammingError ao ser usada; se ela
+        # vazou (não fechada), este SELECT executa normalmente e o teste falha.
+        segunda_conexao.execute('SELECT 1')
 
 
 # --- Task 9: defeitos críticos/importantes achados na revisão de qualidade -
@@ -2443,6 +2710,44 @@ def test_email_ata_sem_estrutura_com_texto_editado_culpa_o_reparse_nao_o_formato
     assert 'não conseguiu convertê-lo' in erro or 'Ajuste o texto' in erro, erro
     assert 'formato antigo' not in erro, \
         'culpar o formato antigo aqui engana: o texto é novo, quem falhou foi o re-parse'
+
+
+def test_preview_ata_v2_sem_managers_bloqueia_em_vez_de_so_cabecalho(client, db_path):
+    """M1 (revisão final): uma ata NÃO legada (format_version=2) e sem
+    `reparse_failed` mas com `managers` vazio (ex.: o usuário editou o texto
+    removendo todos os blocos de Gerente Comercial, e o re-parse "funcionou"
+    devolvendo uma hierarquia vazia — não uma falha) não batia em nenhuma das
+    checagens de bloqueio existentes. O e-mail saía montado só com o
+    cabeçalho, sem aviso nenhum. A correção bloqueia com 422 sempre que
+    `managers` está vazio, independentemente do `format_version`."""
+    header = {'title': 'Ata sem hierarquia', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    rid = toca._iata_save_record(header, [], {}, 'texto', None)
+    registro = toca._iata_load_record(rid)
+    assert registro['format_version'] == 2
+    assert registro['reparse_failed'] in (0, False)
+    assert registro['managers'] == []
+
+    resp = client.get(f'/api/autotoca/iata/{rid}/email/preview')
+    assert resp.status_code == 422, (
+        'sem a correção M1, uma ata v2 com managers vazio não é bloqueada e o '
+        'e-mail sai só com cabeçalho, sem estrutura nenhuma')
+    assert resp.get_json().get('error')
+
+
+def test_email_ata_v2_sem_managers_bloqueia(client, db_path, monkeypatch):
+    """Mesmo cenário do teste acima, mas pela rota de envio: precisa
+    continuar recusando (422) e nunca chamar `_outlook_send_mail`."""
+    header = {'title': 'Ata sem hierarquia', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    rid = toca._iata_save_record(header, [], {}, 'texto', None)
+    chamadas = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, html, attachments=None: chamadas.append(to))
+
+    resp = client.post(f'/api/autotoca/iata/{rid}/email', json={'to': ['a@x.com']})
+    assert resp.status_code == 422
+    assert chamadas == []
 
 
 def test_email_subject_colapsa_quebra_de_linha_do_titulo():

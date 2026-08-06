@@ -190,6 +190,32 @@ def match_account_name(nome, catalogo_por_norm):
     return catalogo_por_norm[chave], ('alta' if deterministico else 'media')
 
 
+def _status_efetivo(opp):
+    """O último status REAL de uma oportunidade anterior, para propagar como
+    `previous_status` na ata nova.
+
+    Achado da revisão final (C1): quando uma oportunidade é pulada por duas
+    (ou mais) atas seguidas, `_anexar_nao_citados` grava `update_text =
+    SEM_UPDATE` na ata do meio para marcar "não foi citada aqui" — mas esse
+    `SEM_UPDATE` NÃO é status, é ausência de status. Se a próxima reconciliação
+    lê `update_text` cegamente como "o status anterior", o texto real do
+    negócio (ex.: "Proposta enviada em 10/01") é substituído por "Sem update
+    nesta reunião" e desaparece da cadeia para sempre — a ata errada renderiza
+    duas linhas sem informação nenhuma ("Sem update" seguido de "Update: Sem
+    update"), exatamente o oposto da promessa de continuidade da feature.
+
+    A regra: se `update_text` é um status real (não vazio, não SEM_UPDATE),
+    ele é o efetivo. Senão, o status real é o `previous_status` que a ata
+    anterior já vinha carregando (o carry-over também propaga esse campo —
+    ver `_anexar_nao_citados` — então ele nunca se perde, só se um
+    `update_text` real aparecer entre o meio, que é quando esta função pega o
+    caminho feliz acima)."""
+    texto = (opp.get('update_text') or '').strip()
+    if texto and texto != SEM_UPDATE:
+        return texto
+    return (opp.get('previous_status') or '').strip() or None
+
+
 def reconcile(current_managers, previous_managers, resolver=None):
     """Casa a hierarquia extraída da reunião nova com a da ata anterior.
 
@@ -265,7 +291,10 @@ def reconcile(current_managers, previous_managers, resolver=None):
                 exato = next((it for it in itens_candidatos if it['idx'] not in usados_idx), None)
                 if exato is not None:
                     usados_idx.add(exato['idx'])
-                    saida['previous_status'] = (exato['data'].get('update_text') or '').strip() or None
+                    # C1: propaga o último status REAL, não um SEM_UPDATE
+                    # carregado de uma ata em que esta oportunidade foi pulada
+                    # — ver `_status_efetivo`.
+                    saida['previous_status'] = _status_efetivo(exato['data'])
                     saida['prev_opportunity_id'] = exato['data'].get('id')
                     saida['match_confidence'] = 'alta'
                 else:
@@ -367,7 +396,8 @@ def _resolver_ambiguos(pendentes, resolver, usados_idx, ids_reivindicados):
         usados_idx.add(item['idx'])
         ids_reivindicados.add(escolhido)
         saida['prev_opportunity_id'] = item['data'].get('id')
-        saida['previous_status'] = (item['data'].get('update_text') or '').strip() or None
+        # C1: mesma correção do ramo de match exato — ver `_status_efetivo`.
+        saida['previous_status'] = _status_efetivo(item['data'])
         # 'media', não 'alta': é julgamento de um LLM sobre nomes que não
         # bateram sozinhos, diferente do match exato/determinístico acima.
         saida['match_confidence'] = 'media'
@@ -414,7 +444,12 @@ def _anexar_nao_citados(resultado, por_conta, usados_idx, matched_accounts):
                 'name': (opp.get('name') or '').strip(),
                 'update_text': SEM_UPDATE,
                 'responsible': (opp.get('responsible') or '').strip() or dados['manager'],
-                'previous_status': (opp.get('update_text') or '').strip() or None,
+                # C1: propaga o último status REAL da oportunidade, não um
+                # SEM_UPDATE herdado de uma ata anterior em que ela também
+                # foi pulada — ver `_status_efetivo`. Sem isto, duas atas
+                # seguidas sem citar a oportunidade apagavam o último status
+                # real da cadeia para sempre.
+                'previous_status': _status_efetivo(opp),
                 'carried_over': True,
                 'prev_opportunity_id': opp.get('id'),
                 'match_confidence': None,
