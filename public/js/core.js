@@ -1593,13 +1593,15 @@
                 'chamado-juridico': 'autoTocaChamadoJuridico',
                 'mala-direta': 'autoTocaMalaDireta',
                 'sync-outlook': 'autoTocaSyncOutlook',
-                'reembolsos': 'autoTocaReembolsos'
+                'reembolsos': 'autoTocaReembolsos',
+                'iata': 'autoTocaIAta'
             };
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
                 'mala-direta': 'autoTocaBtn_mala-direta',
                 'sync-outlook': 'autoTocaBtn_sync-outlook',
-                'reembolsos': 'autoTocaBtn_reembolsos'
+                'reembolsos': 'autoTocaBtn_reembolsos',
+                'iata': 'autoTocaBtn_iata'
             };
             const targetId = panels[key];
             if (!targetId) return;
@@ -1631,6 +1633,7 @@
                 target.style.display = 'block';
                 setActiveAutoTocaModuleButton(buttons[key]);
                 if (key === 'reembolsos') { loadReembContas(); loadReembOrigemHistorico(); }
+                if (key === 'iata' && typeof loadIAta === 'function') { loadIAta(); }
             }
         }
 

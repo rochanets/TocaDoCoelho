@@ -3511,11 +3511,14 @@
         })();
 
         function loadPortfolio() {
+            // A sub-aba iAta saiu do Portfolio (ver Task 11) — se algum estado
+            // residual da sessão ainda apontar para 'iata', cai para 'stf'.
+            if (_portfolioCurrentSubTab === 'iata') _portfolioCurrentSubTab = 'stf';
             switchPortfolioSubmodule(_portfolioCurrentSubTab || 'stf');
         }
 
         function switchPortfolioSubmodule(subTab) {
-            const tabs = ['stf', 'iata', 'whitespace'];
+            const tabs = ['stf', 'whitespace'];
             tabs.forEach(tab => {
                 const panel = document.getElementById(`portfolioSubPanel_${tab}`);
                 const btn = document.getElementById(`portfolioSubBtn_${tab}`);
@@ -3525,7 +3528,6 @@
             });
             _portfolioCurrentSubTab = subTab;
             if (subTab === 'stf') _loadSTFSolutions();
-            else if (subTab === 'iata') loadIAta();
             else if (subTab === 'whitespace') loadWhitespaceMatrix();
         }
 
@@ -3909,66 +3911,11 @@
         }
 
         // ─── iAta ──────────────────────────────────────────────────────────────
-        let iataRecords = [];
+        // loadIAta, renderIAtaHistory e deleteIAtaRecord foram movidas para
+        // public/js/autotoca-iata.js (painel do AutoToca, ver Task 11 do plano).
+        // As funções abaixo (viewIAtaFull, openIAtaModal, submitIAta, etc.) ainda
+        // referenciam a API antiga do Portfolio e serão refeitas nas Tasks 12-13.
         const expandedIAtaRecords = new Set();
-
-        async function loadIAta() {
-            const container = document.getElementById('iataContent');
-            if (!container) return;
-            container.innerHTML = '<p style="color:#6b7280;">Carregando histórico de atas...</p>';
-            try {
-                const response = await fetch(`${API_BASE}/portfolio/iata`);
-                const payload = await response.json().catch(() => []);
-                if (!response.ok) throw new Error(payload.error || 'Erro ao carregar atas.');
-                iataRecords = Array.isArray(payload) ? payload : [];
-                renderIAtaHistory(iataRecords);
-            } catch (error) {
-                container.innerHTML = `<div class="alert alert-error" style="display:block;">${escapeHtml(error.message || 'Erro ao carregar histórico de atas.')}</div>`;
-            }
-        }
-
-        function renderIAtaHistory(records = []) {
-            const container = document.getElementById('iataContent');
-            if (!container) return;
-            if (!records.length) {
-                container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><h3 style="color:#e2dfd5;">Nenhuma ata gerada</h3><p style="color:#e2dfd5;">Clique em "+ Nova Ata" para gerar a ata de uma reunião com IA.</p></div>`;
-                return;
-            }
-            container.innerHTML = records.map(record => {
-                const rid = Number(record.id);
-                const isExpanded = expandedIAtaRecords.has(rid);
-                const participants = Array.isArray(record.participants) ? record.participants : [];
-                const insights = record.insights || {};
-                const insightsList = Array.isArray(insights.insights) ? insights.insights : [];
-                const hasUnmatched = insights.has_unmatched;
-                const dateStr = record.meeting_date ? ` · ${escapeHtml(record.meeting_date)}` : '';
-                const timeStr = record.meeting_time ? ` ${escapeHtml(record.meeting_time)}` : '';
-                return `
-                    <div class="history-item" style="border:1px solid rgba(16,185,129,.25); border-radius:12px; margin-bottom:10px; background:#fff;">
-                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-                            <div style="flex:1; min-width:0; cursor:pointer;" onclick="toggleIAtaExpand(${rid})">
-                                <div style="display:flex; align-items:center; gap:8px; color:#065f46; flex-wrap:wrap;">
-                                    <i class="fas fa-file-alt"></i>
-                                    <h3 style="margin:0; font-size:15px;">${escapeHtml(record.title || 'Ata sem título')}</h3>
-                                    <span style="font-size:12px; color:#6b7280; font-weight:400;">${dateStr}${timeStr}</span>
-                                </div>
-                                ${participants.length ? `<p style="margin:4px 0 0; color:#6b7280; font-size:12px;">Participantes: ${escapeHtml(participants.join(', '))}</p>` : ''}
-                                ${insightsList.length ? `<p style="margin:3px 0 0; font-size:12px; color:${hasUnmatched ? '#b45309' : '#065f46'};">
-                                    <i class="fas fa-${hasUnmatched ? 'exclamation-circle' : 'check-circle'}"></i>
-                                    ${insightsList.length} insight${insightsList.length > 1 ? 's' : ''} de negócio${hasUnmatched ? ' · Oportunidades sem solução mapeada' : ''}
-                                </p>` : ''}
-                            </div>
-                            <div style="display:flex; gap:6px; flex-shrink:0;">
-                                <button class="btn btn-secondary btn-small" onclick="toggleIAtaExpand(${rid})" title="Expandir/Colapsar">${isExpanded ? '▲' : '▼'}</button>
-                                <button class="btn btn-secondary btn-small" onclick="viewIAtaFull(${rid})" title="Ver ata completa"><i class="fas fa-eye"></i></button>
-                                <button class="btn btn-danger btn-small" onclick="deleteIAtaRecord(${rid})" title="Excluir"><i class="fas fa-trash"></i></button>
-                            </div>
-                        </div>
-                        ${isExpanded ? _renderIAtaExpanded(record) : ''}
-                    </div>
-                `;
-            }).join('');
-        }
 
         function _iataParticipantNames(ata, record) {
             const raw = Array.isArray(ata.participants) ? ata.participants : (Array.isArray(record.participants) ? record.participants : []);
@@ -4451,20 +4398,6 @@
                 if (closeBtn) closeBtn.style.display = '';
                 if (formArea) formArea.style.display = '';
                 if (progressArea) progressArea.style.display = 'none';
-            }
-        }
-
-        async function deleteIAtaRecord(rid) {
-            if (!await uiConfirm('Deseja realmente excluir esta ata?', 'Excluir Ata')) return;
-            try {
-                const response = await fetch(`${API_BASE}/portfolio/iata/${rid}`, { method: 'DELETE' });
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(payload.error || 'Erro ao excluir ata.');
-                showSuccess('Ata excluída com sucesso.');
-                expandedIAtaRecords.delete(Number(rid));
-                await loadIAta();
-            } catch (error) {
-                showError(error.message || 'Erro ao excluir ata.');
             }
         }
 
