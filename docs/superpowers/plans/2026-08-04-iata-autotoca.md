@@ -3029,7 +3029,7 @@ UX". Correções em relação à referência:
 - Modify: `public/index.html` (linhas 736, 754-758, 866-870, 2016-2022)
 - Modify: `public/js/itoca-autotoca.js:3517-3528`
 
-- [ ] **Step 1: Adicionar o botão e o painel no AutoToca**
+- [x] **Step 1: Adicionar o botão e o painel no AutoToca**
 
 Em `public/index.html`, na fileira de botões do AutoToca (após
 `autoTocaBtn_reembolsos`, linha 870):
@@ -3060,7 +3060,7 @@ para o id do painel (`autoTocaChamadoJuridico`, `autoTocaReembolsos`, ...). Se
 o mapeamento for por dicionário explícito, acrescentar `iata: 'autoTocaIAta'` e
 chamar `loadIAta()` ao abrir; se for por convenção de nome, seguir a convenção.
 
-- [ ] **Step 2: Remover a sub-aba do Portfolio**
+- [x] **Step 2: Remover a sub-aba do Portfolio**
 
 Em `public/index.html`, apagar o botão da linha 736
 (`portfolioSubBtn_iata`) e o bloco `portfolioSubPanel_iata` (linhas 754-758).
@@ -3083,7 +3083,7 @@ linha 3514) puder ser `'iata'`, adicionar o fallback:
 Sem isso, quem tinha a sub-aba iAta aberta abre o Portfolio num painel que não
 existe mais.
 
-- [ ] **Step 3: Criar `public/js/autotoca-iata.js` com a listagem**
+- [x] **Step 3: Criar `public/js/autotoca-iata.js` com a listagem**
 
 Mover para cá as funções `loadIAta`, `renderIAtaHistory`, `deleteIAtaRecord`
 (hoje em `public/js/itoca-autotoca.js:3915-3990` e `:4462`), trocando
@@ -3161,7 +3161,7 @@ usar os campos novos:
 
 `uiConfirm` é obrigatório — `confirm()` nativo é proibido no projeto.
 
-- [ ] **Step 4: Carregar o script novo**
+- [x] **Step 4: Carregar o script novo**
 
 Em `public/index.html`, após a linha 2016 (`/js/itoca-autotoca.js`):
 
@@ -3169,18 +3169,42 @@ Em `public/index.html`, após a linha 2016 (`/js/itoca-autotoca.js`):
     <script src="/js/autotoca-iata.js"></script>
 ```
 
-- [ ] **Step 5: Verificar no navegador**
+- [x] **Step 5: Verificar no navegador**
 
 Subir o app com a ferramenta de preview (nunca `python app.py` via Bash), abrir
 o AutoToca e confirmar: o botão iAta aparece, o painel abre, a listagem carrega
 (ou mostra o estado vazio), e o Portfolio não tem mais a sub-aba iAta. Checar
 `read_console_messages` — nenhum `ReferenceError` de função removida.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add public/index.html public/js/autotoca-iata.js public/js/itoca-autotoca.js && git commit -m "feat(iata): painel no autotoca e saida do portfolio"
 ```
+
+**Notas da execução (achados):**
+- O mapeamento de `toggleAutoTocaAutomation` é por dicionário explícito
+  (`panels`/`buttons` em `public/js/core.js`, não em `itoca-autotoca.js` como o
+  plano supunha) — `'iata': 'autoTocaIAta'` / `'iata': 'autoTocaBtn_iata'`
+  foram acrescentados lá, e `loadIAta()` é chamado ao abrir o painel.
+- `_portfolioCurrentSubTab` não é persistido em `localStorage` (é só uma
+  variável JS em memória, reinicia em `'stf'` a cada carga de página), então o
+  cenário de "usuário com iata salvo" não podia realmente acontecer entre
+  sessões — mesmo assim, o fallback foi adicionado em `loadPortfolio()` por
+  segurança.
+- `viewIAtaFull`, `_openIAtaViewModal`, `_copyIAtaToClipboard`, `openIAtaModal`
+  e `submitIAta` continuam em `itoca-autotoca.js` apontando para as rotas
+  antigas `/api/portfolio/iata*` (que não existem mais — Task 6 já as moveu
+  para `routes/autotoca_iata.py`). Não precisaram de stub: o padrão
+  `.json().catch(() => ({}))` + `throw new Error(payload.error || fallback)` já
+  existente faz o fetch 404 (HTML, não JSON) resultar só num `showError(...)`
+  gracioso, sem `ReferenceError`/`TypeError` no console — confirmado no
+  navegador. Essas funções serão substituídas de verdade nas Tasks 12-13.
+- Achado à parte (não corrigido aqui, fora do escopo da Task 11):
+  `AUTOTOCA_MODULE_BUTTON_IDS` em `core.js` (usado por
+  `resetAutoTocaModuleButtons()`) já não incluía `autoTocaBtn_reembolsos` antes
+  desta task — `'iata'` foi tratado do mesmo jeito que `'reembolsos'` para
+  manter consistência, sem tentar consertar a lacuna pré-existente.
 
 ---
 
