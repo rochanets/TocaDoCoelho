@@ -1562,11 +1562,15 @@
         }
 
         // Todos os botões de módulo do AutoToca (inclui o WhatsApp Update, que abre modal em vez de painel inline)
+        // Todo botão de módulo do AutoToca precisa estar aqui, senão ele fica
+        // com o destaque de "ativo" mesmo depois que outro painel é aberto.
         const AUTOTOCA_MODULE_BUTTON_IDS = [
             'autoTocaBtn_chamado-juridico',
             'autoTocaBtn_mala-direta',
             'autoTocaBtn_whatsapp-update',
-            'autoTocaBtn_sync-outlook'
+            'autoTocaBtn_sync-outlook',
+            'autoTocaBtn_reembolsos',
+            'autoTocaBtn_iata'
         ];
 
         function resetAutoTocaModuleButtons() {
