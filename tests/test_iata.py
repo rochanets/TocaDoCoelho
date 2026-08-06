@@ -1738,14 +1738,20 @@ def test_put_body_ata_legada_sem_hierarquia_funciona(client, db_path, monkeypatc
     assert registro['managers'][0]['accounts'][0]['opportunities'][0]['update_text'] == 'texto novo'
 
 
-def test_put_body_rename_de_conta_quebra_match_por_nome_mas_posicao_preserva_confirmacao(
+def test_put_body_rename_de_conta_por_posicao_vira_sugestao_nao_confirmacao(
         client, db_path, monkeypatch):
-    """Acha da revisão: se o usuário RENOMEIA a conta no texto editado, o
-    casamento por name_norm com a conta antiga falha. Sem fallback, a
-    confirmação humana feita via /link evaporaria em silêncio (o mesmo tipo
-    de bug da Task 8). O fallback posicional (mesma ideia do robô de
-    formulário: nome primeiro, posição como último recurso) preserva a
-    confirmação quando a lista de contas do gerente não mudou de tamanho."""
+    """Achado da revisão de qualidade da Task 9: se o usuário RENOMEIA a
+    conta no texto editado, o casamento por name_norm com a conta antiga
+    falha, e o fallback posicional entra (mesma ideia do robô de
+    formulário: nome primeiro, posição como último recurso). Mas um
+    casamento por posição é um PALPITE, não uma identidade confirmada — a
+    primeira versão desta correção herdava `match_confirmed=True` cegamente
+    do lado antigo, o que troca vínculos de CRM quando duas contas do
+    mesmo gerente são renomeadas ao mesmo tempo (ver o teste de troca
+    cruzada abaixo). A regra corrigida: o account_id/confidence viram
+    SUGESTÃO (o usuário reconfirma em um clique), `match_confirmed` é
+    sempre zerado quando o casamento veio por posição, e a resposta sinaliza
+    o casamento posicional em `positional_matches` — nunca em silêncio."""
     conn = toca.get_db()
     conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
     conn.commit()
@@ -1771,13 +1777,86 @@ def test_put_body_rename_de_conta_quebra_match_por_nome_mas_posicao_preserva_con
 
     resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': 'texto editado'})
     assert resp.status_code == 200
-    assert resp.get_json()['reparse_failed'] is False
+    corpo = resp.get_json()
+    assert corpo['reparse_failed'] is False
+    assert corpo['positional_matches']['accounts'] == [
+        {'manager': 'Ana', 'name': 'Ambev Brasil', 'previous_name': 'Ambev'}], \
+        'o casamento posicional precisa ser sinalizado na resposta, não silencioso'
 
     conta = toca._iata_load_record(rid)['managers'][0]['accounts'][0]
     assert conta['name'] == 'Ambev Brasil'
     assert conta['account_id'] == account_id, \
-        'vínculo confirmado sobrevive à correção de nome via fallback posicional'
-    assert conta['match_confirmed'] is True
+        'account_id sobrevive como SUGESTÃO via fallback posicional'
+    assert conta['match_confirmed'] is False, \
+        'confirmação humana não pode nascer de um palpite posicional'
+
+
+def test_put_body_troca_cruzada_de_duas_contas_nao_inverte_vinculos_confirmados(
+        client, db_path, monkeypatch):
+    """Reprodução exata do defeito crítico apontado na revisão: duas contas
+    do mesmo gerente, "Ambev" e "Heineken", ambas com vínculo CONFIRMADO via
+    /link. O usuário reescreve o texto renomeando as duas E invertendo a
+    ordem em que aparecem. Sem a guarda de `match_confirmed=False` no
+    casamento posicional, cada conta herdaria (por posição) o account_id
+    CONFIRMADO da outra — "Heineken NV" ficaria com o vínculo confirmado da
+    Ambev e vice-versa, uma troca de CRM silenciosa. Com a guarda, o
+    account_id ainda é sugerido (por posição), mas nenhuma das duas fica
+    marcada como confirmada — o usuário precisa reconfirmar. (O `account_id`
+    sugerido por posição pode continuar sendo o da conta trocada — é só um
+    palpite, sinalizado em `positional_matches`; o dano que a revisão
+    apontou é especificamente a CONFIRMAÇÃO nascendo de um palpite, não o
+    palpite em si.)"""
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
+    conn.execute("INSERT INTO accounts (name) VALUES ('Heineken Brasil')")
+    conn.commit()
+    account_id_ambev = conn.execute(
+        "SELECT id FROM accounts WHERE name = 'Ambev S.A.'").fetchone()[0]
+    account_id_heineken = conn.execute(
+        "SELECT id FROM accounts WHERE name = 'Heineken Brasil'").fetchone()[0]
+    conn.close()
+
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [
+        {'name': 'Ambev', 'account_id': None, 'match_confidence': 'alta', 'opportunities': []},
+        {'name': 'Heineken', 'account_id': None, 'match_confidence': 'alta',
+         'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    contas = toca._iata_load_record(rid)['managers'][0]['accounts']
+    conta_ambev_id = next(a['id'] for a in contas if a['name'] == 'Ambev')
+    conta_heineken_id = next(a['id'] for a in contas if a['name'] == 'Heineken')
+
+    assert client.post(f'/api/autotoca/iata/{rid}/accounts/{conta_ambev_id}/link',
+                       json={'account_id': account_id_ambev}).status_code == 200
+    assert client.post(f'/api/autotoca/iata/{rid}/accounts/{conta_heineken_id}/link',
+                       json={'account_id': account_id_heineken}).status_code == 200
+
+    # Texto editado: nomes reescritos E ordem invertida (Heineken antes de Ambev).
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'X', 'managers': [{'name': 'Ana', 'accounts': [
+            {'name': 'Heineken NV', 'opportunities': []},
+            {'name': 'Ambev Brasil', 'opportunities': []}]}]}))
+
+    resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': 'texto editado'})
+    assert resp.status_code == 200
+
+    corpo = resp.get_json()
+    nomes_sinalizados = {p['name'] for p in corpo['positional_matches']['accounts']}
+    assert nomes_sinalizados == {'Heineken NV', 'Ambev Brasil'}, \
+        'as duas contas casadas por posição precisam aparecer sinalizadas'
+
+    contas_depois = {a['name']: a for a in
+                     toca._iata_load_record(rid)['managers'][0]['accounts']}
+    heineken_nv = contas_depois['Heineken NV']
+    ambev_brasil = contas_depois['Ambev Brasil']
+    # O dano concreto que a revisão reproduziu: nenhuma das duas pode ficar
+    # com um vínculo marcado como CONFIRMADO por um palpite posicional —
+    # mesmo que o account_id sugerido tenha vindo trocado (é só sugestão).
+    assert heineken_nv['match_confirmed'] is False, \
+        'vínculo de "Heineken NV" não pode nascer confirmado de um palpite posicional'
+    assert ambev_brasil['match_confirmed'] is False, \
+        'vínculo de "Ambev Brasil" não pode nascer confirmado de um palpite posicional'
 
 
 def test_put_body_rename_de_oportunidade_mantem_encadeamento_por_posicao(
@@ -1866,3 +1945,220 @@ def test_put_body_falha_inesperada_no_meio_nao_apaga_o_reparse_failed(
     assert registro['body_edited'] == 1
     assert registro['reparse_failed'] == 1, \
         'assume falho até prova em contrário — nunca "sucesso" por omissão'
+
+
+# --- Task 9: defeitos críticos/importantes achados na revisão de qualidade -
+
+def test_put_body_edicao_remapeia_encadeamento_de_ata_futura(client, db_path, monkeypatch):
+    """Reprodução exata do defeito CRÍTICO da revisão: ata1 -> ata2 -> ata3
+    (ata3 encadeada com a oportunidade de ata2 via `prev_opportunity_id`).
+    Editar o texto de ata2 com re-parse bem-sucedido faz
+    `_iata_write_hierarchy` apagar e reinserir as oportunidades de ata2 —
+    nova identidade FÍSICA (id novo) para a MESMA oportunidade lógica. Sem
+    remapeamento, o `ON DELETE SET NULL` da FK dispara em cascata e apaga
+    silenciosamente o `prev_opportunity_id` de ata3, mesmo a rota nunca
+    tendo tocado em ata3."""
+    header1 = {'title': 'Ata 1', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers1 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': None, 'update_text': 'inicio',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': None}]}]}]
+    ata1_id = toca._iata_save_record(header1, managers1, {}, 'texto', None)
+    opp1_id = toca._iata_load_record(ata1_id)[
+        'managers'][0]['accounts'][0]['opportunities'][0]['id']
+
+    header2 = {'title': 'Ata 2', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers2 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': 'inicio', 'update_text': 'meio',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': opp1_id}]}]}]
+    ata2_id = toca._iata_save_record(header2, managers2, {}, 'texto', ata1_id)
+    opp2_id = toca._iata_load_record(ata2_id)[
+        'managers'][0]['accounts'][0]['opportunities'][0]['id']
+
+    header3 = {'title': 'Ata 3', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers3 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': 'meio', 'update_text': 'fim',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': opp2_id}]}]}]
+    ata3_id = toca._iata_save_record(header3, managers3, {}, 'texto', ata2_id)
+
+    assert toca._iata_load_record(ata3_id)['managers'][0]['accounts'][0][
+        'opportunities'][0]['prev_opportunity_id'] == opp2_id
+
+    # Edita o texto de ata2 — mesmo nome de oportunidade, reparse bem-sucedido,
+    # mas fisicamente _iata_write_hierarchy vai apagar e recriar a linha.
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'Ata 2', 'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev',
+            'opportunities': [{'name': 'Migração SAP', 'update': 'meio editado',
+                               'responsible': 'Ana'}]}]}]}))
+    resp = client.put(f'/api/autotoca/iata/{ata2_id}/body',
+                      json={'body_markdown': 'texto editado'})
+    assert resp.status_code == 200
+
+    opp2_novo_id = toca._iata_load_record(ata2_id)[
+        'managers'][0]['accounts'][0]['opportunities'][0]['id']
+    assert opp2_novo_id != opp2_id, \
+        'pré-condição do teste: o DELETE+INSERT precisa ter dado um id físico novo'
+
+    prev_id_depois = toca._iata_load_record(ata3_id)['managers'][0]['accounts'][0][
+        'opportunities'][0]['prev_opportunity_id']
+    assert prev_id_depois is not None, \
+        'editar ata2 não pode apagar silenciosamente o encadeamento de ata3'
+    assert prev_id_depois == opp2_novo_id, \
+        'o encadeamento de ata3 precisa apontar para o id NOVO da oportunidade de ata2'
+
+
+def test_put_body_edicao_que_remove_oportunidade_limpa_encadeamento_honesto(
+        client, db_path, monkeypatch):
+    """Contraparte do teste acima: se a oportunidade que ata3 encadeia
+    REALMENTE sumiu do texto editado de ata2 (o usuário apagou aquele
+    trecho), não há id novo correspondente — `prev_opportunity_id` de ata3
+    deve mesmo virar `None` (via `ON DELETE SET NULL`). Isso não é bug: é o
+    resultado honesto quando não há mais nada para encadear."""
+    header1 = {'title': 'Ata 1', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers1 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': None, 'update_text': 'inicio',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': None}]}]}]
+    ata1_id = toca._iata_save_record(header1, managers1, {}, 'texto', None)
+
+    header2 = {'title': 'Ata 2', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers2 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': 'inicio', 'update_text': 'meio',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': None}]}]}]
+    ata2_id = toca._iata_save_record(header2, managers2, {}, 'texto', ata1_id)
+    opp2_id = toca._iata_load_record(ata2_id)[
+        'managers'][0]['accounts'][0]['opportunities'][0]['id']
+
+    header3 = {'title': 'Ata 3', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers3 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': 'meio', 'update_text': 'fim',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': opp2_id}]}]}]
+    ata3_id = toca._iata_save_record(header3, managers3, {}, 'texto', ata2_id)
+
+    # Texto editado de ata2: a conta/oportunidade "Migração SAP" some de vez.
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'Ata 2', 'managers': [{'name': 'Ana', 'accounts': []}]}))
+    resp = client.put(f'/api/autotoca/iata/{ata2_id}/body',
+                      json={'body_markdown': 'texto sem a oportunidade'})
+    assert resp.status_code == 200
+
+    prev_id_depois = toca._iata_load_record(ata3_id)['managers'][0]['accounts'][0][
+        'opportunities'][0]['prev_opportunity_id']
+    assert prev_id_depois is None, \
+        'sem correspondente novo, None é o resultado honesto — não um bug'
+
+
+def test_put_body_dois_puts_concorrentes_nao_entrelacam_texto_e_hierarquia(
+        client, db_path, monkeypatch):
+    """Reprodução do defeito IMPORTANTE da revisão: PUT A (IA lenta) e PUT B
+    (rápida) na MESMA ata, concorrentes. Sem lock, cada um abre suas
+    próprias transações e o resultado final mistura `body_markdown` de uma
+    edição com a hierarquia de outra. Um lock em memória por `record_id`
+    serializa os dois PUTs — o que espera a vez sempre parte do resultado
+    já commitado do outro, nunca de uma leitura no meio do caminho."""
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': []}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    import threading
+    import time
+
+    def _llm_prompt_fake(prompt, **kwargs):
+        if 'texto A (lento)' in prompt:
+            time.sleep(0.3)
+            return json.dumps({'title': 'X', 'managers': [{'name': 'Ana', 'accounts': [
+                {'name': 'Ambev', 'opportunities': [
+                    {'name': 'Oportunidade A', 'update': 'A', 'responsible': 'Ana'}]}]}]})
+        return json.dumps({'title': 'X', 'managers': [{'name': 'Ana', 'accounts': [
+            {'name': 'Ambev', 'opportunities': [
+                {'name': 'Oportunidade B', 'update': 'B', 'responsible': 'Ana'}]}]}]})
+
+    monkeypatch.setattr(toca, '_llm_prompt', _llm_prompt_fake)
+
+    resultados = {}
+
+    def _put(nome, texto):
+        # Cada thread usa seu próprio test client: o client do Flask não é
+        # seguro para chamadas concorrentes vindas de threads diferentes
+        # (contexto de request/app é thread-local por baixo dos panos).
+        with toca.app.test_client() as thread_client:
+            resp = thread_client.put(f'/api/autotoca/iata/{rid}/body',
+                                     json={'body_markdown': texto})
+            resultados[nome] = resp.get_json()
+
+    t_a = threading.Thread(target=_put, args=('A', 'texto A (lento)'))
+    t_b = threading.Thread(target=_put, args=('B', 'texto B'))
+    t_a.start()
+    time.sleep(0.05)  # garante que A já está dentro do lock quando B tenta entrar
+    t_b.start()
+    t_a.join()
+    t_b.join()
+
+    registro = toca._iata_load_record(rid)
+    nome_opp = registro['managers'][0]['accounts'][0]['opportunities'][0]['name']
+    if registro['body_markdown'] == 'texto A (lento)':
+        assert nome_opp == 'Oportunidade A', \
+            'texto e hierarquia precisam vir da MESMA edição, nunca misturados'
+    else:
+        assert registro['body_markdown'] == 'texto B'
+        assert nome_opp == 'Oportunidade B', \
+            'texto e hierarquia precisam vir da MESMA edição, nunca misturados'
+
+
+def test_put_body_mantem_titulo_anterior_quando_ainda_aparece_no_texto(
+        client, db_path, monkeypatch):
+    """Defeito IMPORTANTE da revisão: a IA reformula o título mesmo quando o
+    usuário só corrigiu um typo no corpo. Se o título antigo ainda aparece
+    no texto editado (comparado por normalize_name), ele prevalece — a IA
+    não pode reescrever o cabeçalho por conta própria."""
+    header = {'title': 'Reunião Ambev - Q3', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': []}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'Reunião comercial Ambev',  # a IA reformulou por conta própria
+        'managers': [{'name': 'Ana', 'accounts': []}]}))
+
+    corpo_editado = 'Reunião Ambev - Q3\nGerente Comercial: Ana\n(typo corrigido no meio)'
+    resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': corpo_editado})
+    assert resp.status_code == 200
+
+    registro = toca._iata_load_record(rid)
+    assert registro['title'] == 'Reunião Ambev - Q3', \
+        'título antigo ainda está no corpo -- a IA não pode trocá-lo por conta própria'
+
+
+def test_put_body_aceita_titulo_novo_quando_antigo_sumiu_do_texto(client, db_path, monkeypatch):
+    """Contraparte: quando o usuário reescreve o cabeçalho de propósito (o
+    título antigo não aparece mais em lugar nenhum do corpo editado), a
+    mudança é aceita — foi uma decisão deliberada, não um efeito colateral
+    da IA reformulando."""
+    header = {'title': 'Reunião Ambev - Q3', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': []}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'Reunião Pipeline Setembro',
+        'managers': [{'name': 'Ana', 'accounts': []}]}))
+
+    corpo_editado = 'Reunião Pipeline Setembro\nGerente Comercial: Ana'
+    resp = client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': corpo_editado})
+    assert resp.status_code == 200
+
+    registro = toca._iata_load_record(rid)
+    assert registro['title'] == 'Reunião Pipeline Setembro', \
+        'título antigo sumiu do corpo -- a mudança deliberada do usuário deve valer'

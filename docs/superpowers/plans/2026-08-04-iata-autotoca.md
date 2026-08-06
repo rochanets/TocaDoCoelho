@@ -2700,19 +2700,13 @@ def update_iata_body(record_id):
   outro — por isso só entra quando o nome falha). Aplicado em cascata nos
   três níveis (gerente -> conta -> oportunidade) por
   `_iata_carregar_campos_anteriores`. Testado em
-  `test_put_body_rename_de_conta_quebra_match_por_nome_mas_posicao_preserva_confirmacao`
-  (o vínculo confirmado sobrevive à correção de nome) e
-  `test_put_body_rename_de_oportunidade_mantem_encadeamento_por_posicao` (o
-  `prev_opportunity_id` sobrevive à correção de um typo no nome).
-  **Limitação aceita:** se o usuário editar duas contas (ou oportunidades) do
-  mesmo gerente na mesma ata — não só uma —, o fallback posicional pode
-  casar errado (a posição continua alinhando 1:1, mas não há garantia de que
-  a intenção do usuário era essa). Não há como distinguir "renomeei A" de
-  "troquei A por B e B por A" sem mais contexto; o custo de errar aqui é o
-  mesmo de qualquer heurística posicional — baixo o suficiente para não
-  travar o fluxo, mas seria o primeiro lugar a olhar se o vínculo de uma
-  conta aparecer trocado depois de uma edição com múltiplas mudanças
-  simultâneas.
+  `test_put_body_rename_de_conta_por_posicao_vira_sugestao_nao_confirmacao`
+  e `test_put_body_rename_de_oportunidade_mantem_encadeamento_por_posicao`
+  (o `prev_opportunity_id` sobrevive à correção de um typo no nome).
+  **A "limitação aceita" descrita aqui na primeira versão desta task —
+  deixar o fallback posicional herdar `match_confirmed=True` do lado antigo
+  — se provou um defeito CRÍTICO real na revisão de qualidade seguinte, não
+  uma limitação tolerável: ver bloco "Revisão de qualidade" logo abaixo.**
 - **`extras`/`insights_json` não são tocados pelo re-parse**, de propósito: o
   re-parse só reestrutura Gerente/Conta/Oportunidade a partir do texto
   editado, e o texto não carrega a seção de insights. Se o usuário apagar um
@@ -2725,6 +2719,97 @@ def update_iata_body(record_id):
   candidato antigo em nenhum nível e os campos entram como `None`/`False` —
   o registro ganha hierarquia pela primeira vez. Testado em
   `test_put_body_ata_legada_sem_hierarquia_funciona`.
+
+**Revisão de qualidade da Task 9 (segunda rodada) — quatro defeitos, dois
+críticos, todos reproduzidos com saída real e corrigidos:**
+
+1. **CRÍTICO — fallback posicional confirmava vínculo de CRM por palpite.**
+   Reproduzido: contas "Ambev" (`account_id=1`) e "Heineken" (`account_id=2`),
+   ambas confirmadas via `/link`; o usuário reescreve o texto renomeando as
+   duas E invertendo a ordem em que digita ("Heineken NV" antes de "Ambev
+   Brasil"); "Heineken NV" ficava com o `account_id` CONFIRMADO da Ambev e
+   vice-versa, sem nenhum sinal na resposta. Corrigido em
+   `_iata_carregar_campos_anteriores`: quando `_iata_match_previous` casa uma
+   conta por `'position'` (não por `'name'`), `account_id`/`match_confidence`
+   continuam vindo como SUGESTÃO, mas `match_confirmed` é **sempre** `False`
+   — uma confirmação humana nunca pode nascer de um palpite posicional. A
+   rota agora devolve `positional_matches: {'accounts': [...],
+   'opportunities': [...]}` na resposta do `PUT`, cada item com
+   `manager`/`name`/`previous_name` (e `account` para oportunidades), para
+   as Tasks 11-13 avisarem na tela — mesmo princípio do campo `positional`
+   do robô de formulário (`integrations/forms_robot.py`): "uma resposta na
+   pergunta errada é pior que uma pergunta em branco". Testado em
+   `test_put_body_rename_de_conta_por_posicao_vira_sugestao_nao_confirmacao`
+   e, reproduzindo o cenário exato da revisão (duas contas, troca cruzada),
+   `test_put_body_troca_cruzada_de_duas_contas_nao_inverte_vinculos_confirmados`.
+   Confirmado que os dois testes falham revertendo a guarda (`match_confirmed`
+   voltando a herdar do lado antigo em vez de forçar `False`).
+
+2. **CRÍTICO — editar uma ata quebrava o encadeamento de uma ata FUTURA.**
+   Reproduzido: ata1 → ata2 → ata3 (`ata3.prev_opportunity_id` apontando
+   para a oportunidade de ata2). Editar o texto de ata2 com reparse
+   bem-sucedido faz `_iata_write_hierarchy` apagar e reinserir as
+   oportunidades de ata2 — nova identidade FÍSICA (id novo) para a MESMA
+   oportunidade lógica — e o `ON DELETE SET NULL` da FK dispara em cascata
+   sobre ata3, zerando `prev_opportunity_id` mesmo a rota nunca tendo
+   tocado em ata3. Corrigido na rota: antes do `DELETE` (dentro de
+   `_iata_write_hierarchy`), captura-se `SELECT id, prev_opportunity_id FROM
+   iata_opportunities WHERE record_id != ? AND prev_opportunity_id IN
+   (<ids antigos desta ata>)` — quem referencia esta ata. Cada oportunidade
+   nova carrega uma chave temporária `_old_own_id` (o id de banco da
+   oportunidade ANTIGA casada por `_iata_carregar_campos_anteriores`, não o
+   `prev_opportunity_id` que ela aponta para OUTRA ata — são conceitos
+   diferentes). Depois do `INSERT`, `_iata_flatten_opportunities` lê a
+   hierarquia nova na mesma ordem de travessia (gerente → conta →
+   oportunidade, a mesma usada por `_iata_write_hierarchy`/
+   `_iata_read_hierarchy` via `display_order`) e monta `old_own_id -> id
+   novo`; quem referenciava o id antigo é atualizado (`UPDATE
+   iata_opportunities SET prev_opportunity_id = ...`) para o id novo. Onde
+   não há correspondente novo (a oportunidade sumiu do texto editado), o
+   `NULL` já aplicado pelo cascade é o resultado honesto — não corrigido de
+   volta. `_old_own_id` é removido (`.pop`) antes de ir para `ata_json`, não
+   é dado de negócio. Testado em
+   `test_put_body_edicao_remapeia_encadeamento_de_ata_futura` (o caso que
+   precisa remapear) e
+   `test_put_body_edicao_que_remove_oportunidade_limpa_encadeamento_honesto`
+   (contraparte: sem correspondente, `None` é esperado, não bug). Confirmado
+   que o primeiro teste falha comentando o bloco de remapeamento.
+
+3. **IMPORTANTE — dois PUTs concorrentes na mesma ata entrelaçavam.**
+   Reproduzido: PUT A (IA lenta) e PUT B (rápida) na mesma ata terminavam
+   com `body_markdown` de um e hierarquia do outro — cada PUT abre suas
+   próprias transações, sem lock. App local de processo único: um lock em
+   memória por `record_id` (`_iata_body_locks`, dict protegido por
+   `_iata_body_locks_guard`) resolve com simplicidade adequada ao porte —
+   sem lock distribuído, sem tabela nova. Toda a rota `update_iata_body`
+   roda dentro de `with _iata_body_lock(record_id):`, e `atual` é lido
+   DENTRO do lock (não antes) — um PUT que esperou a vez herda o resultado
+   já commitado do outro, nunca uma foto de antes dele; do contrário a
+   serialização só adiaria o entrelaçamento em vez de resolvê-lo. Testado
+   em `test_put_body_dois_puts_concorrentes_nao_entrelacam_texto_e_hierarquia`
+   (duas threads reais, cada uma com seu próprio `test_client()` — o client
+   do Flask não é seguro entre threads —, uma delas com `_llm_prompt`
+   propositalmente lento). Confirmado que o teste falha de forma reprodutível
+   (3/3 execuções) trocando o `with _iata_body_lock(...)` por um no-op.
+
+4. **IMPORTANTE — o título era sobrescrito pela IA mesmo sem o usuário ter
+   mexido nele.** Reproduzido: título "Reunião Ambev - Q3", o usuário
+   corrige só um typo no corpo, a IA devolve "Reunião comercial Ambev" e o
+   título muda — o `or atual['title']` da referência só protegia contra
+   título vazio, não contra reformulação indevida. Corrigido com
+   `_iata_titulo_apos_edicao(titulo_anterior, titulo_novo_ia,
+   body_editado)`: mantém o título anterior se ele (por `normalize_name`,
+   tolerante a acento/caixa/pontuação) ainda aparece em algum lugar do corpo
+   editado; só aceita o título novo da IA quando o antigo sumiu do texto —
+   sinal de que a troca foi deliberada. Testado nos dois lados:
+   `test_put_body_mantem_titulo_anterior_quando_ainda_aparece_no_texto` e
+   `test_put_body_aceita_titulo_novo_quando_antigo_sumiu_do_texto`.
+   Confirmado que o primeiro falha voltando para `parsed['header'].get(
+   'title') or atual['title']`.
+
+Todos os quatro confirmados quebrando sem a correção (revertido
+manualmente, teste rodado, restaurado) antes de fechar a task — não só
+"o teste novo passa com o código novo".
 
 - [x] **Step 5: Run test to verify it passes**
 
