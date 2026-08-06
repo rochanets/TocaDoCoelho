@@ -247,6 +247,70 @@
             }
         }
 
+        // Atas geradas antes desta feature (`format_version` 1) não têm
+        // `body_markdown` nem hierarquia: o conteúdo vive em `ata_json`, no
+        // formato antigo (summary/key_points/decisions/next_steps/...). O
+        // visualizador que lia esse formato saiu junto com o módulo velho, e
+        // sem o de baixo o usuário abriria um registro histórico real e veria
+        // um editor em branco. São dados dele: exibimos como somente leitura,
+        // sem reescrever nada no banco.
+        function _iataEhLegada(record) {
+            const temCorpoNovo = (record.body_markdown || '').trim().length > 0;
+            const temHierarquia = (record.managers || []).length > 0;
+            return !temCorpoNovo && !temHierarquia
+                && !!record.ata_json && Object.keys(record.ata_json).length > 0;
+        }
+
+        function _renderIAtaLegada(record) {
+            const a = record.ata_json || {};
+            const partes = [];
+            const bloco = (titulo, conteudo) => {
+                if (!conteudo) return;
+                partes.push(`<div style="margin-bottom:14px;"><div style="font-weight:600; color:#065f46; font-size:13px; margin-bottom:4px;">${escapeHtml(titulo)}</div>${conteudo}</div>`);
+            };
+            const paragrafo = txt => (String(txt || '').trim()
+                ? `<div style="font-size:13px; line-height:1.6; color:#374151; white-space:pre-wrap;">${escapeHtml(String(txt).trim())}</div>` : '');
+            const lista = itens => {
+                const li = (itens || []).map(i => {
+                    const txt = (i && typeof i === 'object')
+                        ? [i.action, i.responsible, i.deadline].filter(Boolean).join(' — ')
+                        : String(i || '');
+                    return txt.trim() ? `<li style="margin:2px 0;">${escapeHtml(txt.trim())}</li>` : '';
+                }).join('');
+                return li ? `<ul style="margin:4px 0; padding-left:20px; font-size:13px; line-height:1.6; color:#374151;">${li}</ul>` : '';
+            };
+
+            const quando = [a.meeting_date || record.meeting_date, a.meeting_time || record.meeting_time]
+                .filter(Boolean).join(' ');
+            const participantes = (a.participants || record.participants || [])
+                .map(p => (p && typeof p === 'object') ? [p.name, p.role].filter(Boolean).join(' (') + (p.role ? ')' : '') : String(p || ''))
+                .filter(Boolean).join(', ');
+
+            bloco('Data e horário', paragrafo(quando));
+            bloco('Local', paragrafo(a.location));
+            bloco('Tema', paragrafo(a.topic || record.topic));
+            bloco('Participantes', paragrafo(participantes));
+            bloco('Objetivo', paragrafo(a.objective));
+            bloco('Resumo', paragrafo(a.summary));
+            bloco('Pauta', lista(a.agenda));
+            bloco('Pontos-chave', lista(a.key_points));
+            bloco('Decisões', lista(a.decisions));
+            bloco('Próximos passos', lista(a.next_steps));
+            bloco('Observações', paragrafo(a.observations));
+
+            const insights = (record.insights_json && record.insights_json.insights) || [];
+            bloco('Insights de negócio', lista(insights.map(i =>
+                [i.pain, i.matched_offer || 'sem solução mapeada', i.observation].filter(Boolean).join(' → '))));
+
+            return `
+                <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; color:#4b5563;">
+                    <i class="fas fa-clock-rotate-left"></i> Ata em formato antigo, anterior ao modelo de Gerente Comercial → Conta → Oportunidade. Exibida somente para leitura — não é possível editar nem enviar por e-mail.
+                </div>
+                <div style="border:1px solid #e5e7eb; border-radius:8px; padding:14px; max-height:60vh; overflow:auto; background:#fff;">
+                    ${partes.join('') || '<div style="font-size:13px; color:#6b7280;">Esta ata não tem conteúdo registrado.</div>'}
+                </div>`;
+        }
+
         function _renderIAtaViewModal(record) {
             const aviso = record.reparse_failed
                 ? `<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; color:#991b1b;"><i class="fas fa-exclamation-triangle"></i> O texto foi salvo, mas a estrutura não pôde ser atualizada — a próxima ata pode não carregar os status corretamente.</div>`
@@ -274,11 +338,13 @@
                         ${avisoPendente}
                         ${aviso}
                         ${revisao ? `<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px; margin-bottom:12px;"><div style="font-weight:600; font-size:13px; color:#92400e; margin-bottom:4px;">Contas sugeridas pela IA — confirme o vínculo</div>${revisao}</div>` : ''}
-                        <textarea id="iataBodyEditor" rows="22" style="width:100%; font-family:Consolas,monospace; font-size:13px; line-height:1.5;">${escapeHtml(record.body_markdown || '')}</textarea>
+                        ${_iataEhLegada(record) ? _renderIAtaLegada(record) : `
+                        <textarea id="iataBodyEditor" rows="22" style="width:100%; font-family:Consolas,monospace; font-size:13px; line-height:1.5;">${escapeHtml(record.body_markdown || '')}</textarea>`}
                         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
                             <button class="btn btn-secondary" onclick="document.getElementById('iataViewModal').remove()">Fechar</button>
+                            ${_iataEhLegada(record) ? '' : `
                             <button class="btn btn-secondary" onclick="saveIAtaBody(${Number(record.id)})"><i class="fas fa-save"></i> Salvar texto</button>
-                            <button class="btn btn-auto-mapping btn-small" onclick="openIAtaEmailModal(${Number(record.id)})"><span class="ai-star-icon">✦</span> Enviar por e-mail</button>
+                            <button class="btn btn-auto-mapping btn-small" onclick="openIAtaEmailModal(${Number(record.id)})"><span class="ai-star-icon">✦</span> Enviar por e-mail</button>`}
                         </div>
                     </div>
                 </div>`;
@@ -329,6 +395,11 @@
                     `Conta "${a.name}" (antes "${a.previous_name}") foi casada por posição — o vínculo com o CRM voltou a ser sugestão, confira.`));
                 (pm.opportunities || []).forEach(o => avisos.push(
                     `Oportunidade "${o.name}" da conta "${o.account}" (antes "${o.previous_name}") foi casada por posição — confira o histórico dela.`));
+                // `lost`: a conta antiga tinha vínculo CONFIRMADO por você e não
+                // foi possível reencontrá-la no texto novo. Perder uma decisão
+                // humana em silêncio é o pior desfecho possível aqui.
+                (pm.lost || []).forEach(l => avisos.push(
+                    `A conta "${l.name}"${l.manager ? ` (gerente ${l.manager})` : ''} tinha vínculo confirmado com o CRM e não foi reencontrada no texto editado — o vínculo se perdeu e precisa ser refeito.`));
                 _iataPendingWarning = avisos.length ? avisos.join(' ') : null;
 
                 await loadIAta();
