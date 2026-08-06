@@ -624,7 +624,12 @@ def _waha_daily_quota(c):
         limit = int(_resolve_setting('waha_daily_send_limit', 'WAHA_DAILY_SEND_LIMIT') or 45)
     except Exception:
         limit = 45
-    c.execute("SELECT COUNT(*) FROM whatsapp_sends WHERE status = 'sent' AND date(sent_at) = date('now', 'localtime')")
+    # sent_at vem do DEFAULT CURRENT_TIMESTAMP do SQLite, que grava em UTC; a cota
+    # é diária no fuso do usuário. Sem o 'localtime' nos dois lados, tudo o que é
+    # enviado entre 21h e a meia-noite (UTC-3) cai no "dia seguinte" em UTC e some
+    # da contagem — zerando o contador e liberando o limite justamente à noite.
+    c.execute("SELECT COUNT(*) FROM whatsapp_sends "
+              "WHERE status = 'sent' AND date(sent_at, 'localtime') = date('now', 'localtime')")
     used = c.fetchone()[0]
     return limit, used
 

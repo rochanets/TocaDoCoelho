@@ -84,7 +84,9 @@ def _radar_generate_ranked(c):
     # ---- 3. Cards de Kanban com urgência Alta parados há mais de N dias ----
     c.execute("""
         SELECT k.id, k.title, k.updated_at,
-               CAST(julianday('now', 'localtime') - julianday(k.updated_at) AS INTEGER) AS stalled_days,
+               -- k.updated_at é gravado com CURRENT_TIMESTAMP (UTC); comparar com
+               -- 'now' também em UTC evita somar o offset do fuso aos dias parados.
+               CAST(julianday('now') - julianday(k.updated_at) AS INTEGER) AS stalled_days,
                a.name AS account_name
         FROM kanban_cards k
         LEFT JOIN kanban_columns col ON col.id = k.column_id
@@ -92,7 +94,7 @@ def _radar_generate_ranked(c):
         WHERE LOWER(COALESCE(k.urgency, '')) IN ('alta', 'high')
           AND LOWER(COALESCE(col.title, '')) NOT LIKE '%conclu%'
           AND LOWER(COALESCE(col.title, '')) NOT LIKE '%finaliz%'
-          AND julianday('now', 'localtime') - julianday(k.updated_at) > ?
+          AND julianday('now') - julianday(k.updated_at) > ?
     """, (RADAR_KANBAN_STALL_DAYS,))
     for row in c.fetchall():
         extra = f' — {row["account_name"]}' if row['account_name'] else ''
