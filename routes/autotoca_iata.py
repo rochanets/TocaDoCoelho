@@ -280,7 +280,8 @@ def _iata_previous_managers(previous_record_id):
 
 
 def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
-                        previous_record_id=None, with_insights=True):
+                        previous_record_id=None, with_insights=True,
+                        prev_bytes=None, prev_name=None):
     try:
         raw_text = (raw_text_input or '').strip()
         if file_bytes:
@@ -313,6 +314,37 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
 
         _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 55})
         previous_managers, aviso_continuidade = _iata_previous_managers(previous_record_id)
+        # Opção "enviar o arquivo da ata anterior": só entra em jogo quando não
+        # há hierarquia anterior nenhuma vinda de previous_record_id (as duas
+        # opções são mutuamente exclusivas no modal, mas nada impede uma
+        # chamada direta à API combinando as duas — aqui o arquivo só serve de
+        # base quando o caminho por id não resultou em nada). O texto extraído
+        # passa pelo MESMO reparse usado para reestruturar o corpo editado
+        # (`build_reparse_prompt`/`parse_hierarchy`): a ata anterior enviada é
+        # só texto solto, sem hierarquia gravada, e precisa da IA para virar
+        # uma lista de managers/accounts/opportunities utilizável pelo
+        # reconcile. Falha aqui NUNCA derruba a tarefa — vira aviso explícito
+        # e a ata segue sendo gerada sem continuidade (mesmo princípio de
+        # `_iata_previous_managers` para um id que sumiu).
+        if not previous_managers and prev_bytes:
+            _iata_task_set(task_id, {'step': 'Lendo a ata anterior enviada...', 'progress': 58})
+            texto_anterior = ''
+            try:
+                texto_anterior = _iata_extract_bytes(prev_bytes, prev_name)
+            except Exception as e:
+                logger.warning(f'[iAta] Falha ao extrair texto da ata anterior enviada: {e}')
+            parsed_anterior = None
+            if (texto_anterior or '').strip():
+                raw_anterior = _llm_prompt(iata_lib.build_reparse_prompt(texto_anterior),
+                                           log_tag='iAta/AtaAnterior')
+                parsed_anterior = iata_lib.parse_hierarchy(raw_anterior) if raw_anterior else None
+            if parsed_anterior:
+                previous_managers = parsed_anterior['managers']
+            else:
+                logger.warning('[iAta] Ata anterior enviada não pôde ser lida; '
+                               'seguindo como ata do zero.')
+                aviso_continuidade = ('A ata anterior enviada não pôde ser lida; esta ata foi '
+                                      'gerada sem continuidade com ela.')
         managers = iata_lib.reconcile(
             parsed['managers'], previous_managers, resolver=_iata_resolver_ambiguidade)
         # Se a ata anterior pedida não existe mais, não grava uma referência
@@ -372,6 +404,12 @@ def create_iata_record():
                 previous_record_id = int(previous_record_id)
             except ValueError:
                 previous_record_id = None
+
+        prev_file = request.files.get('previous_file')
+        prev_bytes, prev_name = None, None
+        if prev_file and prev_file.filename:
+            prev_bytes = prev_file.read()
+            prev_name = prev_file.filename
         # Comparação por lista de valores verdadeiros, não por "diferente de
         # '0'": um formulário mandando 'false'/'no' significa desligado, e a
         # partir da Task 8 os insights são uma chamada de LLM paga — ligar
@@ -385,7 +423,8 @@ def create_iata_record():
             threading.Thread(
                 target=_iata_process_async,
                 args=(task_id, file_bytes, filename, raw_text_input),
-                kwargs={'previous_record_id': previous_record_id, 'with_insights': with_insights},
+                kwargs={'previous_record_id': previous_record_id, 'with_insights': with_insights,
+                       'prev_bytes': prev_bytes, 'prev_name': prev_name},
                 daemon=True).start()
         except Exception:
             # Sem worker rodando, a task ficaria 'processing' para sempre e o

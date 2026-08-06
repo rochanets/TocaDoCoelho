@@ -125,10 +125,13 @@
                             task._done = true;
                             const onSourceTab = (typeof _currentTab !== 'undefined') && _currentTab === task.sourceTab;
                             if (onSourceTab && task.onComplete) {
-                                try { task.onComplete(status.result !== undefined ? status.result : status); } catch(e) {}
+                                // Segundo argumento: o `status` bruto inteiro (inclui `warning`,
+                                // que `status.result` sozinho não carrega). Callbacks existentes
+                                // que só declaram 1 parâmetro simplesmente ignoram o extra.
+                                try { task.onComplete(status.result !== undefined ? status.result : status, status); } catch(e) {}
                                 delete _tasks[task.taskId];
                             } else {
-                                _done.push({ ...task, _result: status.result !== undefined ? status.result : status });
+                                _done.push({ ...task, _result: status.result !== undefined ? status.result : status, _status: status });
                                 delete _tasks[task.taskId];
                             }
                             _render();
@@ -185,7 +188,7 @@
                 // Chama o callback de conclusão com o resultado armazenado
                 if (task.onComplete) {
                     setTimeout(() => {
-                        try { task.onComplete(task._result); } catch(e) {}
+                        try { task.onComplete(task._result, task._status); } catch(e) {}
                     }, 350);
                 }
                 _stopPollIfIdle();
@@ -220,7 +223,7 @@
                     if (task.sourceTab !== tabName) continue;
                     _done.splice(i, 1);
                     if (task.onComplete) {
-                        try { task.onComplete(task._result); } catch(e) {}
+                        try { task.onComplete(task._result, task._status); } catch(e) {}
                     }
                 }
                 _closeDoneList();

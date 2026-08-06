@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
+import io
 import json
 import sqlite3
+import time
 
 import app as toca
 from integrations import iata as iata_lib
@@ -2446,3 +2448,94 @@ def test_email_ata_sem_estrutura_com_texto_editado_culpa_o_reparse_nao_o_formato
 def test_email_subject_colapsa_quebra_de_linha_do_titulo():
     header = {'title': 'Pipeline\nSemanal', 'meeting_date': '04/08/2026'}
     assert iata_lib.email_subject(header) == 'Ata — Pipeline Semanal — 04/08/2026'
+
+
+def test_pipeline_prev_bytes_vira_hierarquia_anterior_para_reconcile(db_path, monkeypatch):
+    """Opção "enviar o arquivo da ata anterior" do modal: sem previous_record_id,
+    o texto extraído de `prev_bytes` precisa passar pelo reparse e virar a
+    base do reconcile — a oportunidade citada na ata anterior enviada, mas
+    não citada na reunião nova, tem que aparecer como 'sem update', do mesmo
+    jeito que aconteceria com uma ata do histórico."""
+    resposta_ata_anterior = json.dumps({
+        'title': 'Ata Anterior (arquivo)', 'meeting_date': None, 'meeting_time': None,
+        'topic': '', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Migração SAP', 'update': 'Proposta enviada', 'responsible': 'Ana'},
+            {'name': 'Observabilidade', 'update': 'Aguardando budget', 'responsible': 'Ana'}]}]}]})
+    resposta_reuniao_nova = json.dumps({
+        'title': 'Pipeline 06/08', 'meeting_date': '06/08/2026', 'meeting_time': '10:00',
+        'topic': 'Funil', 'participants': [{'name': 'Ana', 'role': 'Gerente'}],
+        'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Migração SAP', 'update': 'Cliente pediu desconto',
+             'responsible': 'Bruno'}]}]}]})
+    respostas = iter([resposta_reuniao_nova, resposta_ata_anterior])
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: next(respostas))
+
+    task_id = 'teste_prev_bytes'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'transcrição da reunião nova',
+                             previous_record_id=None, with_insights=False,
+                             prev_bytes='texto qualquer da ata anterior'.encode('utf-8'),
+                             prev_name='ata_anterior.txt')
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    assert not task.get('warning'), task.get('warning')
+    registro = toca._iata_load_record(task['result']['id'])
+    opps = {o['name']: o for o in registro['managers'][0]['accounts'][0]['opportunities']}
+    assert opps['Migração SAP']['previous_status'] == 'Proposta enviada'
+    assert opps['Migração SAP']['update_text'] == 'Cliente pediu desconto'
+    assert opps['Observabilidade']['update_text'] == toca.iata_lib.SEM_UPDATE
+    assert opps['Observabilidade']['carried_over'] is True
+
+
+def test_pipeline_prev_bytes_ilegivel_segue_como_ata_do_zero(db_path, monkeypatch):
+    """A IA não consegue estruturar o texto extraído do arquivo da ata
+    anterior enviada: a geração não pode morrer por causa disso (a extração
+    da reunião nova já rodou com sucesso) — mas o usuário precisa ser avisado
+    de que não houve continuidade, não descobrir isso calado."""
+    respostas = iter([
+        json.dumps({'title': 'Nova', 'meeting_date': None, 'meeting_time': None,
+                    'topic': '', 'participants': [],
+                    'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev',
+                        'opportunities': [{'name': 'Op', 'update': 'u'}]}]}]}),
+        'não consegui estruturar isso',
+    ])
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: next(respostas))
+
+    task_id = 'teste_prev_bytes_ilegivel'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'transcrição da reunião nova',
+                             previous_record_id=None, with_insights=False,
+                             prev_bytes=b'conteudo ilegivel', prev_name='ata.txt')
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    assert 'anterior' in (task.get('warning') or '').lower()
+    registro = toca._iata_load_record(task['result']['id'])
+    assert registro['previous_record_id'] is None
+
+
+def test_post_com_previous_file_repassa_prev_bytes_para_a_task(client, db_path, monkeypatch):
+    """A rota precisa mesmo ler o arquivo do form e repassar via kwargs —
+    sem isto o campo `previous_file` do modal seria preenchido pelo usuário
+    e silenciosamente ignorado pelo backend."""
+    capturado = {}
+
+    def _fake_process(task_id, file_bytes, filename, raw_text_input, **kwargs):
+        capturado.update(kwargs)
+
+    monkeypatch.setattr(toca, '_iata_process_async', _fake_process)
+    resp = client.post('/api/autotoca/iata', data={
+        'raw_text': 'transcrição',
+        'previous_file': (io.BytesIO(b'conteudo da ata anterior'), 'ata_anterior.txt'),
+    }, content_type='multipart/form-data')
+    assert resp.status_code == 202
+
+    # A thread roda em background — dá tempo dela executar antes de checar.
+    for _ in range(50):
+        if capturado:
+            break
+        time.sleep(0.05)
+    assert capturado.get('prev_bytes') == b'conteudo da ata anterior'
+    assert capturado.get('prev_name') == 'ata_anterior.txt'
