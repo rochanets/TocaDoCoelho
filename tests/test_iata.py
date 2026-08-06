@@ -912,3 +912,222 @@ def test_render_extras_com_item_fora_do_formato_nao_some_da_ata():
     html = iata_lib.render_email_html(_header_exemplo(), _managers_exemplo(), extras)
     assert 'Enviar proposta até sexta' in html
     assert 'Cliente reclamou do custo de licença' in html
+
+
+# --- Task 6: persistência da hierarquia e rotas de leitura ------------------
+
+
+def test_save_record_persiste_hierarquia_completa(db_path):
+    header = {'title': 'Pipeline Semanal', 'meeting_date': '04/08/2026',
+              'meeting_time': '10:00', 'topic': 'Funil',
+              'participants': [{'name': 'Ana', 'role': 'Gerente'}]}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': 'alta', 'opportunities': [
+            {'name': 'Migração SAP', 'previous_status': None, 'update_text': 'Proposta',
+             'responsible': 'Bruno', 'carried_over': False,
+             'prev_opportunity_id': None, 'match_confidence': None}]}]}]
+
+    rid = toca._iata_save_record(header, managers, extras={}, raw_text='texto',
+                                 previous_record_id=None)
+
+    registro = toca._iata_load_record(rid)
+    assert registro['title'] == 'Pipeline Semanal'
+    assert registro['format_version'] == 2
+    assert registro['managers'][0]['name'] == 'Ana'
+    assert registro['managers'][0]['accounts'][0]['opportunities'][0]['responsible'] == 'Bruno'
+    assert 'Gerente Comercial: Ana' in registro['body_markdown']
+
+
+def test_get_e_list_retornam_a_ata(client, db_path):
+    header = {'title': 'Pipeline Semanal', 'meeting_date': None, 'meeting_time': None,
+              'topic': 'Funil', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Op', 'previous_status': None, 'update_text': 'u',
+             'responsible': 'Ana', 'carried_over': False,
+             'prev_opportunity_id': None, 'match_confidence': None}]}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    lista = client.get('/api/autotoca/iata')
+    assert lista.status_code == 200
+    assert any(r['id'] == rid for r in lista.get_json())
+
+    detalhe = client.get(f'/api/autotoca/iata/{rid}')
+    assert detalhe.status_code == 200
+    assert detalhe.get_json()['managers'][0]['accounts'][0]['name'] == 'Ambev'
+
+    assert client.get('/api/autotoca/iata/99999').status_code == 404
+
+
+def test_delete_remove_ata_e_hierarquia(client, db_path):
+    import sqlite3
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Op', 'previous_status': None, 'update_text': 'u',
+             'responsible': 'Ana', 'carried_over': False,
+             'prev_opportunity_id': None, 'match_confidence': None}]}]}]
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    assert client.delete(f'/api/autotoca/iata/{rid}').status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    try:
+        restantes = conn.execute(
+            'SELECT COUNT(*) FROM iata_opportunities WHERE record_id = ?', (rid,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert restantes == 0, 'a exclusão precisa levar a hierarquia junto'
+
+
+def test_delete_inexistente_retorna_404(client, db_path):
+    assert client.delete('/api/autotoca/iata/99999').status_code == 404
+
+
+def _cria_account(db_path, nome='Ambev'):
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute('INSERT INTO accounts (name) VALUES (?)', (nome,))
+        conn.commit()
+        return conn.execute('SELECT id FROM accounts WHERE name = ?', (nome,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _hierarquia_completa(account_id=None, **overrides):
+    opp = {'name': 'Migração SAP', 'previous_status': 'Fase 1 fechada',
+           'update_text': 'Proposta revisada', 'responsible': 'Bruno',
+           'carried_over': True, 'prev_opportunity_id': None,
+           'match_confidence': 'media'}
+    opp.update(overrides)
+    return [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': account_id,
+        'match_confidence': 'alta', 'match_confirmed': True,
+        'opportunities': [opp]}]}]
+
+
+def test_save_record_round_trip_preserva_todos_os_campos_da_oportunidade(db_path):
+    """O que sai de _iata_load_record precisa servir como previous_managers
+    para iata_lib.reconcile na próxima ata — se um campo se perder na volta
+    do banco, o encadeamento entre atas quebra em silêncio."""
+    account_id = _cria_account(db_path)
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = _hierarquia_completa(account_id=account_id)
+
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    registro = toca._iata_load_record(rid)
+
+    conta = registro['managers'][0]['accounts'][0]
+    opp = conta['opportunities'][0]
+    assert conta['account_id'] == account_id
+    assert conta['match_confidence'] == 'alta'
+    assert conta['match_confirmed'] is True
+    assert opp['previous_status'] == 'Fase 1 fechada'
+    assert opp['update_text'] == 'Proposta revisada'
+    assert opp['responsible'] == 'Bruno'
+    assert opp['carried_over'] is True
+    assert opp['match_confidence'] == 'media'
+    assert 'id' in opp  # reconcile precisa do id do banco para casar de novo
+
+
+def test_registro_lido_do_banco_serve_como_previous_managers_para_reconcile(db_path):
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = _hierarquia_completa()  # account_id None: reconciliação não depende dele
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    registro = toca._iata_load_record(rid)
+
+    atual = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+        {'name': 'Migração SAP', 'update_text': 'Fechado', 'responsible': 'Ana'}]}]}]
+    result = iata_lib.reconcile(atual, registro['managers'])
+
+    opp = result[0]['accounts'][0]['opportunities'][0]
+    assert opp['match_confidence'] == 'alta'
+    assert opp['previous_status'] == 'Proposta revisada'
+
+
+def test_save_record_respeita_display_order_mesmo_inserido_fora_de_ordem(db_path):
+    managers = [
+        {'name': 'Bruno', 'accounts': [{'name': 'Vale', 'account_id': None,
+            'match_confidence': None, 'opportunities': [
+                {'name': 'Data Lake', 'previous_status': None, 'update_text': 'u',
+                 'responsible': 'Bruno', 'carried_over': False,
+                 'prev_opportunity_id': None, 'match_confidence': None}]}]},
+        {'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+            'match_confidence': None, 'opportunities': [
+                {'name': 'Op2', 'previous_status': None, 'update_text': 'u2',
+                 'responsible': 'Ana', 'carried_over': False,
+                 'prev_opportunity_id': None, 'match_confidence': None},
+                {'name': 'Op1', 'previous_status': None, 'update_text': 'u1',
+                 'responsible': 'Ana', 'carried_over': False,
+                 'prev_opportunity_id': None, 'match_confidence': None}]}]},
+    ]
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    rid = toca._iata_save_record(header, managers, {}, 'texto', None)
+    registro = toca._iata_load_record(rid)
+
+    nomes_gerentes = [m['name'] for m in registro['managers']]
+    assert nomes_gerentes == ['Bruno', 'Ana']
+    opps = registro['managers'][1]['accounts'][0]['opportunities']
+    assert [o['name'] for o in opps] == ['Op2', 'Op1']
+
+
+def test_list_retorna_participantes_parseados(client, db_path):
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': [{'name': 'Ana', 'role': 'Gerente'}]}
+    managers = [{'name': 'Ana', 'accounts': []}]
+    toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    lista = client.get('/api/autotoca/iata').get_json()
+    assert lista[0]['participants'] == [{'name': 'Ana', 'role': 'Gerente'}]
+
+
+def test_get_registro_antigo_sem_hierarquia_e_body_markdown_nao_quebra(client, db_path):
+    """Simula um registro no formato antigo (format_version=1), inserido
+    diretamente como o código legado fazia — sem body_markdown e sem linhas
+    nas tabelas de hierarquia."""
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic,
+               participants, ata_json, insights_json, raw_text, format_version)
+               VALUES (?,?,?,?,?,?,?,?,1)''',
+            ('Ata Antiga', None, None, '', '[]', '{}', '[]', 'texto antigo'))
+        rid = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    detalhe = client.get(f'/api/autotoca/iata/{rid}')
+    assert detalhe.status_code == 200
+    corpo = detalhe.get_json()
+    assert corpo['managers'] == []
+    assert corpo['body_markdown'] is None
+
+
+def test_save_record_e_transacional_na_falha_da_hierarquia(db_path, monkeypatch):
+    """Se a escrita da hierarquia falhar no meio, o registro em iata_records
+    não pode sobrar sozinho no banco — tudo ou nada."""
+    def _quebra(*a, **k):
+        raise RuntimeError('falha simulada na escrita da hierarquia')
+    monkeypatch.setattr(toca, '_iata_write_hierarchy', _quebra)
+
+    header = {'title': 'X', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    managers = [{'name': 'Ana', 'accounts': []}]
+
+    import pytest
+    with pytest.raises(RuntimeError):
+        toca._iata_save_record(header, managers, {}, 'texto', None)
+
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    try:
+        total = conn.execute('SELECT COUNT(*) FROM iata_records').fetchone()[0]
+    finally:
+        conn.close()
+    assert total == 0, 'INSERT sem commit não pode sobreviver a uma falha na hierarquia'

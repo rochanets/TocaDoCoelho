@@ -732,6 +732,7 @@ def init_db():
         responsible TEXT,
         carried_over INTEGER DEFAULT 0,
         prev_opportunity_id INTEGER,
+        match_confidence TEXT,
         display_order INTEGER DEFAULT 0,
         FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
         FOREIGN KEY(iata_account_id) REFERENCES iata_accounts(id) ON DELETE CASCADE,
@@ -1283,6 +1284,21 @@ def _iata_add_record_columns(conn):
         if col not in existentes:
             c.execute(f'ALTER TABLE iata_records ADD COLUMN {col} {ddl}')
 
+
+def _iata_add_opportunity_match_confidence_column(conn):
+    """`reconcile()` (Task 2) devolve `match_confidence` também por
+    oportunidade (alta/media/baixa/None), não só por conta — mas a migração
+    17 só criou a coluna em iata_accounts. Sem esta coluna, o valor era
+    perdido em silêncio a cada gravação (achado da revisão de qualidade da
+    Task 6). Segue o mesmo padrão de `_iata_add_record_columns`: ALTER TABLE
+    condicional, tolerante à tabela ainda não existir."""
+    c = conn.cursor()
+    existentes = {r[1] for r in c.execute('PRAGMA table_info(iata_opportunities)')}
+    if not existentes:
+        return
+    if 'match_confidence' not in existentes:
+        c.execute('ALTER TABLE iata_opportunities ADD COLUMN match_confidence TEXT')
+
 # ---------------------------------------------------------------------------
 SCHEMA_MIGRATIONS = [
     (1, 'baseline_legacy_init', None),  # None => roda init_db()
@@ -1499,6 +1515,9 @@ SCHEMA_MIGRATIONS = [
         'CREATE INDEX IF NOT EXISTS idx_iata_opp_prev ON iata_opportunities(prev_opportunity_id)',
         'CREATE INDEX IF NOT EXISTS idx_iata_opp_norm ON iata_opportunities(name_norm)',
         _iata_add_record_columns,
+    ]),
+    (18, 'iata_opportunity_match_confidence', [
+        _iata_add_opportunity_match_confidence_column,
     ]),
 ]
 
@@ -12757,7 +12776,7 @@ def handle_unexpected_exception(error):
 # No build PyInstaller, incluir --add-data "routes;routes".
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
-                 'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
+                 'whatsapp', 'outlook', 'itoca', 'autotoca', 'autotoca_iata', 'wikitoca',
                  'portfolio', 'config', 'home', 'reembolsos', 'feedback']
 
 

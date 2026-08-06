@@ -1677,7 +1677,7 @@ git add integrations/iata/render.py integrations/iata/__init__.py tests/test_iat
 - Modify: `app.py:12650` (`ROUTE_MODULES`)
 - Test: `tests/test_iata.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 A função de persistência é `_iata_save_record`, definida em
 `routes/autotoca_iata.py` e disponível como atributo do módulo `app` porque as
@@ -1752,12 +1752,40 @@ Nota sobre o `DELETE`: `PRAGMA foreign_keys` não vem ligado por padrão no
 SQLite, então o `ON DELETE CASCADE` pode não disparar. A implementação apaga as
 tabelas filhas explicitamente — o teste acima cobre isso.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_iata.py -k "save_record or get_e_list or delete_remove" -v`
 Expected: FAIL — `AttributeError: module 'app' has no attribute '_iata_save_record'`.
 
-- [ ] **Step 3: Criar `routes/autotoca_iata.py`**
+- [x] **Step 3: Criar `routes/autotoca_iata.py`**
+
+**Correção pós-revisão:** a versão original desta referência tinha três
+defeitos de perda silenciosa de dado, achados testando round-trip
+save→load contra `iata_lib.reconcile`:
+
+1. **`match_confidence` de oportunidade não tinha coluna.** A migração 17
+   (Task 1) só criou `match_confidence` em `iata_accounts` — `iata_opportunities`
+   não tinha essa coluna, então o valor que `reconcile()` calcula por
+   oportunidade (`alta`/`media`/`baixa`/`None`) era descartado a cada
+   gravação, sem erro. Corrigido com uma migração nova (18,
+   `iata_opportunity_match_confidence`, função
+   `_iata_add_opportunity_match_confidence_column` seguindo o padrão de
+   `_iata_add_record_columns`) mais a coluna no `CREATE TABLE IF NOT EXISTS`
+   do `init_db` (para bancos novos). `_iata_write_hierarchy` e o `INSERT` em
+   `iata_opportunities` passaram a gravar `opp.get('match_confidence')`.
+2. **`match_confirmed` de conta voltava como `int` (0/1), não `bool`.**
+   Inconsistente com `carried_over`, que já convertia. `_iata_read_hierarchy`
+   agora aplica `bool(conta.get('match_confirmed'))` também.
+3. **`_iata_load_record` inicializava `ata_json`/`participants`/`insights_json`
+   com fallback `'[]'` (lista) mesmo `ata_json` sendo sempre um objeto —
+   funcionava por acidente graças ao `isinstance(..., dict)` guard, mas era
+   frágil.** Reescrito para dar fallback `'{}'` a `ata_json` especificamente,
+   com o mesmo guard de `isinstance` mantido por segurança.
+
+`PRAGMA foreign_keys=ON` já é ligado em toda conexão por `get_db()` (não é
+"desligado por padrão" como a nota abaixo sugeria) — o `DELETE` explícito das
+tabelas filhas na rota `DELETE` continua correto, só deixou de ser a única
+linha de defesa contra órfãos.
 
 ```python
 # -*- coding: utf-8 -*-
@@ -1935,7 +1963,7 @@ Antes de escrever, conferir em `routes/portfolio.py` como `dict_from_row` é
 usado e confirmar que `json` já está importado no namespace do `app.py` (está —
 `app.py` importa `json` no topo).
 
-- [ ] **Step 4: Registrar o módulo de rotas**
+- [x] **Step 4: Registrar o módulo de rotas**
 
 Em `app.py:12650`, acrescentar `'autotoca_iata'` à lista:
 
@@ -1952,17 +1980,17 @@ agora** o bloco `/api/portfolio/iata*` de `routes/portfolio.py:301-380` (as
 cinco rotas, do `@app.route('/api/portfolio/iata', methods=['GET'])` até o fim
 de `delete_iata_record`). O POST e o polling voltam na Task 7.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_iata.py -v`
 Expected: PASS.
 
-- [ ] **Step 6: Verificar que o app ainda sobe**
+- [x] **Step 6: Verificar que o app ainda sobe**
 
 Run: `python -c "import app; print(len(app.app.url_map._rules))"`
 Expected: imprime um número (sem exceção de endpoint duplicado).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add routes/autotoca_iata.py routes/portfolio.py app.py tests/test_iata.py && git commit -m "feat(iata): rotas de leitura no autotoca com hierarquia persistida"
