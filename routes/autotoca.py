@@ -737,3 +737,572 @@ def autotoca_teste_linkedin():
 @app.route('/uploads/autotoca/<path:filename>')
 def serve_autotoca_upload(filename):
     return send_from_directory(str(AUTOTOCA_UPLOAD_DIR), filename)
+
+
+# ─────────────────────────────────────────
+#  Relatório Semanal — evolução das contas no período
+#
+#  Compila, por conta selecionada, tudo o que foi registrado no período em três
+#  fontes (atividades dos contatos + Agenda + Kanban) e pede ao LLM um resumo
+#  organizado por ASSUNTO, dizendo quais contatos participaram de cada um. O
+#  frontend usa esses nomes para exibir foto e cargo de cada contato envolvido.
+# ─────────────────────────────────────────
+
+# Teto de itens por fonte enviados ao LLM. Sem isso, uma conta com histórico
+# grande estoura o contexto do template SAI e a resposta volta truncada (JSON
+# inválido), o que cai no fallback heurístico sem o usuário entender por quê.
+WEEKLY_REPORT_MAX_ITEMS_PER_SOURCE = 40
+
+
+def _weekly_report_default_period():
+    """Últimos 7 dias (hoje incluído) — o padrão do relatório semanal."""
+    today = date.today()
+    return (today - timedelta(days=6)).isoformat(), today.isoformat()
+
+
+def _weekly_report_norm(value):
+    """Minúsculo e sem acento — usado para casar o nome do contato devolvido
+    pelo LLM com o cadastro, que pode diferir em acento ou caixa."""
+    text = unicodedata.normalize('NFKD', str(value or '').strip())
+    return ''.join(ch for ch in text if not unicodedata.combining(ch)).casefold()
+
+
+def _weekly_report_in_period(value, start_date, end_date):
+    """Compara só a parte de data (o banco guarda TIMESTAMP em alguns campos e
+    'YYYY-MM-DD' em outros, como commitments.due_date)."""
+    day = (str(value or '').strip())[:10]
+    if not day:
+        return False
+    if start_date and day < start_date:
+        return False
+    if end_date and day > end_date:
+        return False
+    return True
+
+
+def _weekly_report_contact_view(contact):
+    """Projeção enxuta do contato para o relatório — é o que alimenta o card com
+    nome e foto no frontend."""
+    return {
+        'id': contact.get('id'),
+        'name': contact.get('name'),
+        'position': contact.get('position'),
+        'area_of_activity': contact.get('area_of_activity'),
+        'email': contact.get('email'),
+        'photo_url': contact.get('photo_url'),
+        'is_main_contact': bool(contact.get('is_main_contact')),
+    }
+
+
+def _weekly_report_collect_account(c, account, start_date, end_date):
+    """Lê as três fontes de evolução da conta no período: atividades dos
+    contatos (+ atividades da própria conta), compromissos da Agenda e cards do
+    Kanban. Devolve tudo já normalizado em `events`, na ordem cronológica
+    decrescente, para virar tanto o contexto do LLM quanto a timeline da tela."""
+    account_id = account['id']
+    account_name = account['name']
+
+    c.execute("""SELECT cl.*, CASE WHEN amc.client_id IS NOT NULL THEN 1 ELSE 0 END AS is_main_contact
+                 FROM clients cl
+                 LEFT JOIN account_main_contacts amc
+                        ON amc.client_id = cl.id AND amc.account_id = ?
+                 WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(?))
+                 ORDER BY is_main_contact DESC, cl.name COLLATE NOCASE""",
+              (account_id, account_name))
+    contacts = [dict_from_row(r) for r in c.fetchall()]
+    contacts_by_id = {row['id']: row for row in contacts}
+    contact_ids = list(contacts_by_id.keys())
+
+    events = []
+
+    # 1) Atividades registradas nos contatos da conta
+    if contact_ids:
+        placeholders = ','.join(['?'] * len(contact_ids))
+        c.execute(f"""SELECT a.id, a.client_id, a.contact_type, a.information, a.description,
+                             a.activity_date, a.created_at, cl.name AS client_name
+                      FROM activities a
+                      JOIN clients cl ON cl.id = a.client_id
+                      WHERE a.client_id IN ({placeholders})
+                        AND date(COALESCE(a.activity_date, a.created_at)) >= date(?)
+                        AND date(COALESCE(a.activity_date, a.created_at)) <= date(?)
+                      ORDER BY datetime(COALESCE(a.activity_date, a.created_at)) DESC, a.id DESC""",
+                  tuple(contact_ids) + (start_date, end_date))
+        for row in c.fetchall():
+            item = dict_from_row(row)
+            text = ' — '.join([p for p in [item.get('information'), item.get('description')] if (p or '').strip()])
+            events.append({
+                'source': 'Atividade',
+                'date': item.get('activity_date') or item.get('created_at'),
+                'contact_id': item.get('client_id'),
+                'contact_name': item.get('client_name'),
+                'title': item.get('contact_type') or 'Atividade',
+                'text': text or 'Interação registrada sem detalhamento.',
+            })
+
+    # 2) Atividades lançadas diretamente na conta (sem contato específico)
+    c.execute("""SELECT id, description, activity_date, created_at
+                 FROM account_activities
+                 WHERE account_id = ?
+                   AND date(COALESCE(activity_date, created_at)) >= date(?)
+                   AND date(COALESCE(activity_date, created_at)) <= date(?)
+                 ORDER BY datetime(COALESCE(activity_date, created_at)) DESC, id DESC""",
+              (account_id, start_date, end_date))
+    for row in c.fetchall():
+        item = dict_from_row(row)
+        events.append({
+            'source': 'Atividade da conta',
+            'date': item.get('activity_date') or item.get('created_at'),
+            'contact_id': None,
+            'contact_name': None,
+            'title': 'Atividade da conta',
+            'text': item.get('description') or 'Atividade da conta sem detalhamento.',
+        })
+
+    # 3) Agenda — compromissos dos contatos da conta
+    if contact_ids:
+        placeholders = ','.join(['?'] * len(contact_ids))
+        c.execute(f"""SELECT cm.id, cm.client_id, cm.title, cm.notes, cm.due_date, cm.due_time,
+                             cm.source_type, cm.followup_activity_id, cl.name AS client_name
+                      FROM commitments cm
+                      JOIN clients cl ON cl.id = cm.client_id
+                      WHERE cm.client_id IN ({placeholders})
+                        AND date(cm.due_date) >= date(?) AND date(cm.due_date) <= date(?)
+                      ORDER BY date(cm.due_date) DESC, cm.id DESC""",
+                  tuple(contact_ids) + (start_date, end_date))
+        for row in c.fetchall():
+            item = dict_from_row(row)
+            done = ' (follow-up registrado)' if item.get('followup_activity_id') else ' (sem follow-up registrado)'
+            events.append({
+                'source': 'Agenda',
+                'date': item.get('due_date'),
+                'contact_id': item.get('client_id'),
+                'contact_name': item.get('client_name'),
+                'title': item.get('title') or 'Compromisso',
+                'text': (item.get('notes') or item.get('title') or 'Compromisso na agenda') + done,
+            })
+
+    # 4) Agenda — renovações de presença/entrega da conta (também aparecem no módulo Agenda)
+    c.execute("""SELECT ev.id, ev.title, ev.due_date, ev.due_time, ap.delivery_name
+                 FROM account_renewal_events ev
+                 LEFT JOIN account_presences ap ON ap.id = ev.presence_id
+                 WHERE ev.account_id = ?
+                   AND date(ev.due_date) >= date(?) AND date(ev.due_date) <= date(?)
+                 ORDER BY date(ev.due_date) DESC, ev.id DESC""",
+              (account_id, start_date, end_date))
+    for row in c.fetchall():
+        item = dict_from_row(row)
+        events.append({
+            'source': 'Agenda',
+            'date': item.get('due_date'),
+            'contact_id': None,
+            'contact_name': None,
+            'title': item.get('title') or 'Renovação de contrato',
+            'text': 'Renovação/vigência da entrega "{}" na agenda da conta.'.format(
+                item.get('delivery_name') or 'não informada'),
+        })
+
+    # 5) Kanban — cards da conta ou de seus contatos. O período é avaliado em
+    #    Python: um card entra se foi criado, atualizado OU comentado dentro da
+    #    janela. Filtrar só por updated_at deixava de fora o card antigo que
+    #    recebeu um comentário novo — justamente a evolução da semana.
+    kanban_params = [account_id]
+    contact_condition = ''
+    if contact_ids:
+        contact_condition = ' OR kc.contact_id IN ({})'.format(','.join(['?'] * len(contact_ids)))
+        kanban_params.extend(contact_ids)
+    c.execute(f"""SELECT kc.id, kc.title, kc.description, kc.tag, kc.activity, kc.urgency,
+                         kc.contact_id, kc.created_at, kc.updated_at,
+                         kcol.title AS column_title, cl.name AS contact_name
+                  FROM kanban_cards kc
+                  LEFT JOIN kanban_columns kcol ON kcol.id = kc.column_id
+                  LEFT JOIN clients cl ON cl.id = kc.contact_id
+                  WHERE (kc.account_id = ? {contact_condition})
+                  ORDER BY datetime(kc.updated_at) DESC, kc.id DESC""", tuple(kanban_params))
+    kanban_rows = [dict_from_row(r) for r in c.fetchall()]
+    for card in kanban_rows:
+        c.execute('SELECT content, created_at FROM kanban_card_activities WHERE card_id = ? '
+                  'ORDER BY datetime(created_at) DESC', (card['id'],))
+        comments = [dict_from_row(r) for r in c.fetchall()]
+        comments_in_period = [x for x in comments
+                              if _weekly_report_in_period(x.get('created_at'), start_date, end_date)]
+        touched = (
+            _weekly_report_in_period(card.get('updated_at'), start_date, end_date)
+            or _weekly_report_in_period(card.get('created_at'), start_date, end_date)
+            or bool(comments_in_period)
+        )
+        if not touched:
+            continue
+        parts = [card.get('description') or '']
+        if card.get('activity'):
+            parts.append(f"Próxima ação: {card['activity']}")
+        for comment in comments_in_period[:5]:
+            parts.append('Comentário {}: {}'.format(
+                str(comment.get('created_at') or '')[:10], comment.get('content') or ''))
+        events.append({
+            'source': 'Kanban',
+            'date': (comments_in_period[0].get('created_at') if comments_in_period
+                     else (card.get('updated_at') or card.get('created_at'))),
+            'contact_id': card.get('contact_id'),
+            'contact_name': card.get('contact_name'),
+            'title': '[{}] {}'.format(card.get('column_title') or 'Sem coluna', card.get('title') or 'Card'),
+            'text': ' | '.join([p.strip() for p in parts if (p or '').strip()]) or 'Card sem descrição.',
+            'urgency': card.get('urgency'),
+            'tag': card.get('tag'),
+        })
+
+    events.sort(key=lambda x: _relation_report_parse_dt(x.get('date')) or datetime.min, reverse=True)
+
+    # Contatos que efetivamente aparecem no período — são eles que a tela mostra
+    # com foto, e não a lista inteira da conta.
+    involved_ids = []
+    for event in events:
+        cid = event.get('contact_id')
+        if cid and cid in contacts_by_id and cid not in involved_ids:
+            involved_ids.append(cid)
+
+    counts = {
+        'atividades': len([e for e in events if e['source'].startswith('Atividade')]),
+        'agenda': len([e for e in events if e['source'] == 'Agenda']),
+        'kanban': len([e for e in events if e['source'] == 'Kanban']),
+    }
+    counts['total'] = counts['atividades'] + counts['agenda'] + counts['kanban']
+
+    return {
+        'account': {
+            'id': account_id,
+            'name': account_name,
+            'logo_url': account.get('logo_url'),
+            'sector': account.get('sector'),
+            'is_target': bool(account.get('is_target')),
+        },
+        'contacts': [_weekly_report_contact_view(contacts_by_id[cid]) for cid in involved_ids],
+        'all_contacts': [_weekly_report_contact_view(row) for row in contacts],
+        'events': events,
+        'counts': counts,
+    }
+
+
+def _weekly_report_build_question(data, start_date, end_date):
+    account = data['account']
+    lines = [
+        f"Conta: {account['name']}",
+        f"Setor: {account.get('sector') or 'Não informado'}",
+        f"Período analisado: {start_date} a {end_date}",
+        '',
+        'Contatos da conta que aparecem nos registros do período '
+        '(use EXATAMENTE estes nomes ao citar contatos):',
+    ]
+    if data['contacts']:
+        for contact in data['contacts']:
+            lines.append(f"- {contact['name']} | cargo: {contact.get('position') or 'não informado'}"
+                         f" | área: {contact.get('area_of_activity') or 'não informada'}")
+    else:
+        lines.append('- (nenhum contato individual identificado nos registros)')
+
+    for source, label in (('Atividade', 'Atividades registradas'),
+                          ('Atividade da conta', 'Atividades da conta'),
+                          ('Agenda', 'Compromissos da Agenda'),
+                          ('Kanban', 'Cards do Kanban')):
+        items = [e for e in data['events'] if e['source'] == source][:WEEKLY_REPORT_MAX_ITEMS_PER_SOURCE]
+        if not items:
+            continue
+        lines.append('')
+        lines.append(f'{label}:')
+        for item in items:
+            who = item.get('contact_name') or 'sem contato vinculado'
+            lines.append('- {} | {} | {} | {}'.format(
+                _relation_report_format_dt(item.get('date')), who,
+                item.get('title') or '', str(item.get('text') or '')[:400]))
+
+    lines += [
+        '',
+        'Com base SOMENTE nos registros acima, escreva o relatório de evolução da conta '
+        'no período. Agrupe o que aconteceu por ASSUNTO tratado com os contatos '
+        '(ex.: renovação de contrato, projeto de cloud, pendência comercial, avaliação de '
+        'segurança). Cada assunto deve reunir os registros que falam do mesmo tema, mesmo '
+        'que vindos de fontes diferentes (atividade, agenda, kanban).',
+        'Não invente fatos, datas ou nomes. Em "contatos", use apenas nomes que aparecem na '
+        'lista de contatos acima, escritos exatamente igual.',
+        '',
+        'Retorne SOMENTE JSON válido, sem texto antes ou depois, no formato:',
+        '{"resumo_periodo": "2 a 4 frases sobre a evolução geral da conta no período",',
+        ' "assuntos": [{"assunto": "título curto do tema",',
+        '               "resumo": "2 a 4 frases sobre o que evoluiu neste tema",',
+        '               "contatos": ["Nome exato do contato"],',
+        '               "origens": ["Atividade", "Agenda", "Kanban"],',
+        '               "status": "avancou" ou "em_andamento" ou "parado"}],',
+        ' "proximos_passos": ["ação objetiva sugerida"],',
+        ' "alertas": ["risco ou pendência observada"]}',
+        'Use listas vazias quando não houver informação suficiente.',
+    ]
+    return '\n'.join(lines)
+
+
+def _weekly_report_normalize_analysis(parsed, data):
+    """Valida a resposta do LLM e resolve os nomes de contato citados para os
+    registros reais da conta (é daí que vêm foto e cargo na tela). Nome que não
+    bate com nenhum contato é descartado — melhor um assunto sem foto do que
+    atribuir a conversa ao contato errado."""
+    by_name = {}
+    for contact in data['all_contacts']:
+        key = _weekly_report_norm(contact.get('name') or '')
+        if key:
+            by_name[key] = contact
+
+    valid_origins = {'atividade': 'Atividade', 'atividade da conta': 'Atividade da conta',
+                     'agenda': 'Agenda', 'kanban': 'Kanban'}
+    valid_status = {'avancou', 'em_andamento', 'parado'}
+
+    assuntos = []
+    for raw in (parsed.get('assuntos') or [])[:12]:
+        if not isinstance(raw, dict):
+            continue
+        titulo = str(raw.get('assunto') or '').strip()
+        resumo = str(raw.get('resumo') or '').strip()
+        if not titulo and not resumo:
+            continue
+        matched, unmatched = [], []
+        for name in (raw.get('contatos') or [])[:12]:
+            contact = by_name.get(_weekly_report_norm(str(name)))
+            if contact:
+                if contact not in matched:
+                    matched.append(contact)
+            elif str(name).strip():
+                unmatched.append(str(name).strip())
+        origens = []
+        for origin in (raw.get('origens') or []):
+            label = valid_origins.get(_weekly_report_norm(str(origin)))
+            if label and label not in origens:
+                origens.append(label)
+        status = _weekly_report_norm(str(raw.get('status') or '')).replace(' ', '_')
+        assuntos.append({
+            'assunto': titulo or 'Assunto sem título',
+            'resumo': resumo,
+            'contatos': matched,
+            'contatos_nao_identificados': unmatched,
+            'origens': origens,
+            'status': status if status in valid_status else 'em_andamento',
+        })
+
+    def _str_list(key, limit):
+        return [str(x).strip() for x in (parsed.get(key) or []) if str(x).strip()][:limit]
+
+    return {
+        'resumo_periodo': str(parsed.get('resumo_periodo') or '').strip(),
+        'assuntos': assuntos,
+        'proximos_passos': _str_list('proximos_passos', 6),
+        'alertas': _str_list('alertas', 6),
+    }
+
+
+def _weekly_report_fallback_analysis(data):
+    """Sem LLM disponível o relatório ainda sai: agrupa os registros pelos
+    tópicos já usados no Relationship Report (classificação por palavra-chave)."""
+    buckets = {}
+    for event in data['events']:
+        topic = _relation_report_topic_from_text(' '.join(
+            filter(None, [event.get('title'), event.get('text')])))
+        buckets.setdefault(topic, []).append(event)
+
+    contacts_by_id = {c['id']: c for c in data['all_contacts'] if c.get('id')}
+    assuntos = []
+    for topic, items in sorted(buckets.items(), key=lambda kv: len(kv[1]), reverse=True):
+        contatos = []
+        for item in items:
+            contact = contacts_by_id.get(item.get('contact_id'))
+            if contact and contact not in contatos:
+                contatos.append(contact)
+        origens = []
+        for item in items:
+            if item['source'] not in origens:
+                origens.append(item['source'])
+        primeiro = items[0]
+        assuntos.append({
+            'assunto': topic,
+            'resumo': '{} registro(s) no período. Mais recente: {} — {}'.format(
+                len(items), _relation_report_format_dt(primeiro.get('date')),
+                str(primeiro.get('text') or '')[:220]),
+            'contatos': contatos,
+            'contatos_nao_identificados': [],
+            'origens': origens,
+            'status': 'em_andamento',
+        })
+
+    counts = data['counts']
+    return {
+        'resumo_periodo': (
+            'Resumo automático sem IA (SAI e OpenRouter indisponíveis). '
+            '{} registro(s) no período: {} atividade(s), {} item(ns) de agenda e '
+            '{} card(s) de Kanban.'.format(
+                counts['total'], counts['atividades'], counts['agenda'], counts['kanban'])
+        ),
+        'assuntos': assuntos,
+        'proximos_passos': [],
+        'alertas': [],
+    }
+
+
+def _weekly_report_analyze(data, start_date, end_date):
+    """Resumo por assunto via LLM (SAI → OpenRouter, conforme _llm_prompt).
+    Devolve (analise, llm_used)."""
+    if not data['events']:
+        return {
+            'resumo_periodo': 'Nenhum registro de atividade, agenda ou Kanban no período selecionado.',
+            'assuntos': [],
+            'proximos_passos': [],
+            'alertas': [],
+        }, False
+
+    question = _weekly_report_build_question(data, start_date, end_date)
+    raw = None
+    try:
+        raw = _llm_prompt(question, log_tag='RelatorioSemanal')
+    except Exception as e:
+        logger.warning(f"[RelatorioSemanal] Falha na chamada ao LLM para "
+                       f"'{data['account']['name']}': {e}")
+
+    if raw:
+        parsed = _extract_json_object_from_text(raw)
+        if isinstance(parsed, dict):
+            analysis = _weekly_report_normalize_analysis(parsed, data)
+            if analysis['resumo_periodo'] or analysis['assuntos']:
+                return analysis, True
+        logger.warning(f"[RelatorioSemanal] Resposta do LLM sem JSON utilizável para "
+                       f"'{data['account']['name']}' — usando agrupamento heurístico.")
+
+    return _weekly_report_fallback_analysis(data), False
+
+
+def _weekly_report_process_async(task_id, account_ids, start_date, end_date):
+    try:
+        _bg_task_set(task_id, {'step': 'Compilando registros das contas...', 'progress': 10})
+
+        # Toda a leitura acontece antes das chamadas de LLM: manter a conexão
+        # aberta durante minutos de rede prende o lock de escrita do SQLite e
+        # derruba gravações concorrentes com "database is locked".
+        conn = get_db()
+        c = conn.cursor()
+        placeholders = ','.join(['?'] * len(account_ids))
+        c.execute(f'SELECT * FROM accounts WHERE id IN ({placeholders}) ORDER BY name COLLATE NOCASE',
+                  tuple(account_ids))
+        accounts = [dict_from_row(r) for r in c.fetchall()]
+        collected = []
+        for account in accounts:
+            collected.append(_weekly_report_collect_account(c, account, start_date, end_date))
+        conn.close()
+
+        if not collected:
+            _bg_task_set(task_id, {'status': 'error', 'error': 'Nenhuma das contas selecionadas foi encontrada.'})
+            return
+
+        report_accounts = []
+        for index, data in enumerate(collected):
+            _bg_task_set(task_id, {
+                'step': '✦ Resumindo {} com IA... ({}/{})'.format(
+                    data['account']['name'], index + 1, len(collected)),
+                'progress': 15 + int((index / len(collected)) * 80),
+            })
+            analysis = None
+            llm_used = False
+            try:
+                analysis, llm_used = _weekly_report_analyze(data, start_date, end_date)
+            except Exception as e:
+                logger.exception(f"[RelatorioSemanal] Falha ao analisar '{data['account']['name']}': {e}")
+                analysis = _weekly_report_fallback_analysis(data)
+            report_accounts.append({
+                'account': data['account'],
+                'counts': data['counts'],
+                'contacts': data['contacts'],
+                'events': data['events'],
+                'llm_used': llm_used,
+                **analysis,
+            })
+
+        result = {
+            'period': {'start_date': start_date, 'end_date': end_date},
+            'generated_at': datetime.now().isoformat(timespec='seconds'),
+            'accounts': report_accounts,
+            'totals': {
+                'accounts': len(report_accounts),
+                'events': sum(a['counts']['total'] for a in report_accounts),
+                'assuntos': sum(len(a['assuntos']) for a in report_accounts),
+            },
+        }
+        logger.info('[RelatorioSemanal] %s conta(s), %s registro(s), %s assunto(s) — período %s a %s',
+                    result['totals']['accounts'], result['totals']['events'],
+                    result['totals']['assuntos'], start_date, end_date)
+        _bg_task_set(task_id, {'status': 'done', 'step': 'Concluído!', 'progress': 100, 'result': result})
+    except Exception as e:
+        logger.exception(f'[RelatorioSemanal] Falha ao gerar relatório: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e), 'progress': 0})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/autotoca/relatorio-semanal/contas', methods=['GET'])
+def autotoca_weekly_report_accounts():
+    """Contas para o seletor do modal, com o total de contatos vinculados —
+    ajuda o usuário a perceber uma conta sem contato antes de gerar o relatório."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("""SELECT a.id, a.name, a.logo_url, a.sector, COALESCE(a.is_target, 0) AS is_target,
+                            (SELECT COUNT(*) FROM clients cl
+                              WHERE LOWER(TRIM(cl.company)) = LOWER(TRIM(a.name))) AS contacts_count
+                     FROM accounts a
+                     ORDER BY a.name COLLATE NOCASE""")
+        rows = [dict_from_row(r) for r in c.fetchall()]
+        conn.close()
+        for row in rows:
+            row['is_target'] = bool(row['is_target'])
+        return jsonify(rows)
+    except Exception as e:
+        logger.exception(f'[RelatorioSemanal] GET /api/autotoca/relatorio-semanal/contas: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/relatorio-semanal', methods=['POST'])
+def autotoca_weekly_report_start():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        account_ids = []
+        for raw in (data.get('account_ids') or []):
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if value > 0 and value not in account_ids:
+                account_ids.append(value)
+        if not account_ids:
+            return jsonify({'error': 'Selecione pelo menos uma conta.'}), 400
+
+        default_start, default_end = _weekly_report_default_period()
+        start_date = (data.get('start_date') or '').strip() or default_start
+        end_date = (data.get('end_date') or '').strip() or default_end
+        for label, value in (('inicial', start_date), ('final', end_date)):
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+                return jsonify({'error': f'Data {label} inválida. Use o formato AAAA-MM-DD.'}), 400
+        if start_date > end_date:
+            return jsonify({'error': 'A data inicial não pode ser posterior à data final.'}), 400
+
+        task_id = uuid.uuid4().hex
+        _bg_task_register_persistent(task_id, 'relatorio_semanal')
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(
+            target=_weekly_report_process_async,
+            args=(task_id, account_ids, start_date, end_date),
+            daemon=True
+        ).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[RelatorioSemanal] POST /api/autotoca/relatorio-semanal: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/relatorio-semanal/tasks/<task_id>', methods=['GET'])
+def autotoca_weekly_report_task(task_id):
+    task = _bg_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    return jsonify(task)

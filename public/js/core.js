@@ -1574,7 +1574,9 @@
             'autoTocaBtn_chamado-juridico',
             'autoTocaBtn_mala-direta',
             'autoTocaBtn_whatsapp-update',
-            'autoTocaBtn_sync-outlook'
+            'autoTocaBtn_sync-outlook',
+            'autoTocaBtn_reembolsos',
+            'autoTocaBtn_relatorio-semanal'
         ];
 
         function resetAutoTocaModuleButtons() {
@@ -1601,13 +1603,15 @@
                 'chamado-juridico': 'autoTocaChamadoJuridico',
                 'mala-direta': 'autoTocaMalaDireta',
                 'sync-outlook': 'autoTocaSyncOutlook',
-                'reembolsos': 'autoTocaReembolsos'
+                'reembolsos': 'autoTocaReembolsos',
+                'relatorio-semanal': 'autoTocaRelatorioSemanal'
             };
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
                 'mala-direta': 'autoTocaBtn_mala-direta',
                 'sync-outlook': 'autoTocaBtn_sync-outlook',
-                'reembolsos': 'autoTocaBtn_reembolsos'
+                'reembolsos': 'autoTocaBtn_reembolsos',
+                'relatorio-semanal': 'autoTocaBtn_relatorio-semanal'
             };
             const targetId = panels[key];
             if (!targetId) return;
@@ -1639,6 +1643,7 @@
                 target.style.display = 'block';
                 setActiveAutoTocaModuleButton(buttons[key]);
                 if (key === 'reembolsos') { loadReembContas(); loadReembOrigemHistorico(); }
+                if (key === 'relatorio-semanal') initRelatorioSemanalPanel();
             }
         }
 
@@ -1657,7 +1662,8 @@
             if (!target) return;
             // Fecha também os painéis de automação do AutoToca
             const chamadoWasVisible = document.getElementById('autoTocaChamadoJuridico')?.style.display === 'block';
-            ['autoTocaChamadoJuridico', 'autoTocaMalaDireta', 'autoTocaSyncOutlook'].forEach(id => {
+            ['autoTocaChamadoJuridico', 'autoTocaMalaDireta', 'autoTocaSyncOutlook',
+             'autoTocaReembolsos', 'autoTocaRelatorioSemanal'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });

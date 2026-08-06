@@ -863,6 +863,7 @@
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
                 <button id="reportsBtn_preparar-reuniao" class="btn btn-auto-mapping" onclick="toggleReportsPanel('preparar-reuniao')"><i class="fab fa-linkedin" style="margin-right:5px;"></i> Preparar Reunião</button>
                 <button id="reportsBtn_relationship-report" class="btn btn-auto-mapping" onclick="toggleReportsPanel('relationship-report')"><i class="fas fa-chart-line" style="margin-right:5px;"></i> Relationship Report</button>
+                <button id="autoTocaBtn_relatorio-semanal" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('relatorio-semanal')"><i class="fas fa-calendar-week" style="margin-right:5px;"></i> Relatório Semanal</button>
                 <button id="autoTocaBtn_chamado-juridico" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('chamado-juridico')"><span class="ai-star-icon">✦</span> Chamado Jurídico</button>
                 <button id="autoTocaBtn_mala-direta" class="btn btn-auto-mapping" onclick="toggleAutoTocaAutomation('mala-direta')"><span class="ai-star-icon">✦</span> Mala Direta</button>
                 <button id="autoTocaBtn_whatsapp-update" class="btn btn-auto-mapping" onclick="openWhatsappUpdateWithWarning()"><span class="ai-star-icon">✦</span> WhatsApp Update</button>
@@ -1254,6 +1255,18 @@
             </div>
             <div id="reportsPanel_relationship-report" style="display:none;">
                 <div id="reportsRelationshipContent"></div>
+            </div>
+            <div id="autoTocaRelatorioSemanal" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; margin-bottom:14px;">
+                    <div style="flex:1; min-width:260px;">
+                        <h3 style="margin-bottom:6px; color:#065f46;">Relatório Semanal</h3>
+                        <p style="margin:0; color:#4b5563; font-size:13px;">Evolução de cada conta no período escolhido, compilada das atividades registradas, dos compromissos da Agenda e dos cards do Kanban, e resumida com IA por assunto tratado com os contatos.</p>
+                    </div>
+                    <button class="btn btn-auto-mapping" type="button" onclick="openRelatorioSemanalModal()">
+                        <span class="ai-star-icon">✦</span> Selecionar Contas e Período
+                    </button>
+                </div>
+                <div id="relSemanalContent"></div>
             </div>
         </div>
 
@@ -2020,6 +2033,7 @@
     <script src="/js/waha-dispatch.js"></script>
     <script src="/js/radar-actions.js"></script>
     <script src="/js/scheduled-sends.js"></script>
+    <script src="/js/relatorio-semanal.js"></script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <!-- html2canvas + jsPDF para exportação do resumo LinkedIn -->
