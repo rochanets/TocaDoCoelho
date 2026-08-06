@@ -2162,3 +2162,54 @@ def test_put_body_aceita_titulo_novo_quando_antigo_sumiu_do_texto(client, db_pat
     registro = toca._iata_load_record(rid)
     assert registro['title'] == 'Reunião Pipeline Setembro', \
         'título antigo sumiu do corpo -- a mudança deliberada do usuário deve valer'
+
+
+def test_put_body_duas_oportunidades_ambiguas_remapeiam_cruzado_mas_sinalizadas(
+        client, db_path, monkeypatch):
+    """Limite conhecido do fallback posicional, fixado por teste.
+
+    Quando o usuário renomeia DUAS oportunidades da mesma conta numa só
+    edição e ainda inverte a ordem, o casamento por posição não tem como
+    distinguir "renomeou" de "trocou de lugar" — o encadeamento das atas
+    futuras sai cruzado. O que a correção garante não é acertar esse caso
+    (impossível sem perguntar ao usuário), e sim que ele NÃO seja silencioso:
+    `positional_matches` reporta as duas trocas, do mesmo jeito que o robô de
+    formulários do projeto reporta o fallback posicional para conferência
+    visual. Se algum dia esse sinal sumir, este teste quebra.
+    """
+    header1 = {'title': 'Ata 1', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers1 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'OppX', 'previous_status': None, 'update_text': 'x1',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': None},
+            {'name': 'OppY', 'previous_status': None, 'update_text': 'y1',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': None}]}]}]
+    ata1_id = toca._iata_save_record(header1, managers1, {}, 'texto', None)
+    opps1 = toca._iata_load_record(ata1_id)['managers'][0]['accounts'][0]['opportunities']
+    id_x, id_y = opps1[0]['id'], opps1[1]['id']
+
+    header2 = {'title': 'Ata 2', 'meeting_date': None, 'meeting_time': None,
+               'topic': '', 'participants': []}
+    managers2 = [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'ContinuacaoDeX', 'previous_status': 'x1', 'update_text': 'x2',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': id_x},
+            {'name': 'ContinuacaoDeY', 'previous_status': 'y1', 'update_text': 'y2',
+             'responsible': 'Ana', 'carried_over': False, 'prev_opportunity_id': id_y}]}]}]
+    ata2_id = toca._iata_save_record(header2, managers2, {}, 'texto', ata1_id)
+
+    # Renomeia as duas E inverte a ordem em que aparecem no texto.
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: json.dumps({
+        'title': 'Ata 1', 'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev',
+            'opportunities': [
+                {'name': 'OppY renomeada', 'update': 'y1', 'responsible': 'Ana'},
+                {'name': 'OppX renomeada', 'update': 'x1', 'responsible': 'Ana'}]}]}]}))
+    resp = client.put(f'/api/autotoca/iata/{ata1_id}/body',
+                      json={'body_markdown': 'texto editado'})
+
+    assert resp.status_code == 200
+    sinalizadas = resp.get_json().get('positional_matches', {}).get('opportunities') or []
+    assert len(sinalizadas) == 2, (
+        'as duas oportunidades casadas por posição precisam ser reportadas — '
+        'sem esse sinal, o cruzamento do encadeamento fica invisível para o usuário')
