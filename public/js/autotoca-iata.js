@@ -230,3 +230,209 @@
                 if (progressArea) progressArea.style.display = 'none';
             }
         }
+
+        // ─── iAta — visualização, edição e envio por e-mail ────────────────
+        let _iataCurrent = null;
+
+        async function viewIAtaFull(rid) {
+            document.getElementById('iataViewModal')?.remove();
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/iata/${rid}`);
+                const record = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(record.error || 'Erro ao abrir a ata.');
+                _iataCurrent = record;
+                document.body.insertAdjacentHTML('beforeend', _renderIAtaViewModal(record));
+            } catch (error) {
+                showError(error.message || 'Erro ao abrir a ata.');
+            }
+        }
+
+        function _renderIAtaViewModal(record) {
+            const aviso = record.reparse_failed
+                ? `<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; color:#991b1b;"><i class="fas fa-exclamation-triangle"></i> O texto foi salvo, mas a estrutura não pôde ser atualizada — a próxima ata pode não carregar os status corretamente.</div>`
+                : '';
+            // Aviso de continuidade perdida (ata anterior sumida/ilegível) ou de
+            // casamento por posição num PUT anterior — mostrado uma única vez.
+            const avisoPendente = _iataPendingWarning
+                ? `<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; color:#92400e;"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(_iataPendingWarning)}</div>`
+                : '';
+            _iataPendingWarning = null;
+            const contas = (record.managers || []).flatMap(m => (m.accounts || []).map(a => ({ manager: m.name, ...a })));
+            const revisao = contas.filter(a => a.account_id && !a.match_confirmed).map(a => `
+                <div style="display:flex; align-items:center; gap:8px; font-size:12px; margin:4px 0; flex-wrap:wrap;">
+                    <span>Conta <strong>${escapeHtml(a.name)}</strong> → sugerida como conta do CRM (${escapeHtml(a.match_confidence || '')})</span>
+                    <button class="btn btn-secondary btn-small" onclick="confirmIAtaAccount(${Number(record.id)}, ${Number(a.id)}, ${Number(a.account_id)})">Confirmar</button>
+                    <button class="btn btn-secondary btn-small" onclick="confirmIAtaAccount(${Number(record.id)}, ${Number(a.id)}, null)">Descartar</button>
+                </div>`).join('');
+            return `
+                <div class="modal active" id="iataViewModal">
+                    <div class="modal-content" style="max-width:860px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title"><i class="fas fa-file-alt"></i> ${escapeHtml(record.title || 'Ata')}</h2>
+                            <button class="modal-close" onclick="document.getElementById('iataViewModal').remove()">&#215;</button>
+                        </div>
+                        ${avisoPendente}
+                        ${aviso}
+                        ${revisao ? `<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px; margin-bottom:12px;"><div style="font-weight:600; font-size:13px; color:#92400e; margin-bottom:4px;">Contas sugeridas pela IA — confirme o vínculo</div>${revisao}</div>` : ''}
+                        <textarea id="iataBodyEditor" rows="22" style="width:100%; font-family:Consolas,monospace; font-size:13px; line-height:1.5;">${escapeHtml(record.body_markdown || '')}</textarea>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+                            <button class="btn btn-secondary" onclick="document.getElementById('iataViewModal').remove()">Fechar</button>
+                            <button class="btn btn-secondary" onclick="saveIAtaBody(${Number(record.id)})"><i class="fas fa-save"></i> Salvar texto</button>
+                            <button class="btn btn-auto-mapping btn-small" onclick="openIAtaEmailModal(${Number(record.id)})"><span class="ai-star-icon">✦</span> Enviar por e-mail</button>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        async function confirmIAtaAccount(rid, iataAccountId, accountId) {
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/iata/${rid}/accounts/${iataAccountId}/link`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_id: accountId })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Erro ao vincular a conta.');
+                showSuccess('Vínculo atualizado.');
+                await viewIAtaFull(rid);
+            } catch (error) {
+                showError(error.message || 'Erro ao vincular a conta.');
+            }
+        }
+
+        async function saveIAtaBody(rid) {
+            const body = document.getElementById('iataBodyEditor')?.value || '';
+            if (!body.trim()) { showError('A ata não pode ficar vazia.'); return; }
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/iata/${rid}/body`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ body_markdown: body })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || 'Erro ao salvar a ata.');
+
+                if (payload.reparse_failed) {
+                    showError('Texto salvo, mas a estrutura não pôde ser atualizada. A próxima ata pode não carregar os status corretamente.');
+                } else {
+                    showSuccess('Ata atualizada.');
+                }
+
+                // `positional_matches`: itens cujo vínculo foi rebaixado de confirmado
+                // para sugestão porque o usuário renomeou algo no texto — o backend
+                // inteiro foi desenhado para não deixar isso silencioso (mesmo
+                // princípio do `positional` do robô de formulário), então isto vira
+                // o aviso mostrado ao reabrir a ata logo abaixo.
+                const pm = payload.positional_matches || {};
+                const avisos = [];
+                (pm.accounts || []).forEach(a => avisos.push(
+                    `Conta "${a.name}" (antes "${a.previous_name}") foi casada por posição — o vínculo com o CRM voltou a ser sugestão, confira.`));
+                (pm.opportunities || []).forEach(o => avisos.push(
+                    `Oportunidade "${o.name}" da conta "${o.account}" (antes "${o.previous_name}") foi casada por posição — confira o histórico dela.`));
+                _iataPendingWarning = avisos.length ? avisos.join(' ') : null;
+
+                await loadIAta();
+                await viewIAtaFull(rid);
+            } catch (error) {
+                showError(error.message || 'Erro ao salvar a ata.');
+            }
+        }
+
+        async function openIAtaEmailModal(rid) {
+            document.getElementById('iataEmailModal')?.remove();
+            let preview = { subject: '', html: '' };
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/iata/${rid}/email/preview`);
+                preview = await response.json().catch(() => ({}));
+                // 422 = ata sem estrutura para montar o e-mail (legada, ou re-parse
+                // sem sucesso ainda) — o backend já manda uma mensagem explicativa em
+                // `error`; não precisa (nem deve) virar um erro cru na tela.
+                if (!response.ok) throw new Error(preview.error || 'Não foi possível montar o preview do e-mail.');
+            } catch (error) {
+                showError(error.message || 'Erro ao gerar o preview do e-mail.');
+                return;
+            }
+            // `stale`: a hierarquia está desatualizada em relação ao texto (último
+            // re-parse falhou) — o preview.html abaixo ainda é HTML MONTADO PELO
+            // BACKEND a partir dessa hierarquia, então é inserido direto (sem
+            // escapeHtml), senão as tags viram texto visível na tela.
+            const avisoStale = preview.stale
+                ? `<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; color:#92400e;"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(preview.warning || 'A estrutura desta ata está desatualizada; o e-mail pode não refletir o texto atual.')}</div>`
+                : '';
+            document.body.insertAdjacentHTML('beforeend', `
+                <div class="modal active" id="iataEmailModal">
+                    <div class="modal-content" style="max-width:820px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title"><i class="fas fa-envelope"></i> Enviar ata por e-mail</h2>
+                            <button class="modal-close" onclick="document.getElementById('iataEmailModal').remove()">&#215;</button>
+                        </div>
+                        ${avisoStale}
+                        <div class="form-group">
+                            <label>Destinatários (separados por vírgula ou ponto e vírgula)</label>
+                            <input id="iataEmailTo" type="text" placeholder="fulano@empresa.com, ciclano@empresa.com">
+                        </div>
+                        <div class="form-group">
+                            <label>Assunto</label>
+                            <input id="iataEmailSubject" type="text" value="${escapeHtml(preview.subject || '')}" readonly style="background:#f3f4f6; color:#6b7280;">
+                        </div>
+                        <div class="form-group">
+                            <label>Preview</label>
+                            <div style="border:1px solid #e5e7eb; border-radius:8px; padding:12px; max-height:320px; overflow:auto; background:#fff;">${preview.html || ''}</div>
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button class="btn btn-secondary" onclick="document.getElementById('iataEmailModal').remove()">Cancelar</button>
+                            <button class="btn btn-auto-mapping btn-small" onclick="sendIAtaEmail(${Number(rid)})"><span class="ai-star-icon">✦</span> Enviar</button>
+                        </div>
+                    </div>
+                </div>`);
+        }
+
+        async function sendIAtaEmail(rid) {
+            const input = document.getElementById('iataEmailTo');
+            const destinos = (input?.value || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+            if (!destinos.length) { showError('Informe ao menos um destinatário.'); return; }
+            if (!await uiConfirm(`Enviar a ata para ${destinos.length} destinatário(s)?`, 'Enviar Ata')) return;
+            await _iataSendEmailAttempt(rid, destinos, input, false);
+        }
+
+        // `confirmStale`: true só depois que o usuário confirmou explicitamente,
+        // pelo diálogo abaixo, que quer enviar mesmo com a estrutura desatualizada
+        // (409 do backend). Nunca setado como default, mesmo quando o preview já
+        // mostrou o aviso — a confirmação é sempre no momento do envio.
+        async function _iataSendEmailAttempt(rid, destinos, input, confirmStale) {
+            try {
+                const response = await fetch(`${API_BASE}/autotoca/iata/${rid}/email`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to: destinos, confirm_stale: confirmStale })
+                });
+                const payload = await response.json().catch(() => ({}));
+
+                if (response.status === 409) {
+                    const seguir = await uiConfirm(
+                        payload.error || 'A estrutura desta ata está desatualizada em relação ao texto. '
+                            + 'O e-mail sairia com a estrutura anterior. Enviar mesmo assim?',
+                        'Estrutura desatualizada');
+                    if (seguir) await _iataSendEmailAttempt(rid, destinos, input, true);
+                    return;
+                }
+                if (!response.ok) {
+                    // 400 (sem destinatário), 404 (ata sumiu) ou 422 (sem estrutura
+                    // para montar o e-mail) — todos com mensagem explicativa do backend.
+                    throw new Error(payload.error || 'Erro ao enviar a ata.');
+                }
+
+                const falhas = (payload.results || []).filter(r => !r.ok);
+                if (falhas.length) {
+                    showError('Falha para: ' + falhas.map(f => `${f.to} (${f.error})`).join('; '));
+                    // Deixa só quem falhou no campo: reenviar com a lista inteira
+                    // duplicaria o e-mail de quem já recebeu com sucesso.
+                    if (input) input.value = falhas.map(f => f.to).join(', ');
+                } else {
+                    showSuccess('Ata enviada.');
+                    document.getElementById('iataEmailModal')?.remove();
+                }
+            } catch (error) {
+                showError(error.message || 'Erro ao enviar a ata.');
+            }
+        }
