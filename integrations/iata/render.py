@@ -117,10 +117,21 @@ _ESTILO_LI = "margin:2px 0;"
 
 
 def email_subject(header):
+    """Assunto do e-mail da ata.
+
+    O título vem de um LLM e pode conter quebra de linha. O envio é via
+    Microsoft Graph (JSON), então não há injeção de cabeçalho SMTP a temer —
+    mas um assunto multi-linha aparece truncado ou estranho nos clientes de
+    e-mail, então colapsamos tudo em espaço.
+    """
     header = header or {}
-    titulo = (header.get('title') or 'Ata de Reunião').strip()
-    data = _clean_null(header.get('meeting_date'))
+    titulo = _uma_linha(header.get('title')) or 'Ata de Reunião'
+    data = _uma_linha(_clean_null(header.get('meeting_date')))
     return f"Ata — {titulo} — {data}" if data else f"Ata — {titulo}"
+
+
+def _uma_linha(valor):
+    return ' '.join(str(valor or '').split())
 
 
 def render_email_html(header, managers, extras=None):

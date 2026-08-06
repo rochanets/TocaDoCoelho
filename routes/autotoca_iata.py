@@ -783,6 +783,12 @@ _IATA_AVISO_ATA_LEGADA = (
     'oportunidades necessária para montar o e-mail. Não é possível gerar o '
     'e-mail automaticamente para este registro.')
 
+_IATA_AVISO_REPARSE_SEM_ESTRUTURA = (
+    'O texto desta ata foi salvo, mas a IA não conseguiu convertê-lo na '
+    'estrutura de gerentes/contas/oportunidades usada para montar o e-mail. '
+    'Ajuste o texto e salve de novo — em especial as linhas de Gerente '
+    'Comercial, conta e oportunidade — para conseguir enviar.')
+
 
 def _iata_email_payload(record_id):
     """Monta assunto e HTML do e-mail para uma ata, ou sinaliza por que não é
@@ -813,8 +819,16 @@ def _iata_email_payload(record_id):
         format_version = int(registro.get('format_version') or 1)
     except (TypeError, ValueError):
         format_version = 1
-    if not managers and format_version < 2:
-        return {'blocked': _IATA_AVISO_ATA_LEGADA}
+    if not managers:
+        # A ordem destas duas checagens importa para o usuário: se ele acabou
+        # de escrever o texto à mão e o re-parse falhou, culpar o "formato
+        # antigo" é enganoso — sugere limitação permanente do registro, quando
+        # na verdade corrigir o texto resolve. Só é ata legada de fato quando
+        # não há nem hierarquia nem texto editado por ele.
+        if registro.get('reparse_failed') and (registro.get('body_markdown') or '').strip():
+            return {'blocked': _IATA_AVISO_REPARSE_SEM_ESTRUTURA}
+        if format_version < 2:
+            return {'blocked': _IATA_AVISO_ATA_LEGADA}
 
     header = registro.get('header') or {
         'title': registro.get('title'), 'meeting_date': registro.get('meeting_date'),

@@ -2413,3 +2413,36 @@ def test_email_ata_legada_sem_hierarquia_bloqueia(client, db_path, monkeypatch):
 
     assert resp.status_code == 422
     assert chamadas == []
+
+
+def test_email_ata_sem_estrutura_com_texto_editado_culpa_o_reparse_nao_o_formato(
+        client, db_path, monkeypatch):
+    """Ata legada que o usuário escreveu à mão e cujo re-parse falhou: a
+    mensagem tem que dizer que o problema é o re-parse (corrigir o texto
+    resolve), não que o registro é de "formato antigo" — isso sugeriria uma
+    limitação permanente e o usuário desistiria sem saber o que fazer."""
+    header = {'title': 'Ata Legada', 'meeting_date': None, 'meeting_time': None,
+              'topic': '', 'participants': []}
+    rid = toca._iata_save_record(header, [], {}, 'texto', None)
+    conn = toca.get_db()
+    conn.execute('UPDATE iata_records SET format_version = 1 WHERE id = ?', (rid,))
+    conn.commit()
+    conn.close()
+
+    # O usuário escreve a ata inteira à mão e o re-parse não consegue estruturar.
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'desculpe, não consegui')
+    resp = client.put(f'/api/autotoca/iata/{rid}/body',
+                      json={'body_markdown': 'Gerente Comercial: Ana\n  * Ambev'})
+    assert resp.status_code == 200 and resp.get_json()['reparse_failed'] is True
+
+    preview = client.get(f'/api/autotoca/iata/{rid}/email/preview')
+    assert preview.status_code == 422
+    erro = preview.get_json()['error']
+    assert 'não conseguiu convertê-lo' in erro or 'Ajuste o texto' in erro, erro
+    assert 'formato antigo' not in erro, \
+        'culpar o formato antigo aqui engana: o texto é novo, quem falhou foi o re-parse'
+
+
+def test_email_subject_colapsa_quebra_de_linha_do_titulo():
+    header = {'title': 'Pipeline\nSemanal', 'meeting_date': '04/08/2026'}
+    assert iata_lib.email_subject(header) == 'Ata — Pipeline Semanal — 04/08/2026'
