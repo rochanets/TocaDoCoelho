@@ -1301,3 +1301,42 @@ def test_pipeline_resolver_de_ambiguidade_casa_oportunidade_com_confianca_media(
     assert opp['match_confidence'] == 'media'
     assert opp['prev_opportunity_id'] == opp_id_anterior
     assert opp['previous_status'] == 'Em análise'
+
+
+def test_post_with_insights_false_desliga_insights(client, db_path, monkeypatch):
+    """'false' significa desligado. A partir da Task 8 os insights são uma
+    chamada de LLM paga — ligar contra a vontade do usuário custa dinheiro."""
+    capturado = {}
+
+    class ThreadSincrona:
+        """Roda o alvo na hora, para o teste não depender do escalonamento da
+        thread real (senão a asserção corre contra o worker)."""
+
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._chamada = (target, args, kwargs or {})
+
+        def start(self):
+            target, args, kwargs = self._chamada
+            capturado.update(kwargs)
+            target(*args, **kwargs)
+
+    monkeypatch.setattr(toca, '_iata_process_async', lambda *a, **k: None)
+    monkeypatch.setattr(toca.threading, 'Thread', ThreadSincrona)
+
+    resp = client.post('/api/autotoca/iata',
+                       data={'raw_text': 'transcrição', 'with_insights': 'false'})
+
+    assert resp.status_code == 202
+    assert capturado['with_insights'] is False
+
+
+def test_post_arquivo_vazio_falha_na_hora_com_400(client, db_path):
+    """Arquivo com nome mas sem conteúdo: 400 imediato em vez de uma task que
+    só morre no meio do processamento."""
+    from io import BytesIO
+    resp = client.post('/api/autotoca/iata',
+                       data={'meeting_file': (BytesIO(b''), 'reuniao.txt')},
+                       content_type='multipart/form-data')
+
+    assert resp.status_code == 400
+    assert 'vazio' in resp.get_json()['error'].lower()

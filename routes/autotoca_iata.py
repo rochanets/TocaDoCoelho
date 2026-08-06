@@ -271,6 +271,11 @@ def create_iata_record():
         if file_obj and file_obj.filename:
             file_bytes = file_obj.read()
             filename = file_obj.filename
+        # Arquivo presente porém vazio: falhar aqui é mais barato (e mais claro
+        # pro usuário) do que abrir uma task que só vai morrer no meio.
+        if not raw_text_input and not file_bytes:
+            return jsonify({'error': 'O arquivo enviado está vazio. '
+                                     'Envie a transcrição da reunião ou cole o texto.'}), 400
 
         previous_record_id = request.form.get('previous_record_id') or None
         if previous_record_id:
@@ -278,15 +283,27 @@ def create_iata_record():
                 previous_record_id = int(previous_record_id)
             except ValueError:
                 previous_record_id = None
-        with_insights = (request.form.get('with_insights') or '1') != '0'
+        # Comparação por lista de valores verdadeiros, não por "diferente de
+        # '0'": um formulário mandando 'false'/'no' significa desligado, e a
+        # partir da Task 8 os insights são uma chamada de LLM paga — ligar
+        # isso contra a vontade do usuário custa dinheiro e tempo dele.
+        with_insights = (request.form.get('with_insights') or '1').strip().lower() \
+            in ('1', 'true', 'yes', 'on', 'sim')
 
         task_id = uuid.uuid4().hex
         _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(
-            target=_iata_process_async,
-            args=(task_id, file_bytes, filename, raw_text_input),
-            kwargs={'previous_record_id': previous_record_id, 'with_insights': with_insights},
-            daemon=True).start()
+        try:
+            threading.Thread(
+                target=_iata_process_async,
+                args=(task_id, file_bytes, filename, raw_text_input),
+                kwargs={'previous_record_id': previous_record_id, 'with_insights': with_insights},
+                daemon=True).start()
+        except Exception:
+            # Sem worker rodando, a task ficaria 'processing' para sempre e o
+            # frontend giraria sem fim — marcar o erro é o que encerra o polling.
+            _iata_task_set(task_id, {'status': 'error',
+                                     'error': 'Não foi possível iniciar o processamento.'})
+            raise
         return jsonify({'task_id': task_id}), 202
     except Exception as e:
         logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
