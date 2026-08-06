@@ -112,11 +112,25 @@ def _index_anterior(previous_managers):
                     'manager': gerente,
                     'name': (account.get('name') or '').strip(),
                     'account_id': account.get('account_id'),
+                    'match_confidence': account.get('match_confidence'),
+                    # Um vínculo confirmado pelo usuário (Task 8, rota /link)
+                    # precisa sobreviver na hierarquia indexada da ata
+                    # anterior — é essa entrada que `reconcile` consulta pra
+                    # propagar o vínculo pra ata nova.
+                    'match_confirmed': bool(account.get('match_confirmed')),
                     'opportunities': [],
                 }
                 por_conta[conta_key] = entry
-            elif not entry.get('account_id') and account.get('account_id'):
-                entry['account_id'] = account.get('account_id')
+            else:
+                if not entry.get('account_id') and account.get('account_id'):
+                    entry['account_id'] = account.get('account_id')
+                # C1 (mesma conta sob gerentes diferentes): uma confirmação
+                # em qualquer ocorrência vence — não deixamos uma segunda
+                # ocorrência não confirmada apagar a confirmação já vista.
+                if account.get('match_confirmed') and not entry.get('match_confirmed'):
+                    entry['match_confirmed'] = True
+                    entry['account_id'] = account.get('account_id') or entry.get('account_id')
+                    entry['match_confidence'] = account.get('match_confidence') or entry.get('match_confidence')
 
             for opp in (account.get('opportunities') or []):
                 item = {'idx': idx_counter, 'data': opp}
@@ -199,6 +213,14 @@ def reconcile(current_managers, previous_managers, resolver=None):
     nunca propagada (I6). Um match confirmado pelo resolver recebe
     `match_confidence='media'` — diferente do match exato ('alta'), é
     julgamento de um LLM sobre nomes que não bateram sozinhos.
+
+    `account_id`/`match_confidence`/`match_confirmed` da conta também são
+    herdados da conta anterior casada, quando a conta atual não trouxer os
+    seus próprios (o que hoje só acontece com `match_confirmed`, já que
+    `parsed['managers']`, recém-saído da extração da IA, nunca tem essa
+    chave). Um vínculo confirmado pelo usuário (Task 8, rota `/link`) é
+    decisão humana — precisa sobreviver ata após ata até alguém desfazê-lo,
+    não pode ser apagado em silêncio só porque uma nova ata foi gerada.
     """
     por_opp, por_conta = _index_anterior(previous_managers)
     contas_nomeadas_norms = [
@@ -256,10 +278,19 @@ def reconcile(current_managers, previous_managers, resolver=None):
                         pendentes_ambiguos.append((saida, candidatos))
                 opps_saida.append(saida)
 
+            # Um vínculo confirmado pelo usuário (Task 8, rota /link) é
+            # decisão humana — tem precedência sobre o que veio da extração
+            # nova (que nunca traz match_confirmed: parsed['managers'] é
+            # fresco da IA). Só herda de anterior_conta quando a conta atual
+            # não trouxer confirmação própria (o que hoje nunca acontece
+            # aqui, mas não custa não presumir).
+            confirmado_anterior = bool(anterior_conta and anterior_conta.get('match_confirmed'))
             conta_saida = {
                 'name': (account.get('name') or '').strip(),
                 'account_id': account.get('account_id') or (anterior_conta.get('account_id') if anterior_conta else None),
-                'match_confidence': account.get('match_confidence'),
+                'match_confidence': account.get('match_confidence') or (
+                    anterior_conta.get('match_confidence') if confirmado_anterior else None),
+                'match_confirmed': bool(account.get('match_confirmed')) or confirmado_anterior,
                 'opportunities': opps_saida,
             }
             contas_saida.append(conta_saida)
@@ -370,7 +401,8 @@ def _anexar_nao_citados(resultado, por_conta, usados_idx, matched_accounts):
             destino = {
                 'name': dados['name'],
                 'account_id': dados.get('account_id'),
-                'match_confidence': None,
+                'match_confidence': dados.get('match_confidence') if dados.get('match_confirmed') else None,
+                'match_confirmed': bool(dados.get('match_confirmed')),
                 'opportunities': [],
             }
             gerente['accounts'].append(destino)

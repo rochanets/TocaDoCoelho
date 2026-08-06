@@ -311,16 +311,22 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
                 'error': 'A IA não retornou uma ata utilizável. Tente novamente.'})
             return
 
-        _iata_task_set(task_id, {'step': 'Cruzando contas com o CRM...', 'progress': 55})
-        _iata_sugerir_contas(parsed['managers'])
-
-        _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 70})
+        _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 55})
         previous_managers, aviso_continuidade = _iata_previous_managers(previous_record_id)
         managers = iata_lib.reconcile(
             parsed['managers'], previous_managers, resolver=_iata_resolver_ambiguidade)
         # Se a ata anterior pedida não existe mais, não grava uma referência
         # fantasma em previous_record_id — o aviso acima já cobre o usuário.
         effective_previous_id = None if aviso_continuidade else previous_record_id
+
+        # Sugestão DEPOIS do reconcile, sobre os managers já reconciliados —
+        # não sobre parsed['managers'] (fresco da extração da IA, que nunca
+        # tem match_confirmed). É só na saída do reconcile que uma conta
+        # carrega match_confirmed=True herdado da ata anterior, e é esse
+        # campo que o guard de _iata_sugerir_contas usa para não sobrescrever
+        # um vínculo que o usuário já confirmou.
+        _iata_task_set(task_id, {'step': 'Cruzando contas com o CRM...', 'progress': 70})
+        _iata_sugerir_contas(managers)
 
         extras = {}
         if with_insights:

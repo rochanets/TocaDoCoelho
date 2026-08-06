@@ -1479,6 +1479,85 @@ def test_link_record_id_que_nao_bate_com_a_conta_retorna_404(client, db_path):
     assert resp.status_code == 404
 
 
+def test_confirmacao_de_vinculo_sobrevive_a_ata_seguinte(client, db_path, monkeypatch):
+    """Regressão de um bug real encontrado em revisão: a confirmação humana
+    de vínculo (via /link) não sobrevivia à ata seguinte, porque (1)
+    `_iata_sugerir_contas` rodava sobre `parsed['managers']` — fresco da
+    extração da IA, que nunca tem `match_confirmed` — ANTES do `reconcile`,
+    de modo que o guard "não sobrescrever confirmado" nunca via um valor
+    verdadeiro no caminho real; e (2) `reconcile()` propagava `account_id`
+    da conta anterior mas não `match_confirmed`/`match_confidence`, então o
+    campo simplesmente não existia na saída.
+
+    Chamar só `_iata_sugerir_contas` isolada (como os outros testes deste
+    arquivo fazem) NÃO reproduz o bug — ela nunca é invocada assim no
+    caminho real. Este teste percorre o encadeamento verdadeiro:
+    `_iata_process_async` (extração -> reconcile -> sugestão -> save) ->
+    `/link` -> `_iata_process_async` de novo com `previous_record_id`.
+    """
+    conn = toca.get_db()
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev S.A.')")
+    conn.execute("INSERT INTO accounts (name) VALUES ('Ambev Holding')")
+    conn.commit()
+    id_sugestao_automatica = conn.execute(
+        "SELECT id FROM accounts WHERE name = 'Ambev S.A.'").fetchone()[0]
+    id_confirmado_pelo_usuario = conn.execute(
+        "SELECT id FROM accounts WHERE name = 'Ambev Holding'").fetchone()[0]
+    conn.close()
+
+    resposta_ata1 = json.dumps({
+        'title': 'Ata 1', 'meeting_date': None, 'meeting_time': None,
+        'topic': '', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Renovação', 'update': 'Em análise', 'responsible': 'Ana'}]}]}]})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ata1)
+
+    task_id_1 = 'confirmacao_ata1'
+    toca._iata_task_set(task_id_1, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id_1, None, None, 'transcrição 1',
+                             previous_record_id=None, with_insights=False)
+    task1 = toca._iata_task_get(task_id_1)
+    assert task1['status'] == 'done', task1.get('error')
+    rid1 = task1['result']['id']
+
+    conta1 = toca._iata_load_record(rid1)['managers'][0]['accounts'][0]
+    # Sugestão automática acerta via sufixo jurídico ("Ambev" == "Ambev
+    # S.A."), mas ninguém confirmou nada ainda.
+    assert conta1['account_id'] == id_sugestao_automatica
+    assert conta1['match_confirmed'] is False
+
+    # Usuário discorda da sugestão automática (cenário real: mais de uma
+    # conta "Ambev" no CRM, e a correta para este cliente é outra) e
+    # confirma manualmente o vínculo correto.
+    resp = client.post(f'/api/autotoca/iata/{rid1}/accounts/{conta1["id"]}/link',
+                       json={'account_id': id_confirmado_pelo_usuario})
+    assert resp.status_code == 200
+    assert toca._iata_load_record(rid1)['managers'][0]['accounts'][0]['account_id'] \
+        == id_confirmado_pelo_usuario
+
+    # Ata 2, com continuidade da ata 1 — mesmo encadeamento real da rota de
+    # criação (extração -> reconcile -> sugestão -> save).
+    resposta_ata2 = json.dumps({
+        'title': 'Ata 2', 'meeting_date': None, 'meeting_time': None,
+        'topic': '', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Renovação', 'update': 'Contrato assinado', 'responsible': 'Ana'}]}]}]})
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: resposta_ata2)
+
+    task_id_2 = 'confirmacao_ata2'
+    toca._iata_task_set(task_id_2, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id_2, None, None, 'transcrição 2',
+                             previous_record_id=rid1, with_insights=False)
+    task2 = toca._iata_task_get(task_id_2)
+    assert task2['status'] == 'done', task2.get('error')
+
+    conta2 = toca._iata_load_record(task2['result']['id'])['managers'][0]['accounts'][0]
+    assert conta2['account_id'] == id_confirmado_pelo_usuario, \
+        'a confirmação humana precisa sobreviver à ata seguinte, não voltar à sugestão automática'
+    assert conta2['match_confirmed'] is True, \
+        'match_confirmed precisa sobreviver ao reconcile, não voltar False'
+
+
 def test_insights_ofertas_sem_portfolio_nao_chama_llm(db_path, monkeypatch):
     """Sem nenhuma oferta cadastrada no portfólio, não vale a pena gastar
     uma chamada de LLM — devolve lista vazia direto."""
