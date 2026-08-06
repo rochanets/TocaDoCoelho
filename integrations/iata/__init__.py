@@ -26,6 +26,7 @@ from .reconcile import (
 from .llm import (
     MAX_TRANSCRICAO_CHARS,
     build_extraction_prompt,
+    build_reparse_prompt,
     parse_hierarchy,
     _loads_tolerante,
 )
@@ -42,6 +43,7 @@ __all__ = [
     'reconcile',
     'MAX_TRANSCRICAO_CHARS',
     'build_extraction_prompt',
+    'build_reparse_prompt',
     'parse_hierarchy',
     'match_account_name',
     'render_markdown',

@@ -466,6 +466,150 @@ def delete_iata_record(record_id):
         return jsonify({'error': str(e)}), 500
 
 
+def _iata_match_previous(old_items, new_items, name_of):
+    """Casa cada item de `new_items` com o item correspondente de
+    `old_items`, para carregar adiante campos que só existem no lado antigo
+    (`account_id`/`match_confirmed` de uma conta, `prev_opportunity_id` de
+    uma oportunidade) através de um re-parse.
+
+    Estratégia igual à do robô de formulário (`integrations/forms_robot.py`):
+    nome normalizado primeiro (resiliente a reordenação), posição como
+    fallback (resiliente a um typo corrigido ou nome levemente reescrito —
+    mas arriscado se o item realmente virou outra coisa). Sem o fallback,
+    renomear uma conta no texto editado faria a confirmação humana feita via
+    `/link` evaporar em silêncio — o mesmo tipo de bug já visto na Task 8.
+
+    O fallback só entra quando as duas listas têm o mesmo tamanho: é o sinal
+    mais barato de "provavelmente o mesmo conjunto, só com nomes ajustados"
+    sem tentar adivinhar mais que isso.
+
+    Devolve uma lista paralela a `new_items`, com o item antigo casado (ou
+    `None` quando não há candidato)."""
+    usados = set()
+    old_by_norm = {}
+    for old in old_items:
+        norm = iata_lib.normalize_name(name_of(old))
+        old_by_norm.setdefault(norm, old)
+
+    mapping = [None] * len(new_items)
+    for i, novo in enumerate(new_items):
+        norm = iata_lib.normalize_name(name_of(novo))
+        candidato = old_by_norm.get(norm)
+        if candidato is not None and id(candidato) not in usados:
+            mapping[i] = candidato
+            usados.add(id(candidato))
+
+    if len(old_items) == len(new_items):
+        for i in range(len(new_items)):
+            if mapping[i] is None and id(old_items[i]) not in usados:
+                mapping[i] = old_items[i]
+                usados.add(id(old_items[i]))
+
+    return mapping
+
+
+def _iata_carregar_campos_anteriores(managers_antigos, managers_novos):
+    """Depois de um re-parse bem-sucedido, preenche em `managers_novos` (in
+    place) os campos que a IA não devolve porque não fazem parte do texto:
+    `account_id`/`match_confirmed`/`match_confidence` de cada conta, e
+    `previous_status`/`prev_opportunity_id`/`carried_over` de cada
+    oportunidade — usando `_iata_match_previous` em cada nível da
+    hierarquia (gerente -> conta -> oportunidade)."""
+    gerente_map = _iata_match_previous(
+        managers_antigos, managers_novos, lambda m: m.get('name'))
+    for manager, antigo_manager in zip(managers_novos, gerente_map):
+        contas_antigas = (antigo_manager or {}).get('accounts') or []
+        conta_map = _iata_match_previous(
+            contas_antigas, manager.get('accounts') or [], lambda a: a.get('name'))
+        for account, antiga_conta in zip(manager.get('accounts') or [], conta_map):
+            antiga_conta = antiga_conta or {}
+            account['account_id'] = antiga_conta.get('account_id')
+            account['match_confirmed'] = bool(antiga_conta.get('match_confirmed'))
+            account['match_confidence'] = antiga_conta.get('match_confidence')
+            opps_antigas = antiga_conta.get('opportunities') or []
+            opp_map = _iata_match_previous(
+                opps_antigas, account.get('opportunities') or [], lambda o: o.get('name'))
+            for opp, antiga_opp in zip(account.get('opportunities') or [], opp_map):
+                antiga_opp = antiga_opp or {}
+                opp['previous_status'] = antiga_opp.get('previous_status')
+                opp['prev_opportunity_id'] = antiga_opp.get('prev_opportunity_id')
+                opp['carried_over'] = bool(antiga_opp.get('carried_over'))
+                opp['responsible'] = opp.get('responsible') or manager.get('name')
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/body', methods=['PUT'])
+def update_iata_body(record_id):
+    """Edição do texto da ata (Task 9). A regra de produto: o texto que o
+    usuário escreveu é gravado ANTES de qualquer tentativa de re-parse, e
+    nunca se perde — se a IA não conseguir reestruturar o texto editado de
+    volta para a hierarquia, o texto fica, a estrutura antiga é mantida, e a
+    falha vira aviso visível (`reparse_failed`), nunca silêncio.
+
+    `reparse_failed` é gravado como 1 já no primeiro UPDATE (assume falho
+    até prova em contrário) e só volta a 0 depois que a hierarquia nova é
+    escrita com sucesso — se o processo cair no meio (entre gravar o texto e
+    terminar o re-parse), o registro fica com o sinal de alerta LIGADO, não
+    apagado: um `reparse_failed=0` indevido seria pior que um falso alarme,
+    porque esconderia do usuário que a estrutura pode estar desatualizada."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        body = (payload.get('body_markdown') or '').strip()
+        if not body:
+            return jsonify({'error': 'O corpo da ata não pode ficar vazio.'}), 400
+
+        atual = _iata_load_record(record_id)
+        if not atual:
+            return jsonify({'error': 'Ata não encontrada.'}), 404
+
+        # 1) grava o texto ANTES de qualquer coisa: o que o usuário escreveu
+        # não se perde. reparse_failed=1 por padrão (ver docstring).
+        conn = get_db()
+        conn.execute(
+            'UPDATE iata_records SET body_markdown = ?, body_edited = 1, reparse_failed = 1 '
+            'WHERE id = ?', (body, record_id))
+        conn.commit()
+        conn.close()
+
+        # 2) tenta trazer o texto de volta para a hierarquia.
+        raw = _llm_prompt(iata_lib.build_reparse_prompt(body), log_tag='iAta/Reparse')
+        parsed = iata_lib.parse_hierarchy(raw) if raw else None
+        if not parsed:
+            logger.warning(f'[iAta] Re-parse falhou para a ata {record_id}; '
+                           'texto preservado, estrutura mantida.')
+            return jsonify({'message': 'Texto salvo, mas não foi possível reestruturar a '
+                                        'ata automaticamente. A hierarquia exibida ainda é '
+                                        'a anterior.',
+                            'reparse_failed': True})
+
+        # 3) preserva vínculo com o CRM (account_id/match_confirmed) e
+        # encadeamento com a ata anterior (prev_opportunity_id) do que
+        # continua casando por nome — com fallback posicional, ver
+        # `_iata_match_previous`.
+        _iata_carregar_campos_anteriores(atual['managers'], parsed['managers'])
+
+        # extras (insights) não são reextraídos do texto editado — o
+        # re-parse só reestrutura Gerente/Conta/Oportunidade, então tanto
+        # `extras` quanto `insights_json` continuam sendo os da geração
+        # original. Se o usuário apagou uma seção de insight no texto, isso
+        # não se reflete aqui: é uma limitação aceita, não um bug — não há
+        # como o re-parse saber que a ausência foi intencional.
+        conn = get_db()
+        c = conn.cursor()
+        _iata_write_hierarchy(c, record_id, parsed['managers'])
+        c.execute('''UPDATE iata_records SET reparse_failed = 0, title = ?, ata_json = ?
+                     WHERE id = ?''',
+                  (parsed['header'].get('title') or atual['title'],
+                   json.dumps({'header': parsed['header'], 'managers': parsed['managers'],
+                               'extras': atual.get('extras') or {}}, ensure_ascii=False),
+                   record_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Ata atualizada.', 'reparse_failed': False})
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao salvar corpo da ata {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/autotoca/iata/<int:record_id>/accounts/<int:iata_account_id>/link',
            methods=['POST'])
 def link_iata_account(record_id, iata_account_id):

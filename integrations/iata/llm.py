@@ -43,6 +43,31 @@ def build_extraction_prompt(raw_text):
     )
 
 
+def build_reparse_prompt(body_markdown):
+    """Monta o prompt que converte o texto da ata (editado à mão pelo
+    usuário na tela) de volta para o JSON estruturado, para a rota de
+    edição do corpo (Task 9). Diferente de `build_extraction_prompt`
+    (que extrai de uma transcrição bruta de reunião), aqui a entrada já é
+    uma ata formatada — a instrução é para ESTRUTURAR o que já está escrito,
+    não reinterpretar ou resumir."""
+    return (
+        "O texto abaixo é uma ata de reunião comercial editada à mão. "
+        "Converta-a de volta para JSON, preservando exatamente o conteúdo escrito.\n"
+        "Retorne EXCLUSIVAMENTE JSON válido:\n"
+        '{"title":"Título","meeting_date":"DD/MM/AAAA ou null","meeting_time":"HH:MM ou null",'
+        '"topic":"Tema","participants":[{"name":"Nome","role":""}],'
+        '"managers":[{"name":"Gerente","accounts":[{"name":"Conta",'
+        '"opportunities":[{"name":"Oportunidade","update":"texto do Update",'
+        '"responsible":"texto do Responsável"}]}]}]}\n'
+        "REGRAS:\n"
+        "- Não reescreva, não resuma e não corrija o texto — apenas estruture;\n"
+        "- Quando a linha da oportunidade tiver 'Nome: status', o status é o histórico "
+        "anterior e NÃO deve ir para 'update';\n"
+        "- Preserve a ordem em que gerentes, contas e oportunidades aparecem.\n\n"
+        f"ATA:\n{(body_markdown or '')[:MAX_TRANSCRICAO_CHARS]}"
+    )
+
+
 # Aspas tipográficas que alguns modelos usam no lugar de aspas retas — se
 # aparecerem como delimitador de string, o JSON nem chega a parsear. Trocamos
 # só como tentativa de reparo (depois que o parse "normal" já falhou), nunca

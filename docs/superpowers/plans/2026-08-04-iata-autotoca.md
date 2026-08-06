@@ -2503,7 +2503,7 @@ git commit -m "fix(iata): confirmacao de vinculo de conta sobrevive a ata seguin
 Regra do desenho: o texto do usuário é gravado **antes** do re-parse. Se o
 re-parse falhar, o texto fica e a falha vira aviso visível.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_put_body_salva_texto_e_atualiza_hierarquia(client, db_path, monkeypatch):
@@ -2562,12 +2562,12 @@ def test_put_body_vazio_retorna_400(client, db_path):
     assert client.put(f'/api/autotoca/iata/{rid}/body', json={'body_markdown': '  '}).status_code == 400
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_iata.py -k put_body -v`
 Expected: FAIL — 405/404 (rota inexistente).
 
-- [ ] **Step 3: Implementar o prompt de re-parse em `integrations/iata/llm.py`**
+- [x] **Step 3: Implementar o prompt de re-parse em `integrations/iata/llm.py`**
 
 ```python
 def build_reparse_prompt(body_markdown):
@@ -2589,7 +2589,7 @@ def build_reparse_prompt(body_markdown):
     )
 ```
 
-- [ ] **Step 4: Implementar a rota em `routes/autotoca_iata.py`**
+- [x] **Step 4: Implementar a rota em `routes/autotoca_iata.py`**
 
 ```python
 @app.route('/api/autotoca/iata/<int:record_id>/body', methods=['PUT'])
@@ -2666,15 +2666,75 @@ def update_iata_body(record_id):
         return jsonify({'error': str(e)}), 500
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+**Divergência da implementação de referência acima, decidida durante a Task 9**
+(a referência já se provou falível sete vezes em tasks anteriores — ver
+"Atenção especial" do prompt da Task 9):
+
+- **`prev_opportunity_id: 7` no teste de referência não roda.** A coluna tem
+  FK real para `iata_opportunities(id)` (`ON DELETE SET NULL`, `app.py`
+  ~linha 738) — um id inventado que não existe ainda derruba o `INSERT` com
+  `sqlite3.IntegrityError` já na construção da ata inicial, antes até de
+  exercitar o `PUT`. Os testes reais geram uma "ata anterior" de verdade
+  (`_iata_save_record`) e usam o id real da oportunidade gravada, do jeito
+  que o sistema realmente produz esse encadeamento (Tasks 2/7).
+- **`reparse_failed` é gravado como `1` já no primeiro `UPDATE`** (passo 1),
+  não só depois de o re-parse falhar (passo 2 da referência). A referência
+  fecha a conexão do passo 1 sem tocar em `reparse_failed`, e só grava `1` se
+  o parse falhar explicitamente — deixando uma janela onde o processo cair
+  entre os passos 1 e 3 resulta em `body_edited=1` com `reparse_failed=0`
+  (herdado do valor antigo), ou seja, texto novo com a hierarquia velha e
+  **nenhum aviso**. Assumir falho por padrão e só zerar no sucesso do passo 3
+  fecha essa janela: uma queda no meio deixa o sinal de alerta ligado, nunca
+  apagado por omissão. Testado em
+  `test_put_body_falha_inesperada_no_meio_nao_apaga_o_reparse_failed`.
+- **Casamento por nome com fallback posicional, não só por `name_norm`.** A
+  referência casa conta/oportunidade nova com a antiga só por nome
+  normalizado — se o usuário renomeia uma conta no texto editado (typo
+  corrigido, nome reescrito), o casamento falha e `match_confirmed`
+  (confirmado via `/link`, uma ação humana) evapora em silêncio: o mesmo
+  tipo de bug já visto na Task 8. `_iata_match_previous` (nova função em
+  `routes/autotoca_iata.py`) usa a mesma estratégia do robô de formulário
+  (`integrations/forms_robot.py`): nome normalizado primeiro (resiliente a
+  reordenação), posição como fallback quando as duas listas têm o mesmo
+  tamanho (resiliente a rename/typo, mas arriscado se o item realmente virou
+  outro — por isso só entra quando o nome falha). Aplicado em cascata nos
+  três níveis (gerente -> conta -> oportunidade) por
+  `_iata_carregar_campos_anteriores`. Testado em
+  `test_put_body_rename_de_conta_quebra_match_por_nome_mas_posicao_preserva_confirmacao`
+  (o vínculo confirmado sobrevive à correção de nome) e
+  `test_put_body_rename_de_oportunidade_mantem_encadeamento_por_posicao` (o
+  `prev_opportunity_id` sobrevive à correção de um typo no nome).
+  **Limitação aceita:** se o usuário editar duas contas (ou oportunidades) do
+  mesmo gerente na mesma ata — não só uma —, o fallback posicional pode
+  casar errado (a posição continua alinhando 1:1, mas não há garantia de que
+  a intenção do usuário era essa). Não há como distinguir "renomeei A" de
+  "troquei A por B e B por A" sem mais contexto; o custo de errar aqui é o
+  mesmo de qualquer heurística posicional — baixo o suficiente para não
+  travar o fluxo, mas seria o primeiro lugar a olhar se o vínculo de uma
+  conta aparecer trocado depois de uma edição com múltiplas mudanças
+  simultâneas.
+- **`extras`/`insights_json` não são tocados pelo re-parse**, de propósito: o
+  re-parse só reestrutura Gerente/Conta/Oportunidade a partir do texto
+  editado, e o texto não carrega a seção de insights. Se o usuário apagar um
+  insight no texto exibido, isso não se reflete em `extras`/`insights_json`
+  — comportamento documentado e testado
+  (`test_put_body_extras_e_insights_json_preservados_apos_reparse`), não um
+  bug a corrigir nesta task.
+- **Ata legada (`format_version=1`) funciona** com o `PUT /body`: sem
+  hierarquia prévia, `_iata_match_previous` simplesmente não encontra
+  candidato antigo em nenhum nível e os campos entram como `None`/`False` —
+  o registro ganha hierarquia pela primeira vez. Testado em
+  `test_put_body_ata_legada_sem_hierarquia_funciona`.
+
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_iata.py -v`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
-git add routes/autotoca_iata.py integrations/iata/llm.py integrations/iata/__init__.py tests/test_iata.py && git commit -m "feat(iata): edicao do texto com reparse tolerante a falha"
+git add routes/autotoca_iata.py integrations/iata/llm.py integrations/iata/__init__.py tests/test_iata.py docs/superpowers/plans/2026-08-04-iata-autotoca.md && git commit -m "feat(iata): edicao do texto com reparse tolerante a falha"
 ```
 
 ---
