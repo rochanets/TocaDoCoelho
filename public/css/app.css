@@ -2175,6 +2175,79 @@
             pointer-events: none;
         }
 
+        /* ---- Indicadores de conexão na abertura (pilha de círculos) ---- */
+        #connStatusStack {
+            position: fixed;
+            right: 24px;
+            bottom: 88px; /* acima do #bgTaskIndicator (bottom:24 + 52 de altura + folga) */
+            z-index: 10650; /* acima dos modais (1000); abaixo do #errorPopupStack (10700) */
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+            pointer-events: none;
+        }
+        .conn-circle {
+            position: relative;
+            width: 54px;
+            height: 54px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.97);
+            box-shadow: 0 4px 18px rgba(0,0,0,0.14);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            pointer-events: auto;
+            user-select: none;
+            transition: opacity 0.5s ease, transform 0.5s ease;
+        }
+        .conn-circle .conn-icon { font-size: 21px; line-height: 1; }
+        .conn-ring {
+            position: absolute;
+            inset: 0;
+            transform: rotate(-90deg); /* progresso começa no topo */
+            pointer-events: none;
+        }
+        .conn-ring-track { fill: none; stroke: #e5e7eb; stroke-width: 3; }
+        .conn-ring-bar {
+            fill: none;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-dasharray: 154; /* 2*PI*24.5 — casa com CONN_RING_LEN no JS */
+            stroke-dashoffset: 154;
+            transition: stroke-dashoffset 0.7s ease;
+            filter: drop-shadow(0 0 4px rgba(52,211,153,0.85)); /* brilho "luz moderna" */
+        }
+        .conn-circle[data-state="neutral"] .conn-ring-bar { display: none; }
+        .conn-badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+        }
+        .conn-circle[data-state="success"] .conn-badge { display: flex; background: #10b981; }
+        .conn-circle[data-state="neutral"] .conn-badge { display: flex; background: #9ca3af; }
+        .conn-circle[data-state="error"] .conn-badge {
+            display: flex;
+            background: #dc2626;
+            animation: connBadgeBlink 1s ease-in-out infinite;
+        }
+        @keyframes connBadgeBlink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.25; }
+        }
+        .conn-circle.conn-fadeout { opacity: 0; transform: translateY(8px) scale(0.85); }
+
         .reemb-receipt-review {
             display: grid;
             gap: 6px;
