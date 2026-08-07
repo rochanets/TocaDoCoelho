@@ -2844,3 +2844,38 @@ def test_post_com_previous_file_repassa_prev_bytes_para_a_task(client, db_path, 
         time.sleep(0.05)
     assert capturado.get('prev_bytes') == b'conteudo da ata anterior'
     assert capturado.get('prev_name') == 'ata_anterior.txt'
+
+
+def test_parse_hierarchy_desembrulha_envelope_do_provedor():
+    """Regressão de produção: `_llm_prompt` devolve o corpo HTTP do SAI SEM
+    desembrulhar, então o que chega aqui é `{"answer": "<json da ata>"}`, não a
+    ata. Antes desta correção o json.loads casava com o envelope, `title` não
+    existia, e a extração inteira era descartada como "a IA não retornou uma
+    ata utilizável" — com a resposta boa dentro do dicionário.
+
+    Todos os testes mockavam `_llm_prompt` devolvendo o JSON puro, então
+    nenhum deles exercitava o formato que o provedor realmente manda.
+    """
+    ata = {'title': 'Pipeline Semanal', 'managers': [
+        {'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Migração SAP', 'update': 'Proposta enviada'}]}]}]}
+
+    envelopes = [
+        {'answer': json.dumps(ata, ensure_ascii=False)},
+        {'output': '```json\n' + json.dumps(ata, ensure_ascii=False) + '\n```'},
+        {'data': {'result': json.dumps(ata, ensure_ascii=False)}},
+        {'response': 'Segue a ata:\n' + json.dumps(ata, ensure_ascii=False)},
+    ]
+    for env in envelopes:
+        parsed = iata_lib.parse_hierarchy(json.dumps(env, ensure_ascii=False))
+        assert parsed is not None, f'envelope não desembrulhado: {list(env)[0]}'
+        assert parsed['header']['title'] == 'Pipeline Semanal'
+        opp = parsed['managers'][0]['accounts'][0]['opportunities'][0]
+        assert opp['update_text'] == 'Proposta enviada'
+
+
+def test_parse_hierarchy_envelope_sem_ata_dentro_continua_none():
+    """O desembrulho não pode virar desculpa para aceitar lixo: um envelope
+    cuja resposta é texto livre continua sendo falha de extração."""
+    assert iata_lib.parse_hierarchy(json.dumps(
+        {'answer': 'Desculpe, não consegui gerar a ata.'})) is None

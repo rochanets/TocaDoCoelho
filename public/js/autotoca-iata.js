@@ -30,15 +30,19 @@
                     ? `<p style="margin:4px 0 0; font-size:12px; color:#b45309;"><i class="fas fa-exclamation-triangle"></i> Estrutura desatualizada após edição manual</p>`
                     : '';
                 const editada = record.body_edited
-                    ? `<span style="font-size:11px; color:#6b7280;">· editada</span>` : '';
+                    ? `<span class="history-meta" style="font-weight:400; opacity:.75;">· editada</span>` : '';
+                // Cores vêm das variáveis do tema escolhido pelo usuário
+                // (`--t-primary`, `--t-card-border`) e das classes que os
+                // outros módulos já usam — nada de verde/cinza cravado, que
+                // ficava ilegível em temas escuros como o blue-space.
                 return `
-                    <div class="history-item" style="border:1px solid rgba(16,185,129,.25); border-radius:12px; margin-bottom:10px; background:#fff; padding:12px;">
+                    <div class="history-item" style="margin-bottom:10px;">
                         <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
                             <div style="flex:1; min-width:0; cursor:pointer;" onclick="viewIAtaFull(${rid})">
-                                <div style="display:flex; align-items:center; gap:8px; color:#065f46; flex-wrap:wrap;">
+                                <div style="display:flex; align-items:center; gap:8px; color:var(--t-primary); flex-wrap:wrap;">
                                     <i class="fas fa-file-alt"></i>
-                                    <h3 style="margin:0; font-size:15px;">${escapeHtml(record.title || 'Ata sem título')}</h3>
-                                    <span style="font-size:12px; color:#6b7280; font-weight:400;">${escapeHtml(quando)}</span>
+                                    <h3 style="margin:0; font-size:15px; color:var(--t-primary);">${escapeHtml(record.title || 'Ata sem título')}</h3>
+                                    <span class="history-meta" style="margin:0; font-weight:400;">${escapeHtml(quando)}</span>
                                     ${editada}
                                 </div>
                                 ${aviso}
@@ -82,10 +86,14 @@
                         <div id="iataFormArea">
                             <div class="form-group">
                                 <label>Base da ata</label>
-                                <div style="display:flex; flex-direction:column; gap:6px; font-size:13px;">
-                                    <label><input type="radio" name="iataBase" value="historico" checked onchange="_iataToggleBase()"> Continuar a partir de uma ata do histórico</label>
-                                    <label><input type="radio" name="iataBase" value="upload" onchange="_iataToggleBase()"> Enviar o arquivo da ata anterior</label>
-                                    <label><input type="radio" name="iataBase" value="zero" onchange="_iataToggleBase()"> Começar uma ata totalmente nova</label>
+                                <div style="display:flex; flex-direction:column; gap:8px; font-size:13px;">
+                                    ${[['historico', 'Continuar a partir de uma ata do histórico', true],
+                                       ['upload', 'Enviar o arquivo da ata anterior', false],
+                                       ['zero', 'Começar uma ata totalmente nova', false]].map(([valor, texto, marcado]) => `
+                                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin:0;">
+                                        <input type="radio" name="iataBase" value="${valor}"${marcado ? ' checked' : ''} onchange="_iataToggleBase()" style="width:auto; margin:0; flex-shrink:0;">
+                                        <span>${texto}</span>
+                                    </label>`).join('')}
                                 </div>
                             </div>
                             <div class="form-group" id="iataBaseHistorico">
@@ -107,7 +115,10 @@
                                 <textarea id="iataRawTextInput" rows="7" placeholder="Cole aqui a transcrição, notas ou chat da reunião..."></textarea>
                             </div>
                             <div class="form-group">
-                                <label style="font-size:13px;"><input type="checkbox" id="iataWithInsights" checked> Incluir insights de negócio (cruzamento com as Soluções STF)</label>
+                                <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer; margin:0;">
+                                    <input type="checkbox" id="iataWithInsights" style="width:auto; margin:0; flex-shrink:0;">
+                                    <span>Incluir insights de negócio (cruzamento com as Soluções STF)</span>
+                                </label>
                             </div>
                         </div>
                         <div id="iataProgressArea" style="display:none; padding:20px 4px 12px;">

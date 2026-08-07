@@ -307,9 +307,21 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
         raw = _llm_prompt(iata_lib.build_extraction_prompt(raw_text), log_tag='iAta/Extração')
         parsed = iata_lib.parse_hierarchy(raw) if raw else None
         if not parsed:
+            # Sem registrar o que veio, esta falha é impossível de diagnosticar
+            # sem reproduzir às cegas — foi o que aconteceu quando o envelope
+            # do SAI derrubou a extração em produção e o log só dizia
+            # "resposta gerada com sucesso".
+            if raw:
+                texto = str(raw)
+                logger.warning(
+                    f'[iAta][Task:{task_id}] Resposta da IA não pôde ser convertida em ata '
+                    f'({len(texto)} chars). Início: {texto[:600]!r} | Fim: {texto[-200:]!r}')
+            else:
+                logger.warning(f'[iAta][Task:{task_id}] Nenhum provedor de IA respondeu.')
             _iata_task_set(task_id, {
                 'status': 'error',
-                'error': 'A IA não retornou uma ata utilizável. Tente novamente.'})
+                'error': 'A IA não retornou uma ata utilizável. Tente novamente — '
+                         'o app.log registra o que ela devolveu.'})
             return
 
         _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 55})

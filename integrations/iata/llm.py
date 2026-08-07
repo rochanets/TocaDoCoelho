@@ -268,12 +268,43 @@ def _parse_participants(raw_participants):
     return saida
 
 
+# Chaves em que provedores de LLM embrulham a resposta real. O `_llm_prompt`
+# do projeto devolve o corpo HTTP do SAI SEM desembrulhar, então o que chega
+# aqui costuma ser `{"answer": "```json{...ata...}```"}` e não a ata direto.
+_CHAVES_ENVELOPE = ('answer', 'output', 'result', 'text', 'response',
+                    'content', 'data', 'message', 'resposta')
+
+
+def _desembrulhar_envelope(parsed, profundidade=0):
+    """Se `parsed` for o envelope do provedor em vez da ata, devolve o objeto
+    de dentro.
+
+    Sem isto, `json.loads` casa com o envelope, `title` não existe e a
+    extração inteira é descartada como "a IA não retornou uma ata utilizável"
+    — com a resposta boa dentro do dicionário. Foi exatamente o que aconteceu
+    em produção com o template SAI, cuja resposta vem embrulhada.
+    """
+    if not isinstance(parsed, dict) or profundidade > 3:
+        return parsed
+    if _field(parsed, 'title', 'titulo', 'título'):
+        return parsed
+    for chave in _CHAVES_ENVELOPE:
+        valor = parsed.get(chave)
+        if isinstance(valor, str) and valor.strip():
+            interno = _loads_tolerante(valor)
+            if isinstance(interno, dict):
+                return _desembrulhar_envelope(interno, profundidade + 1)
+        elif isinstance(valor, dict):
+            return _desembrulhar_envelope(valor, profundidade + 1)
+    return parsed
+
+
 def parse_hierarchy(raw):
     """Converte a resposta bruta da IA (string) no formato canônico que
     `reconcile()` consome. Devolve `None` se a resposta não trouxer sequer um
     título — sinal de que a extração falhou (recusa, texto livre, JSON
     truncado) e não deve ser tratada como uma ata vazia válida."""
-    parsed = _loads_tolerante(raw)
+    parsed = _desembrulhar_envelope(_loads_tolerante(raw))
     if not isinstance(parsed, dict):
         return None
     titulo = str(_field(parsed, 'title', 'titulo', 'título') or '').strip()
