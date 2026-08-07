@@ -570,23 +570,36 @@
                 const emailEl = document.getElementById('graphConnectedEmail');
                 const graphSyncBtn = document.getElementById('outlookGraphSyncBtn');
                 const hint = document.getElementById('outlookSyncHint');
+                const notice = document.getElementById('graphReauthNotice');
+                const consentBtn = document.getElementById('graphConsentBtn');
                 if (data.connected) {
                     if (statusArea) statusArea.style.display = 'none';
                     if (connectedArea) connectedArea.style.display = '';
                     if (emailEl) emailEl.textContent = data.email || 'conta conectada';
                     if (graphSyncBtn) graphSyncBtn.style.display = '';
                     if (hint) hint.style.display = 'none';
+                    if (notice) notice.style.display = 'none';
+                    if (consentBtn) consentBtn.style.display = 'none';
                 } else {
                     if (statusArea) statusArea.style.display = '';
                     if (connectedArea) connectedArea.style.display = 'none';
                     if (graphSyncBtn) graphSyncBtn.style.display = 'none';
                     if (hint) hint.style.display = '';
+                    // Quando a autorização caiu (token revogado ou consentimento
+                    // faltando), mostra o motivo e — só nesse caso — o botão que
+                    // reinicia o OAuth com prompt=consent.
+                    if (notice) {
+                        notice.style.display = data.error ? '' : 'none';
+                        notice.textContent = data.error || '';
+                    }
+                    if (consentBtn) consentBtn.style.display = data.needs_consent ? '' : 'none';
                 }
             } catch (e) { /* silently ignore */ }
         }
 
-        async function connectMicrosoft365() {
-            const res = await fetch(`${API_BASE}/outlook/oauth/start`).catch(() => null);
+        async function connectMicrosoft365(forceConsent) {
+            const qs = forceConsent ? '?force_consent=1' : '';
+            const res = await fetch(`${API_BASE}/outlook/oauth/start${qs}`).catch(() => null);
             if (!res || !res.ok) {
                 const err = res ? (await res.json()).error : 'Erro de rede';
                 await uiConfirm(err || 'Verifique as credenciais nas Configurações.', 'Falha ao conectar');
@@ -625,7 +638,26 @@
                 } else if (d.phase === 'error') {
                     evtSource.close();
                     if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> Sync Microsoft 365'; }
-                    if (statusEl) statusEl.innerHTML = `<span style="color:#dc2626;">${d.message}</span>`;
+                    if (statusEl) {
+                        statusEl.textContent = '';
+                        const msg = document.createElement('span');
+                        msg.style.color = '#dc2626';
+                        msg.textContent = d.message || 'Falha na sincronização.';
+                        statusEl.appendChild(msg);
+                        // A ação de recuperação precisa estar AQUI, no painel de sync:
+                        // o botão da janela popup do OAuth é inalcançável a partir
+                        // desta tela, e era para ele que a mensagem de erro apontava.
+                        if (d.needs_consent || d.needs_reauth) {
+                            const action = document.createElement('button');
+                            action.className = 'btn btn-secondary btn-small';
+                            action.style.marginLeft = '8px';
+                            action.textContent = d.needs_consent
+                                ? 'Conectar pedindo consentimento'
+                                : 'Reconectar Microsoft 365';
+                            action.onclick = () => connectMicrosoft365(!!d.needs_consent);
+                            statusEl.appendChild(action);
+                        }
+                    }
                     if (d.error_type === 'oauth_authentication') {
                         loadOutlookGraphStatus();
                     }

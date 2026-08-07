@@ -73,7 +73,11 @@
     <div id="errorState" class="hidden">
       <h1>Não foi possível conectar</h1>
       <div class="error" id="errorMsg"></div>
-      <button class="btn btn-primary" onclick="retryWithConsent()">Tentar de novo pedindo consentimento</button>
+      <button class="btn btn-primary" id="retryBtn" onclick="retryAuth(false)">Tentar novamente</button>
+      <!-- Só aparece quando o Azure acusou consentimento faltando: forçar
+           consentimento ignora o consentimento de administrador do tenant e
+           cai em "Aprovação necessária" quando ele já existe. -->
+      <button class="btn btn-primary hidden" id="retryConsentBtn" onclick="retryAuth(true)">Tentar de novo pedindo consentimento</button>
       <button class="btn btn-ghost" onclick="window.close()">Fechar janela</button>
     </div>
 
@@ -119,12 +123,12 @@
     });
   }
 
-  // Reinicia o OAuth forçando a tela de consentimento (prompt=consent). Só faz
+  // Reinicia o OAuth. Com forceConsent, manda prompt=consent — o que só faz
   // sentido quando o consentimento realmente está faltando: em tenants que
   // bloqueiam o consentimento de usuário, isso cai na tela "Aprovação
   // necessária" mesmo com o admin já tendo liberado as permissões no Azure.
-  function retryWithConsent() {
-    fetch('/api/outlook/oauth/start?force_consent=1')
+  function retryAuth(forceConsent) {
+    fetch('/api/outlook/oauth/start' + (forceConsent ? '?force_consent=1' : ''))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data && data.auth_url) { window.location.href = data.auth_url; }
@@ -148,7 +152,11 @@
     var params = new URLSearchParams(window.location.search);
     var err = params.get('error');
     if (err) {
-      document.getElementById('errorMsg').textContent = decodeURIComponent(err);
+      // params.get() já devolve o valor decodificado — um decodeURIComponent
+      // extra aqui lançava URIError em mensagens com '%' e deixava a janela
+      // presa em "Conectando…".
+      document.getElementById('errorMsg').textContent = err;
+      document.getElementById('retryConsentBtn').classList.toggle('hidden', params.get('needs_consent') !== '1');
       show('errorState');
       return;
     }
@@ -161,7 +169,8 @@
           document.getElementById('connectedEmail').textContent = data.email || 'conta conectada';
           show('successState');
         } else {
-          document.getElementById('errorMsg').textContent = 'A conexão não foi confirmada. Tente novamente.';
+          document.getElementById('errorMsg').textContent = (data && data.error) || 'A conexão não foi confirmada. Tente novamente.';
+          document.getElementById('retryConsentBtn').classList.toggle('hidden', !(data && data.needs_consent));
           show('errorState');
         }
       })

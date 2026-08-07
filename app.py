@@ -46,13 +46,16 @@ except Exception:
 from werkzeug.exceptions import HTTPException
 from autotoca import AccountAddressService
 from integrations.outlook_graph import (
+    OutlookConsentRequiredError,
     OutlookOAuthError,
+    OutlookReauthRequiredError,
     OutlookSyncError,
     build_authorize_url as outlook_graph_build_authorize_url,
     consume_oauth_state as outlook_graph_consume_oauth_state,
     ensure_schema as outlook_graph_ensure_schema,
     exchange_code_and_store as outlook_graph_exchange_code_and_store,
     fetch_messages as outlook_graph_fetch_messages,
+    get_integration_state as outlook_graph_get_integration_state,
     get_valid_access_token as outlook_graph_get_valid_access_token,
     send_mail as outlook_graph_send_mail,
 )
@@ -7240,7 +7243,17 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     emails = result_holder.get('emails') or []
             except OutlookOAuthError as e:
                 logger.error(f'[Outlook][OAuth] Falha de autenticação no sync-stream ({source}): {e}')
-                yield evt({'phase': 'error', 'error_type': 'oauth_authentication', 'message': str(e)})
+                # needs_consent diz à UI para oferecer a reconexão COM
+                # consentimento forçado ali mesmo no painel de sync. Antes a
+                # mensagem mandava clicar num botão que só existia na janela
+                # popup do OAuth — inalcançável a partir daqui.
+                yield evt({
+                    'phase': 'error',
+                    'error_type': 'oauth_authentication',
+                    'message': str(e),
+                    'needs_reauth': isinstance(e, OutlookReauthRequiredError),
+                    'needs_consent': isinstance(e, OutlookConsentRequiredError),
+                })
                 return
             except OutlookSyncError as e:
                 logger.error(f'[Outlook][Sync] Falha na leitura Graph ({source}): {e}')
