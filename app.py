@@ -176,7 +176,11 @@ else:
     LEGACY_DATA_DIR_V1 = None
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / 'toca-do-coelho.db'
+# TOCA_DB_PATH redireciona o banco inteiro (útil para subir uma instância de
+# teste sem encostar no banco real do usuário — já houve contaminação do banco
+# de produção por um teste que não tinha como apontar para outro arquivo).
+_DB_PATH_OVERRIDE = os.environ.get('TOCA_DB_PATH', '').strip()
+DB_PATH = Path(_DB_PATH_OVERRIDE) if _DB_PATH_OVERRIDE else DATA_DIR / 'toca-do-coelho.db'
 TEST_DB_TEMPLATE_PATH = Path(__file__).resolve().parent / 'BD_teste' / 'toca-do-coelho-ficticio-reduzido.db'
 BACKUP_DIR = DATA_DIR / 'backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -12521,8 +12525,42 @@ _start_inbound_poller()
 _start_scheduled_jobs()
 
 
+def _porta_ja_em_uso(port):
+    """Diz se já existe um servidor ATENDENDO em localhost:port.
+
+    No Windows, o SO_REUSEADDR usado pelo servidor de dev do Werkzeug permite
+    que duas instâncias façam bind na MESMA porta sem nenhum erro — e qual
+    delas atende cada conexão é indeterminado. Foi assim que uma instância
+    antiga (com código desatualizado) continuou respondendo o app enquanto
+    instâncias novas subiam "com sucesso" (quatro processos escutando
+    localhost:3000 em 07/08/2026). Por isso o teste é de CONEXÃO, não de
+    bind: se alguém aceita conexão na porta, outra instância está no ar e
+    este processo NÃO deve subir.
+    """
+    import socket
+    try:
+        with socket.create_connection(('127.0.0.1', int(port)), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _abortar_se_ja_houver_instancia(port):
+    if not _porta_ja_em_uso(port):
+        return
+    msg = (f'Já existe uma instância do Toca do Coelho atendendo em '
+           f'http://localhost:{port}. Este processo não vai subir uma segunda '
+           'instância (ela disputaria a porta e requisições poderiam cair na '
+           'instância antiga, com código desatualizado). Encerre a instância '
+           'que está rodando antes de iniciar de novo.')
+    logger.error(f'[Server] {msg}')
+    print(f'[ERRO] {msg}')
+    sys.exit(1)
+
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))
+    _abortar_se_ja_houver_instancia(port)
     fixed_debug_mode = True
     app.logger.setLevel(logging.DEBUG)
     logging.getLogger().setLevel(logging.DEBUG)

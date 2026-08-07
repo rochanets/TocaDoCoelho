@@ -1542,6 +1542,54 @@ def test_pipeline_pedaco_truncado_e_retentado_dividido_ao_meio(db_path, monkeypa
     assert 'MetadeRecuperada' in contas
 
 
+def test_pipeline_metade_truncada_e_dividida_de_novo(db_path, monkeypatch):
+    """Visto em produção (Parte 1b, 07/08): uma METADE do retry também veio
+    truncada pela IA e o conteúdo dela era simplesmente perdido, porque o
+    retry só dividia uma vez. A metade que falha precisa ser dividida de novo
+    (até 2 níveis de divisão) antes de o pedaço ser dado como perdido."""
+    pedaco = 'Linha da reunião com conteúdo denso.\n' * 60  # ~2200 chars
+    monkeypatch.setattr(iata_lib, 'split_transcricao', lambda texto, **k: [pedaco])
+
+    prefixo_vazio = iata_lib.build_extraction_prompt('')
+
+    def _resposta(nome_conta):
+        return json.dumps({
+            'title': 'Ata Quartos', 'meeting_date': None, 'meeting_time': None,
+            'topic': '', 'participants': [],
+            'managers': [{'name': 'Ana', 'accounts': [{'name': nome_conta, 'opportunities': [
+                {'name': f'Deal {nome_conta}', 'update': 'Discutido', 'responsible': 'Ana'}]}]}]})
+
+    chamadas = {'n': 0}
+
+    def _llm_fake(prompt, log_tag='llm', **kwargs):
+        if log_tag != 'iAta/Extração':
+            return None
+        chamadas['n'] += 1
+        tamanho_pedaco = len(prompt) - len(prefixo_vazio)
+        if tamanho_pedaco > 700:
+            # pedaço inteiro (~2200) E as metades (~1100) vêm truncados;
+            # só os quartos (~550) cabem na resposta.
+            return '{"title":"Ata Quartos","managers":[{"name":"Ana","accounts":[{"name":"Truncada'
+        return _resposta('QuartoRecuperado')
+
+    monkeypatch.setattr(toca, '_llm_prompt', _llm_fake)
+
+    task_id = 'teste_retry_quartos'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'base',
+                             previous_record_id=None, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    assert not task.get('warning'), 'nada foi perdido, não deve haver aviso de parte perdida'
+    # 1 pedaço + 2 metades (falham) + 4 quartos (sucesso) = 7 chamadas.
+    assert chamadas['n'] == 7
+
+    registro = toca._iata_load_record(task['result']['id'])
+    contas = {c['name'] for c in registro['managers'][0]['accounts']}
+    assert 'QuartoRecuperado' in contas
+
+
 def test_pipeline_todos_os_pedacos_falham_retorna_erro(db_path, monkeypatch):
     monkeypatch.setattr(iata_lib, 'split_transcricao',
                         lambda texto, **k: ['parte1', 'parte2'])

@@ -279,7 +279,7 @@ def _iata_previous_managers(previous_record_id):
     return (anterior.get('managers') or []), None
 
 
-def _iata_extrair_parte(task_id, texto, rotulo, permitir_retry=True):
+def _iata_extrair_parte(task_id, texto, rotulo, niveis_retry=2):
     """Extrai a hierarquia de UM pedaço de transcrição (uma chamada de LLM).
 
     Devolve o dict `{'header':..., 'managers':...}` de `parse_hierarchy`, ou
@@ -287,12 +287,14 @@ def _iata_extrair_parte(task_id, texto, rotulo, permitir_retry=True):
     diagnóstico de sempre (tamanho da resposta, início e fim) — sem isso a
     falha é impossível de investigar sem reproduzir às cegas.
 
-    Se a extração falhar e `permitir_retry` for True, tenta UMA VEZ dividir o
-    pedaço ao meio e extrair cada metade separadamente (sem retry recursivo
-    nas metades) — se a causa da falha foi truncamento da resposta da IA
-    (o caso investigado em produção), metade do texto costuma caber na
-    resposta. As metades que derem certo são mescladas; se as duas falharem,
-    o pedaço inteiro é tratado como perdido.
+    Se a extração falhar e ainda houver `niveis_retry`, divide o pedaço ao
+    meio e extrai cada metade separadamente, recursivamente — se a causa da
+    falha foi truncamento da resposta da IA (o caso investigado em produção),
+    um texto menor costuma caber na resposta. O limite de saída do provedor
+    é em tokens, não em caracteres, então uma metade densa ainda pode
+    truncar (aconteceu em produção com uma metade de ~6k chars); por isso a
+    divisão vai até 2 níveis (quartos do pedaço original) antes de o trecho
+    ser tratado como perdido. As partes que derem certo são mescladas.
     """
     raw = _llm_prompt(iata_lib.build_extraction_prompt(texto), log_tag='iAta/Extração')
     parsed = iata_lib.parse_hierarchy(raw) if raw else None
@@ -308,7 +310,7 @@ def _iata_extrair_parte(task_id, texto, rotulo, permitir_retry=True):
     else:
         logger.warning(f'[iAta][Task:{task_id}] Parte {rotulo}: nenhum provedor de IA respondeu.')
 
-    if not permitir_retry or len(texto) < 400:
+    if niveis_retry <= 0 or len(texto) < 400:
         return None
 
     logger.warning(f'[iAta][Task:{task_id}] Retentando parte {rotulo} dividida ao meio.')
@@ -317,8 +319,8 @@ def _iata_extrair_parte(task_id, texto, rotulo, permitir_retry=True):
     if corte <= 0:
         corte = metade
     primeira, segunda = texto[:corte], texto[corte:]
-    p1 = _iata_extrair_parte(task_id, primeira, f'{rotulo}a', permitir_retry=False) if primeira.strip() else None
-    p2 = _iata_extrair_parte(task_id, segunda, f'{rotulo}b', permitir_retry=False) if segunda.strip() else None
+    p1 = _iata_extrair_parte(task_id, primeira, f'{rotulo}a', niveis_retry - 1) if primeira.strip() else None
+    p2 = _iata_extrair_parte(task_id, segunda, f'{rotulo}b', niveis_retry - 1) if segunda.strip() else None
     subpartes = [p for p in (p1, p2) if p]
     if not subpartes:
         return None
