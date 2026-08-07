@@ -511,7 +511,7 @@
             }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') { loadActivities(); }
-            else if (tabName === 'autotoca') { loadAutoToca(); loadReports(); _addinStartPolling(); _initOutlookAddinManifestUrl(); }
+            else if (tabName === 'autotoca') { loadAutoToca(); loadReports(); _addinStartPolling(); }
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'kanban') loadKanban();
             else if (tabName === 'gestao-conta') switchGestaoContaSubmodule(requestedGestaoContaSubTab || _gestaoContaCurrentSubTab || 'accounts');
@@ -595,7 +595,6 @@
             const data = await res.json();
             if (!data.auth_url) {
                 await uiConfirm(data.error || 'Configure Tenant ID e Client ID antes de conectar.', 'Configuração ausente');
-                showGraphConfigForm();
                 return;
             }
             window.open(data.auth_url, '_blank', 'width=520,height=640,noopener');
