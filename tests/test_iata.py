@@ -3201,3 +3201,44 @@ def test_parse_hierarchy_envelope_sem_ata_dentro_continua_none():
     cuja resposta é texto livre continua sendo falha de extração."""
     assert iata_lib.parse_hierarchy(json.dumps(
         {'answer': 'Desculpe, não consegui gerar a ata.'})) is None
+
+
+def test_merge_absorve_conta_do_gerente_nao_identificado():
+    """Artefato real observado na transcrição do usuário: uma conta discutida
+    atravessando a fronteira entre dois pedaços é atribuída ao gerente num
+    pedaço e cai em "Gerente não identificado" no outro, aparecendo duas
+    vezes na ata. O bloco de não identificados é destino de fallback, não um
+    gerente de verdade, então a atribuição nomeada vence."""
+    p1 = {'header': {'title': 'X'}, 'managers': [
+        {'name': 'Mariana', 'accounts': [{'name': 'ADM do Brasil', 'opportunities': [
+            {'name': 'Observabilidade', 'update_text': 'parte 1', 'responsible': ''}]}]}]}
+    p2 = {'header': {'title': 'X'}, 'managers': [
+        {'name': iata_lib.GERENTE_NAO_IDENTIFICADO, 'accounts': [
+            {'name': 'ADM do Brasil S.A.', 'opportunities': [
+                {'name': 'Cloud', 'update_text': 'parte 2', 'responsible': ''}]}]}]}
+
+    merged = iata_lib.merge_hierarchies([p1, p2])
+
+    nomes_gerentes = [m['name'] for m in merged['managers']]
+    assert iata_lib.GERENTE_NAO_IDENTIFICADO not in nomes_gerentes, \
+        'a conta era do gerente nomeado; o bloco de não identificados ficou vazio e deve sumir'
+    contas = merged['managers'][0]['accounts']
+    assert len(contas) == 1, 'a mesma conta não pode aparecer duas vezes'
+    assert {o['name'] for o in contas[0]['opportunities']} == {'Observabilidade', 'Cloud'}
+
+
+def test_merge_mantem_conta_que_so_existe_no_nao_identificado():
+    """O contrário do teste acima: se ninguém reivindicou a conta, ela fica
+    onde está — exibir sem dono é melhor do que perder."""
+    p1 = {'header': {'title': 'X'}, 'managers': [
+        {'name': 'Mariana', 'accounts': [{'name': 'Nestlé', 'opportunities': []}]}]}
+    p2 = {'header': {'title': 'X'}, 'managers': [
+        {'name': iata_lib.GERENTE_NAO_IDENTIFICADO, 'accounts': [
+            {'name': 'Santana', 'opportunities': [
+                {'name': 'Prospecção', 'update_text': 'x', 'responsible': ''}]}]}]}
+
+    merged = iata_lib.merge_hierarchies([p1, p2])
+
+    orfaos = [m for m in merged['managers'] if m['name'] == iata_lib.GERENTE_NAO_IDENTIFICADO]
+    assert len(orfaos) == 1
+    assert [a['name'] for a in orfaos[0]['accounts']] == ['Santana']

@@ -1672,6 +1672,31 @@ def _tavily_api_key():
     return _resolve_bundled_setting('tavily_api_key', 'TAVILY_API_KEY', 'TAVILY_API_KEY')
 
 
+def _openrouter_max_tokens():
+    """Teto de tokens da resposta do OpenRouter, configurável por
+    `openrouter_max_tokens`. Ver o comentário no ponto de uso: sem teto, o
+    provedor reserva o máximo do modelo e recusa por saldo insuficiente."""
+    try:
+        valor = int(_resolve_setting('openrouter_max_tokens', 'OPENROUTER_MAX_TOKENS') or 4000)
+    except (TypeError, ValueError):
+        valor = 4000
+    return max(256, valor)
+
+
+def _sai_timeout_seconds():
+    """Timeout das chamadas ao SAI, configurável por `sai_timeout_seconds`.
+
+    Os 45s originais não davam conta: o template Geral Claude estourava o
+    tempo mesmo com prompts de 13k caracteres, e o usuário via "nenhum
+    provedor respondeu" sem saber que a resposta só estava demorando.
+    """
+    try:
+        valor = int(_resolve_setting('sai_timeout_seconds', 'SAI_TIMEOUT_SECONDS') or 120)
+    except (TypeError, ValueError):
+        valor = 120
+    return max(15, valor)
+
+
 def _sai_execute_question_template(base_url, template_id, api_key, question, log_tag):
     """Executa um template SAI que aceita {"inputs": {"question": ...}} com retry em HTTP 429
     (rate limit transitório). Retorna o texto da resposta ou None."""
@@ -1683,7 +1708,7 @@ def _sai_execute_question_template(base_url, template_id, api_key, question, log
                 f'{base_url}/api/templates/{template_id}/execute',
                 json={'inputs': {'question': question}},
                 headers={'X-Api-Key': api_key},
-                timeout=45
+                timeout=_sai_timeout_seconds()
             )
             if resp.status_code == 200:
                 logger.info(f'[SAI][{log_tag}] OK ({len(resp.text)} chars)')
@@ -1846,7 +1871,14 @@ def _llm_prompt(question, log_tag='llm', temperature=0.1, web=False):
                 json={
                     'model': model,
                     'messages': [{'role': 'user', 'content': question}],
-                    'temperature': temperature
+                    'temperature': temperature,
+                    # Sem max_tokens o OpenRouter reserva o máximo do modelo
+                    # (16k tokens no gpt-4o-mini) e recusa a requisição com
+                    # HTTP 402 quando o saldo não cobre esse teto — mesmo
+                    # havendo crédito de sobra para a resposta real. Pedir um
+                    # teto modesto mantém o fallback funcionando com pouco
+                    # saldo, que é justamente quando ele precisa funcionar.
+                    'max_tokens': _openrouter_max_tokens()
                 },
                 headers={
                     'Authorization': f'Bearer {or_key}',
@@ -1861,7 +1893,15 @@ def _llm_prompt(question, log_tag='llm', temperature=0.1, web=False):
             if raw and str(raw).strip():
                 logger.info(f'[{log_tag}][OpenRouter] Resposta gerada com sucesso (fallback)')
                 return raw
-            logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia.')
+            # Sem isto, um 402 (sem crédito) ou 401 (chave inválida) aparecia
+            # no log apenas como "Resposta vazia" — e a causa real ficava
+            # invisível.
+            erro_api = (data.get('error') or {})
+            if erro_api:
+                logger.warning(f'[{log_tag}][OpenRouter] HTTP {resp.status_code}: '
+                               f'{erro_api.get("message") or erro_api}')
+            else:
+                logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia (HTTP {resp.status_code}).')
         except Exception as e:
             logger.warning(f'[{log_tag}][OpenRouter] Falha no fallback: {e}')
     return None

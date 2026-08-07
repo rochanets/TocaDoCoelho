@@ -562,7 +562,58 @@ def merge_hierarchies(parciais):
     parciais = [p for p in (parciais or []) if p]
     if not parciais:
         return None
+    managers = _merge_managers([p.get('managers') or [] for p in parciais])
     return {
         'header': _merge_headers([p.get('header') or {} for p in parciais]),
-        'managers': _merge_managers([p.get('managers') or [] for p in parciais]),
+        'managers': _absorver_gerente_nao_identificado(managers),
     }
+
+
+def _absorver_gerente_nao_identificado(managers):
+    """Move para o gerente nomeado as contas que caíram no bloco "Gerente não
+    identificado" mas já existem sob alguém.
+
+    Quando uma conta é discutida atravessando a fronteira entre dois pedaços,
+    é comum um pedaço atribuí-la ao gerente e o outro não conseguir — e o
+    resultado seria a mesma conta aparecendo duas vezes na ata, uma delas sob
+    um gerente que não existe. O bloco de não identificados é um destino de
+    fallback, não um gerente de verdade, então na dúvida a atribuição
+    nomeada vence. Contas que só existem lá continuam lá: perder a conta
+    seria pior do que exibi-la sem dono.
+    """
+    nao_ident = [m for m in managers if m.get('name') == GERENTE_NAO_IDENTIFICADO]
+    nomeados = [m for m in managers if m.get('name') != GERENTE_NAO_IDENTIFICADO]
+    if not nao_ident or not nomeados:
+        return managers
+
+    def _equivalente(nome, contas):
+        """Mesmo casamento em duas etapas de `_merge_accounts_into`: nome
+        normalizado idêntico, depois nome sem sufixo de forma jurídica."""
+        norm = normalize_name(nome)
+        if not norm:
+            return None
+        sem_sufixo = _strip_legal_suffix(norm)
+        for conta in contas:
+            outro = normalize_name(conta.get('name'))
+            if not outro:
+                continue
+            if outro == norm or _strip_legal_suffix(outro) == sem_sufixo:
+                return conta
+        return None
+
+    for bloco in nao_ident:
+        remanescentes = []
+        for conta in (bloco.get('accounts') or []):
+            destino = None
+            for m in nomeados:
+                destino = _equivalente(conta.get('name'), m.get('accounts') or [])
+                if destino is not None:
+                    break
+            if destino is None:
+                remanescentes.append(conta)
+                continue
+            indice = {normalize_name(o.get('name')): o
+                      for o in destino.get('opportunities') or []}
+            _merge_opportunities_into(destino, conta.get('opportunities') or [], indice)
+        bloco['accounts'] = remanescentes
+    return [m for m in managers if m.get('accounts')]
