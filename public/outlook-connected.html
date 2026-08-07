@@ -73,7 +73,24 @@
     <div id="errorState" class="hidden">
       <h1>Não foi possível conectar</h1>
       <div class="error" id="errorMsg"></div>
-      <button class="btn btn-primary" onclick="retryWithConsent()">Tentar de novo pedindo consentimento</button>
+      <button class="btn btn-primary" id="retryBtn" onclick="retryAuth(false)">Tentar novamente</button>
+      <!-- Só aparece quando o Azure acusou consentimento faltando: forçar
+           consentimento ignora o consentimento de administrador do tenant e
+           cai em "Aprovação necessária" quando ele já existe. -->
+      <button class="btn btn-primary hidden" id="retryConsentBtn" onclick="retryAuth(true)">Tentar de novo pedindo consentimento</button>
+      <!-- Saída para tenants que bloqueiam consentimento de usuário ("Precisa de
+           aprovação de administrador"): um admin abre o link e libera o tenant
+           inteiro; quem não for admin copia o link (fica no clipboard) e envia. -->
+      <button class="btn btn-primary hidden" id="adminConsentBtn" onclick="goAdminConsent()">Aprovação do administrador</button>
+      <button class="btn btn-ghost" onclick="window.close()">Fechar janela</button>
+    </div>
+
+    <!-- Estado: consentimento de administrador concedido -->
+    <div id="adminConsentState" class="hidden">
+      <h1>Aprovação concedida</h1>
+      <div class="ok-badge"><span>✓</span> <span>Consentimento do administrador registrado</span></div>
+      <p class="sub">O aplicativo foi aprovado para o tenant. Agora conecte a sua conta para concluir.</p>
+      <button class="btn btn-primary" onclick="retryAuth(false)">Conectar Microsoft 365</button>
       <button class="btn btn-ghost" onclick="window.close()">Fechar janela</button>
     </div>
 
@@ -114,17 +131,35 @@
   }
 
   function show(state) {
-    ['errorState', 'successState', 'loadingState'].forEach(function (id) {
+    ['errorState', 'successState', 'loadingState', 'adminConsentState'].forEach(function (id) {
       document.getElementById(id).classList.toggle('hidden', id !== state);
     });
   }
 
-  // Reinicia o OAuth forçando a tela de consentimento (prompt=consent). Só faz
+  // Navega para o consentimento de administrador do Azure. Também deixa o link
+  // no clipboard, para quem não for admin poder enviá-lo ao administrador.
+  function goAdminConsent() {
+    fetch('/api/outlook/oauth/admin-consent-url')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.admin_consent_url) {
+          try { navigator.clipboard.writeText(data.admin_consent_url); } catch (e) {}
+          window.location.href = data.admin_consent_url;
+        } else {
+          document.getElementById('errorMsg').textContent = (data && data.error) || 'Não foi possível gerar o link de aprovação.';
+        }
+      })
+      .catch(function () {
+        document.getElementById('errorMsg').textContent = 'Não foi possível gerar o link de aprovação.';
+      });
+  }
+
+  // Reinicia o OAuth. Com forceConsent, manda prompt=consent — o que só faz
   // sentido quando o consentimento realmente está faltando: em tenants que
   // bloqueiam o consentimento de usuário, isso cai na tela "Aprovação
   // necessária" mesmo com o admin já tendo liberado as permissões no Azure.
-  function retryWithConsent() {
-    fetch('/api/outlook/oauth/start?force_consent=1')
+  function retryAuth(forceConsent) {
+    fetch('/api/outlook/oauth/start' + (forceConsent ? '?force_consent=1' : ''))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data && data.auth_url) { window.location.href = data.auth_url; }
@@ -146,9 +181,20 @@
 
   (function init() {
     var params = new URLSearchParams(window.location.search);
+    if (params.get('admin_consent') === '1') {
+      // Retorno do /v2.0/adminconsent: o tenant foi aprovado, mas a CONTA ainda
+      // não está conectada — o próximo passo é o fluxo normal de autorização.
+      show('adminConsentState');
+      return;
+    }
     var err = params.get('error');
     if (err) {
-      document.getElementById('errorMsg').textContent = decodeURIComponent(err);
+      // params.get() já devolve o valor decodificado — um decodeURIComponent
+      // extra aqui lançava URIError em mensagens com '%' e deixava a janela
+      // presa em "Conectando…".
+      document.getElementById('errorMsg').textContent = err;
+      document.getElementById('retryConsentBtn').classList.toggle('hidden', params.get('needs_consent') !== '1');
+      document.getElementById('adminConsentBtn').classList.toggle('hidden', params.get('needs_consent') !== '1');
       show('errorState');
       return;
     }
@@ -161,7 +207,9 @@
           document.getElementById('connectedEmail').textContent = data.email || 'conta conectada';
           show('successState');
         } else {
-          document.getElementById('errorMsg').textContent = 'A conexão não foi confirmada. Tente novamente.';
+          document.getElementById('errorMsg').textContent = (data && data.error) || 'A conexão não foi confirmada. Tente novamente.';
+          document.getElementById('retryConsentBtn').classList.toggle('hidden', !(data && data.needs_consent));
+          document.getElementById('adminConsentBtn').classList.toggle('hidden', !(data && data.needs_consent));
           show('errorState');
         }
       })

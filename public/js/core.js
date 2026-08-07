@@ -573,23 +573,42 @@
                 const emailEl = document.getElementById('graphConnectedEmail');
                 const graphSyncBtn = document.getElementById('outlookGraphSyncBtn');
                 const hint = document.getElementById('outlookSyncHint');
+                const notice = document.getElementById('graphReauthNotice');
+                const consentBtn = document.getElementById('graphConsentBtn');
+                const adminConsentBtn = document.getElementById('graphAdminConsentBtn');
                 if (data.connected) {
                     if (statusArea) statusArea.style.display = 'none';
                     if (connectedArea) connectedArea.style.display = '';
                     if (emailEl) emailEl.textContent = data.email || 'conta conectada';
                     if (graphSyncBtn) graphSyncBtn.style.display = '';
                     if (hint) hint.style.display = 'none';
+                    if (notice) notice.style.display = 'none';
+                    if (consentBtn) consentBtn.style.display = 'none';
+                    if (adminConsentBtn) adminConsentBtn.style.display = 'none';
                 } else {
                     if (statusArea) statusArea.style.display = '';
                     if (connectedArea) connectedArea.style.display = 'none';
                     if (graphSyncBtn) graphSyncBtn.style.display = 'none';
                     if (hint) hint.style.display = '';
+                    // Quando a autorização caiu (token revogado ou consentimento
+                    // faltando), mostra o motivo e — só nesse caso — o botão que
+                    // reinicia o OAuth com prompt=consent.
+                    if (notice) {
+                        notice.style.display = data.error ? '' : 'none';
+                        notice.textContent = data.error || '';
+                    }
+                    if (consentBtn) consentBtn.style.display = data.needs_consent ? '' : 'none';
+                    // O link de aprovação do administrador é a saída quando o
+                    // tenant bloqueia o consentimento de usuário — o botão fica
+                    // visível junto com o de consentimento.
+                    if (adminConsentBtn) adminConsentBtn.style.display = data.needs_consent ? '' : 'none';
                 }
             } catch (e) { /* silently ignore */ }
         }
 
-        async function connectMicrosoft365() {
-            const res = await fetch(`${API_BASE}/outlook/oauth/start`).catch(() => null);
+        async function connectMicrosoft365(forceConsent) {
+            const qs = forceConsent ? '?force_consent=1' : '';
+            const res = await fetch(`${API_BASE}/outlook/oauth/start${qs}`).catch(() => null);
             if (!res || !res.ok) {
                 const err = res ? (await res.json()).error : 'Erro de rede';
                 await uiConfirm(err || 'Verifique as credenciais nas Configurações.', 'Falha ao conectar');
@@ -601,6 +620,20 @@
                 return;
             }
             window.open(data.auth_url, '_blank', 'width=520,height=640,noopener');
+        }
+
+        // Consentimento de administrador (endpoint v2/adminconsent do Azure).
+        // Abre o link para quem for admin aprovar na hora, e deixa o mesmo link
+        // na área de transferência para quem não for admin mandar ao admin.
+        async function openGraphAdminConsent() {
+            const res = await fetch(`${API_BASE}/outlook/oauth/admin-consent-url`).catch(() => null);
+            const data = res ? await res.json().catch(() => null) : null;
+            if (!data || !data.admin_consent_url) {
+                await uiConfirm((data && data.error) || 'Configure Tenant ID e Client ID nas Configurações antes.', 'Falha ao gerar o link');
+                return;
+            }
+            try { await navigator.clipboard.writeText(data.admin_consent_url); } catch (e) { /* sem clipboard, segue */ }
+            window.open(data.admin_consent_url, '_blank', 'width=520,height=640,noopener');
         }
 
         async function disconnectMicrosoft365() {
@@ -628,7 +661,34 @@
                 } else if (d.phase === 'error') {
                     evtSource.close();
                     if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ai-star-icon">✦</span> Sync Microsoft 365'; }
-                    if (statusEl) statusEl.innerHTML = `<span style="color:#dc2626;">${d.message}</span>`;
+                    if (statusEl) {
+                        statusEl.textContent = '';
+                        const msg = document.createElement('span');
+                        msg.style.color = '#dc2626';
+                        msg.textContent = d.message || 'Falha na sincronização.';
+                        statusEl.appendChild(msg);
+                        // A ação de recuperação precisa estar AQUI, no painel de sync:
+                        // o botão da janela popup do OAuth é inalcançável a partir
+                        // desta tela, e era para ele que a mensagem de erro apontava.
+                        if (d.needs_consent || d.needs_reauth) {
+                            const action = document.createElement('button');
+                            action.className = 'btn btn-secondary btn-small';
+                            action.style.marginLeft = '8px';
+                            action.textContent = d.needs_consent
+                                ? 'Conectar pedindo consentimento'
+                                : 'Reconectar Microsoft 365';
+                            action.onclick = () => connectMicrosoft365(!!d.needs_consent);
+                            statusEl.appendChild(action);
+                            if (d.needs_consent) {
+                                const adminAction = document.createElement('button');
+                                adminAction.className = 'btn btn-secondary btn-small';
+                                adminAction.style.marginLeft = '8px';
+                                adminAction.textContent = 'Aprovação do administrador';
+                                adminAction.onclick = () => openGraphAdminConsent();
+                                statusEl.appendChild(adminAction);
+                            }
+                        }
+                    }
                     if (d.error_type === 'oauth_authentication') {
                         loadOutlookGraphStatus();
                     }

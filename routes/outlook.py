@@ -16,28 +16,79 @@ def outlook_diagnose():
         'detail': 'ok' if is_win else 'Não é Windows — conector COM indisponível'
     })
 
-    has_graph_creds = bool(
-        _resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID')
-    )
+    # Mostra tenant/client_id/scope/redirect_uri de verdade, e de ONDE cada um
+    # veio. `_resolve_setting` dá precedência ao banco: um outlook_graph_client_id
+    # antigo salvo em Configurações sobrepõe silenciosamente a credencial
+    # embarcada e autorizada pela empresa — e o Azure passa a pedir consentimento
+    # para um aplicativo diferente do que o admin liberou. Sem isso aparecer aqui,
+    # esse caso é invisível.
+    db_tenant = (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or '').strip()
+    db_client_id = (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
+    graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+    tenant = graph_settings['tenant']
+    client_id = graph_settings['client_id']
+    has_graph_creds = bool(tenant and client_id)
+    origem_tenant = 'Configurações/ambiente' if db_tenant else 'embarcado no build'
+    origem_client = 'Configurações/ambiente' if db_client_id else 'embarcado no build'
     checks.append({
         'label': 'Graph API (credenciais)',
         'ok': has_graph_creds,
-        'detail': 'Client ID e Secret configurados' if has_graph_creds else 'Configure Tenant ID / Client ID / Client Secret nas Configurações'
+        'detail': (
+            f'Tenant {tenant or "—"} ({origem_tenant}) · '
+            f'Client ID {client_id or "—"} ({origem_client})'
+            if has_graph_creds
+            else 'Configure Tenant ID / Client ID nas Configurações'
+        )
+    })
+    # O caso "travado na tela 'Precisa de aprovação de administrador'" não deixa
+    # rastro nenhum no banco (o Azure nunca redireciona de volta), então o link
+    # de consentimento de administrador aparece aqui incondicionalmente — é daqui
+    # que o usuário copia o link para mandar ao admin (ou abre, se for admin).
+    admin_consent_url = ''
+    try:
+        admin_consent_url = outlook_graph_build_admin_consent_url(settings=graph_settings)
+    except Exception as e:
+        logger.debug(f'[outlook_diagnose] sem link de admin consent: {e}')
+    checks.append({
+        'label': 'Graph API (escopos e redirect)',
+        'ok': bool(graph_settings['scope'] and graph_settings['redirect_uri']),
+        'detail': (
+            f'Escopos: {graph_settings["scope"] or "—"} · '
+            f'Redirect URI: {graph_settings["redirect_uri"] or "— (abra o app pelo navegador para registrar)"}. '
+            'Estes escopos precisam de consentimento DELEGADO no Azure (não "Aplicativo"), '
+            'e o Redirect URI precisa estar registrado no aplicativo.'
+            + (
+                f' Se o Azure travar em "Precisa de aprovação de administrador", '
+                f'um admin resolve de uma vez abrindo: {admin_consent_url}'
+                if admin_consent_url else ''
+            )
+        )
     })
 
-    has_graph_token = False
+    # Igual ao graph-status: a existência da linha em user_integrations não
+    # significa que o token presta. Um grant revogado/sem consentimento aparecia
+    # aqui como "Token OAuth ativo".
+    graph_state = {'connected': False, 'needs_reauth': False, 'needs_consent': False, 'reason': ''}
     try:
         conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM user_integrations WHERE provider = 'outlook_graph' LIMIT 1")
-        has_graph_token = c.fetchone() is not None
-        conn.close()
+        try:
+            graph_state = outlook_graph_get_integration_state(conn, 1)
+        finally:
+            conn.close()
     except Exception as e:
         logger.debug(f'[outlook_diagnose] exceção ignorada: {e}')
+    if graph_state.get('connected'):
+        graph_token_detail = 'Token OAuth ativo'
+    elif graph_state.get('needs_consent'):
+        graph_token_detail = f'Consentimento pendente — {graph_state.get("reason") or "reconecte pedindo consentimento"}'
+    elif graph_state.get('needs_reauth'):
+        graph_token_detail = f'Autorização inválida — {graph_state.get("reason") or "reconecte a conta"}'
+    else:
+        graph_token_detail = 'Não autenticado — use "Conectar Microsoft 365"'
     checks.append({
         'label': 'OAuth Graph autenticado',
-        'ok': has_graph_token,
-        'detail': 'Token OAuth ativo' if has_graph_token else 'Não autenticado — use "Conectar Outlook via Graph"'
+        'ok': bool(graph_state.get('connected')),
+        'detail': graph_token_detail
     })
 
     total_clients = 0
@@ -65,6 +116,7 @@ def outlook_diagnose():
     llm_detail = (('SAI' if has_sai else '') + (' + ' if has_sai and has_or else '') + ('OpenRouter' if has_or else '')) if has_llm else 'Nenhum LLM configurado — resumos desativados'
     checks.append({'label': 'LLM (resumos)', 'ok': has_llm, 'detail': llm_detail})
 
+    has_graph_token = bool(graph_state.get('connected'))
     can_sync = is_win or has_graph_token
     connector = 'graph' if has_graph_token else ('com' if is_win else 'none')
 
@@ -177,13 +229,53 @@ def outlook_oauth_start():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/outlook/oauth/admin-consent-url', methods=['GET'])
+def outlook_oauth_admin_consent_url():
+    """Link do consentimento de administrador (endpoint v2 do Azure).
+
+    Para o caso em que o tenant bloqueia o consentimento de usuário e o Azure
+    trava em "Precisa de aprovação de administrador": um admin abre este link
+    (ou recebe dele por e-mail) e concede o consentimento delegado do tenant
+    inteiro de uma vez — depois disso o Conectar normal funciona."""
+    try:
+        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+        url = outlook_graph_build_admin_consent_url(settings=settings)
+        return jsonify({'admin_consent_url': url})
+    except OutlookOAuthError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/outlook/oauth/admin-consent-url: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/outlook/oauth/callback', methods=['GET'])
 def outlook_oauth_callback():
     try:
         error = (request.args.get('error') or '').strip()
         if error:
             desc = request.args.get('error_description') or error
-            return redirect(f'/?graph_error={urllib.parse.quote(str(desc))}', 302)
+            # Loga o erro cru do Azure (vem com o código AADSTS e o correlation_id
+            # na descrição) — sem isso não há como diagnosticar remotamente.
+            logger.error(f'[Outlook][OAuth] Azure recusou a autorização (error={error}): {desc}')
+            # Vai para a tela do popup que TEM o botão de tentar novamente pedindo
+            # consentimento. Antes caía em /?graph_error=, na janela principal, que
+            # só mostra um alerta — deixando o usuário sem nenhuma saída quando o
+            # que faltava era exatamente o consentimento.
+            params = urllib.parse.urlencode({
+                'error': str(desc),
+                'needs_consent': '1' if error in {'consent_required', 'access_denied', 'interaction_required'} else '0',
+            })
+            return redirect(f'/outlook-connected.html?{params}', 302)
+
+        # Retorno do consentimento de administrador (/v2.0/adminconsent): vem
+        # com admin_consent=True e SEM code/state — sem este tratamento, o admin
+        # que acabou de aprovar caía em "Parâmetros OAuth incompletos".
+        if (request.args.get('admin_consent') or '').strip().lower() == 'true':
+            logger.info(
+                f"[Outlook][OAuth] Consentimento de administrador concedido "
+                f"(tenant={request.args.get('tenant') or '?'}, scope={request.args.get('scope') or '?'})"
+            )
+            return redirect('/outlook-connected.html?admin_consent=1', 302)
 
         code = (request.args.get('code') or '').strip()
         state = (request.args.get('state') or '').strip()
@@ -202,7 +294,11 @@ def outlook_oauth_callback():
         return redirect('/outlook-connected.html', 302)
     except OutlookOAuthError as e:
         logger.error(f'[Outlook][OAuth] Falha na callback OAuth: {e}')
-        return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
+        params = urllib.parse.urlencode({
+            'error': str(e),
+            'needs_consent': '1' if isinstance(e, OutlookConsentRequiredError) else '0',
+        })
+        return redirect(f'/outlook-connected.html?{params}', 302)
     except Exception as e:
         logger.exception(f'[ERROR] GET /api/outlook/oauth/callback: {e}')
         return redirect(f'/outlook-connected.html?error={urllib.parse.quote(str(e))}', 302)
@@ -236,27 +332,49 @@ def outlook_graph_status_endpoint():
     """Retorna se o usuário está conectado ao Microsoft Graph e com qual email."""
     try:
         conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT expires_at FROM user_integrations WHERE provider = 'outlook_graph' AND user_id = 1 LIMIT 1")
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            return jsonify({'connected': False})
+        try:
+            state = outlook_graph_get_integration_state(conn, 1)
+        finally:
+            conn.close()
+        if not state.get('connected'):
+            # Antes bastava a linha existir em user_integrations para responder
+            # connected: true — então um token morto mantinha a UI em "conectado"
+            # para sempre, escondendo o botão Conectar e deixando o usuário sem
+            # nenhuma forma de refazer a autorização.
+            return jsonify({
+                'connected': False,
+                'needs_reauth': bool(state.get('needs_reauth')),
+                'needs_consent': bool(state.get('needs_consent')),
+                'error': state.get('reason') or '',
+            })
         email = None
         try:
             settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
             conn2 = get_db()
-            token = outlook_graph_get_valid_access_token(conn=conn2, user_id=1, settings=settings)
-            conn2.close()
+            try:
+                token = outlook_graph_get_valid_access_token(conn=conn2, user_id=1, settings=settings)
+            finally:
+                conn2.close()
             req = urllib.request.Request('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', method='GET')
             req.add_header('Authorization', f'Bearer {token}')
             req.add_header('Accept', 'application/json')
             with urllib.request.urlopen(req, timeout=10) as resp:
                 me = json.loads(resp.read())
                 email = me.get('mail') or me.get('userPrincipalName')
+        except OutlookReauthRequiredError as e:
+            # A renovação já invalidou o grant — reporta desconectado com o
+            # motivo, em vez de mascarar a falha como "conectado".
+            logger.warning(f'[outlook_graph_status_endpoint] grant inválido: {e}')
+            return jsonify({
+                'connected': False,
+                'needs_reauth': True,
+                'needs_consent': isinstance(e, OutlookConsentRequiredError),
+                'error': str(e),
+            })
         except Exception as e:
+            # Falha de rede/Graph não invalida a conexão — segue conectado sem email.
             logger.debug(f'[outlook_graph_status_endpoint] exceção ignorada: {e}')
-        return jsonify({'connected': True, 'email': email, 'expires_at': row['expires_at']})
+        return jsonify({'connected': True, 'email': email, 'expires_at': state.get('expires_at')})
     except Exception as e:
         return jsonify({'connected': False, 'error': str(e)})
 

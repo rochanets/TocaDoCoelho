@@ -19,6 +19,7 @@ logger = logging.getLogger('toca-do-coelho.outlook-graph')
 GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0'
 TOKEN_URL_TEMPLATE = 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token'
 AUTH_URL_TEMPLATE = 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize'
+ADMIN_CONSENT_URL_TEMPLATE = 'https://login.microsoftonline.com/{tenant}/v2.0/adminconsent'
 PROVIDER = 'outlook_graph'
 
 _MAX_SYNC_PAGES = 50
@@ -32,6 +33,26 @@ _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 
 class OutlookOAuthError(Exception):
+    pass
+
+
+class OutlookReauthRequiredError(OutlookOAuthError):
+    """O grant guardado não serve mais (revogado, expirado, senha trocada).
+
+    Distinta de OutlookOAuthError genérico porque exige uma ação concreta: o
+    token armazenado é descartado e o usuário precisa refazer a conexão. Sem
+    essa distinção o app ficava preso — `user_integrations` mantinha um token
+    morto, a UI seguia mostrando "conectado" e todo sync repetia o mesmo erro
+    para sempre, sem nenhum caminho de volta para a autorização."""
+    pass
+
+
+class OutlookConsentRequiredError(OutlookReauthRequiredError):
+    """Faltam permissões consentidas para esta conta/aplicativo.
+
+    Reconectar só resolve com `prompt=consent` (ou com o administrador
+    concedendo o consentimento para o app no tenant), então a UI precisa
+    oferecer especificamente o fluxo com consentimento forçado."""
     pass
 
 
@@ -115,6 +136,26 @@ def ensure_schema(conn: sqlite3.Connection):
     c.execute('CREATE INDEX IF NOT EXISTS idx_outlook_processed_conv ON outlook_processed_emails(conversation_id)')
 
 
+_AADSTS_RE = re.compile(r'AADSTS\d+')
+
+# AADSTS65001: usuário/admin não consentiu. AADSTS65004: usuário recusou o
+# consentimento. Só esses dois (mais o error code explícito) significam "falta
+# consentimento" — a checagem antiga, `'consent' in err.lower()`, era ampla
+# demais e classificava como falta de consentimento erros de MFA e de sessão,
+# mandando o usuário para o fluxo errado.
+_CONSENT_AADSTS_CODES = ('AADSTS65001', 'AADSTS65004')
+
+# Erros em que o grant guardado deixou de valer e só uma nova autorização
+# resolve (refresh token revogado/expirado, senha trocada, MFA exigida).
+_REAUTH_ERROR_CODES = {'invalid_grant', 'interaction_required', 'login_required'}
+
+
+def _is_consent_error(body, err):
+    if any(code in str(err) for code in _CONSENT_AADSTS_CODES):
+        return True
+    return str(body.get('error') or '') == 'consent_required'
+
+
 def _http_form_post(url, form_data):
     payload = urllib.parse.urlencode(form_data).encode('utf-8')
     req = urllib.request.Request(url, data=payload, method='POST')
@@ -125,15 +166,31 @@ def _http_form_post(url, form_data):
     except urllib.error.HTTPError as e:
         body = _safe_json_loads(e.read())
         err = body.get('error_description') or body.get('error') or str(e)
-        if 'AADSTS65001' in str(err) or 'consent' in str(err).lower() or 'interaction_required' in str(body.get('error') or ''):
-            raise OutlookOAuthError(
-                'As permissões de e-mail ainda não foram concedidas para esta conta. '
-                'Use o botão "Tentar de novo pedindo consentimento" nesta tela. '
-                'Se a empresa exigir aprovação do administrador, peça que ele conceda '
-                'o consentimento para o aplicativo no Azure (Mail.Read, Mail.Send, '
-                'offline_access e User.Read).'
+        # Loga SEMPRE o erro bruto, inclusive nos casos de consentimento: sem o
+        # código AADSTS e o correlation_id no app.log é impossível diagnosticar
+        # remotamente por que o Azure recusou (era exatamente o que faltava para
+        # confirmar se o fim do prompt=consent tinha surtido efeito). Nada aqui
+        # é sensível — o token endpoint não devolve tokens em respostas de erro.
+        aadsts = ', '.join(sorted(set(_AADSTS_RE.findall(str(err))))) or '?'
+        logger.error(
+            f'[OutlookGraph] Falha OAuth no token endpoint '
+            f'(HTTP {getattr(e, "code", "?")}, error={body.get("error") or "?"}, '
+            f'codes={aadsts}, correlation_id={body.get("correlation_id") or "?"}, '
+            f'trace_id={body.get("trace_id") or "?"}): {err}'
+        )
+        if _is_consent_error(body, err):
+            raise OutlookConsentRequiredError(
+                'As permissões de e-mail não estão concedidas para esta conta no Azure. '
+                'Reconecte usando "Conectar pedindo consentimento". Se a empresa exigir '
+                'aprovação do administrador, peça que ele conceda o consentimento do tipo '
+                'DELEGADO (não "Aplicativo") para Mail.Read, Mail.Send, offline_access e '
+                'User.Read no aplicativo do Toca.'
             ) from e
-        logger.error(f'[OutlookGraph] Falha OAuth no token endpoint: {err}')
+        if str(body.get('error') or '') in _REAUTH_ERROR_CODES:
+            raise OutlookReauthRequiredError(
+                'A autorização da conta Microsoft expirou ou foi revogada. '
+                'Reconecte a conta em AutoToca > Sync Outlook.'
+            ) from e
         raise OutlookOAuthError(
             'Falha ao autenticar com a Microsoft. Tente reconectar a integração do Outlook.'
         ) from e
@@ -420,6 +477,40 @@ def build_authorize_url(conn, user_id: int, settings=None, force_consent: bool =
     return f"{cfg['authorize_url']}?{urllib.parse.urlencode(params)}"
 
 
+# Escopos OIDC padrão: não pertencem à Graph API e no adminconsent v2 vão sem
+# o prefixo de recurso.
+_OIDC_SCOPES = {'openid', 'profile', 'email', 'offline_access'}
+
+
+def build_admin_consent_url(settings=None):
+    """URL do consentimento de administrador (endpoint v2 do Azure).
+
+    É a única saída para o beco em que o usuário real ficou preso: o tenant
+    bloqueia consentimento de usuário, o Azure mostra "Precisa de aprovação de
+    administrador" e nunca redireciona de volta — nenhum callback chega ao app
+    e reconectar (com ou sem prompt=consent) cai sempre na mesma tela. Um
+    administrador que abra esta URL concede o consentimento DELEGADO para o
+    tenant inteiro de uma vez; depois disso o "Conectar Microsoft 365" normal
+    passa a funcionar para todos.
+
+    Os escopos da Graph precisam vir qualificados com o recurso
+    (https://graph.microsoft.com/Mail.Read) — diferente do authorize, o
+    adminconsent v2 não assume um recurso padrão para nomes curtos."""
+    cfg = _oauth_config(settings)
+    scopes = []
+    for scope in cfg['scope'].split():
+        if scope.lower() in _OIDC_SCOPES or '://' in scope:
+            scopes.append(scope)
+        else:
+            scopes.append(f'https://graph.microsoft.com/{scope}')
+    params = {
+        'client_id': cfg['client_id'],
+        'scope': ' '.join(scopes),
+        'redirect_uri': cfg['redirect_uri'],
+    }
+    return f"{ADMIN_CONSENT_URL_TEMPLATE.format(tenant=cfg['tenant'])}?{urllib.parse.urlencode(params)}"
+
+
 def _upsert_tokens(conn, user_id, token_payload):
     expires_in = int(token_payload.get('expires_in') or 3600)
     expires_at = _to_iso(_now_utc() + timedelta(seconds=expires_in))
@@ -493,6 +584,72 @@ def _is_expired(expires_at: str):
         return True
 
 
+def _invalidate_integration(conn, user_id: int, reason: str, needs_consent: bool = False):
+    """Descarta o grant guardado quando o Azure recusa o refresh token.
+
+    Sem isso o app ficava preso num loop sem saída: a linha em
+    `user_integrations` continuava lá com um token morto, `graph-status`
+    reportava `connected: true` só porque a linha existia, a UI escondia o botão
+    "Conectar" e todo sync repetia a mesma mensagem de erro para sempre. Zerando
+    os tokens e registrando o motivo em `metadata_json`, a UI volta a oferecer a
+    reconexão — e sabe se ela precisa ser com consentimento forçado."""
+    try:
+        c = conn.cursor()
+        c.execute(
+            '''UPDATE user_integrations
+                  SET access_token = '', refresh_token = '', expires_at = NULL,
+                      metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND provider = ?''',
+            (
+                json.dumps({
+                    'invalid': True,
+                    'reason': str(reason)[:500],
+                    'needs_consent': bool(needs_consent),
+                    'invalidated_at': _to_iso(_now_utc()),
+                }, ensure_ascii=False),
+                int(user_id),
+                PROVIDER,
+            ),
+        )
+        conn.commit()
+        logger.warning(
+            f'[OutlookGraph] Grant invalidado (user_id={user_id}, '
+            f'needs_consent={bool(needs_consent)}): {reason}'
+        )
+    except Exception as e:
+        logger.error(f'[OutlookGraph] Não foi possível invalidar o grant: {e}')
+
+
+def get_integration_state(conn, user_id: int):
+    """Estado da integração para a UI, sem tocar a rede.
+
+    `connected` só é True quando existe de fato um token utilizável — não basta
+    a linha existir no banco."""
+    row = _load_integration(conn, user_id)
+    if not row:
+        return {'connected': False, 'needs_reauth': False, 'needs_consent': False, 'reason': ''}
+    try:
+        meta = json.loads(row['metadata_json'] or '{}')
+    except Exception:
+        meta = {}
+    has_token = bool(_token_decrypt(row['access_token'] or '') or _token_decrypt(row['refresh_token'] or ''))
+    if meta.get('invalid') or not has_token:
+        return {
+            'connected': False,
+            'needs_reauth': True,
+            'needs_consent': bool(meta.get('needs_consent')),
+            'reason': meta.get('reason') or 'A autorização da conta Microsoft não é mais válida. Reconecte a conta.',
+            'expires_at': row['expires_at'],
+        }
+    return {
+        'connected': True,
+        'needs_reauth': False,
+        'needs_consent': False,
+        'reason': '',
+        'expires_at': row['expires_at'],
+    }
+
+
 def _refresh_tokens(conn, user_id: int, refresh_token: str, settings=None):
     cfg = _oauth_config(settings)
     body = {
@@ -501,7 +658,15 @@ def _refresh_tokens(conn, user_id: int, refresh_token: str, settings=None):
         'refresh_token': refresh_token,
         'scope': cfg['scope'],
     }
-    payload = _http_form_post(cfg['token_url'], body)
+    try:
+        payload = _http_form_post(cfg['token_url'], body)
+    except OutlookReauthRequiredError as e:
+        # O refresh token guardado não vale mais. Descarta agora, senão todo
+        # sync seguinte repete o mesmo erro sem nunca oferecer a reconexão.
+        _invalidate_integration(
+            conn, user_id, str(e), needs_consent=isinstance(e, OutlookConsentRequiredError)
+        )
+        raise
     if not payload.get('access_token'):
         raise OutlookOAuthError('Falha ao renovar token OAuth: access_token ausente.')
     _upsert_tokens(conn, user_id, payload)
@@ -521,7 +686,15 @@ def get_valid_access_token(conn, user_id: int, settings=None):
         return access_token
 
     if not refresh_token:
-        raise OutlookOAuthError('Token expirado e refresh_token indisponível. Refaça a conexão OAuth.')
+        # Pode ser um grant já invalidado por uma tentativa anterior — nesse caso
+        # devolve o motivo original em vez de uma mensagem genérica.
+        state = get_integration_state(conn, user_id)
+        if state.get('needs_consent'):
+            raise OutlookConsentRequiredError(state['reason'])
+        raise OutlookReauthRequiredError(
+            state.get('reason')
+            or 'Token expirado e refresh_token indisponível. Refaça a conexão OAuth.'
+        )
 
     payload = _refresh_tokens(conn, user_id, refresh_token, settings=settings)
     return payload.get('access_token')

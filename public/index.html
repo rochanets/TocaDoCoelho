@@ -1034,8 +1034,23 @@
                     <h4 style="margin-bottom:8px; color:#1e40af; font-size:14px;"><i class="fas fa-cloud"></i> Microsoft 365 — Sincronização direta (sem plugin)</h4>
                     <div id="graphStatusArea">
                         <p style="color:#4b5563; font-size:13px; margin-bottom:10px;">Conecte sua conta Microsoft 365 para sincronizar emails diretamente — sem instalar nada no Outlook.</p>
+                        <div id="graphReauthNotice" style="display:none; background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; border-radius:8px; padding:10px; font-size:12px; margin-bottom:10px;"></div>
                         <button class="btn btn-auto-mapping btn-small" onclick="connectMicrosoft365()">
                             <span class="ai-star-icon">✦</span> Conectar Microsoft 365
+                        </button>
+                        <!-- Reconexão com prompt=consent. Fica escondido no caminho normal
+                             (forçar consentimento ignora o consentimento de administrador do
+                             tenant e cai em "Aprovação necessária"); só aparece quando o Azure
+                             de fato acusa consentimento faltando. -->
+                        <button class="btn btn-secondary btn-small" id="graphConsentBtn" style="display:none;" onclick="connectMicrosoft365(true)">
+                            <i class="fas fa-user-shield"></i> Conectar pedindo consentimento
+                        </button>
+                        <!-- Saída para o tenant que trava em "Precisa de aprovação de
+                             administrador": abre (ou copia, para mandar ao admin) o link
+                             do consentimento de administrador do Azure, que libera o
+                             tenant inteiro de uma vez. -->
+                        <button class="btn btn-secondary btn-small" id="graphAdminConsentBtn" style="display:none;" onclick="openGraphAdminConsent()">
+                            <i class="fas fa-key"></i> Aprovação do administrador
                         </button>
                     </div>
                     <div id="graphConnectedArea" style="display:none;">
