@@ -440,6 +440,28 @@ if not APP_PY.exists():
     fatal_error_dialog(f"app.py não encontrado em:\n{APP_PY}\n\nVerifique se o build foi feito com --add-data \"app.py;.\"")
     sys.exit(1)
 
+# A checagem de "servidor pronto" abaixo só faz GET em http://localhost:{porta}/ —
+# ela não distingue QUEM respondeu. Se outra instância do Toca já estiver aberta
+# (o exe da bandeja, tipicamente), o servidor novo morre com "porta em uso", mas a
+# instância antiga responde ao GET e o launcher declara "Servidor pronto!", abrindo
+# o navegador no app VELHO. Quem estava testando uma versão nova rodava a antiga
+# sem perceber. Melhor falhar alto e cedo, com instrução clara.
+def _port_in_use(port):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        return s.connect_ex(('localhost', port)) == 0
+
+if _port_in_use(get_server_port()):
+    _porta_msg = (
+        f"A porta {get_server_port()} já está em uso — provavelmente outro Toca do Coelho "
+        "está aberto (procure o ícone do coelho na bandeja do sistema e use Sair). "
+        "Feche-o e inicie novamente."
+    )
+    print(f"[ERRO] {_porta_msg}")
+    fatal_error_dialog(_porta_msg)
+    sys.exit(1)
+
 # Iniciar WAHA-lite (gateway do WhatsApp Update via Node.js, sem Docker)
 print("[INFO] Verificando WAHA-lite (WhatsApp Update)...")
 _start_waha_lite()
