@@ -163,3 +163,116 @@ def test_whatsapp_scope_matches_active_contacts_with_phone(client):
         'active_without_phone': 1,
         'archived_with_phone': 1,
     }
+
+
+def test_tentar_novamente_reinicia_sessao_mesmo_com_erro_fixado(client, db_path, monkeypatch):
+    """Regressão do impasse que matou a sincronia em produção (05/08).
+
+    Quando o sidecar esgota as 3 reciclagens ele fixa a mensagem de erro no
+    /api/sessions. A condição antiga (`start and not waha_err`) fazia essa
+    mensagem impedir o próprio /start que a limparia — o botão "Tentar
+    novamente" virava no-op e só reiniciar o app resolvia, mesmo depois de a
+    causa (Chrome órfão) já ter desaparecido.
+    """
+    import app as toca
+
+    erro_fixado = ('Não foi possível conectar após 3 tentativas (browser já estava '
+                   'rodando (lock órfão)). Abra o WhatsApp no celular...')
+    chamadas = []
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {'name': 'default', 'status': 'STOPPED', 'error': erro_fixado}
+
+    monkeypatch.setattr(toca.requests, 'get', lambda *a, **k: _Resp())
+    monkeypatch.setattr(toca.requests, 'post',
+                        lambda url, **k: chamadas.append(url) or _Resp())
+
+    resp = client.get('/api/whatsapp/qr?start=1')
+
+    assert resp.status_code == 200
+    assert resp.get_json()['state'] == 'starting'
+    assert any('/start' in url for url in chamadas), \
+        'o /start do sidecar precisa ser chamado mesmo com erro fixado'
+
+
+def test_status_nao_reinicia_sozinho(client, db_path, monkeypatch):
+    """Consulta passiva não pode disparar restart — senão o polling vira um laço."""
+    import app as toca
+
+    chamadas = []
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {'name': 'default', 'status': 'STOPPED', 'error': 'falhou'}
+
+    monkeypatch.setattr(toca.requests, 'get', lambda *a, **k: _Resp())
+    monkeypatch.setattr(toca.requests, 'post',
+                        lambda url, **k: chamadas.append(url) or _Resp())
+
+    client.get('/api/whatsapp/qr')  # sem start=1
+
+    assert not chamadas, 'sem start=1 a rota deve apenas observar'
+
+
+def test_export_de_logs_inclui_o_waha_lite(client, db_path, tmp_path, monkeypatch):
+    """O log do WAHA-lite precisa vir no export de depuração.
+
+    Em três chamados seguidos a causa da falha de WhatsApp (lock órfão do Chrome,
+    migração LID, sessão parada) só existia no waha-lite.log, que ficava de fora —
+    o app.log responde 200 e esconde o motivo no corpo JSON. Cada diagnóstico
+    exigiu acesso à máquina do usuário.
+    """
+    import app as toca
+
+    waha_log = tmp_path / 'waha-lite.log'
+    waha_log.write_text(
+        '[2026-08-05T17:29:04Z] [WARN] Chrome travado da sessao anterior\n'
+        '[2026-08-05T17:29:17Z] [ERROR] Nao foi possivel conectar apos 3 tentativas\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(toca, '_waha_log_file_path', lambda: waha_log)
+
+    payload = client.get('/api/config/logs?limit=200').get_json()
+
+    assert payload['waha_available'] is True
+    assert any('lock' in l.lower() or 'travado' in l.lower() for l in payload['waha_lines'])
+    assert any('3 tentativas' in l for l in payload['waha_lines'])
+
+
+def test_export_de_logs_redige_telefone_e_chave(client, db_path, tmp_path, monkeypatch):
+    """O export é enviado por e-mail/chat — não pode vazar contato nem API key."""
+    import app as toca
+
+    waha_log = tmp_path / 'waha-lite.log'
+    waha_log.write_text(
+        '[INFO] Buscando chat 5511987654321@c.us do cliente\n'
+        '[INFO] headers x-api-key: minha-chave-secreta-123\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(toca, '_waha_log_file_path', lambda: waha_log)
+
+    linhas = '\n'.join(client.get('/api/config/logs').get_json()['waha_lines'])
+
+    assert '5511987654321' not in linhas
+    assert 'minha-chave-secreta-123' not in linhas
+    assert '<contato>' in linhas and '<redigido>' in linhas
+
+
+def test_export_sem_waha_log_nao_quebra(client, db_path, tmp_path, monkeypatch):
+    """Máquina que nunca subiu o WAHA-lite continua conseguindo exportar."""
+    import app as toca
+
+    monkeypatch.setattr(toca, '_waha_log_file_path', lambda: tmp_path / 'nao-existe.log')
+
+    payload = client.get('/api/config/logs').get_json()
+
+    assert payload['waha_available'] is False
+    assert payload['waha_lines'] == []
+    assert 'lines' in payload  # o log do servidor continua vindo

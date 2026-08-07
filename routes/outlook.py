@@ -156,10 +156,16 @@ def sync_outlook_stream_graph():
 def outlook_oauth_start():
     try:
         user_id = max(1, int(request.args.get('user_id', 1)))
+        # Opt-in: força a tela de consentimento. Só use quando o consentimento
+        # realmente estiver faltando (AADSTS65001) — por padrão o fluxo aproveita
+        # o consentimento já concedido pelo administrador do tenant.
+        force_consent = (request.args.get('force_consent') or '').strip().lower() in {'1', 'true', 'yes'}
         settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
         conn = get_db()
         try:
-            auth_url = outlook_graph_build_authorize_url(conn=conn, user_id=user_id, settings=settings)
+            auth_url = outlook_graph_build_authorize_url(
+                conn=conn, user_id=user_id, settings=settings, force_consent=force_consent
+            )
         finally:
             conn.close()
         return jsonify({'auth_url': auth_url, 'provider': 'outlook_graph', 'user_id': user_id})

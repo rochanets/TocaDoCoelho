@@ -41,6 +41,44 @@ def test_send_quota_e_limite(client, sample_client_id, db_path, monkeypatch):
     assert 'Limite diário' in resp.get_json()['error']
 
 
+def test_send_quota_conta_o_dia_local_e_nao_o_dia_utc(client, sample_client_id, db_path):
+    """A cota diária vira à meia-noite do usuário, não à meia-noite UTC.
+
+    `whatsapp_sends.sent_at` usa o DEFAULT CURRENT_TIMESTAMP do SQLite, que grava
+    em UTC. Comparar `date(sent_at)` com `date('now','localtime')` fazia os envios
+    das 21h à meia-noite (UTC-3) contarem como "amanhã": o contador zerava e o
+    limite diário deixava de ser aplicado justamente no fim do expediente.
+
+    O teste grava carimbos ancorados nas bordas do dia *local* (convertidos para
+    UTC com o modificador 'utc', como o SQLite faria ao inserir), então ele exercita
+    o mesmo caminho a qualquer hora do dia e em qualquer fuso.
+    """
+    import app as toca
+
+    def registra(expr_local):
+        conn = toca.get_db()
+        conn.execute(
+            "INSERT INTO whatsapp_sends (client_id, phone, message, status, sent_at) "
+            f"VALUES (?, '+5511999999999', 'oi', 'sent', datetime({expr_local}, 'utc'))",
+            (sample_client_id,))
+        conn.commit()
+        conn.close()
+
+    def used():
+        return client.get('/api/whatsapp/send-quota').get_json()['used_today']
+
+    # Início e fim do dia local: em fusos negativos o fim do dia já é "amanhã" em
+    # UTC; em fusos positivos o início do dia ainda é "ontem" em UTC.
+    registra("date('now','localtime') || ' 00:30:00'")
+    registra("date('now','localtime') || ' 23:30:00'")
+    assert used() == 2
+
+    # Dias local vizinhos continuam de fora.
+    registra("date('now','localtime','-1 day') || ' 23:30:00'")
+    registra("date('now','localtime','+1 day') || ' 00:30:00'")
+    assert used() == 2
+
+
 def test_waha_lite_implementa_endpoint_de_envio():
     """Contrato entre o backend Flask e o mini-servidor distribuído no app."""
     source = (Path(__file__).parents[1] / 'waha-lite' / 'waha-lite.js').read_text(encoding='utf-8')

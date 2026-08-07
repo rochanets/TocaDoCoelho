@@ -222,7 +222,15 @@ def whatsapp_qr():
             return jsonify({'ok': True, 'connected': False, 'state': 'starting',
                             'error': 'WhatsApp conectando (abrindo o Chrome e restaurando a sessão)... aguarde.'})
         # STOPPED / FAILED
-        if start and not waha_err:
+        # O `start` só chega aqui por ação explícita do usuário ("Tentar novamente"),
+        # então tentamos mesmo havendo erro registrado. Antes a condição exigia
+        # `not waha_err` e criava um impasse: depois que o sidecar esgotava as 3
+        # reciclagens ele fixava a mensagem de erro, e essa mensagem passava a
+        # impedir justamente a rechamada que a limparia — a sessão ficava morta até
+        # reiniciar o app, mesmo já tendo sumido a causa (o Chrome órfão). O /start
+        # do sidecar é idempotente: só age se estiver sem cliente ou STOPPED, e
+        # zera o contador de reciclagens junto com o initError.
+        if start:
             requests.post(f'{api_url}/api/sessions/{session}/start', headers=headers, timeout=15)
             return jsonify({'ok': True, 'connected': False, 'state': 'starting',
                             'error': 'Iniciando a sessão do WhatsApp... aguarde.'})
@@ -616,7 +624,12 @@ def _waha_daily_quota(c):
         limit = int(_resolve_setting('waha_daily_send_limit', 'WAHA_DAILY_SEND_LIMIT') or 45)
     except Exception:
         limit = 45
-    c.execute("SELECT COUNT(*) FROM whatsapp_sends WHERE status = 'sent' AND date(sent_at) = date('now', 'localtime')")
+    # sent_at vem do DEFAULT CURRENT_TIMESTAMP do SQLite, que grava em UTC; a cota
+    # é diária no fuso do usuário. Sem o 'localtime' nos dois lados, tudo o que é
+    # enviado entre 21h e a meia-noite (UTC-3) cai no "dia seguinte" em UTC e some
+    # da contagem — zerando o contador e liberando o limite justamente à noite.
+    c.execute("SELECT COUNT(*) FROM whatsapp_sends "
+              "WHERE status = 'sent' AND date(sent_at, 'localtime') = date('now', 'localtime')")
     used = c.fetchone()[0]
     return limit, used
 

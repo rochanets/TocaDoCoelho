@@ -514,7 +514,7 @@
             }
             else if (tabName === 'clientes') loadClients();
             else if (tabName === 'atividades') { loadActivities(); }
-            else if (tabName === 'autotoca') { loadAutoToca(); loadReports(); _addinStartPolling(); _initOutlookAddinManifestUrl(); }
+            else if (tabName === 'autotoca') { loadAutoToca(); loadReports(); _addinStartPolling(); }
             else if (tabName === 'agenda') loadAgenda();
             else if (tabName === 'kanban') loadKanban();
             else if (tabName === 'gestao-conta') switchGestaoContaSubmodule(requestedGestaoContaSubTab || _gestaoContaCurrentSubTab || 'accounts');
@@ -598,7 +598,6 @@
             const data = await res.json();
             if (!data.auth_url) {
                 await uiConfirm(data.error || 'Configure Tenant ID e Client ID antes de conectar.', 'Configuração ausente');
-                showGraphConfigForm();
                 return;
             }
             window.open(data.auth_url, '_blank', 'width=520,height=640,noopener');
@@ -778,9 +777,17 @@
                     return `[${e.ts}] [CLIENT] [${e.tag}] ${e.message}${payload}`;
                 });
 
+                // Falha de WhatsApp quase nunca aparece no app.log — as rotas
+                // respondem 200 e escondem o motivo no corpo. A causa costuma estar
+                // só no log do WAHA-lite, por isso ele vem junto no export.
+                const wahaLines = Array.isArray(data.waha_lines) ? data.waha_lines : [];
+
                 const combined = [
                     '===== SERVIDOR (últimas ' + serverLines.length + ' linhas) =====',
                     ...serverLines,
+                    '',
+                    '===== WHATSAPP / WAHA-lite (últimas ' + wahaLines.length + ' linhas) =====',
+                    ...(wahaLines.length ? wahaLines : ['(sem log do WAHA-lite — o serviço pode nunca ter sido iniciado nesta máquina)']),
                     '',
                     '===== CLIENTE (buffer local — ' + clientBuffer.length + ' entradas) =====',
                     ...clientBuffer
@@ -790,7 +797,7 @@
 
                 if (meta) {
                     const sizeKb = data.size ? (data.size / 1024).toFixed(1) : '0.0';
-                    meta.textContent = `Servidor: ${data.total_lines || 0} linhas (${sizeKb} KB) • Cliente: ${clientBuffer.length} entradas`;
+                    meta.textContent = `Servidor: ${data.total_lines || 0} linhas (${sizeKb} KB) • WhatsApp: ${wahaLines.length} linhas • Cliente: ${clientBuffer.length} entradas`;
                 }
             } catch (e) {
                 viewer.textContent = 'Erro ao carregar logs: ' + (e.message || e);
@@ -1573,7 +1580,8 @@
             'autoTocaBtn_whatsapp-update',
             'autoTocaBtn_sync-outlook',
             'autoTocaBtn_reembolsos',
-            'autoTocaBtn_iata'
+            'autoTocaBtn_iata',
+            'autoTocaBtn_relatorio-semanal'
         ];
 
         function resetAutoTocaModuleButtons() {
@@ -1601,14 +1609,16 @@
                 'mala-direta': 'autoTocaMalaDireta',
                 'sync-outlook': 'autoTocaSyncOutlook',
                 'reembolsos': 'autoTocaReembolsos',
-                'iata': 'autoTocaIAta'
+                'iata': 'autoTocaIAta',
+                'relatorio-semanal': 'autoTocaRelatorioSemanal'
             };
             const buttons = {
                 'chamado-juridico': 'autoTocaBtn_chamado-juridico',
                 'mala-direta': 'autoTocaBtn_mala-direta',
                 'sync-outlook': 'autoTocaBtn_sync-outlook',
                 'reembolsos': 'autoTocaBtn_reembolsos',
-                'iata': 'autoTocaBtn_iata'
+                'iata': 'autoTocaBtn_iata',
+                'relatorio-semanal': 'autoTocaBtn_relatorio-semanal'
             };
             const targetId = panels[key];
             if (!targetId) return;
@@ -1641,6 +1651,7 @@
                 setActiveAutoTocaModuleButton(buttons[key]);
                 if (key === 'reembolsos') { loadReembContas(); loadReembOrigemHistorico(); }
                 if (key === 'iata' && typeof loadIAta === 'function') { loadIAta(); }
+                if (key === 'relatorio-semanal') initRelatorioSemanalPanel();
             }
         }
 
@@ -1659,7 +1670,8 @@
             if (!target) return;
             // Fecha também os painéis de automação do AutoToca
             const chamadoWasVisible = document.getElementById('autoTocaChamadoJuridico')?.style.display === 'block';
-            ['autoTocaChamadoJuridico', 'autoTocaMalaDireta', 'autoTocaSyncOutlook'].forEach(id => {
+            ['autoTocaChamadoJuridico', 'autoTocaMalaDireta', 'autoTocaSyncOutlook',
+             'autoTocaReembolsos', 'autoTocaRelatorioSemanal'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
             });
