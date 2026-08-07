@@ -279,6 +279,52 @@ def _iata_previous_managers(previous_record_id):
     return (anterior.get('managers') or []), None
 
 
+def _iata_extrair_parte(task_id, texto, rotulo, permitir_retry=True):
+    """Extrai a hierarquia de UM pedaço de transcrição (uma chamada de LLM).
+
+    Devolve o dict `{'header':..., 'managers':...}` de `parse_hierarchy`, ou
+    `None` se a extração falhou. Cada falha é registrada com o mesmo
+    diagnóstico de sempre (tamanho da resposta, início e fim) — sem isso a
+    falha é impossível de investigar sem reproduzir às cegas.
+
+    Se a extração falhar e `permitir_retry` for True, tenta UMA VEZ dividir o
+    pedaço ao meio e extrair cada metade separadamente (sem retry recursivo
+    nas metades) — se a causa da falha foi truncamento da resposta da IA
+    (o caso investigado em produção), metade do texto costuma caber na
+    resposta. As metades que derem certo são mescladas; se as duas falharem,
+    o pedaço inteiro é tratado como perdido.
+    """
+    raw = _llm_prompt(iata_lib.build_extraction_prompt(texto), log_tag='iAta/Extração')
+    parsed = iata_lib.parse_hierarchy(raw) if raw else None
+    if parsed:
+        return parsed
+
+    if raw:
+        texto_resp = str(raw)
+        logger.warning(
+            f'[iAta][Task:{task_id}] Parte {rotulo} da transcrição não pôde ser '
+            f'convertida em ata ({len(texto_resp)} chars). '
+            f'Início: {texto_resp[:600]!r} | Fim: {texto_resp[-200:]!r}')
+    else:
+        logger.warning(f'[iAta][Task:{task_id}] Parte {rotulo}: nenhum provedor de IA respondeu.')
+
+    if not permitir_retry or len(texto) < 400:
+        return None
+
+    logger.warning(f'[iAta][Task:{task_id}] Retentando parte {rotulo} dividida ao meio.')
+    metade = len(texto) // 2
+    corte = texto.rfind('\n', 0, metade)
+    if corte <= 0:
+        corte = metade
+    primeira, segunda = texto[:corte], texto[corte:]
+    p1 = _iata_extrair_parte(task_id, primeira, f'{rotulo}a', permitir_retry=False) if primeira.strip() else None
+    p2 = _iata_extrair_parte(task_id, segunda, f'{rotulo}b', permitir_retry=False) if segunda.strip() else None
+    subpartes = [p for p in (p1, p2) if p]
+    if not subpartes:
+        return None
+    return iata_lib.merge_hierarchies(subpartes)
+
+
 def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
                         previous_record_id=None, with_insights=True,
                         prev_bytes=None, prev_name=None):
@@ -293,38 +339,50 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
                                      'error': 'Não foi possível extrair texto da reunião.'})
             return
 
-        # build_extraction_prompt() só embute os primeiros MAX_TRANSCRICAO_CHARS
-        # caracteres no prompt enviado à IA — raw_text (persistido abaixo em
-        # _iata_save_record) continua sendo o texto INTEIRO. Truncar o que vai
-        # para o banco seria perda de dado real, não só uma limitação de prompt.
-        if len(raw_text) > iata_lib.MAX_TRANSCRICAO_CHARS:
-            logger.warning(
-                f'[iAta][Task:{task_id}] Transcrição com {len(raw_text)} caracteres; '
-                f'o prompt de extração usa só os primeiros {iata_lib.MAX_TRANSCRICAO_CHARS} '
-                '(o texto completo continua sendo salvo em raw_text).')
-
-        _iata_task_set(task_id, {'step': 'Extraindo contas e oportunidades...', 'progress': 35})
-        raw = _llm_prompt(iata_lib.build_extraction_prompt(raw_text), log_tag='iAta/Extração')
-        parsed = iata_lib.parse_hierarchy(raw) if raw else None
-        if not parsed:
-            # Sem registrar o que veio, esta falha é impossível de diagnosticar
-            # sem reproduzir às cegas — foi o que aconteceu quando o envelope
-            # do SAI derrubou a extração em produção e o log só dizia
-            # "resposta gerada com sucesso".
-            if raw:
-                texto = str(raw)
-                logger.warning(
-                    f'[iAta][Task:{task_id}] Resposta da IA não pôde ser convertida em ata '
-                    f'({len(texto)} chars). Início: {texto[:600]!r} | Fim: {texto[-200:]!r}')
+        # Reuniões longas eram truncadas em MAX_TRANSCRICAO_CHARS no prompt de
+        # extração (até 65% de uma transcrição de 87 mil caracteres nunca
+        # chegava à IA) e mesmo dentro desse limite a resposta do provedor
+        # podia vir truncada — JSON cortado no meio de uma string, que
+        # `_loads_tolerante` corretamente recusa (não inventa dado) e derrubava
+        # a extração inteira. A correção é fatiar a transcrição INTEIRA em
+        # pedaços pequenos o bastante para a resposta não truncar, extrair
+        # cada um separadamente e mesclar — cobrindo a reunião inteira, não só
+        # os primeiros 30 mil caracteres. raw_text (persistido abaixo em
+        # _iata_save_record) sempre foi e continua sendo o texto INTEIRO.
+        partes_texto = iata_lib.split_transcricao(raw_text)
+        total_partes = len(partes_texto)
+        _faixa_ini, _faixa_fim = 25, 65
+        parciais = []
+        partes_com_falha = 0
+        for i, trecho in enumerate(partes_texto, start=1):
+            progresso = _faixa_ini + int((i - 1) / total_partes * (_faixa_fim - _faixa_ini))
+            _iata_task_set(task_id, {
+                'step': f'Analisando parte {i} de {total_partes}...', 'progress': progresso})
+            parcial = _iata_extrair_parte(task_id, trecho, str(i))
+            if parcial:
+                parciais.append(parcial)
             else:
-                logger.warning(f'[iAta][Task:{task_id}] Nenhum provedor de IA respondeu.')
+                partes_com_falha += 1
+
+        if not parciais:
+            logger.warning(
+                f'[iAta][Task:{task_id}] Todas as {total_partes} parte(s) da transcrição '
+                'falharam na extração.')
             _iata_task_set(task_id, {
                 'status': 'error',
                 'error': 'A IA não retornou uma ata utilizável. Tente novamente — '
                          'o app.log registra o que ela devolveu.'})
             return
 
-        _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 55})
+        parsed = iata_lib.merge_hierarchies(parciais)
+        aviso_partes_perdidas = None
+        if partes_com_falha:
+            aviso_partes_perdidas = (
+                f'{partes_com_falha} de {total_partes} parte(s) da transcrição não puderam '
+                'ser lidas pela IA; esta ata pode estar incompleta.')
+            logger.warning(f'[iAta][Task:{task_id}] {aviso_partes_perdidas}')
+
+        _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 68})
         previous_managers, aviso_continuidade = _iata_previous_managers(previous_record_id)
         # Opção "enviar o arquivo da ata anterior": só entra em jogo quando não
         # há hierarquia anterior nenhuma vinda de previous_record_id (as duas
@@ -339,7 +397,7 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
         # e a ata segue sendo gerada sem continuidade (mesmo princípio de
         # `_iata_previous_managers` para um id que sumiu).
         if not previous_managers and prev_bytes:
-            _iata_task_set(task_id, {'step': 'Lendo a ata anterior enviada...', 'progress': 58})
+            _iata_task_set(task_id, {'step': 'Lendo a ata anterior enviada...', 'progress': 70})
             texto_anterior = ''
             try:
                 texto_anterior = _iata_extract_bytes(prev_bytes, prev_name)
@@ -369,7 +427,7 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
         # carrega match_confirmed=True herdado da ata anterior, e é esse
         # campo que o guard de _iata_sugerir_contas usa para não sobrescrever
         # um vínculo que o usuário já confirmou.
-        _iata_task_set(task_id, {'step': 'Cruzando contas com o CRM...', 'progress': 70})
+        _iata_task_set(task_id, {'step': 'Cruzando contas com o CRM...', 'progress': 75})
         _iata_sugerir_contas(managers)
 
         extras = {}
@@ -382,8 +440,12 @@ def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
                                       effective_previous_id)
         registro = _iata_load_record(record_id)
         updates = {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': registro}
-        if aviso_continuidade:
-            updates['warning'] = aviso_continuidade
+        # Duas fontes de aviso independentes (parte(s) da transcrição perdida(s)
+        # + continuidade com a ata anterior que não aconteceu) podem ocorrer
+        # juntas — combina as duas em vez de a segunda apagar a primeira.
+        avisos_finais = [a for a in (aviso_partes_perdidas, aviso_continuidade) if a]
+        if avisos_finais:
+            updates['warning'] = ' '.join(avisos_finais)
         _iata_task_set(task_id, updates)
     except Exception as e:
         logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')

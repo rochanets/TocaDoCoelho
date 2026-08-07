@@ -32,7 +32,9 @@ from .llm import (
     MAX_TRANSCRICAO_CHARS,
     build_extraction_prompt,
     build_reparse_prompt,
+    merge_hierarchies,
     parse_hierarchy,
+    split_transcricao,
     _loads_tolerante,
 )
 from .render import (
@@ -56,7 +58,9 @@ __all__ = [
     'MAX_TRANSCRICAO_CHARS',
     'build_extraction_prompt',
     'build_reparse_prompt',
+    'merge_hierarchies',
     'parse_hierarchy',
+    'split_transcricao',
     '_loads_tolerante',
     'match_account_name',
     'render_markdown',

@@ -566,9 +566,172 @@ def test_build_extraction_prompt_inclui_texto_e_pede_json():
     assert 'managers' in prompt
 
 
-def test_build_extraction_prompt_trunca_texto_gigante():
+def test_build_extraction_prompt_nao_trunca_texto_gigante():
+    """Correção do truncamento (produção: transcrição de 87 mil caracteres
+    era cortada em MAX_TRANSCRICAO_CHARS antes de chegar à IA, perdendo 65%
+    da reunião). Quem agora garante um prompt de tamanho razoável é
+    split_transcricao() — build_extraction_prompt() embute o texto inteiro
+    que recebeu, sem cortar."""
     prompt = iata_lib.build_extraction_prompt('x' * 60000)
-    assert len(prompt) < 45000
+    assert 'x' * 60000 in prompt
+
+
+# ---------------------------------------------------------------------------
+# split_transcricao — correção do truncamento: fatia transcrições longas em
+# pedaços pequenos o bastante para a resposta da IA não truncar.
+# ---------------------------------------------------------------------------
+
+def test_split_transcricao_texto_curto_devolve_um_pedaco_so():
+    texto = 'Reunião curta, sem necessidade de fatiar.'
+    assert iata_lib.split_transcricao(texto, tamanho=1000) == [texto]
+
+
+def test_split_transcricao_corta_em_quebra_de_linha():
+    linha = 'Ana falou sobre a conta Ambev e a proposta enviada. ' * 10 + '\n'
+    texto = linha * 20  # bem maior que o tamanho do pedaço
+    partes = iata_lib.split_transcricao(texto, tamanho=2000, sobreposicao=100)
+    assert len(partes) > 1
+    for parte in partes[:-1]:
+        # cada pedaço (exceto o último) termina exatamente numa quebra de
+        # linha — nunca no meio de uma frase.
+        assert parte.endswith('\n')
+
+
+def test_split_transcricao_respeita_sobreposicao():
+    texto = 'x' * 30000  # sem nenhuma quebra de linha: corte sempre "duro"
+    partes = iata_lib.split_transcricao(texto, tamanho=10000, sobreposicao=500)
+    assert len(partes) >= 3
+    # o fim do primeiro pedaço e o início do segundo compartilham o trecho
+    # de sobreposição.
+    assert partes[0][-500:] == partes[1][:500]
+
+
+def test_split_transcricao_sem_quebras_de_linha_nao_trava_em_loop_infinito():
+    # Texto grande, sem NENHUMA quebra de linha: sem o corte "duro" de
+    # segurança, um corte que só aceita quebra de linha ficaria preso
+    # tentando cortar em algo que não existe.
+    texto = 'y' * 50000
+    partes = iata_lib.split_transcricao(texto, tamanho=5000, sobreposicao=200)
+    assert len(partes) > 1
+    # a concatenação (desconsiderando a sobreposição) reconstrói o texto original
+    reconstruido = partes[0]
+    for p in partes[1:]:
+        reconstruido += p[200:]
+    assert reconstruido == texto
+
+
+def test_split_transcricao_texto_vazio_devolve_lista_com_string_vazia():
+    assert iata_lib.split_transcricao('', tamanho=1000) == ['']
+
+
+# ---------------------------------------------------------------------------
+# merge_hierarchies — mescla as hierarquias parciais extraídas de cada pedaço
+# de transcrição de volta num único dict.
+# ---------------------------------------------------------------------------
+
+def _parcial(title='Ata', managers=None, participants=None):
+    return {
+        'header': {'title': title, 'meeting_date': None, 'meeting_time': None,
+                   'topic': '', 'participants': participants or []},
+        'managers': managers or [],
+    }
+
+
+def test_merge_hierarchies_conta_repetida_em_dois_pedacos_nao_duplica():
+    p1 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'update_text': 'Proposta enviada', 'responsible': 'Ana'}]}]}])
+    p2 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Observabilidade', 'update_text': 'Novo pedido', 'responsible': 'Ana'}]}]}])
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    assert len(mesclado['managers']) == 1
+    contas = mesclado['managers'][0]['accounts']
+    assert len(contas) == 1
+    nomes_opp = {o['name'] for o in contas[0]['opportunities']}
+    assert nomes_opp == {'Migração SAP', 'Observabilidade'}
+
+
+def test_merge_hierarchies_oportunidade_repetida_concatena_updates():
+    p1 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'update_text': 'Proposta enviada', 'responsible': ''}]}]}])
+    p2 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'update_text': 'Cliente aceitou', 'responsible': 'Bruno'}]}]}])
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    opp = mesclado['managers'][0]['accounts'][0]['opportunities'][0]
+    assert opp['update_text'] == 'Proposta enviada Cliente aceitou'
+    # primeiro responsible NÃO vazio é mantido — o do segundo pedaço, já que
+    # o primeiro veio vazio.
+    assert opp['responsible'] == 'Bruno'
+
+
+def test_merge_hierarchies_oportunidade_repetida_nao_duplica_texto_identico():
+    p1 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'update_text': 'Proposta enviada', 'responsible': 'Ana'}]}]}])
+    p2 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Migração SAP', 'update_text': 'Proposta enviada', 'responsible': 'Ana'}]}]}])
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    opp = mesclado['managers'][0]['accounts'][0]['opportunities'][0]
+    assert opp['update_text'] == 'Proposta enviada'
+
+
+def test_merge_hierarchies_conta_com_sufixo_juridico_diferente_vira_uma_so():
+    p1 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Deal 1', 'update_text': 'Fase 1', 'responsible': 'Ana'}]}]}])
+    p2 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Ambev S.A.', 'account_id': None,
+        'match_confidence': None, 'opportunities': [
+            {'name': 'Deal 2', 'update_text': 'Fase 2', 'responsible': 'Ana'}]}]}])
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    contas = mesclado['managers'][0]['accounts']
+    assert len(contas) == 1
+    nomes_opp = {o['name'] for o in contas[0]['opportunities']}
+    assert nomes_opp == {'Deal 1', 'Deal 2'}
+
+
+def test_merge_hierarchies_contas_realmente_diferentes_continuam_separadas():
+    p1 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Vale', 'account_id': None,
+        'match_confidence': None, 'opportunities': []}]}])
+    p2 = _parcial(managers=[{'name': 'Ana', 'accounts': [{'name': 'Vale Verde', 'account_id': None,
+        'match_confidence': None, 'opportunities': []}]}])
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    nomes_conta = {c['name'] for c in mesclado['managers'][0]['accounts']}
+    assert nomes_conta == {'Vale', 'Vale Verde'}
+
+
+def test_merge_hierarchies_preserva_ordem_de_aparicao():
+    p1 = _parcial(managers=[{'name': 'Bruno', 'accounts': []}])
+    p2 = _parcial(managers=[{'name': 'Ana', 'accounts': []},
+                             {'name': 'Bruno', 'accounts': []}])
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    assert [m['name'] for m in mesclado['managers']] == ['Bruno', 'Ana']
+
+
+def test_merge_hierarchies_header_usa_primeiro_valor_nao_vazio():
+    p1 = _parcial(title='Título Real')
+    p1['header']['meeting_date'] = None
+    p2 = _parcial(title='')
+    p2['header']['title'] = ''  # simula pedaço sem título capturado
+    p2['header']['meeting_date'] = '04/08/2026'
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    assert mesclado['header']['title'] == 'Título Real'
+    assert mesclado['header']['meeting_date'] == '04/08/2026'
+
+
+def test_merge_hierarchies_participantes_mesclados_por_nome_preserva_role_informativo():
+    p1 = _parcial(participants=[{'name': 'Ana', 'role': ''}])
+    p2 = _parcial(participants=[{'name': 'ana', 'role': 'Gerente Comercial'}])
+    mesclado = iata_lib.merge_hierarchies([p1, p2])
+    assert len(mesclado['header']['participants']) == 1
+    assert mesclado['header']['participants'][0]['role'] == 'Gerente Comercial'
+
+
+def test_merge_hierarchies_lista_vazia_devolve_none():
+    assert iata_lib.merge_hierarchies([]) is None
 
 
 # --- Defeitos e robustez adicionais investigados na Task 3 -----------------
@@ -1234,6 +1397,165 @@ def test_pipeline_falha_quando_llm_nao_responde(db_path, monkeypatch):
     toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
     toca._iata_process_async(task_id, None, None, 'texto', previous_record_id=None,
                              with_insights=False)
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'error'
+    assert 'IA' in (task.get('error') or '')
+
+
+# ---------------------------------------------------------------------------
+# Correção do truncamento (produção): transcrições longas são fatiadas em
+# pedaços e cada um é extraído separadamente. Testes abaixo cobrem o laço em
+# _iata_process_async — fatiamento real, cobertura da reunião inteira, pedaço
+# com lixo não derruba a ata, retry de pedaço truncado, e falha total.
+# ---------------------------------------------------------------------------
+
+def test_pipeline_transcricao_longa_gera_varias_chamadas_e_cobre_pedacos_finais(
+        db_path, monkeypatch):
+    """Antes da correção, build_extraction_prompt() cortava a transcrição em
+    MAX_TRANSCRICAO_CHARS (30000) — uma conta citada só depois disso nunca
+    chegava à IA. Com o fatiamento real (split_transcricao, sem mock), a
+    transcrição inteira precisa ser coberta: a conta do ÚLTIMO bloco, bem
+    além dos 30000 caracteres do limite antigo, precisa aparecer na ata."""
+    blocos = []
+    for i in range(1, 6):
+        marcador = f'CONTA_BLOCO_{i}'
+        blocos.append((f'{marcador} foi discutida nesta parte da reuniao.\n') * 400)
+    texto_longo = ''.join(blocos)
+    assert len(texto_longo) > iata_lib.MAX_TRANSCRICAO_CHARS * 2
+
+    chamadas = {'n': 0}
+
+    def _llm_fake(prompt, log_tag='llm', **kwargs):
+        if log_tag != 'iAta/Extração':
+            return None
+        chamadas['n'] += 1
+        for i in range(1, 6):
+            marcador = f'CONTA_BLOCO_{i}'
+            if marcador in prompt:
+                return json.dumps({
+                    'title': 'Pipeline Longo', 'meeting_date': None, 'meeting_time': None,
+                    'topic': '', 'participants': [],
+                    'managers': [{'name': 'Ana', 'accounts': [{'name': marcador, 'opportunities': [
+                        {'name': f'Oportunidade {marcador}', 'update': 'Discutido',
+                         'responsible': 'Ana'}]}]}]})
+        return None
+
+    monkeypatch.setattr(toca, '_llm_prompt', _llm_fake)
+
+    task_id = 'teste_longo'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, texto_longo,
+                             previous_record_id=None, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    assert chamadas['n'] > 1, 'uma transcrição grande precisa gerar mais de uma chamada de LLM'
+
+    registro = toca._iata_load_record(task['result']['id'])
+    contas = {c['name'] for c in registro['managers'][0]['accounts']}
+    assert 'CONTA_BLOCO_5' in contas, (
+        'a conta do último bloco, além dos 30000 caracteres do limite antigo, '
+        'precisa ter chegado até a IA')
+
+
+def test_pipeline_pedaco_com_lixo_nao_derruba_ata_e_gera_warning(db_path, monkeypatch):
+    """Um pedaço que devolve lixo (sem JSON utilizável) não pode derrubar a
+    ata inteira — a task termina 'done' com um warning explícito mencionando
+    a parte perdida, e o restante da ata (do pedaço que funcionou) é salvo."""
+    monkeypatch.setattr(iata_lib, 'split_transcricao',
+                        lambda texto, **k: ['parte valida', 'parte que vira lixo'])
+
+    resposta_valida = json.dumps({
+        'title': 'Ata Parcial', 'meeting_date': None, 'meeting_time': None,
+        'topic': '', 'participants': [],
+        'managers': [{'name': 'Ana', 'accounts': [{'name': 'Ambev', 'opportunities': [
+            {'name': 'Deal Bom', 'update': 'Fechado', 'responsible': 'Ana'}]}]}]})
+
+    def _llm_fake(prompt, log_tag='llm', **kwargs):
+        if log_tag != 'iAta/Extração':
+            return None
+        if 'parte que vira lixo' in prompt:
+            return 'isto não é um JSON válido de jeito nenhum'
+        return resposta_valida
+
+    monkeypatch.setattr(toca, '_llm_prompt', _llm_fake)
+
+    task_id = 'teste_parte_lixo'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'raw text base',
+                             previous_record_id=None, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    assert task.get('warning'), 'pedaço perdido precisa virar aviso explícito, não silêncio'
+    assert '1' in task['warning'] and '2' in task['warning']
+
+    registro = toca._iata_load_record(task['result']['id'])
+    contas = {c['name'] for c in registro['managers'][0]['accounts']}
+    assert 'Ambev' in contas
+
+
+def test_pipeline_pedaco_truncado_e_retentado_dividido_ao_meio(db_path, monkeypatch):
+    """Se um pedaço falha (ex.: resposta truncada da IA), _iata_process_async
+    tenta UMA VEZ dividi-lo ao meio e extrair cada metade separadamente — se
+    a causa foi truncamento, metade costuma caber na resposta. O retry
+    bem-sucedido precisa entrar na ata final."""
+    pedaco = 'A' * 1000
+    monkeypatch.setattr(iata_lib, 'split_transcricao', lambda texto, **k: [pedaco])
+
+    prefixo_vazio = iata_lib.build_extraction_prompt('')
+
+    def _resposta(nome_conta):
+        return json.dumps({
+            'title': 'Ata Retry', 'meeting_date': None, 'meeting_time': None,
+            'topic': '', 'participants': [],
+            'managers': [{'name': 'Ana', 'accounts': [{'name': nome_conta, 'opportunities': [
+                {'name': f'Deal {nome_conta}', 'update': 'Discutido', 'responsible': 'Ana'}]}]}]})
+
+    chamadas = {'n': 0}
+
+    def _llm_fake(prompt, log_tag='llm', **kwargs):
+        if log_tag != 'iAta/Extração':
+            return None
+        chamadas['n'] += 1
+        tamanho_pedaco = len(prompt) - len(prefixo_vazio)
+        if tamanho_pedaco >= 1000:
+            # simula uma resposta truncada da IA: JSON que nunca fecha.
+            return '{"title":"Ata Retry","managers":[{"name":"Ana","accounts":[{"name":"Incompleta'
+        # as duas metades do retry (~500 chars cada) respondem com sucesso.
+        return _resposta('MetadeRecuperada')
+
+    monkeypatch.setattr(toca, '_llm_prompt', _llm_fake)
+
+    task_id = 'teste_retry_metade'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'base',
+                             previous_record_id=None, with_insights=False)
+
+    task = toca._iata_task_get(task_id)
+    assert task['status'] == 'done', task.get('error')
+    # 1 tentativa cheia (falha) + 2 metades do retry = 3 chamadas.
+    assert chamadas['n'] == 3
+
+    registro = toca._iata_load_record(task['result']['id'])
+    contas = {c['name'] for c in registro['managers'][0]['accounts']}
+    assert 'MetadeRecuperada' in contas
+
+
+def test_pipeline_todos_os_pedacos_falham_retorna_erro(db_path, monkeypatch):
+    monkeypatch.setattr(iata_lib, 'split_transcricao',
+                        lambda texto, **k: ['parte1', 'parte2'])
+
+    def _llm_fake(prompt, log_tag='llm', **kwargs):
+        return 'lixo sem json nenhum' if log_tag == 'iAta/Extração' else None
+
+    monkeypatch.setattr(toca, '_llm_prompt', _llm_fake)
+
+    task_id = 'teste_tudo_falha'
+    toca._iata_task_set(task_id, {'status': 'processing', 'progress': 5})
+    toca._iata_process_async(task_id, None, None, 'base',
+                             previous_record_id=None, with_insights=False)
+
     task = toca._iata_task_get(task_id)
     assert task['status'] == 'error'
     assert 'IA' in (task.get('error') or '')

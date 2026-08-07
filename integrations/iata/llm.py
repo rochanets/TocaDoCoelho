@@ -7,16 +7,70 @@ import itertools
 import json
 import re
 
-from .reconcile import GERENTE_NAO_IDENTIFICADO
+from .reconcile import GERENTE_NAO_IDENTIFICADO, _strip_legal_suffix, normalize_name
 
-# Tamanho máximo da transcrição embutida no prompt de extração — protege
-# contra reuniões gigantes estourando o limite de contexto do template SAI.
+# Tamanho máximo da transcrição embutida no prompt de RE-PARSE (edição do
+# corpo já formatado da ata, `build_reparse_prompt`) — protege contra o
+# template SAI truncando a resposta. Não é mais usado para o prompt de
+# EXTRAÇÃO (`build_extraction_prompt`): uma transcrição de reunião pode ser
+# muito maior que isto, e é justamente aí que o truncamento fazia a extração
+# perder até 65% da reunião sem aviso nenhum além de um WARNING no log. A
+# correção real para transcrições grandes é fatiar (`split_transcricao`) e
+# mesclar (`merge_hierarchies`), não truncar — ver `_iata_process_async` em
+# routes/autotoca_iata.py.
 MAX_TRANSCRICAO_CHARS = 30000
+
+
+def split_transcricao(texto, tamanho=12000, sobreposicao=400):
+    """Divide `texto` em pedaços de até `tamanho` caracteres, cortando em
+    quebra de linha sempre que possível (nunca no meio de uma frase), com
+    `sobreposicao` caracteres compartilhados entre pedaços consecutivos para
+    não perder contexto na fronteira.
+
+    Texto com `len(texto) <= tamanho` devolve `[texto]` — um pedaço só.
+    Texto sem nenhuma quebra de linha usável ainda termina em tempo finito:
+    cai para um corte "duro" na posição `tamanho`, nunca fica parado no
+    mesmo lugar (cada iteração sempre avança pelo menos até `fim`).
+    """
+    texto = str(texto or '')
+    if len(texto) <= tamanho:
+        return [texto]
+
+    # Um corte por quebra de linha só é aceito se estiver depois da metade
+    # do pedaço — senão um texto com linhas curtas e frequentes geraria
+    # pedaços minúsculos, multiplicando as chamadas de LLM à toa.
+    corte_minimo = max(1, tamanho // 2)
+
+    partes = []
+    inicio = 0
+    n = len(texto)
+    while inicio < n:
+        fim = min(inicio + tamanho, n)
+        if fim < n:
+            corte = texto.rfind('\n', inicio + corte_minimo, fim)
+            if corte != -1:
+                fim = corte + 1  # inclui a quebra de linha no pedaço atual
+        partes.append(texto[inicio:fim])
+        if fim >= n:
+            break
+        proximo_inicio = fim - sobreposicao
+        if proximo_inicio <= inicio:
+            # Garante progresso mesmo se a sobreposição fosse maior que o
+            # avanço do corte (não deve acontecer com os padrões, mas evita
+            # laço infinito se alguém passar parâmetros exóticos).
+            proximo_inicio = fim
+        inicio = proximo_inicio
+    return partes
 
 
 def build_extraction_prompt(raw_text):
     """Monta o prompt enviado à IA para extrair a hierarquia Gerente → Conta
-    → Oportunidade da transcrição bruta da reunião."""
+    → Oportunidade da transcrição bruta da reunião.
+
+    Não trunca `raw_text`: quem chama esta função é responsável por já ter
+    passado um pedaço de tamanho razoável (ver `split_transcricao`) — antes,
+    truncar aqui em `MAX_TRANSCRICAO_CHARS` fazia até 65% de uma reunião
+    longa nunca chegar à IA."""
     return (
         "Você é um analista comercial. Leia a transcrição de uma reunião de pipeline "
         "e extraia a estrutura Gerente Comercial → Conta → Oportunidade.\n"
@@ -39,7 +93,7 @@ def build_extraction_prompt(raw_text):
         "- update: apenas o que foi dito NESTA reunião, sem repetir histórico;\n"
         "- Não invente contas, oportunidades ou nomes que não estejam no texto;\n"
         "- Preserve nomes próprios como aparecem no texto.\n\n"
-        f"TRANSCRIÇÃO DA REUNIÃO:\n{(raw_text or '')[:MAX_TRANSCRICAO_CHARS]}"
+        f"TRANSCRIÇÃO DA REUNIÃO:\n{raw_text or ''}"
     )
 
 
@@ -281,8 +335,14 @@ def _desembrulhar_envelope(parsed, profundidade=0):
 
     Sem isto, `json.loads` casa com o envelope, `title` não existe e a
     extração inteira é descartada como "a IA não retornou uma ata utilizável"
-    — com a resposta boa dentro do dicionário. Foi exatamente o que aconteceu
-    em produção com o template SAI, cuja resposta vem embrulhada.
+    — com a resposta boa dentro do dicionário. Mantida por ser defensiva e
+    barata (outros provedores realmente embrulham a resposta), mas a causa
+    real de uma falha de produção investigada depois NÃO foi envelope: foi
+    truncamento (a resposta do SAI vinha cortada no meio de uma string, sem
+    fechar o JSON, porque o prompt de extração embutia uma transcrição maior
+    do que o provedor conseguia responder sem truncar) — ver
+    `split_transcricao`/`merge_hierarchies` e `_iata_process_async` em
+    routes/autotoca_iata.py, que é a correção real para esse caso.
     """
     if not isinstance(parsed, dict) or profundidade > 3:
         return parsed
@@ -349,4 +409,160 @@ def parse_hierarchy(raw):
             'participants': _parse_participants(_field(parsed, 'participants', 'participantes')),
         },
         'managers': managers,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Mescla de hierarquias parciais — Task de correção do truncamento: uma
+# transcrição grande é fatiada por `split_transcricao`, cada pedaço é extraído
+# separadamente (uma chamada de LLM cada, resposta pequena o bastante para
+# não truncar), e os dicts `{'header':..., 'managers':...}` resultantes
+# (saída de `parse_hierarchy`, um por pedaço, na ordem dos pedaços) precisam
+# virar UM dict só no mesmo formato antes de seguir para `reconcile()`.
+# ---------------------------------------------------------------------------
+
+def _merge_headers(headers):
+    """Primeiro valor não vazio de cada campo escalar; participantes
+    mesclados por nome normalizado, preservando o `role` mais informativo
+    (o primeiro não vazio visto para aquele nome — uma ocorrência posterior
+    sem role nunca apaga um role já capturado)."""
+    campos = ('title', 'meeting_date', 'meeting_time', 'topic')
+    saida = {campo: None for campo in campos}
+    for header in headers:
+        for campo in campos:
+            if not saida[campo]:
+                valor = (header or {}).get(campo)
+                if valor:
+                    saida[campo] = valor
+
+    participantes_por_norm = {}
+    ordem = []
+    for header in headers:
+        for p in (header or {}).get('participants') or []:
+            nome = str((p or {}).get('name') or '').strip()
+            if not nome:
+                continue
+            chave = normalize_name(nome)
+            role = str((p or {}).get('role') or '').strip()
+            existente = participantes_por_norm.get(chave)
+            if existente is None:
+                participantes_por_norm[chave] = {'name': nome, 'role': role}
+                ordem.append(chave)
+            elif role and not existente['role']:
+                existente['role'] = role
+    saida['participants'] = [participantes_por_norm[k] for k in ordem]
+    saida['topic'] = saida['topic'] or ''
+    return saida
+
+
+def _merge_opportunities_into(conta_saida, opportunities, indice_opps):
+    """Mescla `opportunities` (lista já no formato de `parse_hierarchy`) para
+    dentro de `conta_saida['opportunities']`, usando `indice_opps` (nome
+    normalizado -> dict da oportunidade já em `conta_saida`) para achar
+    repetições. Oportunidade repetida: concatena `update_text` (separado por
+    espaço, sem repetir texto idêntico) e mantém o primeiro `responsible`
+    não vazio."""
+    for opp in opportunities:
+        nome = str((opp or {}).get('name') or '').strip()
+        norm = normalize_name(nome)
+        update = str((opp or {}).get('update_text') or '').strip()
+        responsavel = str((opp or {}).get('responsible') or '').strip()
+
+        existente = indice_opps.get(norm) if norm else None
+        if existente is not None:
+            if update and update not in existente['update_text']:
+                existente['update_text'] = (
+                    f"{existente['update_text']} {update}".strip())
+            if not existente['responsible'] and responsavel:
+                existente['responsible'] = responsavel
+            continue
+
+        nova = {'name': nome, 'update_text': update, 'responsible': responsavel}
+        conta_saida['opportunities'].append(nova)
+        if norm:
+            indice_opps[norm] = nova
+
+
+def _merge_accounts_into(manager_saida, accounts, indice_contas, indice_contas_sufixo, indice_opps_por_conta):
+    """Mescla `accounts` para dentro de `manager_saida['accounts']`.
+
+    Casamento de conta em dois passos, sem fuzzy (a fronteira entre pedaços
+    já é ruidosa; fundir contas erradas seria pior do que exibi-las
+    duplicadas): (a) nome normalizado idêntico; (b) nome sem sufixo de forma
+    jurídica idêntico (reaproveita `_strip_legal_suffix` de `reconcile.py` —
+    "Ambev" e "Ambev S.A." viram uma conta só, mas "Vale" e "Vale Verde"
+    continuam distintas, porque nenhuma termina com um sufixo conhecido).
+    Conta sem nome nunca é casada com outra — cada ocorrência vira um bloco
+    próprio, mesmo princípio de `reconcile.py` para contas sem nome.
+    """
+    for account in accounts:
+        nome = str((account or {}).get('name') or '').strip()
+        norm = normalize_name(nome)
+        chave = None
+        if norm:
+            if norm in indice_contas:
+                chave = norm
+            else:
+                sem_sufixo = _strip_legal_suffix(norm)
+                chave = indice_contas_sufixo.get(sem_sufixo)
+
+        if chave is not None:
+            conta_saida = indice_contas[chave]
+        else:
+            conta_saida = {
+                'name': nome,
+                'account_id': (account or {}).get('account_id'),
+                'match_confidence': (account or {}).get('match_confidence'),
+                'opportunities': [],
+            }
+            manager_saida['accounts'].append(conta_saida)
+            indice_opps_por_conta[id(conta_saida)] = {}
+            if norm:
+                indice_contas[norm] = conta_saida
+                indice_contas_sufixo.setdefault(_strip_legal_suffix(norm), norm)
+
+        _merge_opportunities_into(
+            conta_saida, (account or {}).get('opportunities') or [],
+            indice_opps_por_conta[id(conta_saida)])
+
+
+def _merge_managers(managers_lists):
+    """Mescla listas de `managers` (uma por pedaço, na ordem dos pedaços) por
+    nome normalizado, casando contas/oportunidades dentro de cada gerente."""
+    resultado = []
+    indice_gerentes = {}  # nome_norm -> dict de saída
+    indice_contas_por_gerente = {}     # id(manager_saida) -> {norm: conta_saida}
+    indice_contas_sufixo_por_gerente = {}  # id(manager_saida) -> {sem_sufixo: norm}
+    indice_opps_por_conta = {}         # id(conta_saida) -> {norm: opp_saida}
+
+    for managers in managers_lists:
+        for manager in (managers or []):
+            nome = str((manager or {}).get('name') or '').strip() or GERENTE_NAO_IDENTIFICADO
+            chave = normalize_name(nome)
+            manager_saida = indice_gerentes.get(chave)
+            if manager_saida is None:
+                manager_saida = {'name': nome, 'accounts': []}
+                indice_gerentes[chave] = manager_saida
+                resultado.append(manager_saida)
+                indice_contas_por_gerente[id(manager_saida)] = {}
+                indice_contas_sufixo_por_gerente[id(manager_saida)] = {}
+            _merge_accounts_into(
+                manager_saida, (manager or {}).get('accounts') or [],
+                indice_contas_por_gerente[id(manager_saida)],
+                indice_contas_sufixo_por_gerente[id(manager_saida)],
+                indice_opps_por_conta)
+    return resultado
+
+
+def merge_hierarchies(parciais):
+    """Mescla a lista `parciais` (dicts `{'header':..., 'managers':...}`,
+    saída de `parse_hierarchy`, um por pedaço de transcrição, na ordem dos
+    pedaços) num único dict no mesmo formato — para consumo por
+    `reconcile()`. Devolve `None` se `parciais` estiver vazia."""
+    parciais = [p for p in (parciais or []) if p]
+    if not parciais:
+        return None
+    return {
+        'header': _merge_headers([p.get('header') or {} for p in parciais]),
+        'managers': _merge_managers([p.get('managers') or [] for p in parciais]),
     }
