@@ -1,0 +1,986 @@
+# -*- coding: utf-8 -*-
+# Rotas do iAta dentro do AutoToca.
+# Este arquivo é executado no namespace de app.py por _load_route_modules():
+# tem acesso a get_db, logger, json, dict_from_row e afins.
+
+from integrations import iata as iata_lib
+
+
+def _iata_save_record(header, managers, extras, raw_text, previous_record_id,
+                      body_markdown=None):
+    """Grava a ata e a hierarquia. Devolve o id do registro.
+
+    Uma única conexão/transação cobre o INSERT em iata_records e a escrita
+    da hierarquia: se `_iata_write_hierarchy` levantar no meio, nada foi
+    commitado ainda, e fechar a conexão sem commit descarta o INSERT também
+    — não sobra um registro órfão sem hierarquia.
+    """
+    header = header or {}
+    body = body_markdown or iata_lib.render_markdown(header, managers, extras)
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute(
+            '''INSERT INTO iata_records
+               (title, meeting_date, meeting_time, topic, participants, ata_json,
+                insights_json, raw_text, previous_record_id, body_markdown,
+                body_edited, reparse_failed, format_version)
+               VALUES (?,?,?,?,?,?,?,?,?,?,0,0,2)''',
+            (header.get('title') or 'Ata sem título',
+             header.get('meeting_date'), header.get('meeting_time'),
+             header.get('topic') or '',
+             json.dumps(header.get('participants') or [], ensure_ascii=False),
+             json.dumps({'header': header, 'managers': managers, 'extras': extras or {}},
+                        ensure_ascii=False),
+             json.dumps((extras or {}).get('insights') or [], ensure_ascii=False),
+             raw_text or '', previous_record_id, body))
+        record_id = c.lastrowid
+        _iata_write_hierarchy(c, record_id, managers)
+        conn.commit()
+        return record_id
+    finally:
+        conn.close()
+
+
+def _iata_write_hierarchy(c, record_id, managers):
+    """(Re)escreve as tabelas da hierarquia para uma ata."""
+    c.execute('DELETE FROM iata_opportunities WHERE record_id = ?', (record_id,))
+    c.execute('DELETE FROM iata_accounts WHERE record_id = ?', (record_id,))
+    c.execute('DELETE FROM iata_managers WHERE record_id = ?', (record_id,))
+    for m_ordem, manager in enumerate(managers or []):
+        c.execute('INSERT INTO iata_managers (record_id, name, display_order) VALUES (?,?,?)',
+                  (record_id, manager.get('name') or iata_lib.GERENTE_NAO_IDENTIFICADO, m_ordem))
+        manager_id = c.lastrowid
+        for a_ordem, account in enumerate(manager.get('accounts') or []):
+            nome_conta = account.get('name') or ''
+            c.execute(
+                '''INSERT INTO iata_accounts
+                   (record_id, manager_id, account_id, name, name_norm,
+                    match_confidence, match_confirmed, display_order)
+                   VALUES (?,?,?,?,?,?,?,?)''',
+                (record_id, manager_id, account.get('account_id'), nome_conta,
+                 iata_lib.normalize_name(nome_conta), account.get('match_confidence'),
+                 1 if account.get('match_confirmed') else 0, a_ordem))
+            conta_id = c.lastrowid
+            for o_ordem, opp in enumerate(account.get('opportunities') or []):
+                nome_opp = opp.get('name') or ''
+                c.execute(
+                    '''INSERT INTO iata_opportunities
+                       (record_id, iata_account_id, name, name_norm, previous_status,
+                        update_text, responsible, carried_over, prev_opportunity_id,
+                        match_confidence, display_order)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                    (record_id, conta_id, nome_opp, iata_lib.normalize_name(nome_opp),
+                     opp.get('previous_status'), opp.get('update_text'),
+                     opp.get('responsible'), 1 if opp.get('carried_over') else 0,
+                     opp.get('prev_opportunity_id'), opp.get('match_confidence'), o_ordem))
+
+
+def _iata_read_hierarchy(c, record_id):
+    """Lê a hierarquia no formato canônico, com os ids do banco.
+
+    O resultado precisa servir como `previous_managers` para
+    `iata_lib.reconcile` na próxima ata: cada oportunidade carrega `id`,
+    `name`, `update_text` e `responsible` (usados pelo reconcile), além dos
+    demais campos persistidos. `carried_over` e `match_confirmed` voltam
+    como bool — como foram gravados (True/False) na hierarquia de entrada,
+    não como 0/1 do SQLite.
+    """
+    c.execute('SELECT * FROM iata_managers WHERE record_id = ? ORDER BY display_order, id',
+              (record_id,))
+    managers = [dict_from_row(r) for r in c.fetchall()]
+    for manager in managers:
+        c.execute('''SELECT * FROM iata_accounts WHERE manager_id = ?
+                     ORDER BY display_order, id''', (manager['id'],))
+        contas = [dict_from_row(r) for r in c.fetchall()]
+        for conta in contas:
+            conta['match_confirmed'] = bool(conta.get('match_confirmed'))
+            c.execute('''SELECT * FROM iata_opportunities WHERE iata_account_id = ?
+                         ORDER BY display_order, id''', (conta['id'],))
+            conta['opportunities'] = [dict_from_row(r) for r in c.fetchall()]
+            for opp in conta['opportunities']:
+                opp['carried_over'] = bool(opp.get('carried_over'))
+        manager['accounts'] = contas
+    return managers
+
+
+def _iata_load_record(record_id):
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
+        row = c.fetchone()
+        if not row:
+            return None
+        registro = dict_from_row(row)
+        try:
+            registro['participants'] = json.loads(registro.get('participants') or '[]')
+        except Exception:
+            registro['participants'] = []
+        ata_json = {}
+        try:
+            ata_json = json.loads(registro.get('ata_json') or '{}')
+        except Exception:
+            ata_json = {}
+        if not isinstance(ata_json, dict):
+            ata_json = {}
+        try:
+            registro['insights_json'] = json.loads(registro.get('insights_json') or '[]')
+        except Exception:
+            registro['insights_json'] = []
+        registro['ata_json'] = ata_json
+        registro['extras'] = ata_json.get('extras') or {}
+        registro['header'] = ata_json.get('header') or {}
+        registro['managers'] = _iata_read_hierarchy(c, record_id)
+        return registro
+    finally:
+        conn.close()
+
+
+def _iata_sugerir_contas(managers):
+    """Sugere o vínculo de cada conta citada na ata com uma conta cadastrada
+    em `accounts`, por nome (reaproveita `iata_lib.match_account_name`: nome
+    exato -> sem sufixo de forma jurídica -> similaridade — a mesma lógica
+    já usada para casar com a ata anterior, em vez de duplicar aqui um
+    matching mais fraco de só exato + fuzzy 0.85, que não casaria "Ambev"
+    com "Ambev S.A.", o caso mais comum).
+
+    Isto é só SUGESTÃO — nunca marca `match_confirmed`; quem confirma o
+    vínculo é o usuário, pela rota `/link`. Uma conta que já veio com
+    `match_confirmed=True` (por exemplo herdada da ata anterior via
+    `reconcile`) é preservada como está: uma nova sugestão não pode
+    desfazer uma confirmação humana.
+    """
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute('SELECT id, name FROM accounts')
+        catalogo = {}
+        for r in c.fetchall():
+            norm = iata_lib.normalize_name(r['name'])
+            if norm:
+                # Primeira conta cadastrada com este nome normalizado vence
+                # em caso de duas contas que colapsem para o mesmo nome —
+                # cenário raro demais para merecer mais mecanismo aqui.
+                catalogo.setdefault(norm, r['id'])
+    finally:
+        conn.close()
+
+    for manager in (managers or []):
+        for account in (manager.get('accounts') or []):
+            if account.get('match_confirmed'):
+                continue
+            account_id, confidence = iata_lib.match_account_name(account.get('name'), catalogo)
+            if account_id is not None:
+                account['account_id'] = account_id
+                account['match_confidence'] = confidence
+    return managers
+
+
+def _iata_insights_ofertas(header, managers):
+    """Cruza as oportunidades da ata com as ofertas do portfólio STF via IA."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        # portfolio_offers não tem coluna `description` — as colunas reais
+        # são title/summary (ver CREATE TABLE em app.py). Um SELECT com o
+        # nome errado derrubaria a geração inteira da ata com uma exceção.
+        c.execute('SELECT title, summary FROM portfolio_offers ORDER BY title')
+        ofertas = [dict_from_row(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+    if not ofertas:
+        return []
+
+    resumo = [
+        {'conta': a.get('name'), 'oportunidade': o.get('name'), 'update': o.get('update_text')}
+        for m in (managers or []) for a in (m.get('accounts') or [])
+        for o in (a.get('opportunities') or [])
+    ]
+    if not resumo:
+        return []
+
+    prompt = (
+        "Você é consultor de negócios. Para as oportunidades abaixo, identifique dores "
+        "e cruze com as soluções do portfólio.\n"
+        "Retorne EXCLUSIVAMENTE JSON: "
+        '{"insights":[{"pain":"dor","matched_offer":"título da oferta ou null",'
+        '"confidence":"alta/media/baixa","observation":"observação breve"}]}\n\n'
+        f"OPORTUNIDADES:\n{json.dumps(resumo, ensure_ascii=False)[:12000]}\n\n"
+        f"SOLUÇÕES STF:\n{json.dumps(ofertas, ensure_ascii=False)[:12000]}"
+    )
+    raw = _llm_prompt(prompt, log_tag='iAta/Insights')
+    parsed = iata_lib._loads_tolerante(raw) if raw else None
+    if not isinstance(parsed, dict):
+        logger.warning('[iAta] Insights sem resposta utilizável da IA.')
+        return []
+
+    insights = parsed.get('insights')
+    if isinstance(insights, dict):
+        # A IA às vezes devolve um objeto solto em vez de uma lista com um
+        # item — trata como lista de um elemento em vez de descartar.
+        insights = [insights]
+    if not isinstance(insights, list):
+        logger.warning('[iAta] Campo "insights" da IA não é lista nem objeto utilizável.')
+        return []
+    # Item fora do formato (string solta em vez de dict) entra como texto
+    # cru, mesmo princípio de `_linhas_de_passos`/`_linhas_de_insights` em
+    # integrations/iata/render.py: melhor exibir algo imperfeito do que
+    # descartar em silêncio.
+    return insights
+
+
+def _iata_resolver_ambiguidade(pares):
+    """Desempata oportunidades parecidas em UMA chamada de IA, em lote."""
+    if not pares:
+        return {}
+    prompt = (
+        "Você recebe pares de oportunidades comerciais. Para cada par, diga se a "
+        "oportunidade nova é a MESMA da lista de candidatas anteriores.\n"
+        "Retorne EXCLUSIVAMENTE JSON: "
+        '{"decisoes":[{"index":0,"id_anterior":123}]}. '
+        "Use id_anterior null quando for uma oportunidade diferente.\n\n"
+        + json.dumps(pares, ensure_ascii=False)
+    )
+    raw = _llm_prompt(prompt, log_tag='iAta/Ambiguidade')
+    parsed = iata_lib._loads_tolerante(raw) if raw else None
+    if not isinstance(parsed, dict):
+        return {}
+    saida = {}
+    for d in (parsed.get('decisoes') or []):
+        if isinstance(d, dict) and d.get('index') is not None:
+            try:
+                saida[int(d['index'])] = d.get('id_anterior')
+            except Exception:
+                continue
+    return saida
+
+
+def _iata_previous_managers(previous_record_id):
+    """Carrega os gerentes da ata anterior indicada para servir de base à
+    reconciliação. Devolve `(managers, aviso)`.
+
+    Um `previous_record_id` que não existe mais no banco (apagado entre a
+    escolha do usuário e o fim da geração, ou um id inválido vindo do form)
+    NÃO derruba a tarefa inteira — a extração da IA já rodou e não deve ser
+    descartada por isso — mas também não pode passar em silêncio: o usuário
+    pediu continuidade com uma ata específica e ela não aconteceu. Isso vira
+    um aviso explícito no resultado da task e a ata é salva sem referenciar
+    um id fantasma.
+    """
+    if not previous_record_id:
+        return [], None
+    anterior = _iata_load_record(previous_record_id)
+    if not anterior:
+        aviso = (f'A ata anterior selecionada (id {previous_record_id}) não foi '
+                 'encontrada; esta ata foi gerada sem continuidade com ela.')
+        logger.warning(f'[iAta] {aviso}')
+        return [], aviso
+    return (anterior.get('managers') or []), None
+
+
+def _iata_extrair_parte(task_id, texto, rotulo, niveis_retry=2):
+    """Extrai a hierarquia de UM pedaço de transcrição (uma chamada de LLM).
+
+    Devolve o dict `{'header':..., 'managers':...}` de `parse_hierarchy`, ou
+    `None` se a extração falhou. Cada falha é registrada com o mesmo
+    diagnóstico de sempre (tamanho da resposta, início e fim) — sem isso a
+    falha é impossível de investigar sem reproduzir às cegas.
+
+    Se a extração falhar e ainda houver `niveis_retry`, divide o pedaço ao
+    meio e extrai cada metade separadamente, recursivamente — se a causa da
+    falha foi truncamento da resposta da IA (o caso investigado em produção),
+    um texto menor costuma caber na resposta. O limite de saída do provedor
+    é em tokens, não em caracteres, então uma metade densa ainda pode
+    truncar (aconteceu em produção com uma metade de ~6k chars); por isso a
+    divisão vai até 2 níveis (quartos do pedaço original) antes de o trecho
+    ser tratado como perdido. As partes que derem certo são mescladas.
+    """
+    raw = _llm_prompt(iata_lib.build_extraction_prompt(texto), log_tag='iAta/Extração')
+    parsed = iata_lib.parse_hierarchy(raw) if raw else None
+    if parsed:
+        return parsed
+
+    if raw:
+        texto_resp = str(raw)
+        logger.warning(
+            f'[iAta][Task:{task_id}] Parte {rotulo} da transcrição não pôde ser '
+            f'convertida em ata ({len(texto_resp)} chars). '
+            f'Início: {texto_resp[:600]!r} | Fim: {texto_resp[-200:]!r}')
+    else:
+        logger.warning(f'[iAta][Task:{task_id}] Parte {rotulo}: nenhum provedor de IA respondeu.')
+
+    if niveis_retry <= 0 or len(texto) < 400:
+        return None
+
+    logger.warning(f'[iAta][Task:{task_id}] Retentando parte {rotulo} dividida ao meio.')
+    metade = len(texto) // 2
+    corte = texto.rfind('\n', 0, metade)
+    if corte <= 0:
+        corte = metade
+    primeira, segunda = texto[:corte], texto[corte:]
+    p1 = _iata_extrair_parte(task_id, primeira, f'{rotulo}a', niveis_retry - 1) if primeira.strip() else None
+    p2 = _iata_extrair_parte(task_id, segunda, f'{rotulo}b', niveis_retry - 1) if segunda.strip() else None
+    subpartes = [p for p in (p1, p2) if p]
+    if not subpartes:
+        return None
+    return iata_lib.merge_hierarchies(subpartes)
+
+
+def _iata_process_async(task_id, file_bytes, filename, raw_text_input,
+                        previous_record_id=None, with_insights=True,
+                        prev_bytes=None, prev_name=None):
+    try:
+        raw_text = (raw_text_input or '').strip()
+        if file_bytes:
+            _iata_task_set(task_id, {'step': 'Extraindo texto do arquivo...', 'progress': 15})
+            texto_arquivo = _iata_extract_bytes(file_bytes, filename)
+            raw_text = (texto_arquivo + '\n\n' + raw_text).strip() if raw_text else texto_arquivo
+        if not raw_text:
+            _iata_task_set(task_id, {'status': 'error',
+                                     'error': 'Não foi possível extrair texto da reunião.'})
+            return
+
+        # Reuniões longas eram truncadas em MAX_TRANSCRICAO_CHARS no prompt de
+        # extração (até 65% de uma transcrição de 87 mil caracteres nunca
+        # chegava à IA) e mesmo dentro desse limite a resposta do provedor
+        # podia vir truncada — JSON cortado no meio de uma string, que
+        # `_loads_tolerante` corretamente recusa (não inventa dado) e derrubava
+        # a extração inteira. A correção é fatiar a transcrição INTEIRA em
+        # pedaços pequenos o bastante para a resposta não truncar, extrair
+        # cada um separadamente e mesclar — cobrindo a reunião inteira, não só
+        # os primeiros 30 mil caracteres. raw_text (persistido abaixo em
+        # _iata_save_record) sempre foi e continua sendo o texto INTEIRO.
+        partes_texto = iata_lib.split_transcricao(raw_text)
+        total_partes = len(partes_texto)
+        _faixa_ini, _faixa_fim = 25, 65
+        parciais = []
+        partes_com_falha = 0
+        for i, trecho in enumerate(partes_texto, start=1):
+            progresso = _faixa_ini + int((i - 1) / total_partes * (_faixa_fim - _faixa_ini))
+            _iata_task_set(task_id, {
+                'step': f'Analisando parte {i} de {total_partes}...', 'progress': progresso})
+            parcial = _iata_extrair_parte(task_id, trecho, str(i))
+            if parcial:
+                parciais.append(parcial)
+            else:
+                partes_com_falha += 1
+
+        if not parciais:
+            logger.warning(
+                f'[iAta][Task:{task_id}] Todas as {total_partes} parte(s) da transcrição '
+                'falharam na extração.')
+            _iata_task_set(task_id, {
+                'status': 'error',
+                'error': 'A IA não retornou uma ata utilizável. Tente novamente — '
+                         'o app.log registra o que ela devolveu.'})
+            return
+
+        parsed = iata_lib.merge_hierarchies(parciais)
+        aviso_partes_perdidas = None
+        if partes_com_falha:
+            aviso_partes_perdidas = (
+                f'{partes_com_falha} de {total_partes} parte(s) da transcrição não puderam '
+                'ser lidas pela IA; esta ata pode estar incompleta.')
+            logger.warning(f'[iAta][Task:{task_id}] {aviso_partes_perdidas}')
+
+        _iata_task_set(task_id, {'step': 'Comparando com a ata anterior...', 'progress': 68})
+        previous_managers, aviso_continuidade = _iata_previous_managers(previous_record_id)
+        # Opção "enviar o arquivo da ata anterior": só entra em jogo quando não
+        # há hierarquia anterior nenhuma vinda de previous_record_id (as duas
+        # opções são mutuamente exclusivas no modal, mas nada impede uma
+        # chamada direta à API combinando as duas — aqui o arquivo só serve de
+        # base quando o caminho por id não resultou em nada). O texto extraído
+        # passa pelo MESMO reparse usado para reestruturar o corpo editado
+        # (`build_reparse_prompt`/`parse_hierarchy`): a ata anterior enviada é
+        # só texto solto, sem hierarquia gravada, e precisa da IA para virar
+        # uma lista de managers/accounts/opportunities utilizável pelo
+        # reconcile. Falha aqui NUNCA derruba a tarefa — vira aviso explícito
+        # e a ata segue sendo gerada sem continuidade (mesmo princípio de
+        # `_iata_previous_managers` para um id que sumiu).
+        if not previous_managers and prev_bytes:
+            _iata_task_set(task_id, {'step': 'Lendo a ata anterior enviada...', 'progress': 70})
+            texto_anterior = ''
+            try:
+                texto_anterior = _iata_extract_bytes(prev_bytes, prev_name)
+            except Exception as e:
+                logger.warning(f'[iAta] Falha ao extrair texto da ata anterior enviada: {e}')
+            parsed_anterior = None
+            if (texto_anterior or '').strip():
+                raw_anterior = _llm_prompt(iata_lib.build_reparse_prompt(texto_anterior),
+                                           log_tag='iAta/AtaAnterior')
+                parsed_anterior = iata_lib.parse_hierarchy(raw_anterior) if raw_anterior else None
+            if parsed_anterior:
+                previous_managers = parsed_anterior['managers']
+            else:
+                logger.warning('[iAta] Ata anterior enviada não pôde ser lida; '
+                               'seguindo como ata do zero.')
+                aviso_continuidade = ('A ata anterior enviada não pôde ser lida; esta ata foi '
+                                      'gerada sem continuidade com ela.')
+        managers = iata_lib.reconcile(
+            parsed['managers'], previous_managers, resolver=_iata_resolver_ambiguidade)
+        # Se a ata anterior pedida não existe mais, não grava uma referência
+        # fantasma em previous_record_id — o aviso acima já cobre o usuário.
+        effective_previous_id = None if aviso_continuidade else previous_record_id
+
+        # Sugestão DEPOIS do reconcile, sobre os managers já reconciliados —
+        # não sobre parsed['managers'] (fresco da extração da IA, que nunca
+        # tem match_confirmed). É só na saída do reconcile que uma conta
+        # carrega match_confirmed=True herdado da ata anterior, e é esse
+        # campo que o guard de _iata_sugerir_contas usa para não sobrescrever
+        # um vínculo que o usuário já confirmou.
+        _iata_task_set(task_id, {'step': 'Cruzando contas com o CRM...', 'progress': 75})
+        _iata_sugerir_contas(managers)
+
+        extras = {}
+        if with_insights:
+            _iata_task_set(task_id, {'step': 'Gerando insights de negócio...', 'progress': 85})
+            extras['insights'] = _iata_insights_ofertas(parsed['header'], managers)
+
+        _iata_task_set(task_id, {'step': 'Salvando ata...', 'progress': 95})
+        record_id = _iata_save_record(parsed['header'], managers, extras, raw_text,
+                                      effective_previous_id)
+        registro = _iata_load_record(record_id)
+        updates = {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': registro}
+        # Duas fontes de aviso independentes (parte(s) da transcrição perdida(s)
+        # + continuidade com a ata anterior que não aconteceu) podem ocorrer
+        # juntas — combina as duas em vez de a segunda apagar a primeira.
+        avisos_finais = [a for a in (aviso_partes_perdidas, aviso_continuidade) if a]
+        if avisos_finais:
+            updates['warning'] = ' '.join(avisos_finais)
+        _iata_task_set(task_id, updates)
+    except Exception as e:
+        logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')
+        _iata_task_set(task_id, {'status': 'error', 'error': str(e)})
+    finally:
+        _iata_task_cleanup(task_id)
+
+
+@app.route('/api/autotoca/iata', methods=['POST'])
+def create_iata_record():
+    try:
+        file_obj = request.files.get('meeting_file')
+        raw_text_input = (request.form.get('raw_text') or '').strip()
+        if not file_obj and not raw_text_input:
+            return jsonify({'error': 'Envie um arquivo de reunião ou cole o texto.'}), 400
+
+        file_bytes, filename = None, None
+        if file_obj and file_obj.filename:
+            file_bytes = file_obj.read()
+            filename = file_obj.filename
+        # Arquivo presente porém vazio: falhar aqui é mais barato (e mais claro
+        # pro usuário) do que abrir uma task que só vai morrer no meio.
+        if not raw_text_input and not file_bytes:
+            return jsonify({'error': 'O arquivo enviado está vazio. '
+                                     'Envie a transcrição da reunião ou cole o texto.'}), 400
+
+        previous_record_id_raw = request.form.get('previous_record_id') or None
+        previous_record_id = None
+        # M3: um previous_record_id NÃO numérico (form corrompido/adulterado)
+        # era silenciosamente descartado aqui — a ata seguia "do zero" sem
+        # nenhum aviso, o único caminho em que a continuidade se perdia
+        # calada (o id numérico que simplesmente não existe mais já gera
+        # aviso em `_iata_previous_managers`). Trata igual: aviso explícito
+        # na task, sem derrubar a geração.
+        previous_record_id_aviso = None
+        if previous_record_id_raw:
+            try:
+                previous_record_id = int(previous_record_id_raw)
+            except ValueError:
+                previous_record_id_aviso = (
+                    f'O id da ata anterior selecionada ("{previous_record_id_raw}") não é '
+                    'válido; esta ata foi gerada sem continuidade com ela.')
+                logger.warning(f'[iAta] {previous_record_id_aviso}')
+
+        prev_file = request.files.get('previous_file')
+        prev_bytes, prev_name = None, None
+        if prev_file and prev_file.filename:
+            prev_bytes = prev_file.read()
+            prev_name = prev_file.filename
+        # Comparação por lista de valores verdadeiros, não por "diferente de
+        # '0'": um formulário mandando 'false'/'no' significa desligado, e a
+        # partir da Task 8 os insights são uma chamada de LLM paga — ligar
+        # isso contra a vontade do usuário custa dinheiro e tempo dele.
+        with_insights = (request.form.get('with_insights') or '1').strip().lower() \
+            in ('1', 'true', 'yes', 'on', 'sim')
+
+        task_id = uuid.uuid4().hex
+        initial_task = {'status': 'processing', 'step': 'Iniciando...', 'progress': 5}
+        if previous_record_id_aviso:
+            # `_iata_task_set` faz merge (dict.update), não substituição — este
+            # 'warning' inicial sobrevive até o fim da task a menos que
+            # `_iata_process_async` o substitua por um aviso mais específico
+            # (o que só acontece quando previous_record_id é truthy, e aqui
+            # ele é None por construção).
+            initial_task['warning'] = previous_record_id_aviso
+        _iata_task_set(task_id, initial_task)
+        try:
+            threading.Thread(
+                target=_iata_process_async,
+                args=(task_id, file_bytes, filename, raw_text_input),
+                kwargs={'previous_record_id': previous_record_id, 'with_insights': with_insights,
+                       'prev_bytes': prev_bytes, 'prev_name': prev_name},
+                daemon=True).start()
+        except Exception:
+            # Sem worker rodando, a task ficaria 'processing' para sempre e o
+            # frontend giraria sem fim — marcar o erro é o que encerra o polling.
+            _iata_task_set(task_id, {'status': 'error',
+                                     'error': 'Não foi possível iniciar o processamento.'})
+            raise
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/tasks/<task_id>', methods=['GET'])
+def get_iata_task_status(task_id):
+    task = _iata_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
+    return jsonify(task)
+
+
+@app.route('/api/autotoca/iata', methods=['GET'])
+def list_iata_records():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT id, title, meeting_date, meeting_time, topic, participants,
+                            format_version, body_edited, reparse_failed, created_at
+                     FROM iata_records ORDER BY datetime(created_at) DESC, id DESC''')
+        registros = []
+        for row in c.fetchall():
+            r = dict_from_row(row)
+            try:
+                r['participants'] = json.loads(r.get('participants') or '[]')
+            except Exception:
+                r['participants'] = []
+            registros.append(r)
+        conn.close()
+        return jsonify(registros)
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao listar registros: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/<int:record_id>', methods=['GET'])
+def get_iata_record(record_id):
+    try:
+        registro = _iata_load_record(record_id)
+        if not registro:
+            return jsonify({'error': 'Ata não encontrada.'}), 404
+        return jsonify(registro)
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao buscar registro {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/<int:record_id>', methods=['DELETE'])
+def delete_iata_record(record_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        # get_db() já liga PRAGMA foreign_keys=ON (o ON DELETE CASCADE do
+        # schema cobriria isto sozinho), mas apagamos as filhas explicitamente
+        # mesmo assim: não depender de um PRAGMA por conexão para uma
+        # exclusão que não pode deixar hierarquia órfã para trás.
+        c.execute('DELETE FROM iata_opportunities WHERE record_id = ?', (record_id,))
+        c.execute('DELETE FROM iata_accounts WHERE record_id = ?', (record_id,))
+        c.execute('DELETE FROM iata_managers WHERE record_id = ?', (record_id,))
+        c.execute('DELETE FROM iata_records WHERE id = ?', (record_id,))
+        removidos = c.rowcount
+        conn.commit()
+        conn.close()
+        if not removidos:
+            return jsonify({'error': 'Ata não encontrada.'}), 404
+        return jsonify({'message': 'Ata removida com sucesso.'})
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao remover registro {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# Refactor da revisão final: `_iata_match_previous`, `_iata_carregar_campos_anteriores`,
+# `_iata_flatten_opportunities` e `_iata_titulo_apos_edicao` eram lógica pura
+# (sem Flask/SQLite) morando neste arquivo de rotas — foram extraídas para
+# `integrations/iata/edit.py`, ao lado de `reconcile.py` (mesma classe de
+# problema: casar hierarquia velha com nova). Os nomes com prefixo `_iata_`
+# seguem existindo aqui como aliases para não mudar os call sites abaixo.
+_iata_match_previous = iata_lib.match_previous_items
+_iata_carregar_campos_anteriores = iata_lib.carregar_campos_anteriores
+_iata_flatten_opportunities = iata_lib.flatten_opportunities
+_iata_titulo_apos_edicao = iata_lib.titulo_apos_edicao
+
+
+# Um lock por ata em memória — este é um app local de processo único (sem
+# múltiplos workers), então não precisa de lock distribuído: só impedir que
+# dois PUTs concorrentes na MESMA ata entrelacem suas transações (achado da
+# revisão: PUT A com IA lenta + PUT B rápida terminavam com body_markdown do
+# B e hierarquia do A, uma mistura de duas edições diferentes). O dict é
+# protegido por um lock global só para a operação de criar/buscar o lock de
+# uma ata — não para o corpo da edição em si, que fica só sob o lock daquela
+# ata específica (duas atas diferentes continuam podendo editar em paralelo).
+_iata_body_locks = {}
+_iata_body_locks_guard = threading.Lock()
+
+
+def _iata_body_lock(record_id):
+    with _iata_body_locks_guard:
+        lock = _iata_body_locks.get(record_id)
+        if lock is None:
+            lock = threading.Lock()
+            _iata_body_locks[record_id] = lock
+        return lock
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/body', methods=['PUT'])
+def update_iata_body(record_id):
+    """Edição do texto da ata (Task 9). A regra de produto: o texto que o
+    usuário escreveu é gravado ANTES de qualquer tentativa de re-parse, e
+    nunca se perde — se a IA não conseguir reestruturar o texto editado de
+    volta para a hierarquia, o texto fica, a estrutura antiga é mantida, e a
+    falha vira aviso visível (`reparse_failed`), nunca silêncio.
+
+    `reparse_failed` é gravado como 1 já no primeiro UPDATE (assume falho
+    até prova em contrário) e só volta a 0 depois que a hierarquia nova é
+    escrita com sucesso — se o processo cair no meio (entre gravar o texto e
+    terminar o re-parse), o registro fica com o sinal de alerta LIGADO, não
+    apagado: um `reparse_failed=0` indevido seria pior que um falso alarme,
+    porque esconderia do usuário que a estrutura pode estar desatualizada.
+
+    Toda a operação roda sob um lock em memória por `record_id` (achado da
+    revisão: dois PUTs concorrentes na mesma ata, um com IA lenta e outro
+    rápido, terminavam entrelaçados — texto de uma edição com hierarquia da
+    outra). Isso serializa PUTs concorrentes na MESMA ata; atas diferentes
+    continuam livres para editar em paralelo."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        body = (payload.get('body_markdown') or '').strip()
+        if not body:
+            return jsonify({'error': 'O corpo da ata não pode ficar vazio.'}), 400
+
+        with _iata_body_lock(record_id):
+            # `atual` é lido DENTRO do lock: um PUT que esperou a vez herda o
+            # resultado do PUT anterior (não uma foto de antes dele), senão a
+            # serialização não resolveria o entrelaçamento — só adiaria.
+            atual = _iata_load_record(record_id)
+            if not atual:
+                return jsonify({'error': 'Ata não encontrada.'}), 404
+
+            # 1) grava o texto ANTES de qualquer coisa: o que o usuário
+            # escreveu não se perde. reparse_failed=1 por padrão (docstring).
+            conn = get_db()
+            conn.execute(
+                'UPDATE iata_records SET body_markdown = ?, body_edited = 1, reparse_failed = 1 '
+                'WHERE id = ?', (body, record_id))
+            conn.commit()
+            conn.close()
+
+            # 2) tenta trazer o texto de volta para a hierarquia.
+            raw = _llm_prompt(iata_lib.build_reparse_prompt(body), log_tag='iAta/Reparse')
+            parsed = iata_lib.parse_hierarchy(raw) if raw else None
+            if not parsed:
+                logger.warning(f'[iAta] Re-parse falhou para a ata {record_id}; '
+                               'texto preservado, estrutura mantida.')
+                return jsonify({'message': 'Texto salvo, mas não foi possível reestruturar a '
+                                            'ata automaticamente. A hierarquia exibida ainda é '
+                                            'a anterior.',
+                                'reparse_failed': True})
+
+            # 3) preserva vínculo com o CRM (account_id/match_confirmed) e
+            # encadeamento com a ata anterior (prev_opportunity_id) do que
+            # continua casando por nome — com fallback posicional sinalizado
+            # em `positional_matches` (ver `_iata_carregar_campos_anteriores`
+            # para a regra de não confirmar vínculo por posição).
+            positional_matches = _iata_carregar_campos_anteriores(
+                atual['managers'], parsed['managers'])
+
+            # I3: uma conta ACRESCENTADA no texto editado (não existia na
+            # hierarquia antiga desta ata, então `_iata_carregar_campos_anteriores`
+            # não tem de onde herdar `account_id`) nunca era cruzada com o CRM —
+            # ficava para sempre sem `account_id`, o bloco "Contas sugeridas
+            # pela IA" da tela não mostra contas sem `account_id`, e a rota
+            # `/link` exige um `account_id` que a tela não tinha como oferecer.
+            # Mesmo princípio (e mesma ordem) de `_iata_process_async`: sugere
+            # DEPOIS do casamento com o passado, sobre os managers já com o que
+            # pôde ser herdado — o guard de `match_confirmed` dentro de
+            # `_iata_sugerir_contas` já protege as contas confirmadas acima de
+            # serem sobrescritas por uma sugestão.
+            _iata_sugerir_contas(parsed['managers'])
+
+            # Título: mantém o anterior se ainda aparece no corpo editado —
+            # ver `_iata_titulo_apos_edicao`.
+            titulo_final = _iata_titulo_apos_edicao(
+                atual.get('title'), parsed['header'].get('title'), body)
+            parsed['header']['title'] = titulo_final
+
+            # ids antigos das oportunidades desta ata, na mesma ordem de
+            # travessia usada por `_iata_write_hierarchy`/`_iata_read_hierarchy`
+            # — junto com os ids físicos que outras atas referenciam agora
+            # (capturado ANTES do DELETE de `_iata_write_hierarchy`, que
+            # dispara ON DELETE SET NULL em cascata sobre quem aponta para
+            # essas linhas).
+            old_ids = [o['id'] for o in _iata_flatten_opportunities(atual['managers'])]
+            # M2: a partir daqui a conexão só era fechada no caminho feliz —
+            # uma exceção no meio (write_hierarchy, remapeamento, UPDATE
+            # final) vazava a conexão, diferente do resto do arquivo, que
+            # sempre fecha sob `finally`.
+            conn = get_db()
+            try:
+                c = conn.cursor()
+                referencing = []
+                if old_ids:
+                    placeholders = ','.join('?' * len(old_ids))
+                    c.execute(
+                        f'SELECT id, prev_opportunity_id FROM iata_opportunities '
+                        f'WHERE record_id != ? AND prev_opportunity_id IN ({placeholders})',
+                        (record_id, *old_ids))
+                    referencing = c.fetchall()
+
+                new_flat = _iata_flatten_opportunities(parsed['managers'])
+                # `_old_own_id` é temporário (ver `_iata_carregar_campos_anteriores`)
+                # — extraído aqui na mesma ordem de travessia, e removido do dict
+                # antes de ir para `ata_json` (não é dado de negócio real).
+                old_own_ids_in_order = [o.pop('_old_own_id', None) for o in new_flat]
+
+                # extras (insights) não são reextraídos do texto editado — o
+                # re-parse só reestrutura Gerente/Conta/Oportunidade, então tanto
+                # `extras` quanto `insights_json` continuam sendo os da geração
+                # original. Se o usuário apagou uma seção de insight no texto,
+                # isso não se reflete aqui: é uma limitação aceita, não um bug —
+                # não há como o re-parse saber que a ausência foi intencional.
+                _iata_write_hierarchy(c, record_id, parsed['managers'])
+
+                # Remapeia prev_opportunity_id de OUTRAS atas que apontavam para
+                # ids antigos desta ata: o DELETE+INSERT acima dá identidade
+                # física nova à mesma oportunidade lógica, e sem este remapeamento
+                # o ON DELETE SET NULL derrubaria silenciosamente o encadeamento
+                # de uma ata FUTURA mesmo que a oportunidade continue existindo
+                # (só com id novo). Onde a oportunidade antiga não tem
+                # correspondente nova (sumiu do texto editado), NULL — já
+                # aplicado pelo cascade — é o resultado honesto.
+                if referencing:
+                    novos_flat = _iata_flatten_opportunities(_iata_read_hierarchy(c, record_id))
+                    id_map = {}
+                    for old_own_id, novo_row in zip(old_own_ids_in_order, novos_flat):
+                        if old_own_id is not None:
+                            id_map[old_own_id] = novo_row['id']
+                    for other_opp_id, old_prev_id in referencing:
+                        novo_id = id_map.get(old_prev_id)
+                        if novo_id is not None:
+                            c.execute(
+                                'UPDATE iata_opportunities SET prev_opportunity_id = ? WHERE id = ?',
+                                (novo_id, other_opp_id))
+
+                c.execute('''UPDATE iata_records SET reparse_failed = 0, title = ?, ata_json = ?
+                             WHERE id = ?''',
+                          (titulo_final or atual['title'],
+                           json.dumps({'header': parsed['header'], 'managers': parsed['managers'],
+                                       'extras': atual.get('extras') or {}}, ensure_ascii=False),
+                           record_id))
+                conn.commit()
+            finally:
+                conn.close()
+            return jsonify({'message': 'Ata atualizada.', 'reparse_failed': False,
+                            'positional_matches': positional_matches})
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao salvar corpo da ata {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+_IATA_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+_IATA_AVISO_HIERARQUIA_DESATUALIZADA = (
+    'O texto desta ata foi editado, mas a última tentativa de reestruturação '
+    'automática falhou. O e-mail seria gerado com a estrutura de gerentes/contas/'
+    'oportunidades ANTERIOR, que pode não refletir o texto atual — confirme para '
+    'enviar mesmo assim, ou corrija o texto para que o re-parse funcione antes de '
+    'enviar.')
+
+_IATA_AVISO_ATA_LEGADA = (
+    'Esta é uma ata em formato antigo, sem a estrutura de gerentes/contas/'
+    'oportunidades necessária para montar o e-mail. Não é possível gerar o '
+    'e-mail automaticamente para este registro.')
+
+_IATA_AVISO_REPARSE_SEM_ESTRUTURA = (
+    'O texto desta ata foi salvo, mas a IA não conseguiu convertê-lo na '
+    'estrutura de gerentes/contas/oportunidades usada para montar o e-mail. '
+    'Ajuste o texto e salve de novo — em especial as linhas de Gerente '
+    'Comercial, conta e oportunidade — para conseguir enviar.')
+
+_IATA_AVISO_SEM_HIERARQUIA = (
+    'Esta ata não tem nenhum Gerente Comercial/conta/oportunidade registrado. '
+    'Não é possível montar o e-mail sem essa estrutura.')
+
+
+def _iata_email_payload(record_id):
+    """Monta assunto e HTML do e-mail para uma ata, ou sinaliza por que não é
+    seguro enviar ainda (`blocked`).
+
+    Três casos precisam bloquear em vez de mandar algo enganoso:
+
+    1) Ata "legada" (`format_version` < 2) sem nenhuma hierarquia gravada —
+       não existe fonte de dado nenhuma para montar o e-mail (nem hierarquia,
+       nem garantia de que `ata_json['header']` segue o formato atual).
+
+    2) `reparse_failed=1`: a Task 9 permite editar o texto (`body_markdown`)
+       livremente, e o re-parse que atualiza a hierarquia pode falhar sem
+       apagar o texto editado (por decisão de produto: o texto do usuário
+       nunca se perde). Mas o e-mail é renderizado a partir da HIERARQUIA,
+       não do texto — se ela ficou desatualizada, o e-mail sairia com
+       conteúdo que o usuário não escreveu e não revisou, sem ele perceber.
+       Aqui isso não é bloqueio silencioso: o payload continua sendo
+       montado, só que marcado `stale=True` com um aviso explícito, e é a
+       rota de envio (`send_iata_email`) que exige confirmação explícita
+       antes de mandar.
+
+    3) (Revisão final, M1) Ata NÃO legada (`format_version >= 2`), sem
+       `reparse_failed`, mas ainda assim com `managers` vazio — por exemplo o
+       usuário editou o texto removendo todos os blocos de Gerente Comercial
+       e o re-parse "funcionou" (devolveu uma hierarquia vazia, não uma
+       falha). Sem esta checagem, nenhuma das duas condições acima batia e o
+       e-mail saía montado só com o cabeçalho — sem nenhum aviso — porque
+       `render_email_html` simplesmente não tem nada para iterar."""
+    registro = _iata_load_record(record_id)
+    if not registro:
+        return None
+
+    managers = registro.get('managers') or []
+    try:
+        format_version = int(registro.get('format_version') or 1)
+    except (TypeError, ValueError):
+        format_version = 1
+    if not managers:
+        # A ordem destas checagens importa para o usuário: se ele acabou de
+        # escrever o texto à mão e o re-parse falhou, culpar o "formato
+        # antigo" é enganoso — sugere limitação permanente do registro, quando
+        # na verdade corrigir o texto resolve. Só é ata legada de fato quando
+        # não há nem hierarquia nem texto editado por ele.
+        if registro.get('reparse_failed') and (registro.get('body_markdown') or '').strip():
+            return {'blocked': _IATA_AVISO_REPARSE_SEM_ESTRUTURA}
+        if format_version < 2:
+            return {'blocked': _IATA_AVISO_ATA_LEGADA}
+        # M1: v2 (ou mais nova) sem hierarquia nenhuma e sem re-parse
+        # pendurado — bloqueia de todo jeito, independentemente do
+        # format_version, em vez de deixar cair para o e-mail só com cabeçalho.
+        return {'blocked': _IATA_AVISO_SEM_HIERARQUIA}
+
+    header = registro.get('header') or {
+        'title': registro.get('title'), 'meeting_date': registro.get('meeting_date'),
+        'meeting_time': registro.get('meeting_time'), 'topic': registro.get('topic'),
+        'participants': registro.get('participants') or [],
+    }
+    extras = registro.get('extras') or {}
+    payload = {
+        'subject': iata_lib.email_subject(header),
+        'html': iata_lib.render_email_html(header, managers, extras),
+        'stale': bool(registro.get('reparse_failed')),
+    }
+    if payload['stale']:
+        payload['warning'] = _IATA_AVISO_HIERARQUIA_DESATUALIZADA
+    return payload
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/email/preview', methods=['GET'])
+def preview_iata_email(record_id):
+    try:
+        payload = _iata_email_payload(record_id)
+        if payload is None:
+            return jsonify({'error': 'Ata não encontrada.'}), 404
+        if 'blocked' in payload:
+            return jsonify({'error': payload['blocked']}), 422
+        return jsonify(payload)
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao montar preview de e-mail da ata {record_id}: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/email', methods=['POST'])
+def send_iata_email(record_id):
+    """Envia a ata por e-mail, um envio por destinatário (`_outlook_send_mail`
+    só aceita um endereço por chamada) — cada um com seu próprio resultado,
+    para que a falha de um endereço não esconda o sucesso dos demais.
+
+    Nunca há destinatário implícito: sem `to` explícito e não-vazio, a rota
+    recusa antes de montar qualquer coisa (diferente de `_outlook_send_mail`
+    em outros pontos do app, que cai para o e-mail do próprio usuário quando
+    `to` vem vazio — isso aqui seria enviar a ata comercial de um cliente
+    para o endereço errado sem o usuário pedir)."""
+    try:
+        body = request.get_json(silent=True) or {}
+        brutos = [str(e).strip() for e in (body.get('to') or []) if str(e).strip()]
+        # Dedup preservando a ordem: o mesmo endereço colado duas vezes no
+        # campo do frontend não pode virar dois e-mails reais no destinatário.
+        destinatarios = list(dict.fromkeys(brutos))
+        if not destinatarios:
+            return jsonify({'error': 'Informe ao menos um destinatário.'}), 400
+
+        payload = _iata_email_payload(record_id)
+        if payload is None:
+            return jsonify({'error': 'Ata não encontrada.'}), 404
+        if 'blocked' in payload:
+            return jsonify({'error': payload['blocked']}), 422
+
+        if payload.get('stale') and not body.get('confirm_stale'):
+            return jsonify({'error': payload['warning'], 'stale': True}), 409
+
+        resultados = []
+        for destino in destinatarios:
+            if not _IATA_EMAIL_RE.match(destino):
+                # Validado aqui, sem chamar o Graph: um endereço malformado
+                # nunca vai ser aceito pela API, então não vale gastar uma
+                # tentativa de rede (nem arriscar um erro genérico) por isso.
+                resultados.append({'to': destino, 'ok': False,
+                                   'error': 'Endereço de destinatário inválido.'})
+                continue
+            try:
+                _outlook_send_mail(destino, payload['subject'], payload['html'])
+                resultados.append({'to': destino, 'ok': True})
+            except Exception as e:
+                logger.warning(f'[iAta] Falha ao enviar ata {record_id} para {destino}: {e}')
+                resultados.append({'to': destino, 'ok': False, 'error': str(e)})
+
+        status = 200 if all(r['ok'] for r in resultados) else 207
+        logger.info(f'[iAta] Ata {record_id} enviada por e-mail: {resultados}')
+        return jsonify({'results': resultados}), status
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao enviar ata {record_id} por e-mail: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/autotoca/iata/<int:record_id>/accounts/<int:iata_account_id>/link',
+           methods=['POST'])
+def link_iata_account(record_id, iata_account_id):
+    """Confirma (ou desfaz, com `account_id: null`) o vínculo de uma conta
+    da ata com uma conta cadastrada em `accounts`. A sugestão automática
+    (`_iata_sugerir_contas`) nunca confirma sozinha — esta rota é o único
+    lugar que marca `match_confirmed`, por decisão explícita do usuário."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        account_id = payload.get('account_id')
+        conn = get_db()
+        c = conn.cursor()
+        try:
+            if account_id is not None:
+                try:
+                    account_id = int(account_id)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'account_id inválido.'}), 400
+                c.execute('SELECT 1 FROM accounts WHERE id = ?', (account_id,))
+                if not c.fetchone():
+                    return jsonify({'error': 'Conta do CRM não encontrada.'}), 404
+
+            c.execute('''UPDATE iata_accounts SET account_id = ?, match_confirmed = ?
+                         WHERE id = ? AND record_id = ?''',
+                      (account_id, 1 if account_id is not None else 0,
+                       iata_account_id, record_id))
+            alterados = c.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        if not alterados:
+            return jsonify({'error': 'Conta da ata não encontrada.'}), 404
+        return jsonify({'message': 'Vínculo atualizado.'})
+    except Exception as e:
+        logger.exception(f'[iAta] Erro ao vincular conta {iata_account_id}: {e}')
+        return jsonify({'error': str(e)}), 500

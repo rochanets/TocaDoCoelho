@@ -176,7 +176,11 @@ else:
     LEGACY_DATA_DIR_V1 = None
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / 'toca-do-coelho.db'
+# TOCA_DB_PATH redireciona o banco inteiro (útil para subir uma instância de
+# teste sem encostar no banco real do usuário — já houve contaminação do banco
+# de produção por um teste que não tinha como apontar para outro arquivo).
+_DB_PATH_OVERRIDE = os.environ.get('TOCA_DB_PATH', '').strip()
+DB_PATH = Path(_DB_PATH_OVERRIDE) if _DB_PATH_OVERRIDE else DATA_DIR / 'toca-do-coelho.db'
 TEST_DB_TEMPLATE_PATH = Path(__file__).resolve().parent / 'BD_teste' / 'toca-do-coelho-ficticio-reduzido.db'
 BACKUP_DIR = DATA_DIR / 'backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -697,7 +701,54 @@ def init_db():
         raw_text TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
-    
+
+    c.execute('''CREATE TABLE IF NOT EXISTS iata_managers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        display_order INTEGER DEFAULT 0,
+        FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS iata_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        manager_id INTEGER NOT NULL,
+        account_id INTEGER,
+        name TEXT NOT NULL,
+        name_norm TEXT NOT NULL,
+        match_confidence TEXT,
+        match_confirmed INTEGER DEFAULT 0,
+        display_order INTEGER DEFAULT 0,
+        FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+        FOREIGN KEY(manager_id) REFERENCES iata_managers(id) ON DELETE CASCADE,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS iata_opportunities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        iata_account_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_norm TEXT NOT NULL,
+        previous_status TEXT,
+        update_text TEXT,
+        responsible TEXT,
+        carried_over INTEGER DEFAULT 0,
+        prev_opportunity_id INTEGER,
+        match_confidence TEXT,
+        display_order INTEGER DEFAULT 0,
+        FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+        FOREIGN KEY(iata_account_id) REFERENCES iata_accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY(prev_opportunity_id) REFERENCES iata_opportunities(id) ON DELETE SET NULL
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_acc_record ON iata_accounts(record_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_record ON iata_opportunities(record_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_prev ON iata_opportunities(prev_opportunity_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_iata_opp_norm ON iata_opportunities(name_norm)')
+
+    _iata_add_record_columns(conn)
+
     # Tabela de compromissos (agenda)
     c.execute('''CREATE TABLE IF NOT EXISTS commitments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1218,6 +1269,40 @@ def run_automatic_db_backup(interval_days=3):
 # binários mas mantém o .db em %AppData%). Novas mudanças de schema devem ser
 # adicionadas como entradas numeradas em SCHEMA_MIGRATIONS — nunca mais como
 # ALTER TABLE ad-hoc no init_db.
+def _iata_add_record_columns(conn):
+    """Colunas novas de iata_records (ALTER TABLE não aceita IF NOT EXISTS)."""
+    c = conn.cursor()
+    existentes = {r[1] for r in c.execute('PRAGMA table_info(iata_records)')}
+    if not existentes:
+        # iata_records nasce no init_db (migração 1/baseline); em bancos de teste
+        # sintéticos que pulam a baseline a tabela pode não existir ainda — nesse
+        # caso não há coluna para adicionar.
+        return
+    for col, ddl in (
+        ('previous_record_id', 'INTEGER'),
+        ('body_markdown', 'TEXT'),
+        ('body_edited', 'INTEGER DEFAULT 0'),
+        ('reparse_failed', 'INTEGER DEFAULT 0'),
+        ('format_version', 'INTEGER DEFAULT 1'),
+    ):
+        if col not in existentes:
+            c.execute(f'ALTER TABLE iata_records ADD COLUMN {col} {ddl}')
+
+
+def _iata_add_opportunity_match_confidence_column(conn):
+    """`reconcile()` (Task 2) devolve `match_confidence` também por
+    oportunidade (alta/media/baixa/None), não só por conta — mas a migração
+    17 só criou a coluna em iata_accounts. Sem esta coluna, o valor era
+    perdido em silêncio a cada gravação (achado da revisão de qualidade da
+    Task 6). Segue o mesmo padrão de `_iata_add_record_columns`: ALTER TABLE
+    condicional, tolerante à tabela ainda não existir."""
+    c = conn.cursor()
+    existentes = {r[1] for r in c.execute('PRAGMA table_info(iata_opportunities)')}
+    if not existentes:
+        return
+    if 'match_confidence' not in existentes:
+        c.execute('ALTER TABLE iata_opportunities ADD COLUMN match_confidence TEXT')
+
 # ---------------------------------------------------------------------------
 SCHEMA_MIGRATIONS = [
     (1, 'baseline_legacy_init', None),  # None => roda init_db()
@@ -1391,6 +1476,53 @@ SCHEMA_MIGRATIONS = [
             sent_at TIMESTAMP
         )''',
     ]),
+    (17, 'iata_hierarquia', [
+        '''CREATE TABLE IF NOT EXISTS iata_managers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            display_order INTEGER DEFAULT 0,
+            FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE
+        )''',
+        '''CREATE TABLE IF NOT EXISTS iata_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id INTEGER NOT NULL,
+            manager_id INTEGER NOT NULL,
+            account_id INTEGER,
+            name TEXT NOT NULL,
+            name_norm TEXT NOT NULL,
+            match_confidence TEXT,
+            match_confirmed INTEGER DEFAULT 0,
+            display_order INTEGER DEFAULT 0,
+            FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+            FOREIGN KEY(manager_id) REFERENCES iata_managers(id) ON DELETE CASCADE,
+            FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS iata_opportunities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id INTEGER NOT NULL,
+            iata_account_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            name_norm TEXT NOT NULL,
+            previous_status TEXT,
+            update_text TEXT,
+            responsible TEXT,
+            carried_over INTEGER DEFAULT 0,
+            prev_opportunity_id INTEGER,
+            display_order INTEGER DEFAULT 0,
+            FOREIGN KEY(record_id) REFERENCES iata_records(id) ON DELETE CASCADE,
+            FOREIGN KEY(iata_account_id) REFERENCES iata_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY(prev_opportunity_id) REFERENCES iata_opportunities(id) ON DELETE SET NULL
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_iata_acc_record ON iata_accounts(record_id)',
+        'CREATE INDEX IF NOT EXISTS idx_iata_opp_record ON iata_opportunities(record_id)',
+        'CREATE INDEX IF NOT EXISTS idx_iata_opp_prev ON iata_opportunities(prev_opportunity_id)',
+        'CREATE INDEX IF NOT EXISTS idx_iata_opp_norm ON iata_opportunities(name_norm)',
+        _iata_add_record_columns,
+    ]),
+    (18, 'iata_opportunity_match_confidence', [
+        _iata_add_opportunity_match_confidence_column,
+    ]),
 ]
 
 
@@ -1544,6 +1676,31 @@ def _tavily_api_key():
     return _resolve_bundled_setting('tavily_api_key', 'TAVILY_API_KEY', 'TAVILY_API_KEY')
 
 
+def _openrouter_max_tokens():
+    """Teto de tokens da resposta do OpenRouter, configurável por
+    `openrouter_max_tokens`. Ver o comentário no ponto de uso: sem teto, o
+    provedor reserva o máximo do modelo e recusa por saldo insuficiente."""
+    try:
+        valor = int(_resolve_setting('openrouter_max_tokens', 'OPENROUTER_MAX_TOKENS') or 4000)
+    except (TypeError, ValueError):
+        valor = 4000
+    return max(256, valor)
+
+
+def _sai_timeout_seconds():
+    """Timeout das chamadas ao SAI, configurável por `sai_timeout_seconds`.
+
+    Os 45s originais não davam conta: o template Geral Claude estourava o
+    tempo mesmo com prompts de 13k caracteres, e o usuário via "nenhum
+    provedor respondeu" sem saber que a resposta só estava demorando.
+    """
+    try:
+        valor = int(_resolve_setting('sai_timeout_seconds', 'SAI_TIMEOUT_SECONDS') or 120)
+    except (TypeError, ValueError):
+        valor = 120
+    return max(15, valor)
+
+
 def _sai_execute_question_template(base_url, template_id, api_key, question, log_tag):
     """Executa um template SAI que aceita {"inputs": {"question": ...}} com retry em HTTP 429
     (rate limit transitório). Retorna o texto da resposta ou None."""
@@ -1555,7 +1712,7 @@ def _sai_execute_question_template(base_url, template_id, api_key, question, log
                 f'{base_url}/api/templates/{template_id}/execute',
                 json={'inputs': {'question': question}},
                 headers={'X-Api-Key': api_key},
-                timeout=45
+                timeout=_sai_timeout_seconds()
             )
             if resp.status_code == 200:
                 logger.info(f'[SAI][{log_tag}] OK ({len(resp.text)} chars)')
@@ -1718,7 +1875,14 @@ def _llm_prompt(question, log_tag='llm', temperature=0.1, web=False):
                 json={
                     'model': model,
                     'messages': [{'role': 'user', 'content': question}],
-                    'temperature': temperature
+                    'temperature': temperature,
+                    # Sem max_tokens o OpenRouter reserva o máximo do modelo
+                    # (16k tokens no gpt-4o-mini) e recusa a requisição com
+                    # HTTP 402 quando o saldo não cobre esse teto — mesmo
+                    # havendo crédito de sobra para a resposta real. Pedir um
+                    # teto modesto mantém o fallback funcionando com pouco
+                    # saldo, que é justamente quando ele precisa funcionar.
+                    'max_tokens': _openrouter_max_tokens()
                 },
                 headers={
                     'Authorization': f'Bearer {or_key}',
@@ -1733,7 +1897,15 @@ def _llm_prompt(question, log_tag='llm', temperature=0.1, web=False):
             if raw and str(raw).strip():
                 logger.info(f'[{log_tag}][OpenRouter] Resposta gerada com sucesso (fallback)')
                 return raw
-            logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia.')
+            # Sem isto, um 402 (sem crédito) ou 401 (chave inválida) aparecia
+            # no log apenas como "Resposta vazia" — e a causa real ficava
+            # invisível.
+            erro_api = (data.get('error') or {})
+            if erro_api:
+                logger.warning(f'[{log_tag}][OpenRouter] HTTP {resp.status_code}: '
+                               f'{erro_api.get("message") or erro_api}')
+            else:
+                logger.warning(f'[{log_tag}][OpenRouter] Resposta vazia (HTTP {resp.status_code}).')
         except Exception as e:
             logger.warning(f'[{log_tag}][OpenRouter] Falha no fallback: {e}')
     return None
@@ -9617,237 +9789,6 @@ def _iata_extract_file_text(file_storage):
         return file_bytes.decode('utf-8', errors='replace').strip()
 
 
-def _iata_parse_llm_ata(raw):
-    if not raw:
-        return None
-    stripped = str(raw).strip()
-    if stripped.startswith('```'):
-        m = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', stripped, flags=re.IGNORECASE)
-        if m:
-            stripped = m.group(1).strip()
-    try:
-        parsed = json.loads(stripped)
-    except Exception:
-        parsed = _extract_json_object_from_text(stripped)
-    if not isinstance(parsed, dict):
-        return None
-    if 'title' not in parsed:
-        for key in ('output', 'result', 'text', 'content', 'response', 'data'):
-            candidate = parsed.get(key)
-            if isinstance(candidate, str):
-                try:
-                    nested = json.loads(candidate)
-                    if isinstance(nested, dict) and 'title' in nested:
-                        parsed = nested
-                        break
-                except Exception as e:
-                    logger.debug(f'[_iata_parse_llm_ata] exceção ignorada: {e}')
-    title = (parsed.get('title') or '').strip()
-    if not title:
-        return None
-
-    def _clean_null(val):
-        v = str(val or '').strip()
-        return None if not v or v.lower() in ('null', 'none', 'n/a', '-') else v
-
-    def _parse_participants(raw_list):
-        result = []
-        for p in (raw_list or []):
-            if isinstance(p, dict):
-                name = str(p.get('name') or p.get('nome') or '').strip()
-                role = str(p.get('role') or p.get('cargo') or p.get('empresa') or '').strip()
-                if name:
-                    result.append({'name': name, 'role': role or ''})
-            elif p and str(p).strip():
-                result.append({'name': str(p).strip(), 'role': ''})
-        return result
-
-    return {
-        'title': title,
-        'meeting_date': _clean_null(parsed.get('meeting_date')),
-        'meeting_time': _clean_null(parsed.get('meeting_time')),
-        'location': _clean_null(parsed.get('location')),
-        'topic': (parsed.get('topic') or '').strip() or title,
-        'participants': _parse_participants(parsed.get('participants')),
-        'objective': (parsed.get('objective') or '').strip(),
-        'summary': (parsed.get('summary') or '').strip(),
-        'agenda': [str(a).strip() for a in (parsed.get('agenda') or []) if str(a).strip()],
-        'key_points': [str(k).strip() for k in (parsed.get('key_points') or []) if str(k).strip()],
-        'decisions': [str(d).strip() for d in (parsed.get('decisions') or []) if str(d).strip()],
-        'next_steps': [
-            {
-                'action': str(s.get('action') or '').strip(),
-                'responsible': str(s.get('responsible') or 'A definir').strip(),
-                'deadline': _clean_null(s.get('deadline')),
-                'status': str(s.get('status') or 'pendente').strip()
-            }
-            for s in (parsed.get('next_steps') or []) if isinstance(s, dict)
-        ],
-        'observations': _clean_null(parsed.get('observations'))
-    }
-
-
-def _iata_parse_llm_insights(raw):
-    if not raw:
-        return None
-    stripped = str(raw).strip()
-    if stripped.startswith('```'):
-        m = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', stripped, flags=re.IGNORECASE)
-        if m:
-            stripped = m.group(1).strip()
-    try:
-        parsed = json.loads(stripped)
-    except Exception:
-        parsed = _extract_json_object_from_text(stripped)
-    if not isinstance(parsed, dict):
-        return None
-    insights_raw = parsed.get('insights') or []
-    if not isinstance(insights_raw, list):
-        return None
-    insights = []
-    for item in insights_raw:
-        if not isinstance(item, dict):
-            continue
-        pain = (item.get('pain') or '').strip()
-        if not pain:
-            continue
-        insights.append({
-            'pain': pain,
-            'matched_offer': item.get('matched_offer') or None,
-            'matched_solution': item.get('matched_solution') or None,
-            'confidence': str(item.get('confidence') or 'baixa').strip(),
-            'observation': str(item.get('observation') or '').strip()
-        })
-    return {
-        'insights': insights,
-        'has_unmatched': bool(parsed.get('has_unmatched', False))
-    }
-
-
-def _iata_call_llm(system_msg, user_msg, log_tag):
-    """SAI como primário; OpenRouter como fallback."""
-    # Tenta SAI primeiro
-    question = f"{system_msg}\n\n{user_msg}" if system_msg else user_msg
-    raw = _unwrap_llm_text_response(_sai_simple_prompt(question))
-    if raw and str(raw).strip():
-        logger.info(f'[iAta][{log_tag}] SAI respondeu com sucesso')
-        return raw, 'SAI'
-    logger.info(f'[iAta][{log_tag}] SAI indisponível, tentando OpenRouter.')
-
-    # Fallback: OpenRouter
-    or_key = _resolve_setting('openrouter_api_key', 'OPENROUTER_API_KEY')
-    if not or_key:
-        return None, 'sem_llm'
-    or_settings = _load_app_settings_map(['openrouter_model', 'openrouter_site_url', 'openrouter_app_name'])
-    model = (or_settings.get('openrouter_model') or os.environ.get('OPENROUTER_MODEL', 'stepfun/step-3.5-flash:free')).strip() or 'stepfun/step-3.5-flash:free'
-    site_url = (or_settings.get('openrouter_site_url') or os.environ.get('OPENROUTER_SITE_URL', 'http://localhost')).strip() or 'http://localhost'
-    app_name = (or_settings.get('openrouter_app_name') or os.environ.get('OPENROUTER_APP_NAME', 'TocaDoCoelho')).strip() or 'TocaDoCoelho'
-    try:
-        resp = requests.post(
-            'https://openrouter.ai/api/v1/chat/completions',
-            json={
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': system_msg},
-                    {'role': 'user', 'content': user_msg}
-                ],
-                'temperature': 0.2
-            },
-            headers={
-                'Authorization': f'Bearer {or_key}',
-                'HTTP-Referer': site_url,
-                'X-Title': app_name
-            },
-            timeout=90
-        )
-        data = resp.json()
-        choices = data.get('choices') or []
-        raw = _unwrap_llm_text_response((choices[0].get('message') or {}).get('content', '') if choices else '')
-        if raw and str(raw).strip():
-            logger.info(f'[iAta][{log_tag}][OpenRouter] Resposta gerada com sucesso')
-            return raw, 'OpenRouter'
-        logger.warning(f'[iAta][{log_tag}][OpenRouter] Resposta vazia.')
-    except Exception as e:
-        logger.warning(f'[iAta][{log_tag}][OpenRouter] Falha: {e}.')
-    return None, 'sem_llm'
-
-
-def _iata_generate_ata(raw_text):
-    prompt = (
-        "Você é um especialista em documentação corporativa. "
-        "Analise o texto de reunião e gere uma ATA DE REUNIÃO COMPLETA E DETALHADA em português (Brasil). "
-        "A ata deve ser rica em detalhes, capturando o contexto, as discussões e os argumentos apresentados. "
-        "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown, sem introdução:\n"
-        '{"title":"Título formal da reunião",'
-        '"meeting_date":"DD/MM/AAAA ou null se não mencionada",'
-        '"meeting_time":"HH:MM ou null se não mencionada",'
-        '"location":"Local ou plataforma (ex: Microsoft Teams) ou null",'
-        '"topic":"Tema central da reunião em uma frase",'
-        '"participants":[{"name":"Nome Completo","role":"Cargo ou empresa se mencionado"}],'
-        '"objective":"Objetivo principal da reunião em 2-3 frases completas",'
-        '"summary":"Resumo executivo DETALHADO da reunião com 5-8 frases cobrindo contexto, discussões principais e resultados",'
-        '"agenda":["Item de pauta 1 — descrição breve","Item de pauta 2 — descrição breve"],'
-        '"key_points":["Ponto discutido em detalhe — inclua contexto, argumentos e posições dos participantes. Cada item deve ter 2-4 frases.","Segundo ponto com o mesmo nível de detalhe"],'
-        '"decisions":["Decisão formal tomada com contexto — quem decidiu e por quê quando relevante"],'
-        '"next_steps":[{"action":"Descrição detalhada da ação a ser realizada","responsible":"Nome completo do responsável","deadline":"DD/MM/AAAA ou null","status":"pendente"}],'
-        '"observations":"Observações adicionais relevantes, contexto extra ou informações complementares mencionadas durante a reunião. Use null se não houver."}\n'
-        "REGRAS OBRIGATÓRIAS:\n"
-        "- Liste TODOS os participantes mencionados com nome e cargo/empresa quando disponível;\n"
-        "- key_points: cada item deve ser um parágrafo detalhado (2-4 frases), não apenas uma frase curta;\n"
-        "- next_steps: inclua TODAS as pendências, ações e encaminhamentos com responsáveis identificados;\n"
-        "- Se não houver responsável claro para uma ação, use 'A definir';\n"
-        "- deadline: use formato DD/MM/AAAA quando mencionado, ou null (JSON null, não a string 'null');\n"
-        "- Não invente informações que não estejam no texto original;\n"
-        "- Preserve nomes próprios, empresas e termos técnicos como aparecem no texto.\n\n"
-        f"TEXTO DA REUNIÃO:\n{raw_text[:30000]}"
-    )
-    raw, source = _iata_call_llm(
-        'Você é um especialista em documentação corporativa. Responda SEMPRE e SOMENTE com JSON válido.',
-        prompt,
-        'Ata'
-    )
-    if raw is None:
-        return None, source
-    parsed = _iata_parse_llm_ata(raw)
-    if parsed:
-        return parsed, source
-    logger.warning(f'[iAta] Resposta inválida para parsing de ata (source={source}).')
-    return None, 'llm_invalid_response'
-
-
-def _iata_generate_insights(ata_data, portfolio_offers):
-    ata_text = json.dumps(ata_data, ensure_ascii=False)
-    offers_text = json.dumps(portfolio_offers, ensure_ascii=False)
-    prompt = (
-        "Você é um consultor de negócios especialista em soluções tecnológicas. "
-        "Analise a ata de reunião e identifique dores/desafios de negócio mencionados. "
-        "Cruze cada dor com as soluções disponíveis no portfólio STF. "
-        "Retorne EXCLUSIVAMENTE um objeto JSON válido, sem markdown:\n"
-        '{"insights":[{"pain":"Dor identificada","matched_offer":"Título da oferta ou null",'
-        '"matched_solution":"Solução específica ou null","confidence":"alta/média/baixa",'
-        '"observation":"Observação breve"}],"has_unmatched":true}\n'
-        "Regras:\n"
-        "- Identifique TODAS as dores, desafios e oportunidades mencionados;\n"
-        "- matched_offer = null e observation explicando para buscar soluções na Stefanini se não houver match;\n"
-        "- confidence: 'alta' se endereça diretamente, 'média' se parcialmente, 'baixa' se tangencialmente;\n"
-        "- has_unmatched: true se houver pelo menos uma dor sem match.\n\n"
-        f"ATA:\n{ata_text[:15000]}\n\n"
-        f"SOLUÇÕES STF:\n{offers_text[:15000]}"
-    )
-    raw, source = _iata_call_llm(
-        'Você é um consultor de negócios. Responda SEMPRE e SOMENTE com JSON válido.',
-        prompt,
-        'Insights'
-    )
-    if raw is None:
-        return None, source
-    parsed = _iata_parse_llm_insights(raw)
-    if parsed:
-        return parsed, source
-    logger.warning(f'[iAta] Resposta inválida para parsing de insights (source={source}).')
-    return None, 'llm_invalid_response'
-
-
 _iata_tasks = {}
 _iata_tasks_lock = threading.Lock()
 
@@ -9881,88 +9822,6 @@ def _iata_extract_bytes(file_bytes, filename):
         def read(self):
             return self._data
     return _iata_extract_file_text(_BytesFS(file_bytes, filename))
-
-
-def _iata_process_async(task_id, file_bytes, filename, raw_text_input):
-    try:
-        raw_text = raw_text_input or ''
-        if file_bytes and filename:
-            _iata_task_set(task_id, {'step': 'Extraindo texto do arquivo...', 'progress': 15})
-            file_text = _iata_extract_bytes(file_bytes, filename)
-            if file_text and raw_text_input:
-                raw_text = file_text + '\n\n' + raw_text_input
-            else:
-                raw_text = file_text or raw_text_input
-
-        if not raw_text:
-            raise ValueError('Não foi possível extrair texto do arquivo enviado.')
-
-        _iata_task_set(task_id, {'step': 'Gerando ata com IA...', 'progress': 30})
-        ata_data, ata_source = _iata_generate_ata(raw_text)
-        if not ata_data:
-            if ata_source == 'sem_llm':
-                raise RuntimeError('Nenhum serviço de IA configurado (OpenRouter ou SAI).')
-            raise RuntimeError('A IA retornou uma resposta inválida. Tente novamente.')
-
-        _iata_task_set(task_id, {'step': 'Buscando soluções STF...', 'progress': 68})
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT id, title, summary FROM portfolio_offers ORDER BY id DESC')
-        offers = [dict_from_row(row) for row in c.fetchall()]
-        for offer in offers:
-            c.execute('SELECT pain, solution FROM portfolio_offer_items WHERE offer_id = ? ORDER BY sort_order ASC', (offer['id'],))
-            offer['items'] = [dict_from_row(row) for row in c.fetchall()]
-
-        if offers:
-            _iata_task_set(task_id, {'step': 'Gerando insights de negócio...', 'progress': 78})
-            insights_data, _ = _iata_generate_insights(ata_data, offers)
-            if not insights_data:
-                insights_data = {'insights': [], 'has_unmatched': False}
-        else:
-            insights_data = {'insights': [], 'has_unmatched': False}
-
-        _iata_task_set(task_id, {'step': 'Salvando ata...', 'progress': 92})
-        c.execute(
-            '''INSERT INTO iata_records (title, meeting_date, meeting_time, topic, participants, ata_json, insights_json, raw_text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-            (
-                ata_data['title'],
-                ata_data.get('meeting_date'),
-                ata_data.get('meeting_time'),
-                ata_data.get('topic'),
-                json.dumps([p['name'] if isinstance(p, dict) else str(p) for p in (ata_data.get('participants') or [])], ensure_ascii=False),
-                json.dumps(ata_data, ensure_ascii=False),
-                json.dumps(insights_data, ensure_ascii=False),
-                raw_text[:50000]
-            )
-        )
-        record_id = c.lastrowid
-        conn.commit()
-        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
-        record = _iata_record_to_dict(c.fetchone())
-        conn.close()
-        _iata_task_set(task_id, {'step': 'Concluído!', 'progress': 100, 'status': 'done', 'result': record})
-    except Exception as e:
-        logger.exception(f'[iAta][Task:{task_id}] Erro: {e}')
-        _iata_task_set(task_id, {'status': 'error', 'error': str(e)})
-    finally:
-        _iata_task_cleanup(task_id)
-
-
-def _iata_record_to_dict(record):
-    r = dict(record)
-    for field in ('participants', 'ata_json', 'insights_json'):
-        val = r.get(field)
-        if val:
-            try:
-                r[field] = json.loads(val)
-            except Exception:
-                r[field] = [] if field == 'participants' else {}
-        else:
-            r[field] = [] if field == 'participants' else {}
-    r['ata'] = r.pop('ata_json', {})
-    r['insights'] = r.pop('insights_json', {})
-    return r
 
 
 @app.route('/api/tasks/<task_id>', methods=['GET'])
@@ -10395,10 +10254,10 @@ def _linkedin_build_account_context(account, contact):
                     "priorizando o histórico do contato e complementando com o contexto da conta quando o "
                     "histórico direto for escasso. Não invente fatos não listados."
                 )
-                raw, _src = _iata_call_llm(
-                    'Você é um assistente comercial. Responda em português (Brasil), apenas o resumo, sem markdown.',
-                    user_msg,
-                    'linkedin_relationship'
+                raw = _llm_prompt(
+                    'Você é um assistente comercial. Responda em português (Brasil), apenas o resumo, sem markdown.\n\n'
+                    + user_msg,
+                    log_tag='linkedin_relationship'
                 )
                 if raw and str(raw).strip():
                     relationship_summary = str(raw).strip()
@@ -12648,7 +12507,7 @@ def handle_unexpected_exception(error):
 # No build PyInstaller, incluir --add-data "routes;routes".
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
-                 'whatsapp', 'outlook', 'itoca', 'autotoca', 'wikitoca',
+                 'whatsapp', 'outlook', 'itoca', 'autotoca', 'autotoca_iata', 'wikitoca',
                  'portfolio', 'config', 'home', 'reembolsos', 'feedback']
 
 
@@ -12666,8 +12525,42 @@ _start_inbound_poller()
 _start_scheduled_jobs()
 
 
+def _porta_ja_em_uso(port):
+    """Diz se já existe um servidor ATENDENDO em localhost:port.
+
+    No Windows, o SO_REUSEADDR usado pelo servidor de dev do Werkzeug permite
+    que duas instâncias façam bind na MESMA porta sem nenhum erro — e qual
+    delas atende cada conexão é indeterminado. Foi assim que uma instância
+    antiga (com código desatualizado) continuou respondendo o app enquanto
+    instâncias novas subiam "com sucesso" (quatro processos escutando
+    localhost:3000 em 07/08/2026). Por isso o teste é de CONEXÃO, não de
+    bind: se alguém aceita conexão na porta, outra instância está no ar e
+    este processo NÃO deve subir.
+    """
+    import socket
+    try:
+        with socket.create_connection(('127.0.0.1', int(port)), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _abortar_se_ja_houver_instancia(port):
+    if not _porta_ja_em_uso(port):
+        return
+    msg = (f'Já existe uma instância do Toca do Coelho atendendo em '
+           f'http://localhost:{port}. Este processo não vai subir uma segunda '
+           'instância (ela disputaria a porta e requisições poderiam cair na '
+           'instância antiga, com código desatualizado). Encerre a instância '
+           'que está rodando antes de iniciar de novo.')
+    logger.error(f'[Server] {msg}')
+    print(f'[ERRO] {msg}')
+    sys.exit(1)
+
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 3000))
+    _abortar_se_ja_houver_instancia(port)
     fixed_debug_mode = True
     app.logger.setLevel(logging.DEBUG)
     logging.getLogger().setLevel(logging.DEBUG)

@@ -125,10 +125,13 @@
                             task._done = true;
                             const onSourceTab = (typeof _currentTab !== 'undefined') && _currentTab === task.sourceTab;
                             if (onSourceTab && task.onComplete) {
-                                try { task.onComplete(status.result !== undefined ? status.result : status); } catch(e) {}
+                                // Segundo argumento: o `status` bruto inteiro (inclui `warning`,
+                                // que `status.result` sozinho não carrega). Callbacks existentes
+                                // que só declaram 1 parâmetro simplesmente ignoram o extra.
+                                try { task.onComplete(status.result !== undefined ? status.result : status, status); } catch(e) {}
                                 delete _tasks[task.taskId];
                             } else {
-                                _done.push({ ...task, _result: status.result !== undefined ? status.result : status });
+                                _done.push({ ...task, _result: status.result !== undefined ? status.result : status, _status: status });
                                 delete _tasks[task.taskId];
                             }
                             _render();
@@ -185,7 +188,7 @@
                 // Chama o callback de conclusão com o resultado armazenado
                 if (task.onComplete) {
                     setTimeout(() => {
-                        try { task.onComplete(task._result); } catch(e) {}
+                        try { task.onComplete(task._result, task._status); } catch(e) {}
                     }, 350);
                 }
                 _stopPollIfIdle();
@@ -220,7 +223,7 @@
                     if (task.sourceTab !== tabName) continue;
                     _done.splice(i, 1);
                     if (task.onComplete) {
-                        try { task.onComplete(task._result); } catch(e) {}
+                        try { task.onComplete(task._result, task._status); } catch(e) {}
                     }
                 }
                 _closeDoneList();
@@ -1569,12 +1572,15 @@
         }
 
         // Todos os botões de módulo do AutoToca (inclui o WhatsApp Update, que abre modal em vez de painel inline)
+        // Todo botão de módulo do AutoToca precisa estar aqui, senão ele fica
+        // com o destaque de "ativo" mesmo depois que outro painel é aberto.
         const AUTOTOCA_MODULE_BUTTON_IDS = [
             'autoTocaBtn_chamado-juridico',
             'autoTocaBtn_mala-direta',
             'autoTocaBtn_whatsapp-update',
             'autoTocaBtn_sync-outlook',
             'autoTocaBtn_reembolsos',
+            'autoTocaBtn_iata',
             'autoTocaBtn_relatorio-semanal'
         ];
 
@@ -1603,6 +1609,7 @@
                 'mala-direta': 'autoTocaMalaDireta',
                 'sync-outlook': 'autoTocaSyncOutlook',
                 'reembolsos': 'autoTocaReembolsos',
+                'iata': 'autoTocaIAta',
                 'relatorio-semanal': 'autoTocaRelatorioSemanal'
             };
             const buttons = {
@@ -1610,6 +1617,7 @@
                 'mala-direta': 'autoTocaBtn_mala-direta',
                 'sync-outlook': 'autoTocaBtn_sync-outlook',
                 'reembolsos': 'autoTocaBtn_reembolsos',
+                'iata': 'autoTocaBtn_iata',
                 'relatorio-semanal': 'autoTocaBtn_relatorio-semanal'
             };
             const targetId = panels[key];
@@ -1642,6 +1650,7 @@
                 target.style.display = 'block';
                 setActiveAutoTocaModuleButton(buttons[key]);
                 if (key === 'reembolsos') { loadReembContas(); loadReembOrigemHistorico(); }
+                if (key === 'iata' && typeof loadIAta === 'function') { loadIAta(); }
                 if (key === 'relatorio-semanal') initRelatorioSemanalPanel();
             }
         }

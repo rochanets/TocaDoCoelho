@@ -417,6 +417,11 @@ def _start_waha_lite():
 if '--serve' in sys.argv:
     import app as app_module
     port = get_server_port()
+    # Se outra instância já responde na porta, morre ANTES do app.run — no
+    # Windows o bind duplicado na mesma porta "funciona" (SO_REUSEADDR do
+    # Werkzeug) e a instância antiga continuaria atendendo requisições com
+    # código desatualizado. O launcher pai detecta a morte e avisa o usuário.
+    app_module._abortar_se_ja_houver_instancia(port)
     app_module.app.run(host='localhost', port=port, debug=False, use_reloader=False)
     sys.exit(0)
 

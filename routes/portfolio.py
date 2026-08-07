@@ -298,86 +298,10 @@ def delete_portfolio_offer_item(offer_id, item_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/portfolio/iata', methods=['GET'])
-def list_iata_records():
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM iata_records ORDER BY datetime(created_at) DESC, id DESC')
-        records = [_iata_record_to_dict(row) for row in c.fetchall()]
-        conn.close()
-        return jsonify(records)
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao listar registros: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/iata/<int:record_id>', methods=['GET'])
-def get_iata_record(record_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('SELECT * FROM iata_records WHERE id = ?', (record_id,))
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            return jsonify({'error': 'Registro não encontrado.'}), 404
-        return jsonify(_iata_record_to_dict(row))
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao buscar registro {record_id}: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/iata', methods=['POST'])
-def create_iata_record():
-    try:
-        file_obj = request.files.get('meeting_file')
-        raw_text_input = (request.form.get('raw_text') or '').strip()
-
-        if not file_obj and not raw_text_input:
-            return jsonify({'error': 'Envie um arquivo de reunião ou cole o texto.'}), 400
-
-        file_bytes, filename = None, None
-        if file_obj and file_obj.filename:
-            file_bytes = file_obj.read()
-            filename = file_obj.filename
-
-        task_id = uuid.uuid4().hex
-        _iata_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(
-            target=_iata_process_async,
-            args=(task_id, file_bytes, filename, raw_text_input),
-            daemon=True
-        ).start()
-        return jsonify({'task_id': task_id}), 202
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao iniciar tarefa: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/portfolio/iata/tasks/<task_id>', methods=['GET'])
-def get_iata_task_status(task_id):
-    task = _iata_task_get(task_id)
-    if not task:
-        return jsonify({'status': 'error', 'error': 'Tarefa não encontrada ou expirada.'}), 404
-    return jsonify(task)
-
-
-@app.route('/api/portfolio/iata/<int:record_id>', methods=['DELETE'])
-def delete_iata_record(record_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('DELETE FROM iata_records WHERE id = ?', (record_id,))
-        if c.rowcount == 0:
-            conn.close()
-            return jsonify({'error': 'Registro não encontrado.'}), 404
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Registro removido com sucesso.'})
-    except Exception as e:
-        logger.exception(f'[iAta] Erro ao remover registro {record_id}: {e}')
-        return jsonify({'error': str(e)}), 500
+# As rotas de leitura/escrita do iAta (GET lista/detalhe, POST, polling,
+# DELETE) foram movidas para routes/autotoca_iata.py, dentro do AutoToca
+# (Task 6 do plano de migração). O POST de criação e o polling voltam nesse
+# módulo novo na Task 7.
 
 
 # ===========================================================================
