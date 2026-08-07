@@ -1054,6 +1054,13 @@
                         <button class="btn btn-secondary btn-small" id="graphConsentBtn" style="display:none;" onclick="connectMicrosoft365(true)">
                             <i class="fas fa-user-shield"></i> Conectar pedindo consentimento
                         </button>
+                        <!-- Saída para o tenant que trava em "Precisa de aprovação de
+                             administrador": abre (ou copia, para mandar ao admin) o link
+                             do consentimento de administrador do Azure, que libera o
+                             tenant inteiro de uma vez. -->
+                        <button class="btn btn-secondary btn-small" id="graphAdminConsentBtn" style="display:none;" onclick="openGraphAdminConsent()">
+                            <i class="fas fa-key"></i> Aprovação do administrador
+                        </button>
                     </div>
                     <div id="graphConnectedArea" style="display:none;">
                         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">

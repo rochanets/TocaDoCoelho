@@ -254,3 +254,54 @@ def test_callback_com_erro_do_azure_vai_para_a_tela_com_o_botao(client):
     destino = urllib.parse.urlparse(resp.headers['Location'])
     assert destino.path == '/outlook-connected.html'
     assert urllib.parse.parse_qs(destino.query)['needs_consent'] == ['1']
+
+
+# ── Consentimento de administrador ───────────────────────────────────────────
+# O beco sem saída real (visto no app.log de 07/08/2026): o tenant bloqueia o
+# consentimento de usuário, o Azure mostra "Precisa de aprovação de
+# administrador" e NUNCA redireciona de volta — nenhum callback chega e nem o
+# botão "pedindo consentimento" resolve (cai na mesma tela). A única saída é o
+# consentimento de administrador para o tenant, e o mecanismo padrão do Azure
+# para isso é o endpoint /v2.0/adminconsent — que o app precisa saber montar e
+# cujo retorno o callback precisa reconhecer.
+
+def test_admin_consent_url_usa_o_endpoint_v2_com_escopos_qualificados():
+    url = outlook_graph.build_admin_consent_url(settings=_SETTINGS)
+    parsed = urllib.parse.urlparse(url)
+    assert parsed.hostname == 'login.microsoftonline.com'
+    assert parsed.path == '/contoso.onmicrosoft.com/v2.0/adminconsent'
+    params = _query(url)
+    assert params['client_id'] == [_SETTINGS['client_id']]
+    assert params['redirect_uri'] == [_SETTINGS['redirect_uri']]
+    scopes = params['scope'][0].split()
+    # Escopos da Graph precisam do recurso qualificado no adminconsent v2;
+    # escopos OIDC (offline_access etc.) ficam sem prefixo.
+    assert 'https://graph.microsoft.com/Mail.Read' in scopes
+    assert 'https://graph.microsoft.com/Mail.Send' in scopes
+    assert 'https://graph.microsoft.com/User.Read' in scopes
+    assert 'offline_access' in scopes
+
+
+def test_endpoint_devolve_o_link_de_admin_consent(client):
+    data = client.get('/api/outlook/oauth/admin-consent-url').get_json()
+    assert '/v2.0/adminconsent' in data['admin_consent_url']
+
+
+def test_callback_de_admin_consent_bem_sucedido_nao_e_tratado_como_erro(client):
+    """O retorno do adminconsent não traz code/state — sem tratamento próprio,
+    o admin que acabou de aprovar caía em 'Parâmetros OAuth incompletos'."""
+    resp = client.get('/api/outlook/oauth/callback?admin_consent=True&tenant=contoso.onmicrosoft.com')
+    assert resp.status_code == 302
+    destino = urllib.parse.urlparse(resp.headers['Location'])
+    assert destino.path == '/outlook-connected.html'
+    q = urllib.parse.parse_qs(destino.query)
+    assert q.get('admin_consent') == ['1']
+    assert 'error' not in q
+
+
+def test_callback_de_admin_consent_recusado_segue_no_fluxo_de_erro(client):
+    resp = client.get('/api/outlook/oauth/callback?admin_consent=False&error=access_denied&error_description=recusado')
+    destino = urllib.parse.urlparse(resp.headers['Location'])
+    q = urllib.parse.parse_qs(destino.query)
+    assert 'error' in q
+    assert q.get('admin_consent') != ['1']

@@ -19,6 +19,7 @@ logger = logging.getLogger('toca-do-coelho.outlook-graph')
 GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0'
 TOKEN_URL_TEMPLATE = 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token'
 AUTH_URL_TEMPLATE = 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize'
+ADMIN_CONSENT_URL_TEMPLATE = 'https://login.microsoftonline.com/{tenant}/v2.0/adminconsent'
 PROVIDER = 'outlook_graph'
 
 _MAX_SYNC_PAGES = 50
@@ -474,6 +475,40 @@ def build_authorize_url(conn, user_id: int, settings=None, force_consent: bool =
     if force_consent:
         params['prompt'] = 'consent'
     return f"{cfg['authorize_url']}?{urllib.parse.urlencode(params)}"
+
+
+# Escopos OIDC padrão: não pertencem à Graph API e no adminconsent v2 vão sem
+# o prefixo de recurso.
+_OIDC_SCOPES = {'openid', 'profile', 'email', 'offline_access'}
+
+
+def build_admin_consent_url(settings=None):
+    """URL do consentimento de administrador (endpoint v2 do Azure).
+
+    É a única saída para o beco em que o usuário real ficou preso: o tenant
+    bloqueia consentimento de usuário, o Azure mostra "Precisa de aprovação de
+    administrador" e nunca redireciona de volta — nenhum callback chega ao app
+    e reconectar (com ou sem prompt=consent) cai sempre na mesma tela. Um
+    administrador que abra esta URL concede o consentimento DELEGADO para o
+    tenant inteiro de uma vez; depois disso o "Conectar Microsoft 365" normal
+    passa a funcionar para todos.
+
+    Os escopos da Graph precisam vir qualificados com o recurso
+    (https://graph.microsoft.com/Mail.Read) — diferente do authorize, o
+    adminconsent v2 não assume um recurso padrão para nomes curtos."""
+    cfg = _oauth_config(settings)
+    scopes = []
+    for scope in cfg['scope'].split():
+        if scope.lower() in _OIDC_SCOPES or '://' in scope:
+            scopes.append(scope)
+        else:
+            scopes.append(f'https://graph.microsoft.com/{scope}')
+    params = {
+        'client_id': cfg['client_id'],
+        'scope': ' '.join(scopes),
+        'redirect_uri': cfg['redirect_uri'],
+    }
+    return f"{ADMIN_CONSENT_URL_TEMPLATE.format(tenant=cfg['tenant'])}?{urllib.parse.urlencode(params)}"
 
 
 def _upsert_tokens(conn, user_id, token_payload):

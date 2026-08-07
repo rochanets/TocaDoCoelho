@@ -50,6 +50,7 @@ from integrations.outlook_graph import (
     OutlookOAuthError,
     OutlookReauthRequiredError,
     OutlookSyncError,
+    build_admin_consent_url as outlook_graph_build_admin_consent_url,
     build_authorize_url as outlook_graph_build_authorize_url,
     consume_oauth_state as outlook_graph_consume_oauth_state,
     ensure_schema as outlook_graph_ensure_schema,

@@ -40,6 +40,15 @@ def outlook_diagnose():
             else 'Configure Tenant ID / Client ID nas Configurações'
         )
     })
+    # O caso "travado na tela 'Precisa de aprovação de administrador'" não deixa
+    # rastro nenhum no banco (o Azure nunca redireciona de volta), então o link
+    # de consentimento de administrador aparece aqui incondicionalmente — é daqui
+    # que o usuário copia o link para mandar ao admin (ou abre, se for admin).
+    admin_consent_url = ''
+    try:
+        admin_consent_url = outlook_graph_build_admin_consent_url(settings=graph_settings)
+    except Exception as e:
+        logger.debug(f'[outlook_diagnose] sem link de admin consent: {e}')
     checks.append({
         'label': 'Graph API (escopos e redirect)',
         'ok': bool(graph_settings['scope'] and graph_settings['redirect_uri']),
@@ -48,6 +57,11 @@ def outlook_diagnose():
             f'Redirect URI: {graph_settings["redirect_uri"] or "— (abra o app pelo navegador para registrar)"}. '
             'Estes escopos precisam de consentimento DELEGADO no Azure (não "Aplicativo"), '
             'e o Redirect URI precisa estar registrado no aplicativo.'
+            + (
+                f' Se o Azure travar em "Precisa de aprovação de administrador", '
+                f'um admin resolve de uma vez abrindo: {admin_consent_url}'
+                if admin_consent_url else ''
+            )
         )
     })
 
@@ -215,6 +229,25 @@ def outlook_oauth_start():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/outlook/oauth/admin-consent-url', methods=['GET'])
+def outlook_oauth_admin_consent_url():
+    """Link do consentimento de administrador (endpoint v2 do Azure).
+
+    Para o caso em que o tenant bloqueia o consentimento de usuário e o Azure
+    trava em "Precisa de aprovação de administrador": um admin abre este link
+    (ou recebe dele por e-mail) e concede o consentimento delegado do tenant
+    inteiro de uma vez — depois disso o Conectar normal funciona."""
+    try:
+        settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+        url = outlook_graph_build_admin_consent_url(settings=settings)
+        return jsonify({'admin_consent_url': url})
+    except OutlookOAuthError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/outlook/oauth/admin-consent-url: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/outlook/oauth/callback', methods=['GET'])
 def outlook_oauth_callback():
     try:
@@ -233,6 +266,16 @@ def outlook_oauth_callback():
                 'needs_consent': '1' if error in {'consent_required', 'access_denied', 'interaction_required'} else '0',
             })
             return redirect(f'/outlook-connected.html?{params}', 302)
+
+        # Retorno do consentimento de administrador (/v2.0/adminconsent): vem
+        # com admin_consent=True e SEM code/state — sem este tratamento, o admin
+        # que acabou de aprovar caía em "Parâmetros OAuth incompletos".
+        if (request.args.get('admin_consent') or '').strip().lower() == 'true':
+            logger.info(
+                f"[Outlook][OAuth] Consentimento de administrador concedido "
+                f"(tenant={request.args.get('tenant') or '?'}, scope={request.args.get('scope') or '?'})"
+            )
+            return redirect('/outlook-connected.html?admin_consent=1', 302)
 
         code = (request.args.get('code') or '').strip()
         state = (request.args.get('state') or '').strip()

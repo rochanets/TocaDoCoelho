@@ -572,6 +572,7 @@
                 const hint = document.getElementById('outlookSyncHint');
                 const notice = document.getElementById('graphReauthNotice');
                 const consentBtn = document.getElementById('graphConsentBtn');
+                const adminConsentBtn = document.getElementById('graphAdminConsentBtn');
                 if (data.connected) {
                     if (statusArea) statusArea.style.display = 'none';
                     if (connectedArea) connectedArea.style.display = '';
@@ -580,6 +581,7 @@
                     if (hint) hint.style.display = 'none';
                     if (notice) notice.style.display = 'none';
                     if (consentBtn) consentBtn.style.display = 'none';
+                    if (adminConsentBtn) adminConsentBtn.style.display = 'none';
                 } else {
                     if (statusArea) statusArea.style.display = '';
                     if (connectedArea) connectedArea.style.display = 'none';
@@ -593,6 +595,10 @@
                         notice.textContent = data.error || '';
                     }
                     if (consentBtn) consentBtn.style.display = data.needs_consent ? '' : 'none';
+                    // O link de aprovação do administrador é a saída quando o
+                    // tenant bloqueia o consentimento de usuário — o botão fica
+                    // visível junto com o de consentimento.
+                    if (adminConsentBtn) adminConsentBtn.style.display = data.needs_consent ? '' : 'none';
                 }
             } catch (e) { /* silently ignore */ }
         }
@@ -611,6 +617,20 @@
                 return;
             }
             window.open(data.auth_url, '_blank', 'width=520,height=640,noopener');
+        }
+
+        // Consentimento de administrador (endpoint v2/adminconsent do Azure).
+        // Abre o link para quem for admin aprovar na hora, e deixa o mesmo link
+        // na área de transferência para quem não for admin mandar ao admin.
+        async function openGraphAdminConsent() {
+            const res = await fetch(`${API_BASE}/outlook/oauth/admin-consent-url`).catch(() => null);
+            const data = res ? await res.json().catch(() => null) : null;
+            if (!data || !data.admin_consent_url) {
+                await uiConfirm((data && data.error) || 'Configure Tenant ID e Client ID nas Configurações antes.', 'Falha ao gerar o link');
+                return;
+            }
+            try { await navigator.clipboard.writeText(data.admin_consent_url); } catch (e) { /* sem clipboard, segue */ }
+            window.open(data.admin_consent_url, '_blank', 'width=520,height=640,noopener');
         }
 
         async function disconnectMicrosoft365() {
@@ -656,6 +676,14 @@
                                 : 'Reconectar Microsoft 365';
                             action.onclick = () => connectMicrosoft365(!!d.needs_consent);
                             statusEl.appendChild(action);
+                            if (d.needs_consent) {
+                                const adminAction = document.createElement('button');
+                                adminAction.className = 'btn btn-secondary btn-small';
+                                adminAction.style.marginLeft = '8px';
+                                adminAction.textContent = 'Aprovação do administrador';
+                                adminAction.onclick = () => openGraphAdminConsent();
+                                statusEl.appendChild(adminAction);
+                            }
                         }
                     }
                     if (d.error_type === 'oauth_authentication') {
