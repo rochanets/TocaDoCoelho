@@ -209,6 +209,24 @@
                 const taskId = payload.task_id;
                 if (!taskId) throw new Error('Resposta inesperada do servidor.');
 
+                // Botões Minimizar / Cancelar no topo da barra de progresso —
+                // mesmo padrão da sincronização de e-mail/WhatsApp: minimizar
+                // fecha o modal e o BgTaskManager segue acompanhando no
+                // indicador flutuante; ao concluir, a ata abre sozinha (ou
+                // fica na lista de concluídas se o usuário trocou de aba).
+                _attachBgTaskControls(
+                    progressArea, taskId,
+                    () => document.getElementById('iataNewModal')?.remove(),
+                    () => {
+                        // Cancelar: devolve o formulário preenchido para o
+                        // usuário ajustar e tentar de novo, em vez de fechar.
+                        if (btn) btn.style.display = '';
+                        if (cancelBtn) cancelBtn.style.display = '';
+                        if (formArea) formArea.style.display = '';
+                        if (progressArea) progressArea.style.display = 'none';
+                    }
+                );
+
                 BgTaskManager.register(
                     taskId,
                     `${API_BASE}/autotoca/iata/tasks/${taskId}`,
