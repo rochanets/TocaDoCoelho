@@ -4602,18 +4602,35 @@
         // Feedback: mensagem do usuário + log técnico enviados ao administrador
         // por e-mail (Microsoft Graph). Envio assíncrono com barra de progresso.
         // ------------------------------------------------------------------
-        function openFeedbackModal() {
+        function openFeedbackModal(prefill) {
             const modal = document.getElementById('feedbackModal');
             if (!modal) return;
             document.getElementById('feedbackFormArea').style.display = '';
             document.getElementById('feedbackProgressArea').style.display = 'none';
             const textarea = document.getElementById('feedbackMessage');
-            textarea.value = '';
+            textarea.value = typeof prefill === 'string' ? prefill : '';
             updateFeedbackCounter();
             const btn = document.getElementById('feedbackSendBtn');
             if (btn) btn.disabled = false;
             modal.classList.add('active');
             textarea.focus();
+            // Cursor no fim do texto pré-carregado, para o usuário completar.
+            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        }
+
+        // Abre o Feedback já preenchido com o texto de um erro exibido na tela
+        // (chamado pelo botão de ferramenta do popup de erro).
+        function openFeedbackForError(errorMessage) {
+            const agora = new Date().toLocaleString('pt-BR');
+            let aba = '';
+            try { aba = (typeof _currentTab !== 'undefined' && _currentTab) ? _currentTab : ''; } catch (e) {}
+            const texto =
+                '[Erro reportado pela mensagem de erro]\n' +
+                `Erro: ${errorMessage || '(sem mensagem)'}\n` +
+                `Quando: ${agora}` +
+                (aba ? `\nMódulo/aba: ${aba}` : '') +
+                '\n\nO que eu estava fazendo quando o erro apareceu:\n';
+            openFeedbackModal(texto);
         }
 
         function closeFeedbackModal() {
@@ -4651,11 +4668,24 @@
             document.getElementById('feedbackProgressArea').style.display = '';
             _feedbackSetProgress(10, 'Registrando seu feedback...');
 
+            // O log do cliente (buffer local, inclui os erros mostrados na tela)
+            // vai junto para o administrador — o do servidor o backend já anexa.
+            let clientLog = '';
+            try {
+                const buf = window._tocaDebugBuffer || [];
+                if (buf.length) {
+                    clientLog = buf.slice(-300).map(e => {
+                        const payload = e.data == null ? '' : ` data=${JSON.stringify(e.data)}`;
+                        return `[${e.ts}] [${e.tag}] ${e.message}${payload}`;
+                    }).join('\n').slice(-200000);
+                }
+            } catch (e) { /* o envio do feedback nunca deve falhar por causa do log */ }
+
             try {
                 const startResp = await fetch(`${API_BASE}/feedback`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message })
+                    body: JSON.stringify({ message, client_log: clientLog })
                 });
                 const startData = await startResp.json().catch(() => ({}));
                 if (!startResp.ok || !startData.task_id) {
