@@ -67,7 +67,7 @@ def _feedback_set_status(feedback_id, status, error=None, sent_to=None):
         logger.warning(f'[Feedback] Falha ao atualizar status do feedback {feedback_id}: {e}')
 
 
-def _feedback_send_async(task_id, feedback_id, message, nickname):
+def _feedback_send_async(task_id, feedback_id, message, nickname, client_log=''):
     import platform
     try:
         destino = _feedback_admin_email()
@@ -96,6 +96,14 @@ def _feedback_send_async(task_id, feedback_id, message, nickname):
             attachments.append({
                 'name': f'app-log-{datetime.now().strftime("%Y%m%d-%H%M%S")}.txt',
                 'content_bytes': base64.b64encode(log_text.encode('utf-8', errors='replace')).decode('ascii'),
+                'content_type': 'text/plain'
+            })
+        if client_log:
+            # Buffer do navegador enviado pelo frontend (inclui os erros que o
+            # usuário viu na tela) — complementa o app.log do servidor.
+            attachments.append({
+                'name': f'client-log-{datetime.now().strftime("%Y%m%d-%H%M%S")}.txt',
+                'content_bytes': base64.b64encode(client_log.encode('utf-8', errors='replace')).decode('ascii'),
                 'content_type': 'text/plain'
             })
 
@@ -139,6 +147,11 @@ def create_feedback():
         if len(message) > 5000:
             message = message[:5000]
 
+        # Log do navegador (opcional). Mantém o FIM, que é a parte recente.
+        client_log = (data.get('client_log') or '').strip()
+        if len(client_log) > 200000:
+            client_log = client_log[-200000:]
+
         nickname = _feedback_user_nickname()
 
         conn = get_db()
@@ -154,7 +167,7 @@ def create_feedback():
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Registrando seu feedback...', 'progress': 10})
         threading.Thread(
             target=_feedback_send_async,
-            args=(task_id, feedback_id, message, nickname),
+            args=(task_id, feedback_id, message, nickname, client_log),
             daemon=True
         ).start()
 

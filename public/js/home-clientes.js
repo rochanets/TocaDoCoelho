@@ -5242,12 +5242,64 @@
             }
         }
 
-        // Show Error
+        // Show Error — popup persistente que fica acima de qualquer modal e só
+        // some quando o usuário clica no ×. O botão de ferramenta abre o
+        // Feedback já preenchido com o texto do erro.
+        let _errorPopupSeq = 0;
+
+        function _errorPopupStack() {
+            let stack = document.getElementById('errorPopupStack');
+            if (!stack) {
+                stack = document.createElement('div');
+                stack.id = 'errorPopupStack';
+                document.body.appendChild(stack);
+            }
+            return stack;
+        }
+
         function showError(message) {
-            const el = document.getElementById('errorMsg');
-            el.textContent = message;
-            el.classList.add('show');
-            setTimeout(() => el.classList.remove('show'), 3000);
+            message = String(message == null || message === '' ? 'Erro desconhecido.' : message);
+            // O erro entra no buffer do cliente para ir junto no log do Feedback.
+            try { if (typeof tocaDebug === 'function') tocaDebug('ui.error', message); } catch (e) {}
+
+            const stack = _errorPopupStack();
+
+            // Mesma mensagem já na tela: pisca o card em vez de duplicar.
+            const existing = Array.from(stack.children).find(c => c.dataset.message === message);
+            if (existing) {
+                existing.classList.remove('error-popup-flash');
+                void existing.offsetWidth; // reinicia a animação
+                existing.classList.add('error-popup-flash');
+                return;
+            }
+
+            while (stack.children.length >= 4) stack.removeChild(stack.firstElementChild);
+
+            const id = 'errorPopup' + (++_errorPopupSeq);
+            const card = document.createElement('div');
+            card.className = 'error-popup-card';
+            card.id = id;
+            card.dataset.message = message;
+            card.innerHTML = `
+                <i class="fas fa-exclamation-circle error-popup-icon"></i>
+                <div class="error-popup-text">${escapeHtml(message)}</div>
+                <div class="error-popup-actions">
+                    <button type="button" class="error-popup-btn" title="Reportar este erro (abre o Feedback já preenchido)" onclick="reportErrorAsFeedback('${id}')"><i class="fas fa-tools"></i></button>
+                    <button type="button" class="error-popup-btn error-popup-close" title="Fechar" onclick="dismissErrorPopup('${id}')">×</button>
+                </div>`;
+            stack.appendChild(card);
+        }
+
+        function dismissErrorPopup(id) {
+            const card = document.getElementById(id);
+            if (card) card.remove();
+        }
+
+        function reportErrorAsFeedback(id) {
+            const card = document.getElementById(id);
+            const message = card ? (card.dataset.message || '') : '';
+            dismissErrorPopup(id);
+            if (typeof openFeedbackForError === 'function') openFeedbackForError(message);
         }
 
         // Show Info
