@@ -1,16 +1,13 @@
         // =====================================================
-        // Verificação de conexões (WhatsApp/WAHA e Microsoft 365)
+        // Modais de conexão (WhatsApp/WAHA e Microsoft 365)
         //
-        // 1) Na abertura do sistema, checa em background se a sessão do
-        //    WhatsApp está ativa. Se não estiver, abre um pop-up com o QR code
-        //    do WAHA (com opções "fechar" e "não perguntar mais").
-        // 2) Os mesmos modais ficam disponíveis sob demanda em
-        //    Configurações → Integrações de API.
+        // Disponíveis sob demanda em Configurações → Integrações de API e ao
+        // clicar nos círculos de status da abertura (connection-status.js).
+        // A verificação automática na abertura mora em connection-status.js.
         // =====================================================
 
         const _connModalIds = { wa: 'waConnectModal', ms: 'ms365ConnectModal' };
         let _waConnPollTimer = null;
-        let _waConnOpenedFromStartup = false;
         let _ms365PollTimer = null;
 
         // ---------- WhatsApp / WAHA ----------
@@ -24,20 +21,9 @@
             document.getElementById(_connModalIds.wa)?.remove();
         }
 
-        /**
-         * Abre o modal de sincronização do WhatsApp.
-         * opts: { startup: true } quando veio da verificação automática — só
-         * nesse caso o "não perguntar mais" aparece.
-         */
-        function openWhatsappConnectModal(opts) {
-            const startup = !!(opts && opts.startup);
-            _waConnOpenedFromStartup = startup;
+        /** Abre o modal de sincronização do WhatsApp. */
+        function openWhatsappConnectModal() {
             closeWhatsappConnectModal();
-            const dontAskRow = startup ? `
-                            <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:#6b7280; cursor:pointer; user-select:none; margin-right:auto;">
-                                <input type="checkbox" id="waConnDontAsk" style="width:16px; height:16px; cursor:pointer; accent-color:#10b981;">
-                                Não perguntar mais na abertura do sistema
-                            </label>` : '';
             const html = `
                 <div class="modal active" id="${_connModalIds.wa}" onclick="if(event.target===this) closeWhatsappConnectModal()">
                     <div class="modal-content" style="max-width:460px;">
@@ -52,7 +38,6 @@
                             </div>
                         </div>
                         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:14px; padding-top:12px; border-top:1px solid #e5e7eb;">
-                            ${dontAskRow}
                             <button class="btn btn-secondary btn-small" style="margin-left:auto;" onclick="_waConnClose()">Fechar</button>
                         </div>
                     </div>
@@ -63,19 +48,7 @@
             _waConnPollTimer = setInterval(_waConnRefresh, 4000);
         }
 
-        /** Fecha respeitando o "não perguntar mais" marcado pelo usuário. */
-        async function _waConnClose() {
-            const chk = document.getElementById('waConnDontAsk');
-            if (chk && chk.checked) {
-                try {
-                    await fetch(`${API_BASE}/whatsapp/startup-check`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ enabled: false })
-                    });
-                    showInfo('Ok! O aviso de WhatsApp desconectado não aparecerá mais na abertura. Você pode reativá-lo em Configurações → Integrações de API.');
-                } catch (e) { showError('Não foi possível salvar a preferência.'); }
-            }
+        function _waConnClose() {
             closeWhatsappConnectModal();
             if (typeof loadConnectionsCard === 'function') loadConnectionsCard();
         }
@@ -142,30 +115,6 @@
                 `<div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
                     <button class="btn btn-secondary btn-small" onclick="_waConnRefresh()"><i class="fas fa-rotate-right"></i> Tentar novamente</button>
                  </div>`);
-        }
-
-        /**
-         * Verificação em background na abertura do sistema.
-         * Usa /status (que não acorda o Chrome) e só abre o modal — que aí sim
-         * inicia a sessão para gerar o QR — quando a sessão está mesmo caída.
-         */
-        async function checkWhatsappConnectionOnStartup(attempt) {
-            attempt = attempt || 0;
-            try {
-                const pref = await (await fetch(`${API_BASE}/whatsapp/startup-check`)).json();
-                if (!pref.enabled) return;
-
-                const st = await (await fetch(`${API_BASE}/whatsapp/status`)).json();
-                if (st.connected) return;
-                if (!st.configured) return;   // nada configurado: não incomodar no login
-                // Cold start do WAHA-lite/Chrome: espera antes de acusar desconexão.
-                if (st.state === 'starting' && attempt < 6) {
-                    setTimeout(() => checkWhatsappConnectionOnStartup(attempt + 1), 10000);
-                    return;
-                }
-                if (document.getElementById(_connModalIds.wa)) return;
-                openWhatsappConnectModal({ startup: true });
-            } catch (e) { /* verificação silenciosa — nunca atrapalha a abertura */ }
         }
 
         // ---------- Microsoft 365 ----------
@@ -324,10 +273,6 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: !!enabled })
                 });
-                showSuccess(enabled ? 'Aviso de WhatsApp desconectado reativado.' : 'Aviso de WhatsApp desconectado desligado.');
+                showSuccess(enabled ? 'Verificação de conexões na abertura ativada.' : 'Verificação de conexões na abertura desativada.');
             } catch (e) { showError('Não foi possível salvar a preferência.'); }
         }
-
-        // Atrasa 3s para não competir com os avisos de inicialização
-        // (envios perdidos, primeiro acesso, atualização da extensão).
-        document.addEventListener('DOMContentLoaded', () => setTimeout(checkWhatsappConnectionOnStartup, 3000));
