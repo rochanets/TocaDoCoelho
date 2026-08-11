@@ -928,7 +928,7 @@
             // Abrir modal de progresso
             const modal = document.getElementById('outlookProgressModal');
             if (modal) modal.style.display = 'flex';
-            _setOutlookProgress('Conectando ao Outlook...', '');
+            _setOutlookProgress('Conectando ao Outlook...', '', 5);
 
             // Fechar stream anterior se existir
             if (_outlookEventSource) { _outlookEventSource.close(); _outlookEventSource = null; }
@@ -939,11 +939,11 @@
                 try {
                     const data = JSON.parse(e.data);
                     if (data.phase === 'connecting') {
-                        _setOutlookProgress(data.message, '');
+                        _setOutlookProgress(data.message, '', 10);
                     } else if (data.phase === 'reading') {
-                        _setOutlookProgress(data.message, data.count ? `${data.count} email(s) lidos até agora` : '');
+                        _setOutlookProgress(data.message, data.count ? `${data.count} email(s) lidos até agora` : '', Math.min(20 + (data.count || 0), 70));
                     } else if (data.phase === 'matching') {
-                        _setOutlookProgress(data.message, `${data.count} emails no total`);
+                        _setOutlookProgress(data.message, `${data.count} emails no total`, 85);
                     } else if (data.phase === 'done') {
                         _outlookEventSource.close(); _outlookEventSource = null;
                         _closeOutlookProgressModal();
@@ -967,11 +967,18 @@
             };
         }
 
-        function _setOutlookProgress(msg, count) {
+        function _setOutlookProgress(msg, count, pct) {
             const m = document.getElementById('outlookProgressMsg');
             const c = document.getElementById('outlookProgressCount');
             if (m) m.textContent = msg;
             if (c) c.textContent = count || '';
+            if (typeof pct === 'number') {
+                const fill = document.getElementById('outlookSyncFill');
+                const pctEl = document.getElementById('outlookSyncPct');
+                const clamped = Math.max(5, Math.min(100, Math.round(pct)));
+                if (fill) fill.style.width = `${clamped}%`;
+                if (pctEl) pctEl.textContent = `${clamped}%`;
+            }
         }
 
         function _closeOutlookProgressModal() {
@@ -1320,11 +1327,13 @@
             // Mostrar modal de progresso de import
             const importFill = document.getElementById('outlookImportFill');
             const importStep = document.getElementById('outlookImportStep');
+            const importPct = document.getElementById('outlookImportPct');
             const importMiniStep = document.getElementById('outlookImportMiniStep');
             _outlookImportMinimized = false;
             document.getElementById('outlookImportProgressModal').style.display = 'flex';
             document.getElementById('outlookImportMini').style.display = 'none';
             if (importFill) importFill.style.width = '5%';
+            if (importPct) importPct.textContent = '5%';
             if (importStep) importStep.textContent = 'Iniciando...';
 
             try {
@@ -1345,6 +1354,7 @@
                             const statusRes = await fetch(`/api/outlook/confirm-tasks/${taskId}`);
                             const taskData = await statusRes.json();
                             if (importFill) importFill.style.width = `${taskData.progress || 5}%`;
+                            if (importPct) importPct.textContent = `${taskData.progress || 5}%`;
                             if (importStep) importStep.textContent = taskData.step || '';
                             if (importMiniStep) importMiniStep.textContent = taskData.step || 'Importando...';
                             if (taskData.status === 'done') {
