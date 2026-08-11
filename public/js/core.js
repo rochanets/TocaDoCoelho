@@ -3993,6 +3993,45 @@
             if (response.ok) integrationConfig = await response.json();
         }
 
+        async function loadFeedbackWatcherConfig() {
+            // Recurso do desenvolvedor: o card só aparece na máquina que tem o
+            // Claude Code instalado (ou onde o watcher já foi ligado).
+            try {
+                const response = await fetch(`${API_BASE}/config/feedback-watcher`);
+                if (!response.ok) return;
+                const cfg = await response.json();
+                const card = document.getElementById('feedbackWatcherCard');
+                if (!card) return;
+                const relevante = Boolean(cfg.claude_exe) || cfg.enabled;
+                card.style.display = relevante ? 'flex' : 'none';
+                if (!relevante) return;
+                document.getElementById('feedbackWatcherToggle').checked = Boolean(cfg.enabled);
+                const st = document.getElementById('feedbackWatcherStatus');
+                if (!cfg.enabled) {
+                    st.textContent = 'Desligado. Ao ligar, e-mails de feedback disparam análise automática com Claude Code (branch + PR).';
+                } else if (cfg.active) {
+                    st.textContent = `Ativo — monitorando a caixa de entrada (repo: ${cfg.repo}).`;
+                } else {
+                    st.textContent = `Ligado, mas inativo: ${cfg.reason || 'motivo desconhecido'}`;
+                }
+            } catch (e) { /* silencioso: recurso de desenvolvedor */ }
+        }
+
+        async function onFeedbackWatcherToggle(checked) {
+            const response = await fetch(`${API_BASE}/config/feedback-watcher`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: checked })
+            });
+            if (response.ok) {
+                showSuccess(checked ? 'Watcher de feedback ligado.' : 'Watcher de feedback desligado.');
+            } else {
+                const result = await response.json().catch(() => ({}));
+                showError(result.error || 'Erro ao salvar a configuração do watcher.');
+            }
+            loadFeedbackWatcherConfig();
+        }
+
         async function loadUpdateSourceConfig() {
             const response = await fetch(`${API_BASE}/config/update-source`);
             if (response.ok) updateSourceConfig = await response.json();
@@ -4074,6 +4113,8 @@
             document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '-'}`;
             const updateResult = document.getElementById('updateCheckResult');
             if (updateResult) updateResult.textContent = '';
+
+            loadFeedbackWatcherConfig();
         }
 
         async function saveIntegrationConfig(event) {
