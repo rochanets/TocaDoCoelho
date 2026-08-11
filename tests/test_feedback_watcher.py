@@ -331,3 +331,32 @@ def test_process_job_falha_grava_erro_e_avisa(db_path, tmp_path, monkeypatch):
     assert row['status'] == 'error'
     assert 'tempo limite' in row['error']
     assert len(emails) == 1 and 'erro' in emails[0][1].lower()
+
+
+# ---------------------------------------------------------------------------
+# Endpoints de configuração
+# ---------------------------------------------------------------------------
+
+def test_get_config_padrao_desligado(client, monkeypatch):
+    monkeypatch.delenv('TOCA_FEEDBACK_WATCHER', raising=False)
+    monkeypatch.setattr(toca.fw, 'find_claude_exe', lambda: None)
+    monkeypatch.setattr(toca.fw, 'find_gh_exe', lambda: None)
+    data = client.get('/api/config/feedback-watcher').get_json()
+    assert data['enabled'] is False
+    assert data['active'] is False
+    assert data['claude_exe'] == ''
+    assert data['jobs'] == []
+
+
+def test_put_liga_e_get_reflete(client, monkeypatch):
+    monkeypatch.delenv('TOCA_FEEDBACK_WATCHER', raising=False)
+    monkeypatch.setattr(toca.fw, 'find_claude_exe', lambda: r'C:\x\claude.exe')
+    monkeypatch.setattr(toca.fw, 'find_gh_exe', lambda: None)
+    resp = client.put('/api/config/feedback-watcher',
+                      json={'enabled': True, 'repo': r'C:\TocaDoCoelho'})
+    assert resp.status_code == 200
+    data = client.get('/api/config/feedback-watcher').get_json()
+    assert data['enabled'] is True
+    assert data['active'] is False           # gate barra: gh ausente
+    assert 'gh' in data['reason']
+    assert data['repo'] == r'C:\TocaDoCoelho'
