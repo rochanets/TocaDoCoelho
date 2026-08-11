@@ -24,6 +24,15 @@
             });
         }
 
+        /** Sessão do WhatsApp fora do ar durante um envio: além da mensagem de
+         *  erro, abre o modal de reconexão — o usuário resolve ali mesmo e
+         *  reenvia, sem precisar achar o caminho em Configurações. */
+        function _wahaMaybeOfferReconnect(payload) {
+            if (payload && payload.whatsapp_disconnected && typeof openWhatsappConnectModal === 'function') {
+                openWhatsappConnectModal();
+            }
+        }
+
         async function _wahaRefreshQuota() {
             try {
                 const q = await (await fetch(`${API_BASE}/whatsapp/send-quota`)).json();
@@ -74,7 +83,10 @@
                     body: JSON.stringify({ client_id: draft.contact.id, phone: draft.phone, message: draft.body })
                 });
                 const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) throw new Error(payload.error || 'Falha no envio via WAHA.');
+                if (!resp.ok) {
+                    _wahaMaybeOfferReconnect(payload);
+                    throw new Error(payload.error || 'Falha no envio via WAHA.');
+                }
                 _wahaMarkRow(idx, 'sent');
                 _wahaRefreshQuota();
                 if (payload.activity_id) {
@@ -237,7 +249,12 @@
                     body: JSON.stringify({ client_id: clientId, phone: client.phone, message })
                 });
                 const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) throw new Error(payload.error || 'Falha no envio via WAHA.');
+                if (!resp.ok) {
+                    // Mantém o modal do contato rápido aberto: a mensagem já
+                    // digitada é preservada para reenviar após reconectar.
+                    _wahaMaybeOfferReconnect(payload);
+                    throw new Error(payload.error || 'Falha no envio via WAHA.');
+                }
                 document.getElementById('quickContactModal')?.remove();
                 if (payload.activity_id) {
                     showUndoToast('Mensagem enviada — atividade registrada. Desfazer registro?', async () => {

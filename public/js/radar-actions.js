@@ -90,7 +90,11 @@
                     body: JSON.stringify({ client_id: client.id, phone: client.phone, message })
                 });
                 const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) throw new Error(payload.error || 'Falha no envio via WAHA.');
+                if (!resp.ok) {
+                    // Sessão fora do ar: abre o modal de reconexão (rascunho preservado).
+                    if (typeof _wahaMaybeOfferReconnect === 'function') _wahaMaybeOfferReconnect(payload);
+                    throw new Error(payload.error || 'Falha no envio via WAHA.');
+                }
                 document.getElementById('radarDraftModal')?.remove();
                 await fetch(`${API_BASE}/suggestions/${id}/complete`, { method: 'POST' }).catch(() => {});
                 loadRadarDoDia();
