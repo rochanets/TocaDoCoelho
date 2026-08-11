@@ -118,3 +118,72 @@ def test_parse_pr_url():
     texto = 'PR aberto:\nhttps://github.com/rochanets/TocaDoCoelho/pull/321\nfim'
     assert fw.parse_pr_url(texto) == 'https://github.com/rochanets/TocaDoCoelho/pull/321'
     assert fw.parse_pr_url('sem link') is None
+
+
+# ---------------------------------------------------------------------------
+# Runner: worktree + subprocess (runner injetável, nada de subprocess real)
+# ---------------------------------------------------------------------------
+
+class FakeRunner:
+    """Registra as chamadas; devolve respostas programadas por tipo de comando."""
+
+    def __init__(self, claude_result=None, worktree_fail=False):
+        self.calls = []
+        self.claude_result = claude_result
+        self.worktree_fail = worktree_fail
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((list(map(str, cmd)), kwargs))
+        joined = ' '.join(map(str, cmd))
+        if 'worktree add' in joined and self.worktree_fail:
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='fatal: boom')
+        if 'claude' in str(cmd[0]).lower():
+            if isinstance(self.claude_result, Exception):
+                raise self.claude_result
+            return self.claude_result
+        return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    def joined_calls(self):
+        return [' '.join(c) for c, _ in self.calls]
+
+
+def test_run_claude_job_sucesso_com_pr(tmp_path):
+    report = ('## Diagnóstico\nbug real\n## PR\n'
+              'https://github.com/rochanets/TocaDoCoelho/pull/999')
+    runner = FakeRunner(claude_result=types.SimpleNamespace(
+        returncode=0, stdout=report, stderr=''))
+    result = fw.run_claude_job('claude.exe', tmp_path, tmp_path / 'job', 7, runner=runner)
+    assert result['ok'] is True
+    assert result['branch'] == 'feedback/auto-7'
+    assert result['pr_url'] == 'https://github.com/rochanets/TocaDoCoelho/pull/999'
+    assert result['report'] == report
+    chamadas = runner.joined_calls()
+    assert any('worktree add' in c for c in chamadas)
+    assert any('worktree remove' in c for c in chamadas)  # limpeza sempre
+    # allowlist de ferramentas presente na chamada do claude
+    claude_call = next(c for c, _ in runner.calls if 'claude' in c[0].lower())
+    assert '--allowedTools' in claude_call
+
+
+def test_run_claude_job_timeout_limpa_worktree(tmp_path):
+    runner = FakeRunner(claude_result=subprocess.TimeoutExpired(cmd='claude', timeout=1))
+    result = fw.run_claude_job('claude.exe', tmp_path, tmp_path / 'job', 8, runner=runner)
+    assert result['ok'] is False
+    assert 'tempo limite' in result['error']
+    assert any('worktree remove' in c for c in runner.joined_calls())
+
+
+def test_run_claude_job_exit_code_diferente_de_zero(tmp_path):
+    runner = FakeRunner(claude_result=types.SimpleNamespace(
+        returncode=2, stdout='parcial', stderr='erro feio'))
+    result = fw.run_claude_job('claude.exe', tmp_path, tmp_path / 'job', 9, runner=runner)
+    assert result['ok'] is False
+    assert 'código 2' in result['error']
+    assert 'erro feio' in result['error']
+
+
+def test_run_claude_job_worktree_falhou(tmp_path):
+    runner = FakeRunner(worktree_fail=True)
+    result = fw.run_claude_job('claude.exe', tmp_path, tmp_path / 'job', 10, runner=runner)
+    assert result['ok'] is False
+    assert 'worktree' in result['error']

@@ -115,3 +115,60 @@ def build_prompt(job_dir, job_id):
 def parse_pr_url(text):
     matches = _PR_URL_RE.findall(text or '')
     return matches[-1] if matches else None
+
+
+def run_claude_job(claude_exe, repo_dir, job_dir, job_id,
+                   timeout_s=CLAUDE_TIMEOUT_SECONDS, runner=subprocess.run):
+    """Roda o Claude Code headless num git worktree descartável do repo.
+
+    Devolve {'ok', 'report', 'branch', 'pr_url', 'error'}. O worktree é
+    SEMPRE removido no finally — sucesso, timeout ou exceção. `runner` é
+    injetável para os testes não dependerem de git/claude reais."""
+    branch = f'feedback/auto-{job_id}'
+    extra = {}
+    if os.name == 'nt':
+        extra['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+    def git(*args, timeout=300):
+        return runner(['git', '-C', str(repo_dir)] + list(args),
+                      capture_output=True, text=True, encoding='utf-8',
+                      errors='replace', timeout=timeout, **extra)
+
+    resultado = {'ok': False, 'report': '', 'branch': branch, 'pr_url': None, 'error': None}
+    worktree = tempfile.mkdtemp(prefix=f'toca-feedback-{job_id}-')
+    os.rmdir(worktree)  # worktree add exige que o destino não exista
+    try:
+        git('fetch', 'origin', 'main')  # best-effort: sem rede, cai no HEAD local
+        added = git('worktree', 'add', '--detach', worktree, 'origin/main')
+        if added.returncode != 0:
+            added = git('worktree', 'add', '--detach', worktree, 'HEAD')
+        if added.returncode != 0:
+            resultado['error'] = f'git worktree add falhou: {(added.stderr or "")[-2000:]}'
+            return resultado
+
+        cmd = [claude_exe, '-p', build_prompt(str(job_dir), job_id),
+               '--max-turns', CLAUDE_MAX_TURNS,
+               '--allowedTools', ','.join(CLAUDE_ALLOWED_TOOLS)]
+        try:
+            proc = runner(cmd, cwd=worktree, capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', timeout=timeout_s, **extra)
+        except subprocess.TimeoutExpired:
+            resultado['error'] = (f'Claude Code excedeu o tempo limite de '
+                                  f'{timeout_s // 60} min.')
+            return resultado
+
+        resultado['report'] = (proc.stdout or '').strip()
+        if proc.returncode != 0:
+            tail = ((proc.stderr or '') + '\n' + resultado['report'])[-4000:]
+            resultado['error'] = f'Claude Code saiu com código {proc.returncode}: {tail}'
+            return resultado
+
+        resultado['ok'] = True
+        resultado['pr_url'] = parse_pr_url(resultado['report'])
+        return resultado
+    finally:
+        try:
+            git('worktree', 'remove', '--force', worktree)
+            git('worktree', 'prune')
+        except Exception:
+            pass
