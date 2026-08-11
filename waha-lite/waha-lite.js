@@ -10,6 +10,7 @@
  *   POST /api/sessions
  *   POST /api/sendText
  *   GET  /api/:session/auth/qr?format=image
+ *   GET  /api/:session/chats/overview
  *   GET  /api/:session/chats/:chatId/messages
  *   GET  /ping
  */
@@ -34,12 +35,13 @@ const DATA_DIR     = process.env.WAHA_DATA_DIR     || path.join(__dirname, '.wah
 const READY_TIMEOUT_MS = parseInt(process.env.WAHA_READY_TIMEOUT_MS || '75000', 10);
 // Quantas vezes recriar o cliente automaticamente antes de desistir.
 const MAX_RECREATE     = parseInt(process.env.WAHA_MAX_RECREATE || '3', 10);
-const GATEWAY_VERSION  = 4;
+const GATEWAY_VERSION  = 5;
 const GATEWAY_CAPABILITIES = [
   'chat-list-match',
   'sync-diagnostics',
   'cached-message-fetch',
   'bounded-history-fetch',
+  'chat-overview',
 ];
 
 // Versão do WhatsApp Web a fixar — workaround para o bug "trava em 99% → LOGOUT" do
@@ -546,6 +548,13 @@ async function findChat(rawChatId) {
     const chats = await getChatsCached();
     availableChats = chats.length;
     for (const chat of chats) {
+      // WID completo (ex.: vindo do /chats/overview) casa direto — é o único
+      // caminho que funciona para grupos (@g.us), que não têm telefone.
+      if (chat.id && chat.id._serialized === rawChatId) {
+        return { chatId: chat.id._serialized, strategy: 'exact-id', availableChats };
+      }
+    }
+    for (const chat of chats) {
       if (chat.isGroup) continue;
       const user = chat.id && chat.id.user;
       if (user && variants.has(user)) {
@@ -654,6 +663,40 @@ async function fetchCachedMessages(chatId, gteTs, lteTs, limit) {
     { chatId, gteTs, lteTs, limit },
   );
 }
+
+/** GET /api/:session/chats/overview — lista leve de chats (id, nome, grupo, último ts)
+ *  usada pelo WhatsApp Update para casar nomes de chat/grupo com contas do CRM. */
+app.get('/api/:session/chats/overview', async (req, res) => {
+  const tag = syncLogTag(req);
+  if (!waClient || clientStatus !== 'WORKING') {
+    log('WARN', `${tag}Overview recusado: sessão em estado ${clientStatus}.`);
+    return res.status(503).json({
+      error: 'WhatsApp não conectado',
+      code: 'SESSION_NOT_WORKING',
+      status: clientStatus,
+    });
+  }
+  const requestedLimit = parseInt(req.query.limit || '1200', 10);
+  const limit = Math.min(Number.isFinite(requestedLimit) ? Math.max(requestedLimit, 1) : 1200, 3000);
+  try {
+    const chats = await getChatsCached();
+    const overview = chats.slice(0, limit).map((chat) => ({
+      id: (chat.id && chat.id._serialized) || '',
+      user: (chat.id && chat.id.user) || '',
+      name: chat.name || '',
+      isGroup: Boolean(chat.isGroup),
+      lastMessageTs: Number(chat.timestamp || 0),
+    }));
+    log('INFO', `${tag}Overview de chats: ${overview.length} de ${chats.length} chat(s).`);
+    return res.json(overview);
+  } catch (err) {
+    log('ERROR', `${tag}Falha no overview de chats (${safeError(err)}).`);
+    return res.status(500).json({
+      error: 'Falha interna ao listar conversas.',
+      code: 'CHAT_OVERVIEW_FAILED',
+    });
+  }
+});
 
 /** GET /api/:session/chats/:chatId/messages — mensagens filtradas por timestamp */
 app.get('/api/:session/chats/:chatId/messages', async (req, res) => {

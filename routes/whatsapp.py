@@ -431,6 +431,7 @@ def whatsapp_approve():
 
     for item in items:
         client_id = item.get('client_id')
+        account_id = item.get('account_id') if not item.get('client_id') else None
         summary = (item.get('summary') or '').strip()
         activity_date = (item.get('activity_date') or now_str).strip()
         content_hash = (item.get('content_hash') or '').strip()
@@ -443,7 +444,36 @@ def whatsapp_approve():
         # Permite que o usuário desmarque o FUP no modal de revisão
         followup_enabled = item.get('followup_enabled', True)
 
-        if not client_id or not summary or not content_hash:
+        if (not client_id and not account_id) or not summary or not content_hash:
+            continue
+
+        if account_id:
+            # Atividade direto na CONTA (chat casado pelo nome da conta; contato
+            # não cadastrado no Toca) — menciona o chat/contato relacionado.
+            chat_id = (item.get('chat_id') or '').strip()
+            chat_name = (item.get('chat_name') or '').strip()
+            c.execute('SELECT id FROM whatsapp_account_sync_log WHERE account_id = ? AND content_hash = ?',
+                      (account_id, content_hash))
+            if c.fetchone():
+                continue
+            origem = 'grupo' if item.get('is_group') else 'contato'
+            description = summary
+            if chat_name:
+                description += f'\nVia WhatsApp — {origem}: {chat_name} (não cadastrado no Toca)'
+            c.execute(
+                'INSERT INTO account_activities (account_id, description, activity_date) VALUES (?, ?, ?)',
+                (account_id, description, activity_date)
+            )
+            account_activity_id = c.lastrowid
+            c.execute(
+                '''INSERT INTO whatsapp_account_sync_log
+                       (account_id, chat_id, chat_name, period_days, message_count,
+                        content_hash, last_message_ts, activity_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (account_id, chat_id, chat_name, period_days, message_count,
+                 content_hash, last_message_ts, account_activity_id)
+            )
+            inserted += 1
             continue
 
         c.execute('SELECT id FROM whatsapp_sync_log WHERE client_id = ? AND content_hash = ?',

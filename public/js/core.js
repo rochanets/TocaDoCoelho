@@ -1042,11 +1042,22 @@
             const clientOptions = (_outlookAllClients || []).map(c =>
                 `<option value="${c.id}">${escapeHtml(c.name)}${c.company ? ' — ' + escapeHtml(c.company) : ''}</option>`
             ).join('');
-            return `<div class="outlook-review-item" style="border-left:3px solid #fbbf24;padding-left:8px;">
+            // Conta sugerida pelo domínio do email — permite registrar a atividade
+            // direto na conta, mencionando o contato não cadastrado.
+            const hasAccount = !!item.account_id;
+            const accountOption = hasAccount
+                ? `<option value="account:${item.account_id}" selected>🏢 Registrar direto na conta ${escapeHtml(item.account_name || '')}</option>`
+                : '';
+            const accountBadge = hasAccount
+                ? `<span style="font-size:12px;color:#3730a3;background:#eef2ff;border:1px solid #c7d2fe;padding:2px 6px;border-radius:4px;">🏢 Conta identificada: ${escapeHtml(item.account_name || '')}</span>`
+                : '';
+            const borderColor = hasAccount ? '#818cf8' : '#fbbf24';
+            return `<div class="outlook-review-item" style="border-left:3px solid ${borderColor};padding-left:8px;">
                 <input type="checkbox" class="outlook-unmatched-check" data-uindex="${i}" onchange="_updateOutlookConfirmBtn()" style="margin-top:10px;cursor:pointer;accent-color:#f59e0b;">
                 <div class="outlook-review-body" style="flex:1;">
                     <div class="outlook-review-header">
                         <span style="font-size:12px;color:#92400e;background:#fef3c7;padding:2px 6px;border-radius:4px;">⚠ Sem cliente</span>
+                        ${accountBadge}
                         <span class="outlook-review-date">${escapeHtml(dateStr)}</span>
                         <span class="outlook-review-dir">${dirIcon} ${escapeHtml(item.counterpart_label)}: ${escapeHtml(item.counterpart_name)} &lt;${escapeHtml(item.counterpart_email)}&gt;</span>
                     </div>
@@ -1055,6 +1066,7 @@
                     <div style="margin-top:6px;">
                         <select class="outlook-unmatched-client" data-uindex="${i}" style="font-size:12px;padding:3px 6px;border-radius:5px;border:1px solid #d1fae5;width:100%;max-width:340px;">
                             <option value="">— Selecionar cliente para importar —</option>
+                            ${accountOption}
                             ${clientOptions}
                         </select>
                     </div>
@@ -1305,11 +1317,18 @@
                 .map(chk => {
                     const idx = chk.dataset.uindex;
                     const sel = document.querySelector(`.outlook-unmatched-client[data-uindex="${idx}"]`);
-                    const clientId = sel ? parseInt(sel.value) : 0;
-                    if (!clientId) return null;
+                    const value = sel ? sel.value : '';
                     const item = _outlookUnmatchedItems[parseInt(idx)];
-                    if (!item) return null;
-                    return Object.assign({}, item, {client_id: clientId});
+                    if (!value || !item) return null;
+                    // "account:<id>" = registrar direto na conta (contato não cadastrado)
+                    if (value.startsWith('account:')) {
+                        const accountId = parseInt(value.slice(8));
+                        if (!accountId) return null;
+                        return Object.assign({}, item, {client_id: null, account_id: accountId});
+                    }
+                    const clientId = parseInt(value);
+                    if (!clientId) return null;
+                    return Object.assign({}, item, {client_id: clientId, account_id: null});
                 }).filter(Boolean);
 
             const allSelected = [...selectedMatched, ...selectedUnmatched];

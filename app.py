@@ -1527,6 +1527,27 @@ SCHEMA_MIGRATIONS = [
     (18, 'iata_opportunity_match_confidence', [
         _iata_add_opportunity_match_confidence_column,
     ]),
+    # Dedupe do WhatsApp Update para atividades registradas direto na conta
+    # (chat casado pelo nome da conta, sem contato cadastrado) — espelho do
+    # whatsapp_sync_log, que exige client_id NOT NULL.
+    (19, 'whatsapp_account_sync_log', [
+        '''CREATE TABLE IF NOT EXISTS whatsapp_account_sync_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            chat_id TEXT,
+            chat_name TEXT,
+            period_days INTEGER,
+            message_count INTEGER,
+            content_hash TEXT,
+            last_message_ts INTEGER DEFAULT 0,
+            activity_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY(activity_id) REFERENCES account_activities(id) ON DELETE SET NULL
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_wa_acct_sync_hash ON whatsapp_account_sync_log(account_id, content_hash)',
+        'CREATE INDEX IF NOT EXISTS idx_wa_acct_sync_chat ON whatsapp_account_sync_log(account_id, chat_id)',
+    ]),
 ]
 
 
@@ -6061,6 +6082,93 @@ def sync_accounts_from_clients():
         logger.warning(f'[WARN] sync_accounts_from_clients: {e}')
 
 
+# ---------------------------------------------------------------------------
+# Matching de contas por nome/domínio — usado pelo WhatsApp Update (nome do
+# chat/grupo contém o nome da conta) e pelo Sync Outlook (domínio do email
+# contém o nome da conta) para sugerir atividades direto na conta quando o
+# contato não está cadastrado no Toca.
+# ---------------------------------------------------------------------------
+
+def _normalize_match_text(s):
+    """Minúsculo, sem acento, pontuação vira espaço — mesmo espírito do
+    matching de perguntas do forms_robot."""
+    s = unicodedata.normalize('NFKD', str(s or ''))
+    s = ''.join(ch for ch in s if not unicodedata.combining(ch)).lower()
+    s = re.sub(r'[^a-z0-9]+', ' ', s)
+    return ' '.join(s.split())
+
+
+def _load_accounts_match_index(cursor):
+    cursor.execute('SELECT id, name FROM accounts')
+    index = []
+    for row in cursor.fetchall():
+        norm = _normalize_match_text(row['name'])
+        if not norm:
+            continue
+        index.append({
+            'id': row['id'],
+            'name': row['name'],
+            'norm': norm,
+            'squash': norm.replace(' ', ''),
+        })
+    return index
+
+
+def _match_account_by_chat_name(chat_name, accounts_index):
+    """Nome do chat/grupo do WhatsApp contém o nome da conta como palavra(s)
+    inteira(s) (ex.: grupo 'Projeto Vale x Stefanini' → conta 'Vale').
+    Nomes com menos de 3 caracteres são ignorados para não casar com tudo.
+    Empate: vence o nome de conta mais longo (mais específico)."""
+    padded = f' {_normalize_match_text(chat_name)} '
+    if padded == '  ':
+        return None
+    best = None
+    for acc in accounts_index:
+        if len(acc['norm']) < 3:
+            continue
+        if f" {acc['norm']} " in padded:
+            if best is None or len(acc['norm']) > len(best['norm']):
+                best = acc
+    return best
+
+
+# Rótulos de domínio que nunca identificam uma conta (TLDs e provedores de
+# email pessoal) — evita casar conta com joao@gmail.com ou @outlook.com.
+_GENERIC_DOMAIN_LABELS = {
+    'com', 'net', 'org', 'gov', 'edu', 'co', 'br', 'io', 'ai', 'me', 'app',
+    'gmail', 'googlemail', 'hotmail', 'outlook', 'yahoo', 'live', 'icloud',
+    'msn', 'uol', 'bol', 'terra', 'globo', 'ig', 'proton', 'protonmail',
+    'onmicrosoft',
+}
+
+
+def _match_account_by_email_domain(email, accounts_index):
+    """Domínio do email contém o nome da conta (ex.: joao@vale.com →
+    conta 'Vale'; maria@grupoboticario.com.br → conta 'Boticário')."""
+    email = (email or '').strip().lower()
+    domain = email.split('@', 1)[-1] if '@' in email else ''
+    if not domain or '.' not in domain:
+        return None
+    labels = [l for l in re.split(r'[.\-]', domain) if l and l not in _GENERIC_DOMAIN_LABELS]
+    if not labels:
+        return None
+    best = None
+    for acc in accounts_index:
+        squash = acc['squash']
+        if len(squash) < 3:
+            continue
+        for label in labels:
+            hit = (
+                label == squash
+                or (len(squash) >= 4 and squash in label)
+                or (len(label) >= 4 and label in squash)
+            )
+            if hit and (best is None or len(squash) > len(best['squash'])):
+                best = acc
+                break
+    return best
+
+
 sync_accounts_from_clients()
 
 
@@ -7467,6 +7575,27 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
             for row in c.fetchall():
                 all_clients_for_select.append({'id': row['id'], 'name': row['name'], 'company': row['company'] or ''})
 
+            # Índices para casar emails sem contato cadastrado direto com uma CONTA:
+            # 1) domínio já conhecido via contatos cadastrados (todos da mesma empresa);
+            # 2) nome da conta contido no domínio do email (@nomedaconta).
+            accounts_index = _load_accounts_match_index(c)
+            accounts_by_norm = {acc['norm']: acc for acc in accounts_index}
+            domain_account_map = {}
+            c.execute('''SELECT email, company FROM clients
+                         WHERE email IS NOT NULL AND TRIM(email) != ''
+                           AND company IS NOT NULL AND TRIM(company) != '' ''')
+            _domain_companies = {}
+            for row in c.fetchall():
+                _em = (row['email'] or '').strip().lower()
+                _dom = _em.split('@', 1)[-1] if '@' in _em else ''
+                if _dom and '.' in _dom:
+                    _domain_companies.setdefault(_dom, set()).add(_normalize_match_text(row['company']))
+            for _dom, _companies in _domain_companies.items():
+                if len(_companies) == 1:
+                    acc = accounts_by_norm.get(next(iter(_companies)))
+                    if acc:
+                        domain_account_map[_dom] = acc
+
             # IDs e conversas já processadas em sincronizações anteriores (dedup persistente)
             processed_ids = set()
             processed_conv_ids = set()
@@ -7496,6 +7625,17 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                     if len(domain_clients) == 1:
                         return domain_clients[0]
                 return None
+
+            def _match_account(cand_email):
+                """Sugere uma conta para email sem contato cadastrado."""
+                cand_email = (cand_email or '').strip().lower()
+                domain = cand_email.split('@', 1)[-1] if '@' in cand_email else ''
+                if not domain or domain == own_domain:
+                    return None
+                acc = domain_account_map.get(domain)
+                if acc:
+                    return acc
+                return _match_account_by_email_domain(cand_email, accounts_index)
 
             matched_groups = {}    # (client_id, thread_key) -> grupo
             unmatched_groups = {}  # (counterpart_email, thread_key) -> grupo
@@ -7590,6 +7730,10 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
                             'messages': [],
                             'message_ids': [],
                         }
+                        acc_match = _match_account(cemail)
+                        if acc_match:
+                            grp['account_id'] = acc_match['id']
+                            grp['account_name'] = acc_match['name']
                         unmatched_groups[gkey] = grp
                     grp['messages'].append(msg_entry)
                     if message_id:
@@ -7630,6 +7774,9 @@ def _build_outlook_stream_response(days=60, source='com', page_size=50, max_page
             msg = f'{len(activities)} atividade(s) agrupada(s) por assunto em {total_read} email(s) lidos.'
             if unmatched:
                 msg += f' {len(unmatched)} thread(s) sem cliente correspondente.'
+                account_hits = sum(1 for u in unmatched if u.get('account_id'))
+                if account_hits:
+                    msg += f' Dessas, {account_hits} casada(s) com uma conta pelo domínio do email.'
             yield evt({
                 'phase': 'done',
                 'total_read': total_read,
@@ -7761,6 +7908,8 @@ def _outlook_confirm_async(task_id, activities_to_import):
             })
 
             client_id = act.get('client_id')
+            account_id = act.get('account_id') if not act.get('client_id') else None
+            account_name = (act.get('account_name') or '').strip()
             subject = (act.get('subject') or '').strip()
             email_date = (act.get('date') or '').strip()
             label = act.get('counterpart_label', 'De')
@@ -7771,7 +7920,7 @@ def _outlook_confirm_async(task_id, activities_to_import):
             message_ids = [m for m in (act.get('message_ids') or []) if m]
             conv_id = (act.get('conversation_id') or '').strip()
 
-            if not client_id or not email_date:
+            if (not client_id and not account_id) or not email_date:
                 continue
 
             # Dedup persistente: se todas as mensagens da thread já foram processadas, pula
@@ -7789,23 +7938,24 @@ def _outlook_confirm_async(task_id, activities_to_import):
 
             # Dedup contra atividade já existente (mesma thread/cliente no mesmo minuto)
             date_minute = email_date[:16]
-            c.execute(
-                '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
-                   AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
-                   AND information LIKE ? LIMIT 1''',
-                (client_id, date_minute, f'{subject[:100]}%')
-            )
-            if c.fetchone():
-                skipped += 1
-                skipped_items.append({'client_name': act.get('client_name') or cname, 'subject': subject})
-                for mid in message_ids:
-                    try:
-                        c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
-                                  '(user_id, message_id, conversation_id, client_id) VALUES (1, ?, ?, ?)',
-                                  (mid, conv_id, client_id))
-                    except Exception as e:
-                        logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
-                continue
+            if client_id:
+                c.execute(
+                    '''SELECT id FROM activities WHERE client_id = ? AND contact_type = 'Email'
+                       AND strftime('%Y-%m-%dT%H:%M', activity_date) = ?
+                       AND information LIKE ? LIMIT 1''',
+                    (client_id, date_minute, f'{subject[:100]}%')
+                )
+                if c.fetchone():
+                    skipped += 1
+                    skipped_items.append({'client_name': act.get('client_name') or cname, 'subject': subject})
+                    for mid in message_ids:
+                        try:
+                            c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
+                                      '(user_id, message_id, conversation_id, client_id) VALUES (1, ?, ?, ?)',
+                                      (mid, conv_id, client_id))
+                        except Exception as e:
+                            logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
+                    continue
 
             # Monta o texto consolidado da thread para o resumo do LLM
             if not messages:
@@ -7845,6 +7995,33 @@ def _outlook_confirm_async(task_id, activities_to_import):
             information = '\n'.join(info_parts)
 
             analysis_text = (summary or body_preview or subject or '')[:600]
+
+            if account_id:
+                # Atividade direto na CONTA (contato não cadastrado no Toca) —
+                # menciona quem era o contato relacionado no corpo da atividade.
+                contact_ref = cname if cname and cname.lower() != cemail else cemail
+                if cemail and contact_ref != cemail:
+                    contact_ref = f'{contact_ref} <{cemail}>'
+                information += f'\nContato relacionado: {contact_ref} (não cadastrado no Toca)'
+                c.execute(
+                    'INSERT INTO account_activities (account_id, description, activity_date) VALUES (?, ?, ?)',
+                    (account_id, information, email_date)
+                )
+                imported += 1
+                imported_items.append({
+                    'client_name': f'Conta: {account_name}' if account_name else 'Conta',
+                    'subject': subject,
+                    'date': email_date[:10] if email_date else '',
+                })
+                for mid in message_ids:
+                    try:
+                        c.execute('INSERT OR IGNORE INTO outlook_processed_emails '
+                                  '(user_id, message_id, conversation_id) VALUES (1, ?, ?)',
+                                  (mid, conv_id))
+                    except Exception as e:
+                        logger.debug(f'[_outlook_confirm_async] exceção ignorada: {e}')
+                # Sem follow-up/estágio: compromissos e Kanban exigem contato cadastrado.
+                continue
 
             c.execute(
                 '''INSERT INTO activities (client_id, contact_type, information, activity_date)
@@ -11299,6 +11476,201 @@ def _waha_ensure_sync_gateway(api_url, headers, session, task_id, log_prefix):
     )
 
 
+def _phone_digit_variants(digits):
+    """Variantes BR com e sem o 9º dígito (espelho do phoneVariants do WAHA-lite)."""
+    variants = {digits}
+    m = re.match(r'^55(\d{2})9(\d{8})$', digits)
+    if m:
+        variants.add(f'55{m.group(1)}{m.group(2)}')
+    m = re.match(r'^55(\d{2})(\d{8})$', digits)
+    if m:
+        variants.add(f'55{m.group(1)}9{m.group(2)}')
+    return variants
+
+
+def _whatsapp_scan_account_chats(c, api_url, headers, session, clients, since_ts, now_ts,
+                                 period_days, period_label, task_id, log_prefix,
+                                 diagnostic_counts, max_chats=20):
+    """Varre a lista de chats do WAHA e casa o NOME do chat/grupo com o nome de
+    uma conta cadastrada (ex.: grupo 'Projeto Vale x Stefanini' → conta 'Vale').
+    Conversas de contatos cadastrados ficam de fora — já são cobertas pelo loop
+    principal por telefone. Retorna itens para revisão, que ao serem aprovados
+    viram atividade direto na CONTA, mencionando o contato não cadastrado."""
+    accounts_index = _load_accounts_match_index(c)
+    if not accounts_index:
+        return []
+
+    try:
+        resp = requests.get(
+            f'{api_url}/api/{session}/chats/overview',
+            headers=headers, params={'limit': 1200}, timeout=30
+        )
+    except requests.exceptions.RequestException as exc:
+        diagnostic_counts['account_scan_unavailable'] = 1
+        logger.warning('%s Varredura por conta indisponível: WAHA inacessível (%s).',
+                       log_prefix, type(exc).__name__)
+        return []
+    if resp.status_code == 404:
+        # Gateway WAHA-lite antigo, sem o endpoint de overview — reiniciar o app resolve.
+        diagnostic_counts['account_scan_unavailable'] = 1
+        logger.info('%s Varredura por conta indisponível: gateway WAHA-lite sem capacidade '
+                    'chat-overview (reinicie o WAHA-lite para atualizar).', log_prefix)
+        return []
+    if resp.status_code != 200:
+        diagnostic_counts['account_scan_unavailable'] = 1
+        logger.warning('%s Varredura por conta falhou: HTTP %s do WAHA.', log_prefix, resp.status_code)
+        return []
+    try:
+        chats = resp.json()
+    except Exception:
+        diagnostic_counts['account_scan_unavailable'] = 1
+        return []
+    if not isinstance(chats, list):
+        return []
+
+    # Números já cobertos pelo scan por contato (com variantes do 9º dígito)
+    known_digits = set()
+    for _cid, _cname, _phone in clients:
+        chat_wid = _phone_to_waha_chatid(_phone)
+        if chat_wid:
+            known_digits |= _phone_digit_variants(chat_wid.split('@')[0])
+
+    candidates = []
+    for chat in chats:
+        if not isinstance(chat, dict):
+            continue
+        chat_name = (chat.get('name') or '').strip()
+        chat_id = (chat.get('id') or '').strip()
+        if not chat_name or not chat_id:
+            continue
+        if not chat.get('isGroup') and (chat.get('user') or chat_id.split('@')[0]) in known_digits:
+            continue
+        last_msg_ts = int(chat.get('lastMessageTs') or 0)
+        if last_msg_ts and last_msg_ts < since_ts:
+            continue
+        acc = _match_account_by_chat_name(chat_name, accounts_index)
+        if acc:
+            candidates.append((chat, acc))
+
+    if len(candidates) > max_chats:
+        logger.info('%s Varredura por conta: %s chat(s) casaram, limitando a %s nesta execução.',
+                    log_prefix, len(candidates), max_chats)
+        candidates = candidates[:max_chats]
+
+    def _msg_ts(m):
+        try:
+            return int(m.get('timestamp') or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    items = []
+    total = len(candidates)
+    for idx, (chat, acc) in enumerate(candidates):
+        chat_id = (chat.get('id') or '').strip()
+        chat_name = (chat.get('name') or '').strip()
+        _bg_task_set(task_id, {
+            'step': f'🏢 Verificando conversas por conta... ({idx + 1}/{total})',
+            'progress': 90 + int((idx / max(total, 1)) * 7),
+        })
+
+        # Deduplicação incremental por conta+chat (espelho do fluxo por contato)
+        c.execute('SELECT MAX(last_message_ts) FROM whatsapp_account_sync_log '
+                  'WHERE account_id = ? AND chat_id = ?', (acc['id'], chat_id))
+        _row = c.fetchone()
+        last_processed_ts = int(_row[0]) if _row and _row[0] else 0
+        effective_since = max(since_ts, last_processed_ts + 1) if last_processed_ts else since_ts
+
+        try:
+            msg_resp = requests.get(
+                f'{api_url}/api/{session}/chats/{chat_id}/messages',
+                headers=headers,
+                params={
+                    'limit': 500,
+                    'downloadMedia': 'false',
+                    'filter.timestamp.gte': effective_since,
+                    'filter.timestamp.lte': now_ts,
+                },
+                timeout=25
+            )
+        except requests.exceptions.RequestException as exc:
+            logger.warning('%s Conversa por conta %s/%s ignorada: WAHA indisponível (%s).',
+                           log_prefix, idx + 1, total, type(exc).__name__)
+            if isinstance(exc, requests.exceptions.ReadTimeout):
+                break
+            continue
+        if msg_resp.status_code != 200:
+            continue
+        try:
+            raw = msg_resp.json()
+        except Exception:
+            continue
+        messages = raw if isinstance(raw, list) else (raw.get('messages') or raw.get('data') or [])
+        if not isinstance(messages, list) or not messages:
+            continue
+
+        messages.sort(key=_msg_ts)
+        texts = []
+        last_ts = 0
+        for msg in messages:
+            ts = _msg_ts(msg)
+            if ts and (ts < effective_since or ts > now_ts):
+                continue
+            if ts > last_ts:
+                last_ts = ts
+            text, _sender = _waha_extract_text(msg, chat_name)
+            if text:
+                texts.append(text)
+        if not texts:
+            continue
+
+        content_hash = hashlib.sha256('|'.join(texts).encode('utf-8', errors='replace')).hexdigest()[:40]
+        c.execute('SELECT id FROM whatsapp_account_sync_log WHERE account_id = ? AND content_hash = ?',
+                  (acc['id'], content_hash))
+        if c.fetchone():
+            continue
+
+        conversation_text = '\n'.join(texts[-60:])
+        kind = 'do grupo' if chat.get('isGroup') else 'da conversa'
+        prompt = (
+            f"Analise a conversa de WhatsApp {kind} '{chat_name}', relacionada à conta/empresa "
+            f"'{acc['name']}' (período: {period_label}). "
+            "Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois) no formato:\n"
+            '{"resumo": "resumo conciso em 2 a 4 frases em português, formato log de atividade CRM, '
+            'mencionando tópicos tratados, decisões e pendências, sem aspas nem markdown"}\n\n'
+            f"Conversa:\n{conversation_text}"
+        )
+        raw_llm = _llm_prompt(prompt, log_tag='WhatsAppUpdateConta')
+        summary = ''
+        parsed = _extract_json_object_from_text(raw_llm) if raw_llm else None
+        if isinstance(parsed, dict):
+            summary = (parsed.get('resumo') or parsed.get('summary') or '').strip()
+        elif raw_llm:
+            summary = raw_llm.strip()
+        if not summary:
+            summary = (f"Conversa de WhatsApp {kind} '{chat_name}' no período de {period_label}. "
+                       f'{len(texts)} mensagem(ns) trocada(s).')
+
+        activity_date = (datetime.utcfromtimestamp(last_ts).strftime('%Y-%m-%d %H:%M:%S')
+                         if last_ts else datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        items.append({
+            'account_id': acc['id'],
+            'account_name': acc['name'],
+            'chat_id': chat_id,
+            'chat_name': chat_name,
+            'is_group': 1 if chat.get('isGroup') else 0,
+            'summary': summary,
+            'activity_date': activity_date,
+            'message_count': len(texts),
+            'content_hash': content_hash,
+            'last_message_ts': last_ts,
+            'period_days': period_days,
+        })
+        logger.info('%s Conversa por conta %s/%s pronta para revisão: mensagens_importáveis=%s.',
+                    log_prefix, idx + 1, total, len(texts))
+
+    return items
+
+
 def _whatsapp_sync_async(task_id, period_days):
     run_id = re.sub(r'[^a-zA-Z0-9_-]', '', str(task_id))[:12] or uuid.uuid4().hex[:12]
     log_prefix = f'[WhatsApp Sync][sync:{run_id}]'
@@ -11636,21 +12008,37 @@ def _whatsapp_sync_async(task_id, period_days):
                 log_prefix, contact_ref, len(texts),
             )
 
+        # ── Varredura por conta: chats/grupos cujo nome bate com uma conta ──
+        account_items = []
+        try:
+            _bg_task_set(task_id, {'step': '🏢 Verificando conversas ligadas a contas...', 'progress': 90})
+            account_items = _whatsapp_scan_account_chats(
+                c, api_url, headers, session, clients, since_ts, now_ts,
+                period_days, period_label, task_id, log_prefix, diagnostic_counts
+            )
+        except Exception as exc:
+            logger.warning('%s Varredura por conta falhou (%s): %s', log_prefix,
+                           type(exc).__name__, _waha_redact_diagnostic_text(str(exc))[:240])
+
         diagnostic_summary = _whatsapp_sync_diagnostic_summary(diagnostic_counts, total)
         logger.info(
-            '%s Fim: total=%s, para_revisão=%s, ignorados=%s, motivos=%s.',
-            log_prefix, total, imported, skipped,
+            '%s Fim: total=%s, para_revisão=%s, por_conta=%s, ignorados=%s, motivos=%s.',
+            log_prefix, total, imported, len(account_items), skipped,
             json.dumps(diagnostic_counts, ensure_ascii=False, sort_keys=True),
         )
+        result_message = f'{imported} conversa(s) para revisar, {skipped} sem novidade.'
+        if account_items:
+            result_message = (f'{imported} conversa(s) de contato e {len(account_items)} '
+                              f'ligada(s) a conta para revisar, {skipped} sem novidade.')
         _bg_task_set(task_id, {
             'status': 'done', 'progress': 100,
             'step': '✅ Análise concluída — revise os resumos!',
             'result': {
-                'pending': imported,
+                'pending': imported + len(account_items),
                 'skipped': skipped,
                 'total_clients': total,
-                'items': pending_items,
-                'message': f'{imported} conversa(s) para revisar, {skipped} sem novidade.',
+                'items': pending_items + account_items,
+                'message': result_message,
                 'diagnostics': {
                     'run_id': run_id,
                     'counts': diagnostic_counts,
