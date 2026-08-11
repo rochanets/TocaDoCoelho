@@ -63,6 +63,7 @@ from integrations.outlook_graph import (
     send_mail as outlook_graph_send_mail,
 )
 from integrations import ext_autoupdate
+from integrations import feedback_watcher as fw
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
