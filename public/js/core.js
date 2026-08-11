@@ -3781,11 +3781,22 @@
             return null;
         }
 
+        function _reembFriendlyExtensionError(message) {
+            // Um content script órfão (extensão auto-atualizada com a página
+            // aberta) pode deixar vazar o erro cru do Chrome — o remédio real
+            // é recarregar a página, e é isso que o usuário precisa ler.
+            const raw = String(message || '');
+            if (/could not establish connection|receiving end does not exist|extension context invalidated|message port closed/i.test(raw)) {
+                return 'A extensão AutoToca foi atualizada e perdeu a conexão com esta página. Recarregue a página (F5) e tente novamente.';
+            }
+            return raw;
+        }
+
         function _reembOpenExtensionTab(taskData) {
             return new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
                     window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
-                    reject(new Error('A extensão AutoToca não confirmou a abertura da aba. Recarregue a extensão e tente novamente.'));
+                    reject(new Error('A extensão AutoToca não confirmou a abertura da aba. Recarregue a página (F5) e tente novamente.'));
                 }, 6000);
                 const onResult = event => {
                     const detail = event?.detail || {};
@@ -3793,7 +3804,7 @@
                     clearTimeout(timeout);
                     window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
                     if (detail.ok) resolve(detail);
-                    else reject(new Error(detail.message || 'A extensão não conseguiu abrir o e-Reembolso.'));
+                    else reject(new Error(_reembFriendlyExtensionError(detail.message) || 'A extensão não conseguiu abrir o e-Reembolso.'));
                 };
                 window.addEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
                 window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_COMMAND_EVENT, {

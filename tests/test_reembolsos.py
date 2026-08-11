@@ -624,3 +624,48 @@ def test_extensao_reembolso_mira_campos_por_id_do_portal():
         "chooseNative('QUANTIDADE'", 'fillPeriod(payload',
     ):
         assert banned not in robot_source, banned
+
+
+def test_extensao_sobrevive_a_auto_atualizacao_sem_erro_cru_de_conexao():
+    """Feedback Netto v5.6.0.0: "Could not establish connection. Receiving end
+    does not exist." ao iniciar o robô de Reembolsos.
+
+    Quando a extensão se recarrega (auto-update via chrome.runtime.reload()) ou
+    é removida/quebrada, o content script antigo fica ÓRFÃO: os listeners DOM
+    (ping/comando) continuam vivos, mas todo o canal chrome.* morre. O órfão
+    respondia ao ping — a página achava a extensão pronta — e o sendMessage do
+    comando estourava o erro cru do Chrome, mostrado sem tradução ao usuário.
+
+    Camadas exigidas aqui:
+    1. content.js só responde ping/comando com o contexto da extensão vivo;
+    2. content.js traduz erros crus de canal em instrução amigável (F5);
+    3. background.js re-injeta os content scripts nas abas já abertas após
+       instalação/atualização/reload (sem duplicar onde já há script vivo);
+    4. core.js traduz o erro cru caso ainda vaze de uma versão antiga.
+    """
+    content_source = _EXTENSION_DIR.joinpath('content.js').read_text(encoding='utf-8')
+    background_source = _EXTENSION_DIR.joinpath('background.js').read_text(encoding='utf-8')
+    core_source = (Path(__file__).parents[1] / 'public' / 'js' / 'core.js').read_text(encoding='utf-8')
+
+    # 1. Guarda de contexto: órfão fica mudo (não anuncia um canal morto).
+    assert 'function extensionContextAlive()' in content_source
+    assert 'chrome.runtime && chrome.runtime.id' in content_source
+    assert 'if (!extensionContextAlive()) return;' in content_source
+
+    # 2. Erro cru de canal nunca chega ao usuário sem tradução.
+    assert 'function friendlyChannelError(' in content_source
+    assert '/could not establish connection|receiving end does not exist|extension context invalidated|message port closed/i' in content_source
+    assert 'Recarregue a página (F5)' in content_source
+
+    # 3. Re-injeção pós-update nas abas abertas, com ping para não duplicar.
+    assert "message?.type === 'autotoca_cs_ping'" in content_source
+    assert '_reinjectContentScripts' in background_source
+    assert "chrome.tabs.sendMessage(tab.id, { type: 'autotoca_cs_ping' })" in background_source
+    assert 'chrome.scripting.executeScript' in background_source
+    assert "files: ['content.js', 'reembolso.js']" in background_source
+
+    # 4. Última linha de defesa no frontend do Toca.
+    assert '_reembFriendlyExtensionError' in core_source
+    assert '/could not establish connection|receiving end does not exist|extension context invalidated|message port closed/i' in core_source
+    # O timeout de abertura orienta o F5 (é o remédio real quando o script órfão fica mudo).
+    assert 'Recarregue a página (F5) e tente novamente' in core_source

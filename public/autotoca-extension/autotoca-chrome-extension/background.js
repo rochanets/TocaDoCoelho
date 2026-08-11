@@ -20,9 +20,52 @@ function _validReembolsoUrl(value) {
   }
 }
 
+// Após instalação/atualização/reload, o Chrome NÃO re-injeta content scripts
+// nas abas já abertas — e o script antigo fica órfão (canal chrome.* morto,
+// listeners DOM vivos). Sem esta re-injeção, uma aba do Toca aberta durante o
+// auto-update via chrome.runtime.reload() via "Could not establish connection.
+// Receiving end does not exist." ao acionar o robô, até o usuário dar F5.
+const _REINJECT_URL_PATTERNS = [
+  'http://localhost/*',
+  'http://127.0.0.1/*',
+  'https://forms.office.com/*',
+  'https://www.linkedin.com/*',
+  'https://linkedin.com/*',
+  'https://ereembolso.stefanini.com.br/*',
+];
+
+async function _reinjectContentScripts() {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: _REINJECT_URL_PATTERNS });
+  } catch (e) {
+    console.log('[AutoToca Helper] reinject: tabs.query falhou', e);
+    return;
+  }
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'autotoca_cs_ping' });
+      continue; // já há um content script VIVO deste contexto — não duplica
+    } catch (_) {
+      // sem receptor: script ausente ou órfão — injeta
+    }
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content.js', 'reembolso.js'],
+      });
+      console.log(`[AutoToca Helper] content scripts re-injetados na aba ${tab.id}`);
+    } catch (e) {
+      console.log(`[AutoToca Helper] reinject falhou na aba ${tab.id}`, e);
+    }
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[AutoToca Helper] instalada com sucesso');
   _checkForUpdate();
+  _reinjectContentScripts();
 });
 
 // ---------------------------------------------------------------------------
