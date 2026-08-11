@@ -180,3 +180,203 @@ def create_feedback():
 @app.route('/api/feedback/tasks/<task_id>', methods=['GET'])
 def get_feedback_task(task_id):
     return jsonify(_bg_task_get(task_id))
+
+
+# ---------------------------------------------------------------------------
+# Watcher de feedback → Claude Code (roda só no perfil do administrador).
+#
+# A parte pura (descoberta de executáveis, worktree, subprocess) vive em
+# integrations/feedback_watcher.py (importado no app.py como `fw`). Aqui
+# ficam o gate por perfil, o poll da inbox via Graph, a orquestração de cada
+# job e o e-mail de resultado. Dedup por graph_message_id na tabela
+# feedback_auto_jobs — o e-mail NÃO é marcado como lido (exigiria escopo
+# Mail.ReadWrite, que não temos nem vamos pedir).
+# ---------------------------------------------------------------------------
+
+FEEDBACK_JOBS_DIR = (Path(os.environ.get('LOCALAPPDATA') or tempfile.gettempdir())
+                     / 'TocaDoCoelho' / 'feedback-jobs')
+
+
+def _feedback_watcher_enabled():
+    raw = (_resolve_setting('feedback_watcher_enabled', 'TOCA_FEEDBACK_WATCHER') or '')
+    return raw.strip().lower() in ('1', 'true', 'on')
+
+
+def _feedback_watcher_repo():
+    return (_resolve_setting('feedback_watcher_repo', 'TOCA_FEEDBACK_REPO')
+            or r'C:\TocaDoCoelho').strip()
+
+
+def _feedback_watcher_gate():
+    """Todas as condições precisam valer; nas máquinas dos demais usuários
+    alguma sempre falha (no limite: a caixa conectada não é a do admin).
+    Devolve dict com ok/reason e, quando ok, token/claude_exe/repo prontos."""
+    gate = {'ok': False, 'reason': '', 'token': None, 'claude_exe': None, 'repo': None}
+    if not _feedback_watcher_enabled():
+        gate['reason'] = 'desligado (feedback_watcher_enabled)'
+        return gate
+    claude_exe = fw.find_claude_exe()
+    if not claude_exe:
+        gate['reason'] = 'claude.exe não encontrado (PATH nem %APPDATA%\\Claude\\claude-code)'
+        return gate
+    if not fw.find_gh_exe():
+        gate['reason'] = 'gh (GitHub CLI) não encontrado no PATH'
+        return gate
+    repo = Path(_feedback_watcher_repo())
+    if not (repo / '.git').exists():
+        gate['reason'] = f'repositório git não encontrado em {repo}'
+        return gate
+    try:
+        graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+        conn = get_db()
+        try:
+            token = outlook_graph_get_valid_access_token(
+                conn=conn, user_id=1, settings=graph_settings)
+        finally:
+            conn.close()
+        me = (_graph_get_me_email(token) or '').strip().lower()
+    except Exception as e:
+        gate['reason'] = f'Outlook não conectado: {e}'
+        return gate
+    if me != _feedback_admin_email().lower():
+        gate['reason'] = f'conta conectada ({me}) não é a do administrador'
+        return gate
+    gate.update({'ok': True, 'token': token, 'claude_exe': claude_exe, 'repo': str(repo)})
+    return gate
+
+
+def _feedback_watcher_insert_job(msg):
+    """Registra o job; devolve o id, ou None se a mensagem já foi processada
+    (dedup pelo UNIQUE de graph_message_id)."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute('INSERT INTO feedback_auto_jobs (graph_message_id, subject, sender) '
+                  'VALUES (?, ?, ?)',
+                  (msg['id'], msg.get('subject') or '', msg.get('sender_email') or ''))
+        conn.commit()
+        return c.lastrowid
+    except sqlite3.IntegrityError:
+        return None
+    finally:
+        conn.close()
+
+
+def _feedback_watcher_update_job(job_id, **fields):
+    if not fields:
+        return
+    sets = ', '.join(f'{k} = ?' for k in fields)
+    conn = get_db()
+    conn.execute(f'UPDATE feedback_auto_jobs SET {sets} WHERE id = ?',
+                 (*fields.values(), job_id))
+    conn.commit()
+    conn.close()
+
+
+def _feedback_watcher_process_job(job_id, msg, gate):
+    agora = lambda: datetime.now().isoformat(timespec='seconds')  # noqa: E731
+    _feedback_watcher_update_job(job_id, status='running', started_at=agora())
+    logger.info(f'[FeedbackWatcher] Job {job_id} iniciado — "{msg.get("subject")}"')
+
+    job_dir = FEEDBACK_JOBS_DIR / str(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        atts = outlook_graph_fetch_message_attachments(gate['token'], msg['id'])
+    except Exception as e:
+        logger.warning(f'[FeedbackWatcher] Job {job_id}: anexos indisponíveis: {e}')
+        atts = []
+    for att in atts:
+        nome = os.path.basename(att.get('name') or 'anexo.txt') or 'anexo.txt'
+        try:
+            (job_dir / nome).write_bytes(base64.b64decode(att.get('content_bytes') or ''))
+        except Exception as e:
+            logger.warning(f'[FeedbackWatcher] Job {job_id}: anexo "{nome}" ignorado: {e}')
+    (job_dir / 'feedback.md').write_text(
+        fw.build_feedback_md(msg.get('subject') or '', msg.get('sender_email') or '',
+                             msg.get('received_at') or '', msg.get('body_text') or ''),
+        encoding='utf-8')
+
+    result = fw.run_claude_job(gate['claude_exe'], gate['repo'], job_dir, job_id)
+    logger.info(f'[FeedbackWatcher] Job {job_id} terminou: ok={result["ok"]} '
+                f'pr={result.get("pr_url")} erro={result.get("error")}')
+
+    destino = _feedback_admin_email()
+    remetente = msg.get('sender_name') or msg.get('sender_email') or 'usuário'
+    if result['ok']:
+        _feedback_watcher_update_job(job_id, status='done', report=result['report'],
+                                     branch=result['branch'], pr_url=result['pr_url'],
+                                     error=None, finished_at=agora())
+        status_label = 'PR aberto' if result['pr_url'] else 'diagnóstico'
+        pr_html = (f'<p><strong>PR:</strong> <a href="{html.escape(result["pr_url"])}">'
+                   f'{html.escape(result["pr_url"])}</a></p>' if result['pr_url'] else '')
+        body = (
+            f'<p><strong>Análise automática do feedback de {html.escape(remetente)}</strong></p>'
+            f'{pr_html}'
+            f'<pre style="white-space:pre-wrap; font-size:13px;">'
+            f'{html.escape(result["report"][:20000])}</pre>'
+        )
+        assunto = f'🤖 Análise do feedback — {remetente} — {status_label}'
+    else:
+        _feedback_watcher_update_job(job_id, status='error', report=result['report'],
+                                     error=result['error'], finished_at=agora())
+        body = (
+            f'<p><strong>A análise automática do feedback de {html.escape(remetente)} '
+            f'falhou.</strong></p>'
+            f'<p>{html.escape(result["error"] or "erro desconhecido")}</p>'
+            f'<p style="color:#6b7280; font-size:12px;">Material do job em '
+            f'{html.escape(str(job_dir))}.</p>'
+        )
+        assunto = f'🤖 Análise do feedback — {remetente} — erro'
+    try:
+        _outlook_send_mail(destino, assunto, body)
+    except Exception as e:
+        logger.warning(f'[FeedbackWatcher] Job {job_id}: e-mail de resultado falhou: {e}')
+
+
+def _feedback_watcher_tick():
+    """Uma rodada: gate → não lidas → filtra feedback → processa as novas.
+    Devolve o gate (para o loop logar o motivo quando inativo)."""
+    gate = _feedback_watcher_gate()
+    if not gate['ok']:
+        return gate
+    msgs = outlook_graph_fetch_unread_inbox(gate['token'])
+    for msg in msgs:
+        if not fw.is_feedback_subject(msg.get('subject')):
+            continue
+        job_id = _feedback_watcher_insert_job(msg)
+        if job_id is None:
+            continue  # já processado numa rodada anterior
+        _feedback_watcher_process_job(job_id, msg, gate)
+    return gate
+
+
+_feedback_watcher_started = False
+
+
+def _start_feedback_watcher():
+    global _feedback_watcher_started
+    if _feedback_watcher_started or os.environ.get('TOCA_DISABLE_BG_JOBS') == '1':
+        return
+    _feedback_watcher_started = True
+
+    def _loop():
+        last_reason = None
+        while True:
+            try:
+                minutes = int(_resolve_setting('feedback_watcher_poll_minutes',
+                                               'TOCA_FEEDBACK_POLL_MINUTES') or 5)
+            except Exception:
+                minutes = 5
+            time.sleep(max(minutes, 1) * 60)
+            try:
+                gate = _feedback_watcher_tick()
+                reason = gate.get('reason') or ''
+                if not gate.get('ok') and reason != last_reason:
+                    # loga só na mudança para não poluir o app.log a cada 5 min
+                    logger.info(f'[FeedbackWatcher] Inativo: {reason}')
+                last_reason = reason
+            except Exception as e:
+                logger.warning(f'[FeedbackWatcher] Tick falhou: {e}')
+
+    threading.Thread(target=_loop, daemon=True).start()
+    logger.info('[FeedbackWatcher] Watcher de feedback iniciado')

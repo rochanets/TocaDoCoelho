@@ -187,3 +187,147 @@ def test_run_claude_job_worktree_falhou(tmp_path):
     result = fw.run_claude_job('claude.exe', tmp_path, tmp_path / 'job', 10, runner=runner)
     assert result['ok'] is False
     assert 'worktree' in result['error']
+
+
+# ---------------------------------------------------------------------------
+# Orquestração (routes/feedback.py, executado no namespace do app)
+# ---------------------------------------------------------------------------
+
+def _gate_ok(tmp_path):
+    return {'ok': True, 'reason': '', 'token': 'tok',
+            'claude_exe': 'claude.exe', 'repo': str(tmp_path)}
+
+
+def test_gate_desligado_por_padrao(db_path, monkeypatch):
+    monkeypatch.delenv('TOCA_FEEDBACK_WATCHER', raising=False)
+    gate = toca._feedback_watcher_gate()
+    assert gate['ok'] is False
+    assert 'desligado' in gate['reason']
+
+
+def test_gate_sem_claude_exe(db_path, monkeypatch):
+    monkeypatch.setenv('TOCA_FEEDBACK_WATCHER', '1')
+    monkeypatch.setattr(toca.fw, 'find_claude_exe', lambda: None)
+    gate = toca._feedback_watcher_gate()
+    assert gate['ok'] is False
+    assert 'claude' in gate['reason'].lower()
+
+
+def test_gate_recusa_caixa_de_outro_usuario(db_path, tmp_path, monkeypatch):
+    (tmp_path / '.git').mkdir()
+    monkeypatch.setenv('TOCA_FEEDBACK_WATCHER', '1')
+    monkeypatch.setenv('TOCA_FEEDBACK_REPO', str(tmp_path))
+    monkeypatch.setattr(toca.fw, 'find_claude_exe', lambda: 'claude.exe')
+    monkeypatch.setattr(toca.fw, 'find_gh_exe', lambda: 'gh.exe')
+    monkeypatch.setattr(toca, '_graph_redirect_uri', lambda: 'http://localhost/cb')
+    monkeypatch.setattr(toca, '_graph_make_settings', lambda redirect_uri='': {})
+    monkeypatch.setattr(toca, 'outlook_graph_get_valid_access_token',
+                        lambda **kw: 'tok')
+    monkeypatch.setattr(toca, '_graph_get_me_email', lambda tok: 'outra@pessoa.com')
+    gate = toca._feedback_watcher_gate()
+    assert gate['ok'] is False
+    assert 'administrador' in gate['reason']
+
+
+def test_gate_aprovado_na_maquina_do_admin(db_path, tmp_path, monkeypatch):
+    (tmp_path / '.git').mkdir()
+    monkeypatch.setenv('TOCA_FEEDBACK_WATCHER', '1')
+    monkeypatch.setenv('TOCA_FEEDBACK_REPO', str(tmp_path))
+    monkeypatch.setattr(toca.fw, 'find_claude_exe', lambda: 'claude.exe')
+    monkeypatch.setattr(toca.fw, 'find_gh_exe', lambda: 'gh.exe')
+    monkeypatch.setattr(toca, '_graph_redirect_uri', lambda: 'http://localhost/cb')
+    monkeypatch.setattr(toca, '_graph_make_settings', lambda redirect_uri='': {})
+    monkeypatch.setattr(toca, 'outlook_graph_get_valid_access_token',
+                        lambda **kw: 'tok')
+    monkeypatch.setattr(toca, '_graph_get_me_email',
+                        lambda tok: toca._feedback_admin_email())
+    gate = toca._feedback_watcher_gate()
+    assert gate['ok'] is True
+    assert gate['token'] == 'tok'
+    assert gate['claude_exe'] == 'claude.exe'
+
+
+def test_insert_job_dedup_por_graph_message_id(db_path):
+    msg = {'id': 'GRAPH-1', 'subject': 's', 'sender_email': 'a@b.com'}
+    assert toca._feedback_watcher_insert_job(msg) is not None
+    assert toca._feedback_watcher_insert_job(msg) is None
+
+
+def test_tick_processa_somente_feedback_novo(db_path, tmp_path, monkeypatch):
+    monkeypatch.setattr(toca, '_feedback_watcher_gate', lambda: _gate_ok(tmp_path))
+    msgs = [
+        {'id': 'M1', 'subject': '🐇 Feedback do Toca — X — v1',
+         'sender_email': 'a@b.com', 'sender_name': 'X',
+         'received_at': '2026-08-11T10:00:00Z', 'body_text': 'quebrou'},
+        {'id': 'M2', 'subject': 'newsletter qualquer',
+         'sender_email': 'z@b.com', 'sender_name': 'Z',
+         'received_at': '2026-08-11T10:01:00Z', 'body_text': 'oi'},
+    ]
+    monkeypatch.setattr(toca, 'outlook_graph_fetch_unread_inbox',
+                        lambda tok, top=25: msgs)
+    processados = []
+    monkeypatch.setattr(toca, '_feedback_watcher_process_job',
+                        lambda job_id, msg, gate: processados.append(msg['id']))
+    toca._feedback_watcher_tick()
+    assert processados == ['M1']
+    toca._feedback_watcher_tick()  # segunda rodada: dedup segura
+    assert processados == ['M1']
+
+
+def test_process_job_sucesso_grava_e_envia_email(db_path, tmp_path, monkeypatch):
+    monkeypatch.setattr(toca, 'FEEDBACK_JOBS_DIR', tmp_path / 'jobs')
+    msg = {'id': 'M9', 'subject': '🐇 Feedback do Toca — X — v1',
+           'sender_email': 'a@b.com', 'sender_name': 'X',
+           'received_at': '2026-08-11T10:00:00Z', 'body_text': 'quebrou o botão'}
+    job_id = toca._feedback_watcher_insert_job(msg)
+    anexos = [{'name': 'app-log-1.txt',
+               'content_bytes': base64.b64encode('linha de log'.encode()).decode(),
+               'content_type': 'text/plain'}]
+    monkeypatch.setattr(toca, 'outlook_graph_fetch_message_attachments',
+                        lambda tok, mid: anexos)
+    monkeypatch.setattr(toca.fw, 'run_claude_job',
+                        lambda *a, **kw: {'ok': True, 'report': '## Diagnóstico\nok',
+                                          'branch': f'feedback/auto-{job_id}',
+                                          'pr_url': 'https://github.com/r/t/pull/5',
+                                          'error': None})
+    emails = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, body, attachments=None:
+                        emails.append((to, subject, body)) or to)
+    toca._feedback_watcher_process_job(job_id, msg, _gate_ok(tmp_path))
+
+    conn = toca.get_db()
+    row = conn.execute('SELECT * FROM feedback_auto_jobs WHERE id = ?', (job_id,)).fetchone()
+    conn.close()
+    assert row['status'] == 'done'
+    assert row['pr_url'] == 'https://github.com/r/t/pull/5'
+    assert (tmp_path / 'jobs' / str(job_id) / 'feedback.md').exists()
+    assert (tmp_path / 'jobs' / str(job_id) / 'app-log-1.txt').read_text(encoding='utf-8') == 'linha de log'
+    assert len(emails) == 1
+    assert 'Análise do feedback' in emails[0][1]
+    assert 'pull/5' in emails[0][2]
+
+
+def test_process_job_falha_grava_erro_e_avisa(db_path, tmp_path, monkeypatch):
+    monkeypatch.setattr(toca, 'FEEDBACK_JOBS_DIR', tmp_path / 'jobs')
+    msg = {'id': 'M10', 'subject': '🐇 Feedback do Toca — X — v1',
+           'sender_email': 'a@b.com', 'sender_name': 'X',
+           'received_at': '2026-08-11T10:00:00Z', 'body_text': 'quebrou'}
+    job_id = toca._feedback_watcher_insert_job(msg)
+    monkeypatch.setattr(toca, 'outlook_graph_fetch_message_attachments',
+                        lambda tok, mid: [])
+    monkeypatch.setattr(toca.fw, 'run_claude_job',
+                        lambda *a, **kw: {'ok': False, 'report': '', 'branch': 'x',
+                                          'pr_url': None, 'error': 'tempo limite'})
+    emails = []
+    monkeypatch.setattr(toca, '_outlook_send_mail',
+                        lambda to, subject, body, attachments=None:
+                        emails.append((to, subject, body)) or to)
+    toca._feedback_watcher_process_job(job_id, msg, _gate_ok(tmp_path))
+
+    conn = toca.get_db()
+    row = conn.execute('SELECT * FROM feedback_auto_jobs WHERE id = ?', (job_id,)).fetchone()
+    conn.close()
+    assert row['status'] == 'error'
+    assert 'tempo limite' in row['error']
+    assert len(emails) == 1 and 'erro' in emails[0][1].lower()

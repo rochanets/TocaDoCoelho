@@ -12560,6 +12560,7 @@ def _load_route_modules():
 _load_route_modules()
 _start_inbound_poller()
 _start_scheduled_jobs()
+_start_feedback_watcher()
 
 
 def _porta_ja_em_uso(port):
