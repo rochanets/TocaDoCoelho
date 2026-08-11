@@ -136,6 +136,11 @@ def test_baseline_tables_confere_com_o_init_db_atual():
     assert not sumidas, f'BASELINE_TABLES cita tabelas que o init_db não cria mais: {sorted(sumidas)}'
 
 
+def test_banco_novo_cria_feedback_auto_jobs(db_path):
+    """Watcher de feedback → Claude Code (migração 19)."""
+    assert 'feedback_auto_jobs' in _tables(db_path)
+
+
 def test_versoes_das_migracoes_sao_unicas_e_ordenadas():
     versions = [version for version, _name, _stmts in toca.SCHEMA_MIGRATIONS]
     assert len(versions) == len(set(versions))

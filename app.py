@@ -1527,6 +1527,26 @@ SCHEMA_MIGRATIONS = [
     (18, 'iata_opportunity_match_confidence', [
         _iata_add_opportunity_match_confidence_column,
     ]),
+    # Watcher de feedback → Claude Code: um job por email de feedback recebido
+    # na caixa do administrador. Dedup por graph_message_id (não marcamos o
+    # email como lido — isso exigiria o escopo Mail.ReadWrite, que não temos).
+    (19, 'feedback_auto_jobs', [
+        '''CREATE TABLE IF NOT EXISTS feedback_auto_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            graph_message_id TEXT UNIQUE NOT NULL,
+            subject TEXT,
+            sender TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            branch TEXT,
+            pr_url TEXT,
+            report TEXT,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_feedback_auto_jobs_status ON feedback_auto_jobs(status)',
+    ]),
 ]
 
 
