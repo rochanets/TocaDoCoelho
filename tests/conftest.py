@@ -40,6 +40,30 @@ def client(db_path):
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _drena_threads_de_indexacao_wikitoca(monkeypatch):
+    """Dá join nas threads de indexação do WikiToca (daemon=True) antes do
+    monkeypatch de DB_PATH/WIKI_UPLOAD_DIR ser revertido.
+
+    Sem isto, uma thread de _wiki_index_documents_async ainda viva quando um
+    teste falha (timeout do _espera_task, assert anterior, etc.) sobrevive ao
+    teardown do fixture `db_path` e, no primeiro `get_db()` seguinte, grava em
+    %APPDATA%\\toca-do-coelho\\toca-do-coelho.db — o banco real do usuário —
+    usando ids do banco de teste que já sumiu. Mesma classe de bug que motivou
+    o isolamento de diretórios em `_isola_diretorios_de_upload` acima.
+
+    Recebe `monkeypatch` explicitamente (mesmo sem usá-lo) só para forçar a
+    ordem de teardown: por depender dele, este fixture é finalizado antes do
+    `monkeypatch.undo()` que reverte DB_PATH — não dá pra confiar só na ordem
+    implícita entre fixtures autouse para uma garantia desta importância.
+    """
+    yield
+    threads = getattr(toca, '_wiki_indexing_threads', [])
+    for t in threads:
+        if t.is_alive():
+            t.join(timeout=5)
+
+
 @pytest.fixture()
 def sample_client_id(client):
     resp = client.post('/api/clientes', data={

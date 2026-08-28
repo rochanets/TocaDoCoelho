@@ -4,30 +4,65 @@
 # tem acesso a todos os helpers/globals de app.py e registra as rotas no
 # mesmo objeto Flask `app`, com URLs idênticas às originais.
 
+# Tabelas de destino permitidas em _wiki_index_document — mapa explícito em vez
+# de um catch-all `else`: uma chave desconhecida levanta em vez de gravar em
+# silêncio na tabela vizinha (ex.: um typo futuro em `table`).
+_WIKI_INDEX_UPDATE_SQL = {
+    'wiki_documents': ('UPDATE wiki_documents SET extracted_text=?, extract_status=?, '
+                       'extracted_at=CURRENT_TIMESTAMP WHERE id=?'),
+    'wiki_training_documents': ('UPDATE wiki_training_documents SET extracted_text=?, '
+                                'extract_status=? WHERE id=?'),
+}
+
+# Threads de indexação em background disparadas por esta rota (upload, import-zip
+# e reindex). Os testes dão join nelas no teardown (ver tests/conftest.py): sem
+# isso, uma thread daemon ainda viva sobrevive ao monkeypatch de DB_PATH revertido
+# e grava no banco real do usuário com ids do banco de teste.
+_wiki_indexing_threads = []
+
+
+def _wiki_track_thread(thread):
+    """Registra uma thread de indexação recém-disparada, descartando da lista as
+    que já terminaram — para ela não crescer indefinidamente ao longo da vida do
+    processo em produção."""
+    global _wiki_indexing_threads
+    _wiki_indexing_threads = [t for t in _wiki_indexing_threads if t.is_alive()]
+    _wiki_indexing_threads.append(thread)
+
+
 def _wiki_index_document(table, row_id, file_path):
     """Extrai o texto de um arquivo e grava no cache da linha indicada.
     `table` é 'wiki_documents' ou 'wiki_training_documents'.
     Nunca levanta: falha vira extract_status='error' para aparecer na UI."""
-    status = 'error'
-    texto = ''
+    file_path = Path(file_path)
+    if not file_path.exists():
+        # Caso realista e recuperável: o arquivo sumiu do disco (limpeza manual,
+        # migração incompleta, restore parcial...). `_itoca_extract_text_from_file`
+        # também detecta isso e devolve '' em silêncio, mas aqui precisamos
+        # distinguir "arquivo existe e não tem texto" (empty) de "arquivo ausente"
+        # (error) — senão o selo de erro da UI nunca acende.
+        logger.warning(f'[WikiToca] Arquivo não encontrado no disco ao indexar '
+                       f'({table} id={row_id}): {file_path}')
+        status, texto = 'error', ''
+    else:
+        try:
+            texto = _itoca_extract_text_from_file(str(file_path)) or ''
+            status = 'ok' if texto.strip() else 'empty'
+        except Exception as e:
+            logger.warning(f'[WikiToca] Falha ao extrair texto de {file_path}: {e}')
+            status, texto = 'error', ''
     try:
-        texto = _itoca_extract_text_from_file(str(file_path)) or ''
-        status = 'ok' if texto.strip() else 'empty'
-    except Exception as e:
-        logger.warning(f'[WikiToca] Falha ao extrair texto de {file_path}: {e}')
-    try:
+        update_sql = _WIKI_INDEX_UPDATE_SQL.get(table)
+        if not update_sql:
+            raise ValueError(f'Tabela de indexação desconhecida: {table!r}')
         conn = get_db()
         c = conn.cursor()
-        if table == 'wiki_documents':
-            c.execute('UPDATE wiki_documents SET extracted_text=?, extract_status=?, '
-                      'extracted_at=CURRENT_TIMESTAMP WHERE id=?', (texto, status, row_id))
-        else:
-            c.execute('UPDATE wiki_training_documents SET extracted_text=?, extract_status=? '
-                      'WHERE id=?', (texto, status, row_id))
+        c.execute(update_sql, (texto, status, row_id))
         conn.commit()
         conn.close()
     except Exception as e:
         logger.exception(f'[WikiToca] Falha ao gravar texto extraído ({table} id={row_id}): {e}')
+        return 'error'
     return status
 
 
@@ -37,7 +72,7 @@ def _wiki_index_documents_async(task_id, doc_ids):
         total = len(doc_ids)
         if not total:
             _bg_task_set(task_id, {'status': 'done', 'step': 'Nada a indexar.',
-                                   'progress': 100, 'result': {'indexed': 0}})
+                                   'progress': 100, 'result': {'indexed': 0, 'total': 0}})
             return
         indexados = 0
         for pos, doc_id in enumerate(doc_ids, start=1):
@@ -61,6 +96,24 @@ def _wiki_index_documents_async(task_id, doc_ids):
         _bg_task_set(task_id, {'status': 'error', 'error': str(e), 'progress': 100})
     finally:
         _bg_task_cleanup(task_id)
+
+
+# Guarda contra reindexações concorrentes: um duplo-clique no botão "Reindexar"
+# (Task 11) não pode disparar duas varreduras de OCR sobre os mesmos ids — não
+# corrompe nada, mas duplica o trabalho caro. Só se aplica ao reindex; uploads
+# simultâneos continuam legítimos e não passam por este lock.
+_wiki_reindex_lock = threading.Lock()
+_wiki_reindex_state = {'task_id': None, 'total': 0}
+
+
+def _wiki_reindex_async(task_id, doc_ids):
+    """Roda o backfill de indexação e libera o lock de reindex concorrente ao
+    final, com sucesso ou erro."""
+    try:
+        _wiki_index_documents_async(task_id, doc_ids)
+    finally:
+        _wiki_reindex_state['task_id'] = None
+        _wiki_reindex_lock.release()
 
 
 @app.route('/api/wikitoca/entries', methods=['GET'])
@@ -181,6 +234,15 @@ def delete_wiki_entry(entry_id):
         return api_error(500, 'WIKI_ENTRY_DELETE_ERROR', 'Erro ao excluir conhecimento.', details=str(e))
 
 
+# Colunas da listagem de documentos, propositalmente sem `extracted_text`: essa
+# rota é chamada a cada troca para a aba WikiToca, e DOCX/XLSX não têm teto de
+# tamanho na extração (diferente do PDF, limitado a 30 páginas) — um documento
+# grande faria cada troca de aba trafegar dezenas de MB à toa. Quem precisa do
+# texto extraído consulta a coluna direto no banco (ex.: busca por conteúdo).
+_WIKI_DOC_LIST_COLUMNS = ('id, title, file_name, original_name, file_url, file_ext, file_size, '
+                         'extract_status, extracted_at, created_at, updated_at')
+
+
 @app.route('/api/wikitoca/documents', methods=['GET'])
 def list_wiki_documents():
     logger.debug('[DEBUG] GET /api/wikitoca/documents chamado')
@@ -191,13 +253,13 @@ def list_wiki_documents():
         if q:
             like = f'%{q}%'
             c.execute(
-                '''SELECT * FROM wiki_documents
+                f'''SELECT {_WIKI_DOC_LIST_COLUMNS} FROM wiki_documents
                    WHERE title LIKE ? OR original_name LIKE ?
                    ORDER BY updated_at DESC''',
                 (like, like)
             )
         else:
-            c.execute('SELECT * FROM wiki_documents ORDER BY updated_at DESC')
+            c.execute(f'SELECT {_WIKI_DOC_LIST_COLUMNS} FROM wiki_documents ORDER BY updated_at DESC')
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
         logger.debug(f'[DEBUG] GET /api/wikitoca/documents retornando {len(rows)} documentos')
@@ -250,9 +312,12 @@ def upload_wiki_documents():
             return api_error(400, 'WIKI_DOC_INVALID_TYPE',
                              'Nenhum arquivo válido enviado. Tipos aceitos: PDF, XLS, XLSX, DOC, DOCX.')
         task_id = uuid.uuid4().hex
+        _bg_task_register_persistent(task_id, 'wiki_indexacao')
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Indexando documentos...', 'progress': 5})
-        threading.Thread(target=_wiki_index_documents_async,
-                         args=(task_id, [d['id'] for d in created]), daemon=True).start()
+        thread = threading.Thread(target=_wiki_index_documents_async,
+                                  args=(task_id, [d['id'] for d in created]), daemon=True)
+        _wiki_track_thread(thread)
+        thread.start()
         return jsonify({'documents': created, 'task_id': task_id}), 201
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/wikitoca/documents: {e}')
@@ -265,6 +330,12 @@ def reindex_wiki_documents():
     """Backfill do texto extraído dos documentos já existentes.
     Body opcional: {"force": true} para reprocessar também os já indexados."""
     logger.debug('[DEBUG] POST /api/wikitoca/documents/reindex chamado')
+    if not _wiki_reindex_lock.acquire(blocking=False):
+        logger.info(f"[WikiToca] Reindexação já em andamento (task_id={_wiki_reindex_state['task_id']}), "
+                    "ignorando novo disparo")
+        return jsonify({'task_id': _wiki_reindex_state['task_id'],
+                        'total': _wiki_reindex_state['total'],
+                        'already_running': True}), 202
     try:
         force = bool((request.get_json(silent=True) or {}).get('force'))
         conn = get_db()
@@ -278,11 +349,18 @@ def reindex_wiki_documents():
         doc_ids = [r[0] for r in c.fetchall()]
         conn.close()
         task_id = uuid.uuid4().hex
+        _wiki_reindex_state['task_id'] = task_id
+        _wiki_reindex_state['total'] = len(doc_ids)
+        _bg_task_register_persistent(task_id, 'wiki_indexacao')
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
-        threading.Thread(target=_wiki_index_documents_async, args=(task_id, doc_ids), daemon=True).start()
+        thread = threading.Thread(target=_wiki_reindex_async, args=(task_id, doc_ids), daemon=True)
+        _wiki_track_thread(thread)
+        thread.start()
         logger.info(f'[WikiToca] Reindexação iniciada para {len(doc_ids)} documento(s)')
         return jsonify({'task_id': task_id, 'total': len(doc_ids)}), 202
     except Exception as e:
+        _wiki_reindex_state['task_id'] = None
+        _wiki_reindex_lock.release()
         logger.exception(f'[ERROR] POST /api/wikitoca/documents/reindex: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOC_REINDEX_ERROR', 'Erro ao reindexar documentos.', details=str(e))
@@ -405,10 +483,13 @@ def import_wiki_documents():
         result = {'imported': len(imported), 'documents': imported}
         if imported:
             task_id = uuid.uuid4().hex
+            _bg_task_register_persistent(task_id, 'wiki_indexacao')
             _bg_task_set(task_id, {'status': 'processing', 'step': 'Indexando documentos importados...',
                                    'progress': 5})
-            threading.Thread(target=_wiki_index_documents_async,
-                             args=(task_id, [d['id'] for d in imported]), daemon=True).start()
+            thread = threading.Thread(target=_wiki_index_documents_async,
+                                      args=(task_id, [d['id'] for d in imported]), daemon=True)
+            _wiki_track_thread(thread)
+            thread.start()
             result['task_id'] = task_id
         return jsonify(result), 201
     except zipfile.BadZipFile:

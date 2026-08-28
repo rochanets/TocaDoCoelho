@@ -1,8 +1,6 @@
 import io
-import json
 import sqlite3
 import time
-import zipfile
 
 import pytest
 
@@ -152,11 +150,20 @@ def test_ocr_cai_para_ingles_quando_o_pacote_portugues_falta(tmp_path, monkeypat
     assert 'Approval flow' in toca._itoca_extract_text_from_file(str(destino))
 
 
-def _espera_task(client, task_id, timeout=15.0):
+def _espera_task(client, task_id, timeout=15.0, esperar_erro=False):
+    """Faz polling em /api/tasks/<id> até a task terminar.
+
+    Por padrão exige status == 'done': se a task terminar em 'error', o teste
+    falha aqui com a mensagem completa da task, em vez de seguir e falhar
+    depois num assert de conteúdo com uma mensagem confusa. Passe
+    `esperar_erro=True` nos poucos testes em que o erro é o resultado esperado.
+    """
     limite = time.time() + timeout
     while time.time() < limite:
         payload = client.get(f'/api/tasks/{task_id}').get_json()
         if payload.get('status') in ('done', 'error'):
+            if not esperar_erro:
+                assert payload.get('status') == 'done', payload
             return payload
         time.sleep(0.1)
     raise AssertionError(f'Task {task_id} não terminou em {timeout}s')
@@ -176,44 +183,102 @@ def _sobe_documento(client, nome='manual.docx', texto='Prazo de aprovacao e de c
     return resp.get_json()
 
 
+def _extracted_text(doc_id):
+    """Lê extracted_text direto do banco — a listagem HTTP não traz mais essa
+    coluna (ver _WIKI_DOC_LIST_COLUMNS em routes/wikitoca.py), de propósito."""
+    conn = toca.get_db()
+    row = conn.execute('SELECT extracted_text FROM wiki_documents WHERE id=?', (doc_id,)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def _espera_reindex_lock_livre(timeout=5.0):
+    """Espera o lock de reindexação concorrente (_wiki_reindex_lock) ficar livre.
+
+    Entre a task de reindex virar 'done' (visível via polling) e a thread
+    efetivamente liberar o lock há uma janela mínima (o release acontece
+    alguns bytecodes depois do último _bg_task_set). Testes que disparam
+    duas reindexações em sequência esperam aqui para não flakar pegando
+    'already_running' por essa corrida — não é o que M2 está testando.
+    """
+    limite = time.time() + timeout
+    while toca._wiki_reindex_lock.locked() and time.time() < limite:
+        time.sleep(0.02)
+
+
 def test_upload_de_documento_indexa_o_texto(client):
     payload = _sobe_documento(client)
     assert payload['task_id']
     assert payload['documents'][0]['extract_status'] == 'pending'
+    doc_id = payload['documents'][0]['id']
 
     _espera_task(client, payload['task_id'])
 
     doc = client.get('/api/wikitoca/documents').get_json()[0]
     assert doc['extract_status'] == 'ok'
-    assert 'cinco dias uteis' in (doc['extracted_text'] or '')
+    # Listagem não traz mais o texto extraído — DOCX/XLSX não têm teto de
+    # tamanho na extração, e essa rota é chamada a cada troca para a aba.
+    assert 'extracted_text' not in doc
+    assert 'cinco dias uteis' in (_extracted_text(doc_id) or '')
+
+
+def test_documento_sem_texto_vira_empty(client):
+    """Um arquivo válido mas sem nenhum texto extraível vira extract_status
+    'empty' — diferente de 'error', reservado para quando algo deu errado
+    de verdade (arquivo sumido, biblioteca ausente, extração explodiu)."""
+    payload = _sobe_documento(client, texto='')
+    doc_id = payload['documents'][0]['id']
+
+    _espera_task(client, payload['task_id'])
+
+    doc = client.get('/api/wikitoca/documents').get_json()[0]
+    assert doc['extract_status'] == 'empty'
+    assert not (_extracted_text(doc_id) or '').strip()
+
+
+def test_arquivo_sumido_do_disco_vira_error(client):
+    """Se o arquivo já não existir mais no disco quando a indexação roda, o
+    resultado tem que ser 'error' — não 'empty', que sugeriria "documento sem
+    texto" quando na verdade o arquivo nem existe mais e nenhuma ação de UI
+    recupera isso sozinha."""
+    payload = _sobe_documento(client)
+    doc_id = payload['documents'][0]['id']
+    file_name = payload['documents'][0]['file_name']
+    _espera_task(client, payload['task_id'])
+
+    file_path = toca.WIKI_UPLOAD_DIR / file_name
+    file_path.unlink()
+
+    status = toca._wiki_index_document('wiki_documents', doc_id, file_path)
+
+    assert status == 'error'
+    doc = client.get('/api/wikitoca/documents').get_json()[0]
+    assert doc['extract_status'] == 'error'
+    assert not (_extracted_text(doc_id) or '')
 
 
 def test_import_zip_indexa_documento_reimportado(client, db_path):
     """Documento apagado, reimportado via .zip, precisa terminar indexado —
     sem isso ele fica com extract_status NULL para sempre (selo 'Indexando...'
-    que nunca sai do lugar, e ausente da busca por conteúdo da Task 4)."""
+    que nunca sai do lugar, e ausente da busca por conteúdo da Task 4).
+
+    O .zip usado aqui é o round-trip real de GET /export-zip, não um formato
+    remontado à mão: se o formato de exportação mudar, este teste quebra
+    junto com o comportamento real, em vez de continuar verde sozinho.
+    """
     payload = _sobe_documento(client)
     _espera_task(client, payload['task_id'])
-    doc = client.get('/api/wikitoca/documents').get_json()[0]
-    file_bytes = (toca.WIKI_UPLOAD_DIR / doc['file_name']).read_bytes()
+    doc_id = payload['documents'][0]['id']
 
-    del_resp = client.delete(f"/api/wikitoca/documents/{doc['id']}")
+    export_resp = client.get('/api/wikitoca/documents/export-zip')
+    assert export_resp.status_code == 200
+    zip_bytes = export_resp.data
+
+    del_resp = client.delete(f'/api/wikitoca/documents/{doc_id}')
     assert del_resp.status_code == 200, del_resp.get_json()
 
-    manifest = [{
-        'title': doc['title'],
-        'file_name': doc['file_name'],
-        'original_name': doc['original_name'],
-        'file_ext': doc['file_ext'],
-    }]
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False))
-        zf.writestr(f"files/{doc['file_name']}", file_bytes)
-    buf.seek(0)
-
     resp = client.post('/api/wikitoca/documents/import-zip',
-                       data={'file': (buf, 'wikitoca-documentos.zip')},
+                       data={'file': (io.BytesIO(zip_bytes), 'wikitoca-documentos.zip')},
                        content_type='multipart/form-data')
     assert resp.status_code == 201, resp.get_json()
     import_payload = resp.get_json()
@@ -222,14 +287,15 @@ def test_import_zip_indexa_documento_reimportado(client, db_path):
 
     _espera_task(client, import_payload['task_id'])
 
-    doc2 = client.get('/api/wikitoca/documents').get_json()[0]
-    assert doc2['extract_status'] == 'ok'
-    assert 'cinco dias uteis' in (doc2['extracted_text'] or '')
+    doc = client.get('/api/wikitoca/documents').get_json()[0]
+    assert doc['extract_status'] == 'ok'
+    assert 'cinco dias uteis' in (_extracted_text(doc['id']) or '')
 
 
 def test_reindex_processa_documentos_sem_texto(client, db_path):
     payload = _sobe_documento(client)
     _espera_task(client, payload['task_id'])
+    doc_id = payload['documents'][0]['id']
 
     conn = toca.get_db()
     conn.execute("UPDATE wiki_documents SET extracted_text=NULL, extract_status=NULL")
@@ -242,4 +308,43 @@ def test_reindex_processa_documentos_sem_texto(client, db_path):
 
     doc = client.get('/api/wikitoca/documents').get_json()[0]
     assert doc['extract_status'] == 'ok'
-    assert 'cinco dias uteis' in (doc['extracted_text'] or '')
+    assert 'cinco dias uteis' in (_extracted_text(doc_id) or '')
+
+
+def test_reindex_com_lista_vazia_termina_sem_erro(client, db_path):
+    """Reindexar uma base sem nenhum documento não pode travar nem propagar
+    exceção — a task tem que terminar 'done' com indexed=0/total=0, sem a UI
+    da Task 11 precisar de defensiva para um shape de resultado diferente."""
+    resp = client.post('/api/wikitoca/documents/reindex', json={})
+    assert resp.status_code == 202, resp.get_json()
+    payload = resp.get_json()
+    assert payload['total'] == 0
+
+    task = _espera_task(client, payload['task_id'])
+    assert task['result'] == {'indexed': 0, 'total': 0}
+
+
+def test_reindex_force_reprocessa_documento_ja_ok(client, db_path):
+    """Sem `force`, um documento já 'ok' não entra no backfill (o backfill é só
+    para quem ficou para trás). Com `force: true`, todo mundo é reprocessado."""
+    payload = _sobe_documento(client)
+    _espera_task(client, payload['task_id'])
+    doc_id = payload['documents'][0]['id']
+
+    resp_sem_force = client.post('/api/wikitoca/documents/reindex', json={})
+    assert resp_sem_force.status_code == 202, resp_sem_force.get_json()
+    sem_force_payload = resp_sem_force.get_json()
+    assert sem_force_payload['total'] == 0
+    _espera_task(client, sem_force_payload['task_id'])
+    _espera_reindex_lock_livre()
+
+    resp_force = client.post('/api/wikitoca/documents/reindex', json={'force': True})
+    assert resp_force.status_code == 202, resp_force.get_json()
+    force_payload = resp_force.get_json()
+    assert force_payload['total'] == 1
+    task = _espera_task(client, force_payload['task_id'])
+    assert task['result'] == {'indexed': 1, 'total': 1}
+
+    doc = client.get('/api/wikitoca/documents').get_json()[0]
+    assert doc['extract_status'] == 'ok'
+    assert 'cinco dias uteis' in (_extracted_text(doc_id) or '')
