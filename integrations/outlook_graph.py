@@ -785,6 +785,60 @@ def fetch_messages(access_token: str, start_date: datetime, end_date: datetime, 
     return inbox + sent
 
 
+def fetch_unread_inbox_messages(access_token: str, top=25):
+    """Mensagens NÃO LIDAS da inbox, com o corpo em texto puro (header Prefer).
+
+    Usada pelo watcher de feedback: só leitura (escopo Mail.Read já existente);
+    o watcher NÃO marca como lida — isso exigiria Mail.ReadWrite."""
+    top = max(1, min(int(top), 50))
+    params = {
+        '$select': 'id,subject,from,receivedDateTime,body',
+        '$filter': 'isRead eq false',
+        '$orderby': 'receivedDateTime desc',
+        '$top': top,
+    }
+    url = f"{GRAPH_BASE_URL}/me/mailFolders/inbox/messages?{urllib.parse.urlencode(params)}"
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Accept': 'application/json',
+        'Prefer': 'outlook.body-content-type="text"',
+    }
+    payload = _http_get_json(url, headers=headers)
+    items = []
+    for msg in payload.get('value', []) or []:
+        sender = ((msg.get('from') or {}).get('emailAddress') or {})
+        items.append({
+            'id': msg.get('id') or '',
+            'subject': msg.get('subject') or '',
+            'sender_email': (sender.get('address') or '').lower(),
+            'sender_name': sender.get('name') or '',
+            'received_at': msg.get('receivedDateTime') or '',
+            'body_text': ((msg.get('body') or {}).get('content')) or '',
+        })
+    return items
+
+
+def fetch_message_attachments(access_token: str, message_id: str):
+    """Anexos de arquivo (fileAttachment) de uma mensagem, base64 como veio
+    do Graph — mesmo formato dos attachments de send_mail."""
+    if not message_id:
+        return []
+    url = (f"{GRAPH_BASE_URL}/me/messages/"
+           f"{urllib.parse.quote(message_id, safe='')}/attachments")
+    headers = {'Authorization': f'Bearer {access_token}', 'Accept': 'application/json'}
+    payload = _http_get_json(url, headers=headers)
+    items = []
+    for att in payload.get('value', []) or []:
+        if att.get('@odata.type') != '#microsoft.graph.fileAttachment':
+            continue
+        items.append({
+            'name': att.get('name') or 'anexo',
+            'content_bytes': att.get('contentBytes') or '',
+            'content_type': att.get('contentType') or 'application/octet-stream',
+        })
+    return items
+
+
 def send_mail(access_token: str, to: str, subject: str, body_html: str, attachments=None):
     """Envia e-mail via Microsoft Graph POST /me/sendMail (requer escopo Mail.Send).
     attachments: lista de dicts {'name', 'content_bytes' (base64 str), 'content_type'}.

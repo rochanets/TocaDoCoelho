@@ -55,12 +55,15 @@ from integrations.outlook_graph import (
     consume_oauth_state as outlook_graph_consume_oauth_state,
     ensure_schema as outlook_graph_ensure_schema,
     exchange_code_and_store as outlook_graph_exchange_code_and_store,
+    fetch_message_attachments as outlook_graph_fetch_message_attachments,
     fetch_messages as outlook_graph_fetch_messages,
+    fetch_unread_inbox_messages as outlook_graph_fetch_unread_inbox,
     get_integration_state as outlook_graph_get_integration_state,
     get_valid_access_token as outlook_graph_get_valid_access_token,
     send_mail as outlook_graph_send_mail,
 )
 from integrations import ext_autoupdate
+from integrations import feedback_watcher as fw
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
@@ -1526,6 +1529,26 @@ SCHEMA_MIGRATIONS = [
     ]),
     (18, 'iata_opportunity_match_confidence', [
         _iata_add_opportunity_match_confidence_column,
+    ]),
+    # Watcher de feedback → Claude Code: um job por email de feedback recebido
+    # na caixa do administrador. Dedup por graph_message_id (não marcamos o
+    # email como lido — isso exigiria o escopo Mail.ReadWrite, que não temos).
+    (19, 'feedback_auto_jobs', [
+        '''CREATE TABLE IF NOT EXISTS feedback_auto_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            graph_message_id TEXT UNIQUE NOT NULL,
+            subject TEXT,
+            sender TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            branch TEXT,
+            pr_url TEXT,
+            report TEXT,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_feedback_auto_jobs_status ON feedback_auto_jobs(status)',
     ]),
 ]
 
@@ -12537,6 +12560,7 @@ def _load_route_modules():
 _load_route_modules()
 _start_inbound_poller()
 _start_scheduled_jobs()
+_start_feedback_watcher()
 
 
 def _porta_ja_em_uso(port):

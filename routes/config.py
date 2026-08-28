@@ -432,6 +432,51 @@ def save_integrations_config():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/config/feedback-watcher', methods=['GET'])
+def get_feedback_watcher_config():
+    """Estado do watcher de feedback → Claude Code (recurso do desenvolvedor).
+    Devolve também o diagnóstico do gate — é o que a UI mostra quando o
+    watcher está ligado mas inativo (ex.: claude.exe não encontrado)."""
+    try:
+        enabled = _feedback_watcher_enabled()
+        info = {
+            'enabled': enabled,
+            'repo': _feedback_watcher_repo(),
+            'claude_exe': fw.find_claude_exe() or '',
+            'gh_found': bool(fw.find_gh_exe()),
+            'active': False,
+            'reason': 'desligado',
+        }
+        if enabled:
+            gate = _feedback_watcher_gate()
+            info['active'] = gate['ok']
+            info['reason'] = gate.get('reason') or ''
+        conn = get_db()
+        rows = conn.execute(
+            'SELECT id, subject, sender, status, pr_url, error, created_at, finished_at '
+            'FROM feedback_auto_jobs ORDER BY id DESC LIMIT 10').fetchall()
+        conn.close()
+        info['jobs'] = [dict(r) for r in rows]
+        return jsonify(info)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/feedback-watcher: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/feedback-watcher', methods=['PUT'])
+def save_feedback_watcher_config():
+    try:
+        data = request.get_json() or {}
+        _save_app_setting('feedback_watcher_enabled', '1' if data.get('enabled') else '')
+        repo = (data.get('repo') or '').strip()
+        if repo:
+            _save_app_setting('feedback_watcher_repo', repo)
+        return jsonify({'message': 'Configuração do watcher salva.'})
+    except Exception as e:
+        logger.exception(f'[ERROR] PUT /api/config/feedback-watcher: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/config/update-source', methods=['GET'])
 def get_update_source_config():
     try:
