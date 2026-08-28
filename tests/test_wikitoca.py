@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 import app as toca
 
 
@@ -71,3 +73,56 @@ def test_migracao_19_e_idempotente(db_path):
 
     assert {'extracted_text', 'extracted_at', 'extract_status'} <= _columns(db_path, 'wiki_documents')
     assert 'wiki_training_sessions' in _tables(db_path)
+
+
+_SEM_OCR = not (getattr(toca, 'PYTESSERACT_AVAILABLE', False) and getattr(toca, 'PIL_AVAILABLE', False))
+
+
+def _cria_png(tmp_path):
+    from PIL import Image
+    destino = tmp_path / 'captura.png'
+    Image.new('RGB', (40, 20), color='white').save(str(destino))
+    return destino
+
+
+@pytest.mark.skipif(_SEM_OCR, reason='pytesseract/Pillow indisponíveis')
+def test_extrai_texto_de_imagem_via_ocr(tmp_path, monkeypatch):
+    """Com o Tesseract disponível, o texto lido da imagem entra na extração.
+
+    Este é o teste que dirige o TDD: sem o ramo de imagem a função cai fora de
+    todos os `elif` e devolve '' — não porque o OCR falhou, mas porque o formato
+    nem é tratado.
+    """
+    destino = _cria_png(tmp_path)
+    # setattr via monkeypatch garante a restauração mesmo com o código de
+    # produção reatribuindo tesseract_cmd durante a chamada.
+    monkeypatch.setattr(toca.pytesseract.pytesseract, 'tesseract_cmd', 'tesseract')
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', lambda: 'tesseract-falso')
+    monkeypatch.setattr(toca.pytesseract, 'image_to_string', lambda *a, **k: 'Fluxo de aprovacao')
+
+    assert 'Fluxo de aprovacao' in toca._itoca_extract_text_from_file(str(destino))
+
+
+@pytest.mark.skipif(_SEM_OCR, reason='pytesseract/Pillow indisponíveis')
+def test_extrai_texto_de_imagem_sem_tesseract_retorna_vazio(tmp_path, monkeypatch):
+    """Sem o binário do Tesseract a extração não pode explodir — devolve vazio."""
+    destino = _cria_png(tmp_path)
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', lambda: None)
+
+    assert toca._itoca_extract_text_from_file(str(destino)) == ''
+
+
+@pytest.mark.skipif(_SEM_OCR, reason='pytesseract/Pillow indisponíveis')
+def test_ocr_de_imagem_que_falha_nao_propaga_excecao(tmp_path, monkeypatch):
+    """Imagem corrompida/OCR quebrado vira string vazia, não exceção — quem chama
+    marca extract_status='error' pelo resultado, sem derrubar o lote de upload."""
+    destino = _cria_png(tmp_path)
+
+    def _explode(*a, **k):
+        raise RuntimeError('tesseract morreu')
+
+    monkeypatch.setattr(toca.pytesseract.pytesseract, 'tesseract_cmd', 'tesseract')
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', lambda: 'tesseract-falso')
+    monkeypatch.setattr(toca.pytesseract, 'image_to_string', _explode)
+
+    assert toca._itoca_extract_text_from_file(str(destino)) == ''

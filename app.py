@@ -4882,6 +4882,25 @@ def _itoca_extract_text_from_file(file_path_str):
                 except Exception as e5:
                     logger.warning(f'[iToca] openpyxl falhou em {path.name}: {e5}')
 
+        elif ext in ('.png', '.jpg', '.jpeg'):
+            if PYTESSERACT_AVAILABLE and PIL_AVAILABLE:
+                tess_cmd = _itoca_find_tesseract_cmd()
+                if tess_cmd:
+                    pytesseract.pytesseract.tesseract_cmd = tess_cmd
+                    try:
+                        img = PILImage.open(str(path))
+                        try:
+                            ocr_text = pytesseract.image_to_string(img, lang='por+eng')
+                        except Exception:
+                            ocr_text = pytesseract.image_to_string(img, lang='eng')
+                        if ocr_text.strip():
+                            text_parts.append(ocr_text.strip())
+                    except Exception as e7:
+                        logger.warning(f'[iToca] OCR de imagem falhou em {path.name}: {e7}')
+                else:
+                    logger.info(f'[iToca] Tesseract não encontrado — {path.name} ficará sem texto extraído. '
+                                'Instale em https://github.com/UB-Mannheim/tesseract/wiki')
+
         elif ext == '.txt':
             try:
                 text_parts.append(path.read_text(encoding='utf-8', errors='replace'))
@@ -10572,6 +10591,10 @@ def _automapping_process_async(task_id, company, country, industry, force, reque
 # ─────────────────────────────────────────────────────────────
 
 ALLOWED_WIKI_EXTENSIONS = {'.pdf', '.xls', '.xlsx', '.doc', '.docx'}
+# A Capacitação aceita imagens (via OCR) além dos tipos de texto. `.doc` legado
+# entra por consistência com o submódulo Documentos, mas o python-docx não o lê:
+# nesse caso o documento fica com extract_status='empty', como já acontece hoje.
+ALLOWED_WIKI_TRAINING_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg'}
 
 
 # WikiToca - Export/Import XLSX
