@@ -17,7 +17,7 @@ def _isola_diretorios_de_upload(tmp_path, monkeypatch):
     até o nome estourar o limite de caminho do Windows e a suíte falhar sozinha.
     """
     for nome in ('UPLOAD_DIR', 'AUTOTOCA_UPLOAD_DIR', 'REEMBOLSOS_UPLOAD_DIR',
-                 'ACCOUNT_UPLOAD_DIR'):
+                 'ACCOUNT_UPLOAD_DIR', 'WIKI_UPLOAD_DIR', 'WIKI_TRAINING_UPLOAD_DIR'):
         if hasattr(toca, nome):
             destino = tmp_path / 'uploads' / nome.lower()
             destino.mkdir(parents=True, exist_ok=True)

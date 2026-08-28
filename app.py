@@ -197,6 +197,8 @@ ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
 ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+WIKI_TRAINING_UPLOAD_DIR = WIKI_UPLOAD_DIR / 'capacitacao'
+WIKI_TRAINING_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Pasta ESTÁVEL onde a extensão AutoToca é publicada para o "carregar sem compactação"
@@ -1307,6 +1309,22 @@ def _iata_add_opportunity_match_confidence_column(conn):
     if 'match_confidence' not in existentes:
         c.execute('ALTER TABLE iata_opportunities ADD COLUMN match_confidence TEXT')
 
+
+def _wiki_add_document_extract_columns(conn):
+    """Colunas de cache do texto extraído dos documentos do WikiToca, usadas
+    pela busca por conteúdo. ALTER TABLE condicional, no mesmo padrão de
+    `_iata_add_record_columns` — tolerante à tabela ainda não existir."""
+    c = conn.cursor()
+    existentes = {r[1] for r in c.execute('PRAGMA table_info(wiki_documents)')}
+    if not existentes:
+        return
+    if 'extracted_text' not in existentes:
+        c.execute('ALTER TABLE wiki_documents ADD COLUMN extracted_text TEXT')
+    if 'extracted_at' not in existentes:
+        c.execute('ALTER TABLE wiki_documents ADD COLUMN extracted_at TIMESTAMP')
+    if 'extract_status' not in existentes:
+        c.execute('ALTER TABLE wiki_documents ADD COLUMN extract_status TEXT')
+
 # ---------------------------------------------------------------------------
 SCHEMA_MIGRATIONS = [
     (1, 'baseline_legacy_init', None),  # None => roda init_db()
@@ -1526,6 +1544,46 @@ SCHEMA_MIGRATIONS = [
     ]),
     (18, 'iata_opportunity_match_confidence', [
         _iata_add_opportunity_match_confidence_column,
+    ]),
+    # WikiToca: busca por conteúdo nos Documentos + submódulo Capacitação.
+    # 19 é o próximo número da linhagem `main` (que ia até 18). A linhagem
+    # `Live` ocupa 20–32 no banco de produção do usuário; como o
+    # _run_schema_migrations confere cada versão individualmente, a 19 roda
+    # normalmente lá. Nada aqui pode nascer só dentro do init_db().
+    (19, 'wikitoca_submodulos_capacitacao', [
+        _wiki_add_document_extract_columns,
+        '''CREATE TABLE IF NOT EXISTS wiki_training_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            title_source TEXT DEFAULT 'ai',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS wiki_training_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            file_url TEXT NOT NULL,
+            file_ext TEXT,
+            file_size INTEGER,
+            extracted_text TEXT,
+            extract_status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES wiki_training_sessions(id) ON DELETE CASCADE
+        )''',
+        '''CREATE TABLE IF NOT EXISTS wiki_training_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+            content TEXT NOT NULL,
+            source_kind TEXT,
+            source_refs TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES wiki_training_sessions(id) ON DELETE CASCADE
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_wiki_training_docs_session ON wiki_training_documents(session_id)',
+        'CREATE INDEX IF NOT EXISTS idx_wiki_training_msgs_session ON wiki_training_messages(session_id, created_at)',
     ]),
 ]
 
