@@ -255,6 +255,25 @@ def _wiki_norm(texto):
     return ''.join(ch for ch in base if not unicodedata.combining(ch)).lower()
 
 
+def _wiki_norm_indexado(texto):
+    """Como _wiki_norm, mas devolve também o índice do caractere ORIGINAL que
+    gerou cada caractere normalizado.
+
+    NFKD faz decomposição de compatibilidade: 'ﬁ' vira 'fi', '½' vira '1⁄2'.
+    Sem esse mapa, uma posição encontrada no texto normalizado aponta para o
+    caractere errado no texto original — e o destaque sai deslocado. Ligaduras
+    são comuns em texto extraído de PDF, então isso acontece de verdade.
+    """
+    saida, indices = [], []
+    for i, ch in enumerate(str(texto or '')):
+        for nch in unicodedata.normalize('NFKD', ch):
+            if unicodedata.combining(nch):
+                continue
+            saida.append(nch.lower())
+            indices.append(i)
+    return ''.join(saida), indices
+
+
 def _wiki_snippet(texto, termo, janela=200):
     """Trecho em volta da primeira ocorrência do termo, com <mark> no termo.
     Tudo que veio do arquivo é escapado; só o <mark> é inserido por nós, em
@@ -262,14 +281,24 @@ def _wiki_snippet(texto, termo, janela=200):
     novo. Devolve '' se o termo não aparecer no texto."""
     if not texto or not termo:
         return ''
-    pos = _wiki_norm(texto).find(_wiki_norm(termo))
-    if pos < 0:
+    texto = str(texto)
+    norm, indices = _wiki_norm_indexado(texto)
+    pos_norm = norm.find(_wiki_norm(termo))
+    if pos_norm < 0:
         return ''
+    termo_len_norm = len(_wiki_norm(termo))
+    # Converte a posição achada no texto normalizado de volta para índices do
+    # texto original via o mapa caractere a caractere de _wiki_norm_indexado.
+    pos = indices[pos_norm]
+    fim_norm = pos_norm + termo_len_norm - 1
+    # fim_norm sempre e um indice valido em `indices` (o termo foi
+    # encontrado dentro de `norm`, que tem o mesmo tamanho de `indices`).
+    pos_fim = indices[fim_norm] + 1
     ini = max(0, pos - janela // 2)
-    fim = min(len(texto), pos + len(termo) + janela // 2)
+    fim = min(len(texto), pos_fim + janela // 2)
     antes = html.escape(texto[ini:pos])
-    match = html.escape(texto[pos:pos + len(termo)])
-    depois = html.escape(texto[pos + len(termo):fim])
+    match = html.escape(texto[pos:pos_fim])
+    depois = html.escape(texto[pos_fim:fim])
     prefixo = '…' if ini > 0 else ''
     sufixo = '…' if fim < len(texto) else ''
     return f'{prefixo}{antes}<mark>{match}</mark>{depois}{sufixo}'.replace('\n', ' ')

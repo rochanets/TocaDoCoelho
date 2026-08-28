@@ -393,3 +393,50 @@ def test_busca_escapa_conteudo_malicioso_no_snippet(client):
     assert '<script>' not in snippet
     assert '&lt;script&gt;' in snippet
     assert '<mark>alert</mark>' in snippet
+
+
+def test_snippet_com_ligadura_antes_do_termo_nao_desloca_o_destaque(client):
+    """NFKD e decomposicao de COMPATIBILIDADE, nao so de acentos: a ligadura
+    'ﬁ' (U+FB01), comum em texto extraido de PDF, normaliza para 2 caracteres
+    ('fi'). Se _wiki_snippet usar a posicao achada no texto normalizado para
+    fatiar o texto original sem corrigir esse deslocamento, o <mark> cai
+    caracteres a frente do termo real."""
+    payload = _sobe_documento(
+        client, nome='config.docx',
+        texto='A conﬁguração define o prazo de cinco dias.')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=prazo').get_json()
+
+    assert len(rows) == 1
+    assert '<mark>prazo</mark>' in rows[0]['snippet']
+
+
+def test_snippet_com_acento_antes_do_termo_continua_correto(client):
+    """Acento (NFKD decompoe em letra base + combining mark, que e removida)
+    preserva o tamanho do texto -- esse caso já funcionava e não pode
+    regredir com a correção do deslocamento por ligadura/compatibilidade."""
+    payload = _sobe_documento(
+        client, nome='aprovacao.docx',
+        texto='A situação está resolvida: o prazo é de cinco dias.')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=prazo').get_json()
+
+    assert len(rows) == 1
+    assert '<mark>prazo</mark>' in rows[0]['snippet']
+
+
+def test_snippet_com_termo_no_final_do_texto(client):
+    """Exercita a borda do índice final: quando o termo casado termina no
+    último caractere do texto, o índice de fim não pode estourar a lista de
+    índices do mapa normalizado -> original."""
+    payload = _sobe_documento(
+        client, nome='final.docx',
+        texto='Documento sem nenhuma observacao alem do prazo')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=prazo').get_json()
+
+    assert len(rows) == 1
+    assert '<mark>prazo</mark>' in rows[0]['snippet']
