@@ -242,26 +242,78 @@ def delete_wiki_entry(entry_id):
 _WIKI_DOC_LIST_COLUMNS = ('id, title, file_name, original_name, file_url, file_ext, file_size, '
                          'extract_status, extracted_at, created_at, updated_at')
 
+_WIKI_EXT_FILTERS = {
+    'pdf': ('.pdf',),
+    'word': ('.doc', '.docx'),
+    'excel': ('.xls', '.xlsx'),
+}
+
+
+def _wiki_norm(texto):
+    """Minúsculas e sem acento, para casar 'POLÍTICA' com 'politica'."""
+    base = unicodedata.normalize('NFKD', str(texto or ''))
+    return ''.join(ch for ch in base if not unicodedata.combining(ch)).lower()
+
+
+def _wiki_snippet(texto, termo, janela=200):
+    """Trecho em volta da primeira ocorrência do termo, com <mark> no termo.
+    Tudo que veio do arquivo é escapado; só o <mark> é inserido por nós, em
+    posição conhecida — é isso que permite o frontend renderizar sem escapar de
+    novo. Devolve '' se o termo não aparecer no texto."""
+    if not texto or not termo:
+        return ''
+    pos = _wiki_norm(texto).find(_wiki_norm(termo))
+    if pos < 0:
+        return ''
+    ini = max(0, pos - janela // 2)
+    fim = min(len(texto), pos + len(termo) + janela // 2)
+    antes = html.escape(texto[ini:pos])
+    match = html.escape(texto[pos:pos + len(termo)])
+    depois = html.escape(texto[pos + len(termo):fim])
+    prefixo = '…' if ini > 0 else ''
+    sufixo = '…' if fim < len(texto) else ''
+    return f'{prefixo}{antes}<mark>{match}</mark>{depois}{sufixo}'.replace('\n', ' ')
+
 
 @app.route('/api/wikitoca/documents', methods=['GET'])
 def list_wiki_documents():
     logger.debug('[DEBUG] GET /api/wikitoca/documents chamado')
     try:
         q = (request.args.get('q') or '').strip()
+        ext_filtro = (request.args.get('ext') or '').strip().lower()
         conn = get_db()
         c = conn.cursor()
-        if q:
-            like = f'%{q}%'
-            c.execute(
-                f'''SELECT {_WIKI_DOC_LIST_COLUMNS} FROM wiki_documents
-                   WHERE title LIKE ? OR original_name LIKE ?
-                   ORDER BY updated_at DESC''',
-                (like, like)
-            )
-        else:
-            c.execute(f'SELECT {_WIKI_DOC_LIST_COLUMNS} FROM wiki_documents ORDER BY updated_at DESC')
+        # Sem busca, o texto extraído nem sai do banco: um DOCX/XLSX grande gera
+        # dezenas de MB e esta rota é chamada a cada troca de aba. Só a busca
+        # precisa do texto, e ainda assim ele não volta na resposta.
+        colunas = _WIKI_DOC_LIST_COLUMNS + (', extracted_text' if q else '')
+        c.execute(f'SELECT {colunas} FROM wiki_documents ORDER BY updated_at DESC')
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
+
+        if ext_filtro in _WIKI_EXT_FILTERS:
+            aceitos = _WIKI_EXT_FILTERS[ext_filtro]
+            rows = [r for r in rows if (r.get('file_ext') or '').lower() in aceitos]
+
+        if q:
+            alvo = _wiki_norm(q)
+            filtrados = []
+            for r in rows:
+                em_nome = alvo in _wiki_norm(r.get('original_name')) or alvo in _wiki_norm(r.get('title'))
+                snippet = _wiki_snippet(r.get('extracted_text'), q)
+                if em_nome or snippet:
+                    r['snippet'] = snippet
+                    filtrados.append(r)
+            rows = filtrados
+        else:
+            for r in rows:
+                r['snippet'] = ''
+
+        # O texto só foi buscado para calcular o snippet; a UI nunca usa o
+        # conteúdo integral, então ele não volta na resposta.
+        for r in rows:
+            r.pop('extracted_text', None)
+
         logger.debug(f'[DEBUG] GET /api/wikitoca/documents retornando {len(rows)} documentos')
         return jsonify(rows)
     except Exception as e:

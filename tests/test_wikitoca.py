@@ -348,3 +348,48 @@ def test_reindex_force_reprocessa_documento_ja_ok(client, db_path):
     doc = client.get('/api/wikitoca/documents').get_json()[0]
     assert doc['extract_status'] == 'ok'
     assert 'cinco dias uteis' in (_extracted_text(doc_id) or '')
+
+
+def test_busca_de_documentos_casa_no_conteudo_e_devolve_snippet(client):
+    payload = _sobe_documento(client, nome='manual.docx',
+                              texto='O prazo de aprovacao do contrato e de cinco dias uteis.')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=cinco dias').get_json()
+
+    assert len(rows) == 1
+    assert '<mark>cinco dias</mark>' in rows[0]['snippet']
+
+
+def test_busca_de_documentos_ignora_acento_e_caixa(client):
+    payload = _sobe_documento(client, nome='politica.docx',
+                              texto='Politica de reembolso para viagens internacionais.')
+    _espera_task(client, payload['task_id'])
+
+    assert len(client.get('/api/wikitoca/documents?q=POLÍTICA').get_json()) == 1
+
+
+def test_filtro_por_tipo_de_arquivo(client):
+    payload = _sobe_documento(client, nome='manual.docx', texto='Conteudo qualquer')
+    _espera_task(client, payload['task_id'])
+
+    assert len(client.get('/api/wikitoca/documents?ext=word').get_json()) == 1
+    assert client.get('/api/wikitoca/documents?ext=pdf').get_json() == []
+
+
+def test_busca_escapa_conteudo_malicioso_no_snippet(client):
+    """O snippet e a unica string HTML que a API devolve, e a Task 11 vai
+    injeta-lo sem escapar de novo -- se o conteudo do documento tiver uma tag,
+    ela precisa virar entidade HTML, sobrando so o <mark> que nos inserimos."""
+    payload = _sobe_documento(
+        client, nome='malicioso.docx',
+        texto='Antes <script>alert(1)</script> depois do trecho perigoso.')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=alert').get_json()
+
+    assert len(rows) == 1
+    snippet = rows[0]['snippet']
+    assert '<script>' not in snippet
+    assert '&lt;script&gt;' in snippet
+    assert '<mark>alert</mark>' in snippet
