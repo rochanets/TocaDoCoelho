@@ -226,26 +226,68 @@ git commit -m "feat(wikitoca): migracao 19 com colunas de extracao e tabelas de 
 
 Acrescentar em `tests/test_wikitoca.py`:
 
+Acrescentar `import pytest` junto dos imports do topo do arquivo (não no meio), e ao fim:
+
 ```python
-import pytest
+_SEM_OCR = not (getattr(toca, 'PYTESSERACT_AVAILABLE', False) and getattr(toca, 'PIL_AVAILABLE', False))
 
 
-def test_extrai_texto_de_imagem_sem_tesseract_retorna_vazio(tmp_path, monkeypatch):
-    """Sem o binário do Tesseract a extração não pode explodir — devolve vazio."""
-    pytest.importorskip('PIL')
+def _cria_png(tmp_path):
     from PIL import Image
-
     destino = tmp_path / 'captura.png'
     Image.new('RGB', (40, 20), color='white').save(str(destino))
+    return destino
 
+
+@pytest.mark.skipif(_SEM_OCR, reason='pytesseract/Pillow indisponíveis')
+def test_extrai_texto_de_imagem_via_ocr(tmp_path, monkeypatch):
+    """Com o Tesseract disponível, o texto lido da imagem entra na extração.
+
+    Este é o teste que dirige o TDD: sem o ramo de imagem a função cai fora de
+    todos os `elif` e devolve '' — não porque o OCR falhou, mas porque o formato
+    nem é tratado.
+    """
+    destino = _cria_png(tmp_path)
+    # setattr via monkeypatch garante a restauração mesmo com o código de
+    # produção reatribuindo tesseract_cmd durante a chamada.
+    monkeypatch.setattr(toca.pytesseract.pytesseract, 'tesseract_cmd', 'tesseract')
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', lambda: 'tesseract-falso')
+    monkeypatch.setattr(toca.pytesseract, 'image_to_string', lambda *a, **k: 'Fluxo de aprovacao')
+
+    assert 'Fluxo de aprovacao' in toca._itoca_extract_text_from_file(str(destino))
+
+
+@pytest.mark.skipif(_SEM_OCR, reason='pytesseract/Pillow indisponíveis')
+def test_extrai_texto_de_imagem_sem_tesseract_retorna_vazio(tmp_path, monkeypatch):
+    """Sem o binário do Tesseract a extração não pode explodir — devolve vazio."""
+    destino = _cria_png(tmp_path)
     monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', lambda: None)
+
+    assert toca._itoca_extract_text_from_file(str(destino)) == ''
+
+
+@pytest.mark.skipif(_SEM_OCR, reason='pytesseract/Pillow indisponíveis')
+def test_ocr_de_imagem_que_falha_nao_propaga_excecao(tmp_path, monkeypatch):
+    """Imagem corrompida/OCR quebrado vira string vazia, não exceção — quem chama
+    marca extract_status='error' pelo resultado, sem derrubar o lote de upload."""
+    destino = _cria_png(tmp_path)
+
+    def _explode(*a, **k):
+        raise RuntimeError('tesseract morreu')
+
+    monkeypatch.setattr(toca.pytesseract.pytesseract, 'tesseract_cmd', 'tesseract')
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', lambda: 'tesseract-falso')
+    monkeypatch.setattr(toca.pytesseract, 'image_to_string', _explode)
+
     assert toca._itoca_extract_text_from_file(str(destino)) == ''
 ```
 
-- [ ] **Step 2: Rodar o teste para confirmar que falha**
+> **Por que o teste "sem tesseract" sozinho não serve de driver de TDD:** hoje a função devolve `''` para qualquer extensão sem ramo (`result_text = '\n'.join(text_parts)` com a lista vazia, `app.py:4894`), então ele já passa antes da implementação. É `test_extrai_texto_de_imagem_via_ocr` que falha de verdade. Os outros dois entram como guarda de regressão dos caminhos de erro.
+
+- [ ] **Step 2: Rodar os testes para confirmar que o driver falha**
 
 Run: `pytest tests/test_wikitoca.py -k imagem -v`
-Expected: FAIL — hoje a função não tem ramo para `.png`, então nenhum `elif` casa e o teste não exercita o caminho novo.
+Expected: `test_extrai_texto_de_imagem_via_ocr` FALHA (`assert 'Fluxo de aprovacao' in ''`) — a função não tem ramo para `.png`. Os outros dois já passam; é esperado, eles guardam os caminhos de erro depois da implementação.
 
 - [ ] **Step 3: Adicionar o ramo de imagem na extração**
 
