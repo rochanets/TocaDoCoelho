@@ -628,7 +628,6 @@ _WIKI_EXT_FILTERS = {
 
 def _wiki_norm(texto):
     """Minúsculas e sem acento, para casar 'POLÍTICA' com 'politica'."""
-    import unicodedata
     base = unicodedata.normalize('NFKD', str(texto or ''))
     return ''.join(ch for ch in base if not unicodedata.combining(ch)).lower()
 
@@ -638,7 +637,6 @@ def _wiki_snippet(texto, termo, janela=200):
     Tudo que veio do arquivo é escapado; só o <mark> é inserido por nós, em
     posição conhecida — é isso que permite o frontend renderizar sem escapar de
     novo. Devolve '' se o termo não aparecer no texto."""
-    import html as _html
     if not texto or not termo:
         return ''
     pos = _wiki_norm(texto).find(_wiki_norm(termo))
@@ -646,9 +644,9 @@ def _wiki_snippet(texto, termo, janela=200):
         return ''
     ini = max(0, pos - janela // 2)
     fim = min(len(texto), pos + len(termo) + janela // 2)
-    antes = _html.escape(texto[ini:pos])
-    match = _html.escape(texto[pos:pos + len(termo)])
-    depois = _html.escape(texto[pos + len(termo):fim])
+    antes = html.escape(texto[ini:pos])
+    match = html.escape(texto[pos:pos + len(termo)])
+    depois = html.escape(texto[pos + len(termo):fim])
     prefixo = '…' if ini > 0 else ''
     sufixo = '…' if fim < len(texto) else ''
     return f'{prefixo}{antes}<mark>{match}</mark>{depois}{sufixo}'.replace('\n', ' ')
