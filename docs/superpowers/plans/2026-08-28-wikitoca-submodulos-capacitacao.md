@@ -665,7 +665,7 @@ def list_wiki_documents():
         # Sem busca, o texto extraído nem sai do banco: um DOCX/XLSX grande gera
         # dezenas de MB e esta rota é chamada a cada troca de aba. Só a busca
         # precisa do texto, e ainda assim ele não volta na resposta.
-        colunas = _WIKI_DOC_COLUNAS_LISTAGEM + (', extracted_text' if q else '')
+        colunas = _WIKI_DOC_LIST_COLUMNS + (', extracted_text' if q else '')
         c.execute(f'SELECT {colunas} FROM wiki_documents ORDER BY updated_at DESC')
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
@@ -701,7 +701,7 @@ def list_wiki_documents():
         return api_error(500, 'WIKI_DOCS_LIST_ERROR', 'Erro ao listar documentos.', details=str(e))
 ```
 
-> `_WIKI_DOC_COLUNAS_LISTAGEM` é a constante com a lista explícita de colunas
+> `_WIKI_DOC_LIST_COLUMNS` é a constante com a lista explícita de colunas
 > **sem** `extracted_text`, criada na Task 3 ao substituir o `SELECT *`. Se o
 > nome que ficou lá for outro, use o nome real — não recrie a constante.
 >
