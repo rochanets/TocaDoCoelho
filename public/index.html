@@ -1865,7 +1865,12 @@
                 <h2><i class="fas fa-envelope" style="margin-right:8px;color:#10b981;"></i>Sincronizando com Outlook</h2>
             </div>
             <div style="padding:20px;">
-                <div class="outlook-progress-track"><div class="outlook-progress-fill"></div></div>
+                <div class="outlook-progress-track">
+                    <div id="outlookSyncFill" class="outlook-progress-fill">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div id="outlookSyncPct" style="font-size:11px;color:#6b7280;text-align:right;margin:0 18px 8px 0;">5%</div>
                 <p id="outlookProgressMsg" style="font-size:13px;color:#374151;margin:0 0 4px;">Conectando ao Outlook...</p>
                 <p id="outlookProgressCount" style="font-size:12px;color:#9ca3af;margin:0;min-height:16px;"></p>
                 <div style="margin-top:16px;text-align:right;">
@@ -1927,7 +1932,12 @@
                     onmouseover="this.style.color='#374151'" onmouseout="this.style.color='#6b7280'">⊟</button>
             </div>
             <div id="outlookImportProgressArea" style="padding:20px;">
-                <div class="outlook-progress-track"><div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;"></div></div>
+                <div class="outlook-progress-track">
+                    <div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div id="outlookImportPct" style="font-size:11px;color:#6b7280;text-align:right;margin:0 18px 0 0;">5%</div>
                 <p id="outlookImportStep" style="font-size:13px;color:#374151;margin:8px 0 0;">Iniciando...</p>
             </div>
         </div>

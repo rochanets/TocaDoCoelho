@@ -144,6 +144,13 @@ Veja `_account_autofill_via_sai()` em `app.py` como exemplo completo do padrão 
 
 ## Padrões do projeto
 
+### Fluxo de trabalho — sempre abrir PR após alteração
+
+Após commitar qualquer alteração em uma branch, verifique se já existe PR aberta
+para ela (`gh pr list --head <branch>`). Se não houver, abra uma imediatamente
+(`git push -u origin <branch>` + `gh pr create` com base `main`), sem perguntar.
+Branch commitada sem PR fica invisível no fluxo de revisão/integração do usuário.
+
 ### Diálogos de confirmação — NUNCA usar `confirm()` nativo
 
 **Proibido:** `confirm(...)`, `window.confirm(...)` — abre janela padrão do sistema operacional, fora do tema visual.
