@@ -102,6 +102,10 @@ except ImportError:
     pytesseract = None
     PYTESSERACT_AVAILABLE = False
 
+# Teto de tempo por chamada de OCR. Sem isso, uma imagem patológica pendura a
+# thread de background e a barra de progresso do usuário congela para sempre.
+ITOCA_OCR_TIMEOUT_SECONDS = 60
+
 try:
     from pdf2image import convert_from_path
     PDF2IMAGE_AVAILABLE = True
@@ -4888,11 +4892,19 @@ def _itoca_extract_text_from_file(file_path_str):
                 if tess_cmd:
                     pytesseract.pytesseract.tesseract_cmd = tess_cmd
                     try:
-                        img = PILImage.open(str(path))
-                        try:
-                            ocr_text = pytesseract.image_to_string(img, lang='por+eng')
-                        except Exception:
-                            ocr_text = pytesseract.image_to_string(img, lang='eng')
+                        with PILImage.open(str(path)) as img:
+                            try:
+                                img = ImageOps.exif_transpose(img)
+                            except Exception:
+                                pass
+                            try:
+                                ocr_text = pytesseract.image_to_string(
+                                    img, lang='por+eng', timeout=ITOCA_OCR_TIMEOUT_SECONDS)
+                            except Exception as e6:
+                                logger.debug(f'[iToca] OCR com lang=por+eng falhou em {path.name}, '
+                                             f'caindo para lang=eng: {e6}')
+                                ocr_text = pytesseract.image_to_string(
+                                    img, lang='eng', timeout=ITOCA_OCR_TIMEOUT_SECONDS)
                         if ocr_text.strip():
                             text_parts.append(ocr_text.strip())
                     except Exception as e7:
