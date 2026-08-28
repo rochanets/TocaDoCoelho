@@ -6,7 +6,7 @@
 
 **Architecture:** Backend Flask em `routes/wikitoca.py` (executado no namespace de `app.py` por `_load_route_modules()`), tabelas novas via migração numerada 19 em `SCHEMA_MIGRATIONS`, extração de texto reaproveitando `_itoca_extract_text_from_file()`, operações longas em thread com `_bg_task_set` + polling em `GET /api/tasks/<task_id>`, e LLM sempre via `_llm_prompt()` (SAI primeiro, OpenRouter fallback). Frontend em arquivo novo `public/js/wikitoca.js`, extraído de `itoca-autotoca.js`.
 
-**Tech Stack:** Python 3 + Flask + SQLite; pytest; Vanilla JS/HTML (SPA em `public/index.html` + `public/js/*.js`); `pdfplumber`, `python-docx`, `openpyxl`, `pytesseract` (já presentes) e `python-pptx` (novo).
+**Tech Stack:** Python 3 + Flask + SQLite; pytest; Vanilla JS/HTML (SPA em `public/index.html` + `public/js/*.js`); `pdfplumber`, `python-docx`, `openpyxl`, `pytesseract` (todas já presentes — nenhuma dependência nova).
 
 **Spec:** `docs/superpowers/specs/2026-08-28-wikitoca-submodulos-capacitacao-design.md`
 
@@ -20,7 +20,6 @@
 |---|---|---|
 | `app.py` | Constantes de upload, flags de dependência opcional, `_itoca_extract_text_from_file`, `SCHEMA_MIGRATIONS` | Modificar |
 | `routes/wikitoca.py` | Todas as rotas HTTP do WikiToca + helpers de indexação, ranking e cascata de resposta | Modificar |
-| `requirements.txt` | Nova dependência `python-pptx` | Modificar |
 | `public/index.html` | Markup dos 3 submódulos e da tela de Capacitação; `<script src="/js/wikitoca.js">` | Modificar |
 | `public/css/app.css` | Classes `.wiki-sub-*`, `.cap-*` e o responsivo da gaveta | Modificar |
 | `public/js/wikitoca.js` | **Todo** o JS do WikiToca (3 submódulos) | Criar |
@@ -217,11 +216,10 @@ git commit -m "feat(wikitoca): migracao 19 com colunas de extracao e tabelas de 
 
 ---
 
-## Task 2: Extração de texto de PPTX e imagens
+## Task 2: Extração de texto de imagens (OCR)
 
 **Files:**
-- Modify: `requirements.txt`
-- Modify: `app.py` (flags perto da linha 96; `_itoca_extract_text_from_file` na linha 4701; `ALLOWED_WIKI_TRAINING_EXTENSIONS` perto da linha 10514)
+- Modify: `app.py` (`_itoca_extract_text_from_file` na linha 4701; `ALLOWED_WIKI_TRAINING_EXTENSIONS` perto da linha 10514)
 - Test: `tests/test_wikitoca.py`
 
 - [ ] **Step 1: Escrever o teste que falha**
@@ -230,27 +228,6 @@ Acrescentar em `tests/test_wikitoca.py`:
 
 ```python
 import pytest
-
-
-@pytest.mark.skipif(not getattr(toca, 'PYTHON_PPTX_AVAILABLE', False),
-                    reason='python-pptx não instalado')
-def test_extrai_texto_de_pptx(tmp_path):
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    prs = Presentation()
-    slide = prs.slides.add_slide(prs.slide_layouts[5])
-    caixa = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
-    caixa.text_frame.text = 'Prazo de aprovacao e de cinco dias uteis'
-    slide.notes_slide.notes_text_frame.text = 'Lembrar de citar a politica interna'
-    destino = tmp_path / 'deck.pptx'
-    prs.save(str(destino))
-
-    texto = toca._itoca_extract_text_from_file(str(destino))
-
-    assert 'Prazo de aprovacao' in texto
-    assert 'politica interna' in texto
-    assert '[Slide 1]' in texto
 
 
 def test_extrai_texto_de_imagem_sem_tesseract_retorna_vazio(tmp_path, monkeypatch):
@@ -267,62 +244,14 @@ def test_extrai_texto_de_imagem_sem_tesseract_retorna_vazio(tmp_path, monkeypatc
 
 - [ ] **Step 2: Rodar o teste para confirmar que falha**
 
-Run: `pytest tests/test_wikitoca.py -k "pptx or imagem" -v`
-Expected: o teste de PPTX é pulado (skip, `PYTHON_PPTX_AVAILABLE` ainda não existe) e o de imagem FALHA com `AssertionError` — a função hoje não trata `.png` e cai no `return` final com texto de outro ramo, ou devolve string vazia por caminho errado. Ambos precisam do código novo.
+Run: `pytest tests/test_wikitoca.py -k imagem -v`
+Expected: FAIL — hoje a função não tem ramo para `.png`, então nenhum `elif` casa e o teste não exercita o caminho novo.
 
-- [ ] **Step 3: Adicionar a dependência**
-
-Em `requirements.txt`, logo depois da linha `python-docx>=1.1.0`:
-
-```
-python-pptx>=0.6.23
-```
-
-Instalar: `pip install "python-pptx>=0.6.23"`
-
-- [ ] **Step 4: Adicionar a flag de dependência opcional**
-
-Em `app.py`, logo após o bloco `try: import docx as python_docx ...` (linha ~92-97):
-
-```python
-try:
-    import pptx as python_pptx
-    PYTHON_PPTX_AVAILABLE = True
-except ImportError:
-    python_pptx = None
-    PYTHON_PPTX_AVAILABLE = False
-```
-
-- [ ] **Step 5: Adicionar os ramos de PPTX e imagem na extração**
+- [ ] **Step 3: Adicionar o ramo de imagem na extração**
 
 Em `app.py`, dentro de `_itoca_extract_text_from_file`, inserir **antes** do ramo `elif ext == '.txt':`:
 
 ```python
-        elif ext == '.pptx':
-            if PYTHON_PPTX_AVAILABLE:
-                try:
-                    prs = python_pptx.Presentation(str(path))
-                    for idx, slide in enumerate(prs.slides, start=1):
-                        slide_parts = []
-                        for shape in slide.shapes:
-                            if shape.has_text_frame and shape.text_frame.text.strip():
-                                slide_parts.append(shape.text_frame.text.strip())
-                            if getattr(shape, 'has_table', False):
-                                for row in shape.table.rows:
-                                    row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                                    if row_text:
-                                        slide_parts.append(row_text)
-                        if slide.has_notes_slide:
-                            notas = slide.notes_slide.notes_text_frame.text.strip()
-                            if notas:
-                                slide_parts.append(f'Notas: {notas}')
-                        if slide_parts:
-                            text_parts.append(f'[Slide {idx}] ' + '\n'.join(slide_parts))
-                except Exception as e6:
-                    logger.warning(f'[iToca] python-pptx falhou em {path.name}: {e6}')
-            else:
-                logger.info(f'[iToca] python-pptx indisponível — {path.name} ficará sem texto extraído.')
-
         elif ext in ('.png', '.jpg', '.jpeg'):
             if PYTESSERACT_AVAILABLE and PIL_AVAILABLE:
                 tess_cmd = _itoca_find_tesseract_cmd()
@@ -343,27 +272,27 @@ Em `app.py`, dentro de `_itoca_extract_text_from_file`, inserir **antes** do ram
                                 'Instale em https://github.com/UB-Mannheim/tesseract/wiki')
 ```
 
-- [ ] **Step 6: Declarar as extensões aceitas na Capacitação**
+- [ ] **Step 4: Declarar as extensões aceitas na Capacitação**
 
 Em `app.py`, logo depois de `ALLOWED_WIKI_EXTENSIONS = {'.pdf', '.xls', '.xlsx', '.doc', '.docx'}` (linha 10514):
 
 ```python
-# A Capacitação aceita apresentações e imagens além dos tipos do submódulo
-# Documentos. `.doc` legado entra por consistência, mas o python-docx não o lê:
+# A Capacitação aceita imagens (via OCR) além dos tipos de texto. `.doc` legado
+# entra por consistência com o submódulo Documentos, mas o python-docx não o lê:
 # nesse caso o documento fica com extract_status='empty', como já acontece hoje.
-ALLOWED_WIKI_TRAINING_EXTENSIONS = {'.pdf', '.doc', '.docx', '.pptx', '.png', '.jpg', '.jpeg'}
+ALLOWED_WIKI_TRAINING_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg'}
 ```
 
-- [ ] **Step 7: Rodar os testes**
+- [ ] **Step 5: Rodar os testes**
 
 Run: `pytest tests/test_wikitoca.py -v`
-Expected: PASS em todos (o teste de PPTX agora executa de verdade, não é pulado).
+Expected: PASS em todos.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add requirements.txt app.py tests/test_wikitoca.py
-git commit -m "feat(wikitoca): extracao de texto de PPTX e OCR de imagens"
+git add app.py tests/test_wikitoca.py
+git commit -m "feat(wikitoca): OCR de imagens na extracao de texto"
 ```
 
 ---
@@ -1331,7 +1260,7 @@ def upload_wiki_capacitacao_documents(session_id):
 
         if not created:
             return api_error(400, 'WIKI_CAP_INVALID_TYPE',
-                             'Nenhum arquivo válido enviado. Tipos aceitos: PDF, DOC, DOCX, PPTX, PNG, JPG.')
+                             'Nenhum arquivo válido enviado. Tipos aceitos: PDF, DOC, DOCX, PNG, JPG.')
 
         task_id = uuid.uuid4().hex
         _bg_task_set(task_id, {'status': 'processing', 'step': 'Enviando arquivos...', 'progress': 5})
@@ -2163,7 +2092,7 @@ Em `public/index.html`, substituir `<div id="wikiSubCapacitacao" style="display:
                     <div id="capEmptyState" class="cap-empty">
                         <img src="/coelho_wiki.png" alt="" style="width:64px; height:64px; object-fit:contain; opacity:.8;">
                         <h3>Crie sua primeira capacitação</h3>
-                        <p>Anexe PDFs, apresentações, documentos Word ou imagens e converse com a IA sobre eles.</p>
+                        <p>Anexe PDFs, documentos Word ou imagens e converse com a IA sobre eles.</p>
                         <button class="btn btn-auto-mapping" onclick="createCapacitacaoSession()"><i class="fas fa-plus"></i> Nova capacitação</button>
                     </div>
 
@@ -2179,7 +2108,7 @@ Em `public/index.html`, substituir `<div id="wikiSubCapacitacao" style="display:
                         </div>
 
                         <div class="cap-chips" id="capDocChips"></div>
-                        <input id="capFileInput" type="file" accept=".pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg" multiple style="display:none;" onchange="uploadCapacitacaoDocuments(event)">
+                        <input id="capFileInput" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" multiple style="display:none;" onchange="uploadCapacitacaoDocuments(event)">
 
                         <div id="capProgressWrap" style="display:none; margin:10px 0;">
                             <div style="font-size:12px; color:#6b7280; margin-bottom:6px;" id="capProgressStep">Iniciando...</div>
@@ -2444,8 +2373,7 @@ Em `public/js/wikitoca.js`, depois de `closeCapacitacaoDrawer`:
 ```javascript
         const CAP_EXT_ICONS = {
             '.pdf': 'fa-file-pdf', '.doc': 'fa-file-word', '.docx': 'fa-file-word',
-            '.pptx': 'fa-file-powerpoint', '.png': 'fa-file-image',
-            '.jpg': 'fa-file-image', '.jpeg': 'fa-file-image',
+            '.png': 'fa-file-image', '.jpg': 'fa-file-image', '.jpeg': 'fa-file-image',
         };
 
         function renderCapacitacaoChips() {
@@ -2678,14 +2606,14 @@ git commit -m "feat(wikitoca): chat da capacitacao com selos de origem da respos
 - [ ] **Step 1: Rodar a suíte inteira**
 
 Run: `pytest tests/ -v`
-Expected: PASS em tudo, sem skips inesperados (o teste de PPTX deve executar).
+Expected: PASS em tudo, sem skips inesperados.
 
 - [ ] **Step 2: Passar o app inteiro no navegador**
 
 Rodar `python app.py`, abrir `http://localhost:3000` e percorrer, com o console aberto e **zero erros**:
 1. WikiToca → Conhecimentos: listar, buscar, criar, editar, excluir, ordenar A-Z/Z-A, exportar e importar `.xlsx`.
 2. WikiToca → Documentos: subir, buscar por nome, buscar por conteúdo, filtrar por tipo, reindexar, exportar e importar `.zip`, excluir.
-3. WikiToca → Capacitação: criar, anexar PDF/PPTX/imagem, título por IA, perguntar (as três origens), follow-up, limpar conversa, renomear, excluir, gaveta abaixo de 1100px.
+3. WikiToca → Capacitação: criar, anexar PDF/Word/imagem, título por IA, perguntar (as três origens), follow-up, limpar conversa, renomear, excluir, gaveta abaixo de 1100px.
 4. iToca e AutoToca: abrir as duas abas e confirmar que continuam funcionando (a Task 9 mexeu no `itoca-autotoca.js`).
 
 - [ ] **Step 3: Documentar o padrão no CLAUDE.md**

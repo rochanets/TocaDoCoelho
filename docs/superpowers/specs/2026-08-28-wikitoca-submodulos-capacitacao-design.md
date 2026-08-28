@@ -30,9 +30,9 @@ NotebookLM) onde o usuário anexa documentos e conversa com a IA sobre eles.
    pelo iToca), não texto completo truncado.
 9. **Imagens:** OCR via Tesseract (`pytesseract`, já dependência). Sem o binário
    instalado, o arquivo sobe mas fica marcado como "sem texto extraído".
-10. **PPTX:** adiciona `python-pptx` ao `requirements.txt`. Vale **apenas** para a
-    Capacitação — o submódulo Documentos e a base do iToca continuam aceitando só
-    PDF/Excel/Word.
+10. **Sem PPT:** apresentações ficam fora desta versão. A Capacitação aceita
+    PDF, Word e imagens; o submódulo Documentos e a base do iToca continuam
+    aceitando só PDF/Excel/Word.
 11. **Indexação:** no upload (assíncrona, com barra + coelho) e botão
     **"Reindexar documentos"** para o backfill dos arquivos já existentes.
 12. **Escalada para os passos seguintes da cascata:** a IA sinaliza `INSUFICIENTE`
@@ -181,7 +181,7 @@ entra na indexação do iToca (`_itoca_*`).
 ```
 ┌ Capacitação ─────────────────────────────────┬──────────────────┐
 │ Onboarding Comercial 2026        ✏️ 🧹 🗑     │ CAPACITAÇÕES     │
-│ [📄 manual.pdf ×] [📊 deck.pptx ×] [+ Anexar] │ [+ Nova]         │
+│ [📄 manual.pdf ×] [🖼 fluxo.png ×] [+ Anexar]  │ [+ Nova]         │
 │ ───────────────────────────────────────────── │ ┌──────────────┐ │
 │ 🧑 Qual o prazo de aprovação?                │ │Onboarding…   │◀│
 │ 🐇 Segundo o manual, 5 dias úteis…           │ │3 docs · hoje │ │
@@ -210,17 +210,13 @@ entra na indexação do iToca (`_itoca_*`).
 
 ### Ingestão de documentos
 
-Extensões aceitas: `.pdf`, `.doc`, `.docx`, `.pptx`, `.png`, `.jpg`, `.jpeg`.
+Extensões aceitas: `.pdf`, `.doc`, `.docx`, `.png`, `.jpg`, `.jpeg`.
 (`.doc` legado entra por consistência com o submódulo Documentos, mas `python-docx`
 não o lê — cai em `extract_status='empty'`, exatamente como já acontece hoje.)
 
-`_itoca_extract_text_from_file()` (`app.py:4701`) ganha dois ramos novos, no mesmo
+`_itoca_extract_text_from_file()` (`app.py:4701`) ganha um ramo novo, no mesmo
 estilo defensivo dos existentes:
 
-- **`.pptx`** → `python-pptx` (nova dependência em `requirements.txt`), com flag
-  `PYTHON_PPTX_AVAILABLE` no padrão de `PDFPLUMBER_AVAILABLE`. Extrai texto de todos
-  os shapes com `text_frame`, tabelas e **notas do apresentador**, prefixando cada
-  bloco com `[Slide N]`.
 - **`.png`/`.jpg`/`.jpeg`** → `pytesseract.image_to_string(img, lang='por+eng')` com
   fallback para `lang='eng'`, localizando o binário via `_itoca_find_tesseract_cmd()`.
   Sem binário: retorna vazio e o documento fica `extract_status='empty'`; o chip
@@ -316,8 +312,8 @@ vez em banco novo; `tests/test_schema_migrations.py` falha se isso acontecer.
 
 - `tests/test_schema_migrations.py` (já existente) valida que a migração 19 cria as
   tabelas em banco novo e em banco legado.
-- Testes de `_itoca_extract_text_from_file()` para `.pptx` e imagem, com skip quando
-  a biblioteca/binário não estiver presente no ambiente.
+- Teste de `_itoca_extract_text_from_file()` para imagem, cobrindo o caso sem o
+  binário do Tesseract instalado (não pode levantar exceção).
 - Teste de `_wiki_rank_chunks()`: pergunta com termo presente pontua acima do limiar;
   pergunta sem relação fica abaixo (garante que o passo 1 é pulado).
 - Teste de rota da busca de documentos: `q` casando em `extracted_text` retorna o
@@ -329,5 +325,6 @@ vez em banco novo; `tests/test_schema_migrations.py` falha se isso acontecer.
 
 - Export/import `.zip` de instâncias de Capacitação.
 - Múltiplas conversas dentro de uma mesma instância (uma instância = uma conversa).
-- `.pptx` no submódulo Documentos e na base do iToca.
+- Apresentações (`.pptx`) em qualquer submódulo — exigiria a dependência nova
+  `python-pptx` no instalador.
 - Descrição de imagens por modelo multimodal (só OCR nesta versão).
