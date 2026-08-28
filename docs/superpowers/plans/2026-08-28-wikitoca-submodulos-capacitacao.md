@@ -1119,6 +1119,26 @@ git commit -m "feat(wikitoca): CRUD das instancias de capacitacao"
 - Modify: `routes/wikitoca.py` (rotas e worker novos, depois do CRUD)
 - Test: `tests/test_wikitoca.py`
 
+> **Restrição de projeto — não reaproveite `wiki_documents` aqui.** Os materiais
+> de treinamento vão para `wiki_training_documents`, tabela própria. Os laços de
+> snapshot do RAG do iToca em `app.py:5039` e `app.py:5463` (este já comentado
+> como "pode ser lento por OCR") iteram **todos** os `wiki_documents` e chamam a
+> extração em cada rebuild. Gravar material de capacitação lá violaria o
+> isolamento exigido pelo spec ("não aparecem no submódulo Documentos nem entram
+> na base do iToca") **e** faria o OCR de todas as imagens rodar a cada snapshot.
+>
+> **Momento certo de extrair o helper de OCR.** Existem hoje três sites com o
+> núcleo "localizar tesseract → atribuir o global `tesseract_cmd` → `por+eng` com
+> fallback `eng`": `app.py:2337` (reembolsos), `app.py:4819` (PDF escaneado) e
+> `app.py:4885` (imagem). Com o consumidor em lote desta task, vale extrair um
+> `_itoca_ocr_image(img) -> str` estreito cobrindo **só os dois ramos dentro de
+> `_itoca_extract_text_from_file`** — deixando reembolsos como está, porque o
+> entorno dele (4 variantes de pré-processamento × 2 modos `--psm` com scoring)
+> diverge demais. O ganho não é economizar linhas: é ter um lugar único para a
+> mutação do global e para o `lru_cache` em `_itoca_find_tesseract_cmd()` (hoje
+> cada chamada dispara um `subprocess.run(['tesseract', '--version'])`, o que num
+> lote de N imagens vira N subprocessos).
+
 - [ ] **Step 1: Escrever o teste que falha**
 
 Acrescentar em `tests/test_wikitoca.py`:
