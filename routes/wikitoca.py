@@ -392,8 +392,8 @@ def import_wiki_documents():
                 doc_title = entry.get('title') or original_name
                 c.execute(
                     '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
-                                                  created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                                                  extract_status, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
                     (doc_title, safe_name, original_name, file_url, ext, file_size)
                 )
                 conn.commit()
@@ -402,7 +402,15 @@ def import_wiki_documents():
                 imported.append(dict_from_row(c.fetchone()))
             conn.close()
 
-        return jsonify({'imported': len(imported), 'documents': imported}), 201
+        result = {'imported': len(imported), 'documents': imported}
+        if imported:
+            task_id = uuid.uuid4().hex
+            _bg_task_set(task_id, {'status': 'processing', 'step': 'Indexando documentos importados...',
+                                   'progress': 5})
+            threading.Thread(target=_wiki_index_documents_async,
+                             args=(task_id, [d['id'] for d in imported]), daemon=True).start()
+            result['task_id'] = task_id
+        return jsonify(result), 201
     except zipfile.BadZipFile:
         return api_error(400, 'WIKI_DOC_IMPORT_INVALID', 'Arquivo .zip inválido ou corrompido.')
     except Exception as e:

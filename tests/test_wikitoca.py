@@ -1,6 +1,8 @@
 import io
+import json
 import sqlite3
 import time
+import zipfile
 
 import pytest
 
@@ -184,6 +186,45 @@ def test_upload_de_documento_indexa_o_texto(client):
     doc = client.get('/api/wikitoca/documents').get_json()[0]
     assert doc['extract_status'] == 'ok'
     assert 'cinco dias uteis' in (doc['extracted_text'] or '')
+
+
+def test_import_zip_indexa_documento_reimportado(client, db_path):
+    """Documento apagado, reimportado via .zip, precisa terminar indexado —
+    sem isso ele fica com extract_status NULL para sempre (selo 'Indexando...'
+    que nunca sai do lugar, e ausente da busca por conteúdo da Task 4)."""
+    payload = _sobe_documento(client)
+    _espera_task(client, payload['task_id'])
+    doc = client.get('/api/wikitoca/documents').get_json()[0]
+    file_bytes = (toca.WIKI_UPLOAD_DIR / doc['file_name']).read_bytes()
+
+    del_resp = client.delete(f"/api/wikitoca/documents/{doc['id']}")
+    assert del_resp.status_code == 200, del_resp.get_json()
+
+    manifest = [{
+        'title': doc['title'],
+        'file_name': doc['file_name'],
+        'original_name': doc['original_name'],
+        'file_ext': doc['file_ext'],
+    }]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False))
+        zf.writestr(f"files/{doc['file_name']}", file_bytes)
+    buf.seek(0)
+
+    resp = client.post('/api/wikitoca/documents/import-zip',
+                       data={'file': (buf, 'wikitoca-documentos.zip')},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 201, resp.get_json()
+    import_payload = resp.get_json()
+    assert import_payload['imported'] == 1
+    assert import_payload['task_id']
+
+    _espera_task(client, import_payload['task_id'])
+
+    doc2 = client.get('/api/wikitoca/documents').get_json()[0]
+    assert doc2['extract_status'] == 'ok'
+    assert 'cinco dias uteis' in (doc2['extracted_text'] or '')
 
 
 def test_reindex_processa_documentos_sem_texto(client, db_path):
