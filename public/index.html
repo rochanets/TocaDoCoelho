@@ -1231,8 +1231,12 @@
                         <div style="font-weight:700; color:var(--t-primary);">Atas de reunião</div>
                         <div class="history-meta" style="margin:0; font-weight:400;">Gerente Comercial → Conta → Oportunidade, com o status da ata anterior carregado.</div>
                     </div>
-                    <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
+                        <button class="btn btn-auto-mapping btn-small" onclick="openIAtaMeuResumoModal()"><span class="ai-star-icon">✦</span> Meu resumo</button>
+                    </div>
                 </div>
+                <div id="iataMeuResumoContent" style="display:none; margin-bottom:16px;"></div>
                 <div id="iataContent"></div>
             </div>
             <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
@@ -2062,6 +2066,7 @@
     <script src="/js/radar-actions.js"></script>
     <script src="/js/scheduled-sends.js"></script>
     <script src="/js/relatorio-semanal.js"></script>
+    <script src="/js/iata-meu-resumo.js"></script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <!-- html2canvas + jsPDF para exportação do resumo LinkedIn -->
