@@ -2493,17 +2493,19 @@
                        <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>`;
                 const btnIcon = isWpp ? '<i class="fab fa-whatsapp"></i>' : '<i class="fas fa-paper-plane"></i>';
                 const btnLabel = isWpp ? 'Abrir no WhatsApp' : 'Abrir no Outlook';
-                const wahaBtn = isWpp
+                // Envio direto (sem abrir janela): WAHA no WhatsApp, conta
+                // Microsoft conectada (OAuth/Graph) no e-mail.
+                const directBtn = isWpp
                     ? `<button id="mailingWahaBtn_${i}" class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaWahaOne(${i})" title="Enviar direto via WAHA, sem abrir janela do navegador"><i class="fas fa-bolt"></i> WAHA</button>`
-                    : '';
+                    : `<button id="mailingOauthBtn_${i}" class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaOutlookOne(${i})" title="Enviar direto pela sua conta Microsoft conectada, sem abrir janela"><i class="fas fa-bolt"></i> Enviar</button>`;
                 return `
-                <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto${isWpp ? ' auto' : ''}; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
+                <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
                     <div style="min-width:0; overflow:hidden;">
                         <div style="font-weight:600; color:#065f46;">${escapeHtml(d.contact.name || '-')}</div>
                         ${subInfo}
                     </div>
                     <span class="mailing-dispatch-status" id="mailingDispatchStatus_${i}" style="font-size:12px; color:#92400e; white-space:nowrap;">Pendente</span>
-                    ${wahaBtn}
+                    ${directBtn}
                     <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})">${btnIcon} ${btnLabel}</button>
                 </div>`;
             }).join('');
@@ -2513,13 +2515,16 @@
                    <button class="btn btn-secondary btn-small" onclick="scheduleMailingViaWaha()" title="Agendar o envio de toda a fila via WAHA para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
                    <span id="mailingWahaQuota" style="font-size:12px; color:#6b7280;"></span>
                    <button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-forward-step"></i> Abrir próximo no WhatsApp</button>`
-                : `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;
+                : `<button id="mailingOutlookBatchBtn" class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaOutlookAll()" title="Envia toda a fila pela sua conta Microsoft conectada, sem abrir janelas"><span class="ai-star-icon">✦</span> Enviar todos via Outlook</button>
+                   <button id="mailingOutlookScheduleBtn" class="btn btn-secondary btn-small" onclick="scheduleMailingViaOutlook()" title="Agendar o envio de toda a fila para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
+                   <span id="mailingOutlookStatus" style="font-size:12px; color:#6b7280;">verificando conta Microsoft...</span>
+                   <button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;
 
             const batchNote = isWpp
                 ? `Cada mensagem WhatsApp deve ser aberta e enviada individualmente — o sistema reutiliza a mesma aba do WhatsApp Web. Use <strong>Abrir próximo no WhatsApp</strong> para ciclar pelos contatos em sequência, ou <strong>Abrir no WhatsApp</strong> em cada linha para enviar um por vez.`
-                : `Para evitar o bloqueador de pop-ups do navegador, cada janela do Outlook é aberta por um clique individual.
-                   Clique em <strong>Abrir no Outlook</strong> em cada linha para disparar a janela correspondente e registrar automaticamente a atividade daquele contato.
-                   Se você já autorizou pop-ups deste site, pode tentar o modo em lote no botão abaixo.`;
+                : `Com a conta Microsoft conectada, <strong>Enviar todos via Outlook</strong> dispara a fila inteira de uma vez pela sua própria caixa,
+                   sem abrir janelas — cada e-mail vai para os Itens Enviados e a atividade é registrada automaticamente.
+                   O modo antigo continua disponível: <strong>Abrir no Outlook</strong> monta a mensagem no Outlook Web para você revisar e enviar na mão.`;
 
             const skippedNote = skipped
                 ? `<p style="color:#92400e; font-size:12px; margin-bottom:10px;">${skipped} contato(s) sem ${isWpp ? 'telefone' : 'e-mail'} foram ignorados.</p>`
@@ -2535,10 +2540,10 @@
                             ${batchBtnHtml}
                             <span id="mailingDispatchCounter" style="font-size:12px; color:#6b7280;">0 de ${drafts.length} enviados</span>
                         </div>
-                        <div id="mailingWahaProgress" style="display:none; padding:8px 4px 12px;">
-                            <div style="font-size:13px; color:#6b7280; margin-bottom:8px; text-align:center;" id="mailingWahaProgressStep">Iniciando...</div>
+                        <div id="mailingDispatchProgress" style="display:none; padding:8px 4px 12px;">
+                            <div style="font-size:13px; color:#6b7280; margin-bottom:8px; text-align:center;" id="mailingDispatchProgressStep">Iniciando...</div>
                             <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px;">
-                                <div id="mailingWahaProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                <div id="mailingDispatchProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
                                     <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
@@ -2554,6 +2559,7 @@
             `;
             document.body.insertAdjacentHTML('beforeend', html);
             if (isWpp && typeof _wahaRefreshQuota === 'function') _wahaRefreshQuota();
+            if (!isWpp && typeof _mailingOutlookRefreshStatus === 'function') _mailingOutlookRefreshStatus();
             tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length, channel: drafts[0]?.channel });
         }
 
@@ -2579,6 +2585,56 @@
             if (rowEl) {
                 rowEl.style.background = 'rgba(236,253,245,.55)';
                 rowEl.style.borderColor = 'rgba(16,185,129,.35)';
+            }
+            const sentCount = autoTocaMailingDispatchDrafts.filter(d => d.status === 'sent').length;
+            const counterEl = document.getElementById('mailingDispatchCounter');
+            if (counterEl) counterEl.textContent = `${sentCount} de ${autoTocaMailingDispatchDrafts.length} enviados`;
+        }
+
+        /** Barra de progresso do despacho em lote — compartilhada pelos dois
+         *  canais de envio direto (WAHA no WhatsApp, OAuth/Graph no e-mail). */
+        function _mailingSetDispatchProgress(pct, step) {
+            const wrap = document.getElementById('mailingDispatchProgress');
+            const bar = document.getElementById('mailingDispatchProgressBar');
+            const stepEl = document.getElementById('mailingDispatchProgressStep');
+            if (wrap) wrap.style.display = 'block';
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+        }
+
+        function _mailingHideDispatchProgress() {
+            const wrap = document.getElementById('mailingDispatchProgress');
+            if (wrap) wrap.style.display = 'none';
+        }
+
+        /** Resultado de um envio direto na linha correspondente da fila.
+         *  `viaLabel` identifica o canal usado ("WAHA", "Outlook"). */
+        function _mailingMarkDispatchRow(idx, status, error, viaLabel) {
+            const draft = autoTocaMailingDispatchDrafts[idx];
+            const statusEl = document.getElementById(`mailingDispatchStatus_${idx}`);
+            const actionBtns = [
+                document.getElementById(`mailingWahaBtn_${idx}`),
+                document.getElementById(`mailingOauthBtn_${idx}`),
+                document.getElementById(`mailingDispatchBtn_${idx}`)
+            ];
+            if (statusEl) statusEl.title = error || '';
+            if (status === 'sent') {
+                if (draft) draft.status = 'sent';
+                if (statusEl) {
+                    statusEl.textContent = `Enviado ✓${viaLabel ? ` (${viaLabel})` : ''}`;
+                    statusEl.style.color = '#059669';
+                }
+                actionBtns.forEach(btn => { if (btn) btn.style.display = 'none'; });
+            } else if (status === 'blocked') {
+                if (statusEl) {
+                    statusEl.textContent = viaLabel === 'WAHA' ? 'Limite diário' : 'Não enviado';
+                    statusEl.style.color = '#b45309';
+                }
+            } else if (status === 'error') {
+                if (statusEl) {
+                    statusEl.textContent = `Falha: ${(error || 'erro').slice(0, 60)}`;
+                    statusEl.style.color = '#ef4444';
+                }
             }
             const sentCount = autoTocaMailingDispatchDrafts.filter(d => d.status === 'sent').length;
             const counterEl = document.getElementById('mailingDispatchCounter');
