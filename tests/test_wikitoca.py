@@ -440,3 +440,10 @@ def test_snippet_com_termo_no_final_do_texto(client):
 
     assert len(rows) == 1
     assert '<mark>prazo</mark>' in rows[0]['snippet']
+
+
+def test_snippet_com_termo_que_normaliza_para_vazio_nao_quebra():
+    """Termo só com caracteres combinantes normaliza para '' — `find('')` daria 0
+    e o mapa de índices seria acessado fora do range, virando 500 na busca."""
+    assert toca._wiki_snippet('qualquer texto aqui', '́') == ''
+    assert toca._wiki_snippet('́́', '́') == ''

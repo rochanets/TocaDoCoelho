@@ -282,17 +282,23 @@ def _wiki_snippet(texto, termo, janela=200):
     if not texto or not termo:
         return ''
     texto = str(texto)
+    termo_norm = _wiki_norm(termo)
+    # Um termo formado só por caracteres combinantes normaliza para string vazia;
+    # `find('')` devolveria 0 e o mapa de índices seria indexado fora do range
+    # (IndexError = 500 na rota de busca). Sem termo, não há o que destacar.
+    if not termo_norm:
+        return ''
     norm, indices = _wiki_norm_indexado(texto)
-    pos_norm = norm.find(_wiki_norm(termo))
+    pos_norm = norm.find(termo_norm)
     if pos_norm < 0:
         return ''
-    termo_len_norm = len(_wiki_norm(termo))
+    termo_len_norm = len(termo_norm)
     # Converte a posição achada no texto normalizado de volta para índices do
     # texto original via o mapa caractere a caractere de _wiki_norm_indexado.
     pos = indices[pos_norm]
     fim_norm = pos_norm + termo_len_norm - 1
-    # fim_norm sempre e um indice valido em `indices` (o termo foi
-    # encontrado dentro de `norm`, que tem o mesmo tamanho de `indices`).
+    # fim_norm é sempre um índice válido em `indices`: o termo foi encontrado
+    # dentro de `norm`, que tem exatamente o mesmo tamanho de `indices`.
     pos_fim = indices[fim_norm] + 1
     ini = max(0, pos - janela // 2)
     fim = min(len(texto), pos_fim + janela // 2)
