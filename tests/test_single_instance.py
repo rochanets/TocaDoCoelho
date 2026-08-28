@@ -23,12 +23,27 @@ def test_porta_ja_em_uso_detecta_listener_ativo():
     servidor.listen(1)
     porta = servidor.getsockname()[1]
 
+    def aceitar_uma_conexao():
+        # No Windows, fechar o socket enquanto esta thread está bloqueada em
+        # accept() faz o accept() levantar WSAENOTSOCK (10038) — o pytest
+        # reportaria como exceção não tratada de thread. Só acontece se a
+        # conexão nunca chegar (ou seja, se o assert abaixo já falhou), então
+        # aqui o erro é esperado e engolido.
+        try:
+            conexao, _ = servidor.accept()
+        except OSError:
+            return
+        conexao.close()
+
     # aceita a conexão de teste em background para o create_connection completar
-    aceitador = threading.Thread(target=lambda: servidor.accept(), daemon=True)
+    aceitador = threading.Thread(target=aceitar_uma_conexao, daemon=True)
     aceitador.start()
     try:
         assert toca._porta_ja_em_uso(porta) is True
     finally:
+        # a thread aceitadora precisa terminar ANTES do close(), senão o
+        # close() corre com o accept() (ver comentário acima)
+        aceitador.join(timeout=5)
         servidor.close()
 
 
