@@ -662,7 +662,11 @@ def list_wiki_documents():
         ext_filtro = (request.args.get('ext') or '').strip().lower()
         conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT * FROM wiki_documents ORDER BY updated_at DESC')
+        # Sem busca, o texto extraído nem sai do banco: um DOCX/XLSX grande gera
+        # dezenas de MB e esta rota é chamada a cada troca de aba. Só a busca
+        # precisa do texto, e ainda assim ele não volta na resposta.
+        colunas = _WIKI_DOC_COLUNAS_LISTAGEM + (', extracted_text' if q else '')
+        c.execute(f'SELECT {colunas} FROM wiki_documents ORDER BY updated_at DESC')
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
 
@@ -684,11 +688,10 @@ def list_wiki_documents():
             for r in rows:
                 r['snippet'] = ''
 
-        # O texto completo pesa muito na resposta da listagem e a UI só usa o
-        # snippet. `?full=1` existe para os testes e para depuração.
-        if request.args.get('full') != '1':
-            for r in rows:
-                r.pop('extracted_text', None)
+        # O texto só foi buscado para calcular o snippet; a UI nunca usa o
+        # conteúdo integral, então ele não volta na resposta.
+        for r in rows:
+            r.pop('extracted_text', None)
 
         logger.debug(f'[DEBUG] GET /api/wikitoca/documents retornando {len(rows)} documentos')
         return jsonify(rows)
@@ -698,26 +701,19 @@ def list_wiki_documents():
         return api_error(500, 'WIKI_DOCS_LIST_ERROR', 'Erro ao listar documentos.', details=str(e))
 ```
 
-- [ ] **Step 4: Ajustar os testes de indexação que liam `extracted_text` da listagem**
+> `_WIKI_DOC_COLUNAS_LISTAGEM` é a constante com a lista explícita de colunas
+> **sem** `extracted_text`, criada na Task 3 ao substituir o `SELECT *`. Se o
+> nome que ficou lá for outro, use o nome real — não recrie a constante.
+>
+> Os testes da Task 3 já leem o `extracted_text` direto do banco via
+> `toca.get_db()`, não da listagem, então nenhum deles precisa de ajuste aqui.
 
-Os testes da Task 3 leem `doc['extracted_text']` da listagem, que agora é omitido por padrão. Em `tests/test_wikitoca.py`, trocar nos dois testes:
-
-```python
-    doc = client.get('/api/wikitoca/documents').get_json()[0]
-```
-
-por:
-
-```python
-    doc = client.get('/api/wikitoca/documents?full=1').get_json()[0]
-```
-
-- [ ] **Step 5: Rodar os testes**
+- [ ] **Step 4: Rodar os testes**
 
 Run: `pytest tests/test_wikitoca.py -v`
 Expected: PASS em todos.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add routes/wikitoca.py tests/test_wikitoca.py
@@ -1811,7 +1807,8 @@ Em `public/index.html`, substituir todo o conteúdo entre `<div id="wikitoca" cl
                 <div class="wiki-section-header">
                     <h3 class="wiki-section-title" style="margin-bottom:0;">Documentos (PDF, Excel, Word)</h3>
                     <div class="wiki-import-export">
-                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="reindexWikiDocuments()" title="Reprocessar o texto dos documentos para a busca por conteúdo"><i class="fas fa-rotate"></i> Reindexar documentos</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="reindexWikiDocuments()" title="Reprocessar o texto dos documentos pendentes para a busca por conteúdo"><i class="fas fa-rotate"></i> Reindexar documentos</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="reindexWikiDocuments(true)" title="Reprocessar TODOS os documentos, inclusive os já indexados — use depois de instalar o Tesseract"><i class="fas fa-rotate-right"></i> Reindexar tudo</button>
                         <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiDocuments()" title="Exportar documentos"><i class="fas fa-file-export"></i> Exportar</button>
                         <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiDocImportModal()" title="Importar documentos"><i class="fas fa-file-import"></i> Importar</button>
                     </div>
@@ -2018,14 +2015,21 @@ Em `public/js/wikitoca.js`, logo antes de `async function loadWikiDocuments`:
             searchWikiDocuments();
         }
 
-        async function reindexWikiDocuments() {
-            if (!await uiConfirm('Reprocessar o texto de todos os documentos pendentes? '
-                + 'Isso pode levar alguns minutos.', 'Reindexar documentos')) return;
+        // `force` reprocessa também os documentos já marcados como 'ok' e 'empty'.
+        // Sem esse caminho, quem instala o Tesseract DEPOIS de subir um PDF
+        // escaneado fica preso: o documento ficou 'empty', e o reindex normal
+        // (que só pega NULL/pending/error) nunca mais o alcança.
+        async function reindexWikiDocuments(force = false) {
+            const pergunta = force
+                ? 'Reprocessar o texto de TODOS os documentos, inclusive os já indexados? '
+                  + 'Use isto depois de instalar o Tesseract. Pode levar vários minutos.'
+                : 'Reprocessar o texto dos documentos pendentes? Isso pode levar alguns minutos.';
+            if (!await uiConfirm(pergunta, 'Reindexar documentos')) return;
             try {
                 const resp = await fetch(`${API_BASE}/wikitoca/documents/reindex`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({})
+                    body: JSON.stringify({ force })
                 });
                 const payload = await resp.json().catch(() => ({}));
                 if (!resp.ok) throw new Error(payload.error || 'Não foi possível iniciar a reindexação.');
