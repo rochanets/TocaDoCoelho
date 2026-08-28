@@ -1317,6 +1317,8 @@ def _wiki_add_document_extract_columns(conn):
     c = conn.cursor()
     existentes = {r[1] for r in c.execute('PRAGMA table_info(wiki_documents)')}
     if not existentes:
+        logger.warning('[Migração 19] wiki_documents não existe — colunas de extração '
+                       'não foram adicionadas. Busca por conteúdo ficará inativa.')
         return
     if 'extracted_text' not in existentes:
         c.execute('ALTER TABLE wiki_documents ADD COLUMN extracted_text TEXT')

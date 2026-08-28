@@ -58,3 +58,16 @@ def test_migracao_19_roda_em_banco_legado_sem_as_colunas(tmp_path, monkeypatch):
 
     assert {'extracted_text', 'extracted_at', 'extract_status'} <= _columns(legado, 'wiki_documents')
     assert 'wiki_training_sessions' in _tables(legado)
+
+
+def test_migracao_19_e_idempotente(db_path):
+    """Se a linha da 19 sumir do schema_version, rodar de novo não pode quebrar."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('DELETE FROM schema_version WHERE version = 19')
+    conn.commit()
+    conn.close()
+
+    toca._run_schema_migrations()
+
+    assert {'extracted_text', 'extracted_at', 'extract_status'} <= _columns(db_path, 'wiki_documents')
+    assert 'wiki_training_sessions' in _tables(db_path)
