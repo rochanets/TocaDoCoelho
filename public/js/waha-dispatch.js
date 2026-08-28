@@ -33,34 +33,10 @@
             } catch (e) { return null; }
         }
 
-        function _wahaSetDispatchProgress(pct, step) {
-            const wrap = document.getElementById('mailingWahaProgress');
-            const bar = document.getElementById('mailingWahaProgressBar');
-            const stepEl = document.getElementById('mailingWahaProgressStep');
-            if (wrap) wrap.style.display = 'block';
-            if (bar) bar.style.width = Math.max(5, pct) + '%';
-            if (stepEl) stepEl.textContent = step || '';
-        }
-
-        function _wahaMarkRow(idx, status, error) {
-            const draft = autoTocaMailingDispatchDrafts[idx];
-            const statusEl = document.getElementById(`mailingDispatchStatus_${idx}`);
-            const wahaBtn = document.getElementById(`mailingWahaBtn_${idx}`);
-            const openBtn = document.getElementById(`mailingDispatchBtn_${idx}`);
-            if (status === 'sent') {
-                if (draft) draft.status = 'sent';
-                if (statusEl) { statusEl.textContent = 'Enviado ✓ (WAHA)'; statusEl.style.color = '#059669'; }
-                if (wahaBtn) wahaBtn.style.display = 'none';
-                if (openBtn) openBtn.style.display = 'none';
-            } else if (status === 'blocked') {
-                if (statusEl) { statusEl.textContent = 'Limite diário'; statusEl.style.color = '#b45309'; }
-            } else if (status === 'error') {
-                if (statusEl) { statusEl.textContent = `Falha: ${(error || 'erro').slice(0, 60)}`; statusEl.style.color = '#ef4444'; }
-            }
-            const sentCount = autoTocaMailingDispatchDrafts.filter(d => d.status === 'sent').length;
-            const counterEl = document.getElementById('mailingDispatchCounter');
-            if (counterEl) counterEl.textContent = `${sentCount} de ${autoTocaMailingDispatchDrafts.length} enviados`;
-        }
+        // A barra de progresso e a marcação de linha são compartilhadas com o
+        // despacho por e-mail (core.js) — aqui só fica o que é do WAHA.
+        const _wahaSetDispatchProgress = (pct, step) => _mailingSetDispatchProgress(pct, step);
+        const _wahaMarkRow = (idx, status, error) => _mailingMarkDispatchRow(idx, status, error, 'WAHA');
 
         async function dispatchMailingViaWahaOne(idx) {
             const draft = autoTocaMailingDispatchDrafts[idx];
@@ -124,8 +100,7 @@
                             const idx = pending[j] ? pending[j].i : null;
                             if (idx !== null) _wahaMarkRow(idx, det.status, det.error);
                         });
-                        const wrap = document.getElementById('mailingWahaProgress');
-                        if (wrap) wrap.style.display = 'none';
+                        _mailingHideDispatchProgress();
                         _wahaRefreshQuota();
                         const msg = `Despacho concluído: ${result.sent} enviado(s)` +
                             (result.failed ? `, ${result.failed} falha(s)` : '') +
@@ -135,8 +110,7 @@
                         try { loadActivities(); loadDashboard(); } catch (e) { /* opcional */ }
                     },
                     (errMsg) => {
-                        const wrap = document.getElementById('mailingWahaProgress');
-                        if (wrap) wrap.style.display = 'none';
+                        _mailingHideDispatchProgress();
                         showError(errMsg || 'Erro no despacho via WAHA.');
                     },
                     (pct, step) => _wahaSetDispatchProgress(pct, step)

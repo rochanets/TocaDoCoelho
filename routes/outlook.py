@@ -650,3 +650,181 @@ def import_outlook_emails():
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/outlook/import: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# ===========================================================================
+# Envio de e-mail pela conta conectada (OAuth / Microsoft Graph)
+# Usado pela Mala Direta para despachar a fila inteira sem abrir uma janela
+# do Outlook Web por contato. O caminho legado (deeplink "Abrir no Outlook")
+# continua disponível e é o fallback quando não há conta conectada.
+# ===========================================================================
+
+# O Graph limita o envio delegado a ~30 mensagens/minuto por caixa; o intervalo
+# aleatório mantém a fila abaixo disso e evita disparar a heurística de spam do
+# tenant em listas grandes.
+_EMAIL_SEND_INTERVAL_MIN_DEFAULT = 1.5
+_EMAIL_SEND_INTERVAL_MAX_DEFAULT = 3.0
+
+
+def _email_body_to_html(message):
+    """Converte o corpo em texto puro da mala direta para HTML seguro."""
+    return '<p>' + html.escape(message or '').replace('\n', '<br>') + '</p>'
+
+
+def _email_send_and_register(c, client_id, to, subject, message, register_activity=True):
+    """Envia um e-mail pela conta Microsoft conectada e registra a atividade.
+
+    Retorna {ok, error, needs_auth, activity_id}. `needs_auth` distingue "a
+    conta não está conectada / o consentimento caiu" (a fila inteira falharia,
+    não adianta continuar) de uma falha pontual daquele destinatário.
+    """
+    to = (to or '').strip()
+    if not to:
+        return {'ok': False, 'error': 'Contato sem e-mail cadastrado.'}
+    subject = (subject or '').strip() or '(sem assunto)'
+    message = message or ''
+    try:
+        _outlook_send_mail(to, subject, _email_body_to_html(message))
+    except (OutlookReauthRequiredError, OutlookOAuthError) as e:
+        return {'ok': False, 'needs_auth': True, 'error': str(e)}
+    except Exception as e:
+        logger.warning(f'[Outlook][Envio] Falha ao enviar para {to}: {e}')
+        return {'ok': False, 'error': str(e)}
+
+    activity_id = None
+    if register_activity and client_id:
+        info = f'E-mail enviado via Outlook (OAuth): {subject}\n{message[:400]}'
+        c.execute("INSERT INTO activities (client_id, contact_type, information) VALUES (?, 'Email', ?)",
+                  (client_id, info))
+        activity_id = c.lastrowid
+        c.execute('UPDATE clients SET last_activity_date = CURRENT_TIMESTAMP WHERE id = ?', (client_id,))
+        _inbound_mark_responded(c, client_id, 'email')
+    return {'ok': True, 'activity_id': activity_id}
+
+
+@app.route('/api/outlook/send', methods=['POST'])
+def outlook_send_single():
+    """Envia um e-mail pela conta conectada e registra a atividade."""
+    try:
+        data = request.get_json(force=True) or {}
+        to = (data.get('to') or '').strip()
+        message = (data.get('message') or '').strip()
+        if not to or not message:
+            return jsonify({'error': 'Destinatário e mensagem são obrigatórios.'}), 400
+        conn = get_db()
+        c = conn.cursor()
+        result = _email_send_and_register(
+            c, data.get('client_id'), to, data.get('subject'), message,
+            register_activity=data.get('register_activity', True)
+        )
+        conn.commit()
+        conn.close()
+        status = 200 if result.get('ok') else (401 if result.get('needs_auth') else 502)
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/send: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+def _outlook_batch_send_async(task_id, items, interval_min, interval_max):
+    import random as _random
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        total = len(items)
+        sent = failed = blocked = 0
+        details = []
+        for i, item in enumerate(items):
+            name = item.get('name') or item.get('to') or f'contato {i + 1}'
+            _bg_task_set(task_id, {
+                'step': f'Enviando para {name}... ({i + 1}/{total})',
+                'progress': 5 + int((i / max(total, 1)) * 90)
+            })
+            result = _email_send_and_register(
+                c, item.get('client_id'), item.get('to') or '',
+                item.get('subject'), item.get('message') or ''
+            )
+            conn.commit()
+            if result.get('needs_auth'):
+                # Token/consentimento caiu no meio da fila: o restante falharia
+                # igual, então é marcado como bloqueado em vez de erro por contato.
+                reason = result.get('error') or 'Conta Microsoft desconectada.'
+                details.append({'name': name, 'status': 'blocked', 'error': reason})
+                for rest in items[i + 1:]:
+                    details.append({'name': rest.get('name') or rest.get('to'),
+                                    'status': 'blocked', 'error': reason})
+                blocked = total - i
+                break
+            if result.get('ok'):
+                sent += 1
+                details.append({'name': name, 'status': 'sent', 'activity_id': result.get('activity_id')})
+            else:
+                # Falha em 1 destinatário não interrompe a fila.
+                failed += 1
+                details.append({'name': name, 'status': 'error', 'error': result.get('error')})
+            if i < total - 1:
+                time.sleep(_random.uniform(interval_min, interval_max))
+        conn.close()
+        logger.info(f'[Outlook][Mala Direta] Despacho concluído: {sent} enviado(s), '
+                    f'{failed} falha(s), {blocked} bloqueado(s) de {total}.')
+        _bg_task_set(task_id, {
+            'status': 'done', 'progress': 100, 'step': 'Concluído!',
+            'result': {'sent': sent, 'failed': failed, 'blocked': blocked, 'details': details}
+        })
+        _bg_task_cleanup(task_id, delay=600)
+    except Exception as e:
+        logger.exception(f'[Outlook][Mala Direta] Falha no despacho: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e)})
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/outlook/send-batch', methods=['POST'])
+def outlook_send_batch():
+    """Dispara a fila da mala direta pela conta conectada, em background."""
+    try:
+        data = request.get_json(force=True) or {}
+        items = data.get('items') or []
+        if not items:
+            return jsonify({'error': 'Nenhum contato na fila.'}), 400
+
+        # Recusa antes de abrir a thread quando não há conta conectada — assim o
+        # usuário recebe o motivo na hora, em vez de uma fila que falha inteira.
+        conn = get_db()
+        try:
+            state = outlook_graph_get_integration_state(conn, 1)
+        finally:
+            conn.close()
+        if not state.get('connected'):
+            return jsonify({
+                'error': state.get('reason') or 'Conecte sua conta Microsoft 365 para enviar pelo Outlook.',
+                'needs_auth': True,
+                'needs_consent': bool(state.get('needs_consent')),
+            }), 401
+
+        try:
+            interval_min = float(_resolve_setting('outlook_send_interval_min', 'OUTLOOK_SEND_INTERVAL_MIN')
+                                 or _EMAIL_SEND_INTERVAL_MIN_DEFAULT)
+            interval_max = float(_resolve_setting('outlook_send_interval_max', 'OUTLOOK_SEND_INTERVAL_MAX')
+                                 or _EMAIL_SEND_INTERVAL_MAX_DEFAULT)
+        except Exception:
+            interval_min, interval_max = _EMAIL_SEND_INTERVAL_MIN_DEFAULT, _EMAIL_SEND_INTERVAL_MAX_DEFAULT
+        if interval_max < interval_min:
+            interval_max = interval_min
+
+        task_id = uuid.uuid4().hex
+        _bg_task_register_persistent(task_id, 'outlook_batch_send')
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando despacho...', 'progress': 3})
+        threading.Thread(target=_outlook_batch_send_async,
+                         args=(task_id, items, interval_min, interval_max), daemon=True).start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/outlook/send-batch: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/outlook/send-tasks/<task_id>', methods=['GET'])
+def outlook_send_task_poll(task_id):
+    task = _bg_task_get(task_id)
+    if not task:
+        return jsonify({'status': 'not_found'}), 404
+    return jsonify(task)
