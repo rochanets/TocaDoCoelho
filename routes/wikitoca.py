@@ -4,6 +4,65 @@
 # tem acesso a todos os helpers/globals de app.py e registra as rotas no
 # mesmo objeto Flask `app`, com URLs idênticas às originais.
 
+def _wiki_index_document(table, row_id, file_path):
+    """Extrai o texto de um arquivo e grava no cache da linha indicada.
+    `table` é 'wiki_documents' ou 'wiki_training_documents'.
+    Nunca levanta: falha vira extract_status='error' para aparecer na UI."""
+    status = 'error'
+    texto = ''
+    try:
+        texto = _itoca_extract_text_from_file(str(file_path)) or ''
+        status = 'ok' if texto.strip() else 'empty'
+    except Exception as e:
+        logger.warning(f'[WikiToca] Falha ao extrair texto de {file_path}: {e}')
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        if table == 'wiki_documents':
+            c.execute('UPDATE wiki_documents SET extracted_text=?, extract_status=?, '
+                      'extracted_at=CURRENT_TIMESTAMP WHERE id=?', (texto, status, row_id))
+        else:
+            c.execute('UPDATE wiki_training_documents SET extracted_text=?, extract_status=? '
+                      'WHERE id=?', (texto, status, row_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.exception(f'[WikiToca] Falha ao gravar texto extraído ({table} id={row_id}): {e}')
+    return status
+
+
+def _wiki_index_documents_async(task_id, doc_ids):
+    """Indexa uma lista de wiki_documents em background, reportando progresso."""
+    try:
+        total = len(doc_ids)
+        if not total:
+            _bg_task_set(task_id, {'status': 'done', 'step': 'Nada a indexar.',
+                                   'progress': 100, 'result': {'indexed': 0}})
+            return
+        indexados = 0
+        for pos, doc_id in enumerate(doc_ids, start=1):
+            conn = get_db()
+            row = dict_from_row(conn.execute(
+                'SELECT file_name, original_name FROM wiki_documents WHERE id=?', (doc_id,)).fetchone())
+            conn.close()
+            if not row:
+                continue
+            nome = row.get('original_name') or row.get('file_name')
+            _bg_task_set(task_id, {
+                'step': f'Processando {pos} de {total} — {nome}',
+                'progress': int(5 + (pos - 1) * 90 / total),
+            })
+            if _wiki_index_document('wiki_documents', doc_id, WIKI_UPLOAD_DIR / row['file_name']) == 'ok':
+                indexados += 1
+        _bg_task_set(task_id, {'status': 'done', 'step': 'Concluído!', 'progress': 100,
+                               'result': {'indexed': indexados, 'total': total}})
+    except Exception as e:
+        logger.exception(f'[WikiToca] _wiki_index_documents_async: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e), 'progress': 100})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
 @app.route('/api/wikitoca/entries', methods=['GET'])
 def list_wiki_entries():
     logger.debug('[DEBUG] GET /api/wikitoca/entries chamado')
@@ -177,8 +236,8 @@ def upload_wiki_documents():
             doc_title = title or original_name
             c.execute(
                 '''INSERT INTO wiki_documents (title, file_name, original_name, file_url, file_ext, file_size,
-                                              created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                                              extract_status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
                 (doc_title, safe_name, original_name, file_url, ext, file_size)
             )
             conn.commit()
@@ -190,11 +249,43 @@ def upload_wiki_documents():
         if not created:
             return api_error(400, 'WIKI_DOC_INVALID_TYPE',
                              'Nenhum arquivo válido enviado. Tipos aceitos: PDF, XLS, XLSX, DOC, DOCX.')
-        return jsonify(created), 201
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Indexando documentos...', 'progress': 5})
+        threading.Thread(target=_wiki_index_documents_async,
+                         args=(task_id, [d['id'] for d in created]), daemon=True).start()
+        return jsonify({'documents': created, 'task_id': task_id}), 201
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/wikitoca/documents: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_DOC_UPLOAD_ERROR', 'Erro ao enviar documento.', details=str(e))
+
+
+@app.route('/api/wikitoca/documents/reindex', methods=['POST'])
+def reindex_wiki_documents():
+    """Backfill do texto extraído dos documentos já existentes.
+    Body opcional: {"force": true} para reprocessar também os já indexados."""
+    logger.debug('[DEBUG] POST /api/wikitoca/documents/reindex chamado')
+    try:
+        force = bool((request.get_json(silent=True) or {}).get('force'))
+        conn = get_db()
+        c = conn.cursor()
+        if force:
+            c.execute('SELECT id FROM wiki_documents ORDER BY id')
+        else:
+            c.execute("SELECT id FROM wiki_documents "
+                      "WHERE extract_status IS NULL OR extract_status IN ('pending', 'error') "
+                      "ORDER BY id")
+        doc_ids = [r[0] for r in c.fetchall()]
+        conn.close()
+        task_id = uuid.uuid4().hex
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        threading.Thread(target=_wiki_index_documents_async, args=(task_id, doc_ids), daemon=True).start()
+        logger.info(f'[WikiToca] Reindexação iniciada para {len(doc_ids)} documento(s)')
+        return jsonify({'task_id': task_id, 'total': len(doc_ids)}), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/wikitoca/documents/reindex: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_DOC_REINDEX_ERROR', 'Erro ao reindexar documentos.', details=str(e))
 
 
 @app.route('/api/wikitoca/documents/<int:document_id>', methods=['DELETE'])

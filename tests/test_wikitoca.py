@@ -1,4 +1,6 @@
+import io
 import sqlite3
+import time
 
 import pytest
 
@@ -146,3 +148,57 @@ def test_ocr_cai_para_ingles_quando_o_pacote_portugues_falta(tmp_path, monkeypat
     monkeypatch.setattr(toca.pytesseract, 'image_to_string', _so_ingles)
 
     assert 'Approval flow' in toca._itoca_extract_text_from_file(str(destino))
+
+
+def _espera_task(client, task_id, timeout=15.0):
+    limite = time.time() + timeout
+    while time.time() < limite:
+        payload = client.get(f'/api/tasks/{task_id}').get_json()
+        if payload.get('status') in ('done', 'error'):
+            return payload
+        time.sleep(0.1)
+    raise AssertionError(f'Task {task_id} não terminou em {timeout}s')
+
+
+def _sobe_documento(client, nome='manual.docx', texto='Prazo de aprovacao e de cinco dias uteis'):
+    from docx import Document
+    buf = io.BytesIO()
+    doc = Document()
+    doc.add_paragraph(texto)
+    doc.save(buf)
+    buf.seek(0)
+    resp = client.post('/api/wikitoca/documents',
+                       data={'files': (buf, nome)},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 201, resp.get_json()
+    return resp.get_json()
+
+
+def test_upload_de_documento_indexa_o_texto(client):
+    payload = _sobe_documento(client)
+    assert payload['task_id']
+    assert payload['documents'][0]['extract_status'] == 'pending'
+
+    _espera_task(client, payload['task_id'])
+
+    doc = client.get('/api/wikitoca/documents').get_json()[0]
+    assert doc['extract_status'] == 'ok'
+    assert 'cinco dias uteis' in (doc['extracted_text'] or '')
+
+
+def test_reindex_processa_documentos_sem_texto(client, db_path):
+    payload = _sobe_documento(client)
+    _espera_task(client, payload['task_id'])
+
+    conn = toca.get_db()
+    conn.execute("UPDATE wiki_documents SET extracted_text=NULL, extract_status=NULL")
+    conn.commit()
+    conn.close()
+
+    resp = client.post('/api/wikitoca/documents/reindex', json={})
+    assert resp.status_code == 202, resp.get_json()
+    _espera_task(client, resp.get_json()['task_id'])
+
+    doc = client.get('/api/wikitoca/documents').get_json()[0]
+    assert doc['extract_status'] == 'ok'
+    assert 'cinco dias uteis' in (doc['extracted_text'] or '')
