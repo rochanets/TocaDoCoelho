@@ -1287,3 +1287,399 @@ def test_exclusao_da_instancia_durante_a_indexacao_nao_trava_a_task_nem_recria_p
         'pasta/arquivo orfaos em disco -- o DELETE nao esperou a thread de '
         'indexacao fechar o arquivo antes do rmtree'
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 8 — cascata de resposta (documentos da instância → base WikiToca → web).
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Núcleo puro: rodam em milissegundos, sem client/thread/polling ──────────
+
+
+@pytest.mark.parametrize('bruto', [
+    'INSUFICIENTE',
+    'insuficiente',
+    '  INSUFICIENTE  ',
+    'INSUFICIENTE\n',
+    '"INSUFICIENTE"',
+    '**INSUFICIENTE**',
+    '`INSUFICIENTE`',
+    'Insuficiente!',
+    'INSUFICIENTE.',
+    'Insuficiente:',
+    '### INSUFICIENTE',
+    'INSUFICIENTE\n\nOs trechos nao mencionam o prazo pedido.',
+])
+def test_sinal_de_insuficiente_e_reconhecido_com_enfeites(bruto):
+    """O modelo raramente devolve a palavra "pelada": vem com aspas, markdown,
+    pontuacao ou uma justificativa na linha seguinte. Um falso negativo aqui
+    coloca a string literal INSUFICIENTE na tela do usuario."""
+    assert toca._wiki_cap_e_insuficiente(bruto) is True
+
+
+@pytest.mark.parametrize('bruto', [
+    None,
+    '',
+    '   ',
+    'O prazo e de cinco dias uteis.',
+    'O saldo e insuficiente para a operacao.',
+    'A documentacao e insuficiente, mas o prazo e de cinco dias.',
+    'Insuficiente saldo em conta impede a aprovacao do contrato.',
+    'A palavra INSUFICIENTE aparece no artigo 5 do regulamento anexo.',
+])
+def test_resposta_legitima_que_contem_a_palavra_nao_e_tratada_como_sinal(bruto):
+    assert toca._wiki_cap_e_insuficiente(bruto) is False
+
+
+def test_monta_contexto_devolve_blocos_e_labels_sem_repetir():
+    trechos = [
+        {'label': 'a.docx', 'chunk': 'primeiro trecho'},
+        {'label': 'a.docx', 'chunk': 'segundo trecho'},
+        {'label': 'b.pdf', 'chunk': 'terceiro trecho'},
+    ]
+    blocos, labels = toca._wiki_cap_monta_contexto(trechos)
+    assert len(blocos) == 3
+    assert labels == ['a.docx', 'b.pdf']
+    assert 'primeiro trecho' in blocos[0] and '[a.docx]' in blocos[0]
+
+
+def test_monta_contexto_corta_no_limite_de_caracteres():
+    trechos = [{'label': f'doc{i}.docx', 'chunk': 'x' * 500} for i in range(10)]
+    blocos, labels = toca._wiki_cap_monta_contexto(trechos, max_chars=1200)
+    assert 0 < len(blocos) < 10
+    assert sum(len(b) for b in blocos) <= 1200
+    assert len(labels) == len(blocos)
+
+
+def test_monta_contexto_com_bloco_unico_maior_que_o_limite_ainda_devolve_algo():
+    """Sem esta garantia, um unico bloco acima do orcamento zeraria o contexto e
+    o passo da cascata seria pulado em silencio -- o usuario iria para a web
+    tendo a resposta no proprio documento."""
+    trechos = [{'label': 'gigante.pdf', 'chunk': 'y' * 5000}]
+    blocos, labels = toca._wiki_cap_monta_contexto(trechos, max_chars=100)
+    assert len(blocos) == 1
+    assert len(blocos[0]) <= 100
+    assert labels == ['gigante.pdf']
+
+
+def test_monta_contexto_sem_trechos_devolve_vazio():
+    assert toca._wiki_cap_monta_contexto([]) == ([], [])
+
+
+def test_historico_formata_papeis_do_mais_antigo_para_o_mais_novo():
+    rows = [
+        {'role': 'assistant', 'content': 'resposta antiga'},
+        {'role': 'user', 'content': 'pergunta antiga'},
+    ]  # como vem do SELECT (DESC): mais novo primeiro
+    texto = toca._wiki_cap_formata_historico(rows)
+    assert texto.index('pergunta antiga') < texto.index('resposta antiga')
+    assert 'Usuário: pergunta antiga' in texto
+    assert 'Assistente: resposta antiga' in texto
+
+
+def test_historico_vazio_nao_gera_prefixo():
+    assert toca._wiki_cap_formata_historico([]) == ''
+
+
+def test_historico_gigante_e_truncado_para_nao_estourar_o_contexto():
+    rows = [{'role': 'user', 'content': 'z' * 40000}]
+    texto = toca._wiki_cap_formata_historico(rows)
+    assert len(texto) <= toca._WIKI_CAP_HISTORY_MAX_CHARS + 200
+
+
+def test_cache_da_base_do_wikitoca_evita_retokenizar(client, monkeypatch):
+    """Medido na Task 5: a tokenizacao domina o custo do ranking. Sem cache,
+    TODA mensagem de chat re-tokeniza wiki_entries + wiki_documents inteiros
+    antes de chamar o LLM."""
+    client.post('/api/wikitoca/entries', json={'title': 'Politica', 'content': 'conteudo da politica'})
+
+    toca._wiki_cap_invalida_cache_da_base()
+    real = toca._wiki_build_blocks
+    chamadas = []
+
+    def espiao(sources):
+        chamadas.append(len(sources or []))
+        return real(sources)
+
+    monkeypatch.setattr(toca, '_wiki_build_blocks', espiao)
+    try:
+        primeiro = toca._wiki_cap_base_blocks()
+        segundo = toca._wiki_cap_base_blocks()
+        assert len(chamadas) == 1, 'a segunda chamada deveria vir do cache'
+        assert primeiro == segundo
+
+        # Uma alteracao na base invalida o cache pela versao das fontes.
+        client.post('/api/wikitoca/entries', json={'title': 'Outra', 'content': 'outro conteudo bem diferente'})
+        terceiro = toca._wiki_cap_base_blocks()
+        assert len(chamadas) == 2, 'mudar a base deveria invalidar o cache'
+        assert len(terceiro) > len(primeiro)
+    finally:
+        toca._wiki_cap_invalida_cache_da_base()
+
+
+# ── Cascata ponta a ponta ──────────────────────────────────────────────────
+
+
+def _prepara_capacitacao_com_doc(client, monkeypatch, texto):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    payload = _sobe_doc_capacitacao(client, sess['id'], texto=texto)
+    _espera_task(client, payload['task_id'])
+    return sess['id']
+
+
+def test_resposta_vem_dos_documentos_da_instancia(client, monkeypatch):
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+    chamadas = []
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        chamadas.append({'web': web, 'question': question})
+        return 'O prazo e de cinco dias uteis.'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                       json={'question': 'Qual o prazo de aprovacao do contrato?'})
+    assert resp.status_code == 202, resp.get_json()
+    _espera_task(client, resp.get_json()['task_id'])
+
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{session_id}').get_json()['messages']
+    assert msgs[0]['role'] == 'user'
+    assert msgs[1]['source_kind'] == 'documents'
+    assert 'manual.docx' in msgs[1]['source_refs']
+    assert len(chamadas) == 1 and chamadas[0]['web'] is False
+
+
+def test_insuficiente_nos_documentos_escala_para_a_base_wikitoca(client, monkeypatch):
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+    client.post('/api/wikitoca/entries', json={
+        'title': 'Politica de contrato', 'content': 'O prazo de rescisao do contrato e de trinta dias.'})
+    respostas = ['INSUFICIENTE', 'O prazo de rescisao e de trinta dias.']
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        return respostas.pop(0)
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                       json={'question': 'Qual o prazo de rescisao do contrato?'})
+    _espera_task(client, resp.get_json()['task_id'])
+
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{session_id}').get_json()['messages']
+    assert msgs[-1]['source_kind'] == 'wiki'
+    assert 'trinta dias' in msgs[-1]['content']
+    assert any('Conhecimento: Politica de contrato' in r for r in msgs[-1]['source_refs'])
+
+
+def test_pergunta_sem_relacao_nenhuma_vai_para_a_web(client, monkeypatch):
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+    chamadas = []
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        chamadas.append(web)
+        return 'Resposta encontrada na internet.' if web else 'INSUFICIENTE'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                       json={'question': 'Qual a cotacao do dolar hoje?'})
+    _espera_task(client, resp.get_json()['task_id'])
+
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{session_id}').get_json()['messages']
+    assert msgs[-1]['source_kind'] == 'web'
+    assert chamadas == [True]
+
+
+def test_sem_nenhum_llm_disponivel_a_task_vira_erro(client, monkeypatch):
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: None)
+
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                       json={'question': 'Qual o prazo de aprovacao do contrato?'})
+    payload = _espera_task(client, resp.get_json()['task_id'], esperar_erro=True)
+    assert payload['status'] == 'error'
+    assert 'IA' in payload['error']
+
+
+def test_pergunta_vazia_e_rejeitada(client):
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/ask', json={'question': '  '})
+    assert resp.status_code == 400
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_QUESTION_REQUIRED'
+
+
+def test_pergunta_em_capacitacao_inexistente_e_404(client):
+    resp = client.post('/api/wikitoca/capacitacao/sessions/999/ask', json={'question': 'Alguma coisa?'})
+    assert resp.status_code == 404
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_NOT_FOUND'
+
+
+def test_a_pergunta_atual_nao_aparece_duas_vezes_no_prompt(client, monkeypatch):
+    """A rota grava a mensagem do usuario ANTES de disparar a thread; se o
+    historico nao excluir essa mensagem, a pergunta entra no prompt como
+    `Usuário: X` e como `PERGUNTA: X` -- desperdicio de contexto e ruido para
+    o modelo."""
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+    prompts = []
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        prompts.append(question)
+        return 'O prazo e de cinco dias uteis.'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    primeira = 'Qual o prazo de aprovacao do contrato?'
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask', json={'question': primeira})
+    _espera_task(client, resp.get_json()['task_id'])
+
+    assert len(prompts) == 1
+    assert prompts[0].count(primeira) == 1
+    assert 'Histórico' not in prompts[0]
+
+    # follow-up: agora o historico existe e traz a pergunta anterior, mas a
+    # pergunta NOVA continua aparecendo uma unica vez.
+    segunda = 'E o prazo de aprovacao vale para contrato de servico?'
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask', json={'question': segunda})
+    _espera_task(client, resp.get_json()['task_id'])
+
+    assert len(prompts) == 2
+    assert prompts[1].count(segunda) == 1
+    assert primeira in prompts[1]
+
+
+def test_providers_responderam_mas_nada_foi_encontrado_nao_e_erro_de_integracao(client, monkeypatch):
+    """Correção B: se o LLM respondeu INSUFICIENTE nos documentos/base e a busca
+    web voltou vazia, dizer "verifique as chaves em Configurações" é mentira --
+    manda o usuario mexer numa configuracao que esta correta."""
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        return None if web else 'INSUFICIENTE'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                       json={'question': 'Qual o prazo de aprovacao do contrato?'})
+    payload = _espera_task(client, resp.get_json()['task_id'])
+
+    assert payload['status'] == 'done'
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{session_id}').get_json()['messages']
+    assert msgs[-1]['role'] == 'assistant'
+    assert msgs[-1]['source_kind'] == 'none'
+    assert 'não encontrei' in msgs[-1]['content'].lower()
+    assert 'chaves' not in msgs[-1]['content'].lower()
+
+
+def test_instancia_sem_documentos_pula_direto_para_a_base_wikitoca(client, monkeypatch):
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    client.post('/api/wikitoca/entries', json={
+        'title': 'Politica de contrato', 'content': 'O prazo de rescisao do contrato e de trinta dias.'})
+    chamadas = []
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        chamadas.append(web)
+        return 'O prazo de rescisao e de trinta dias.'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/ask',
+                       json={'question': 'Qual o prazo de rescisao do contrato?'})
+    _espera_task(client, resp.get_json()['task_id'])
+
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()['messages']
+    assert msgs[-1]['source_kind'] == 'wiki'
+    assert chamadas == [False]  # uma unica chamada: o passo 1 nao gastou LLM
+
+
+def test_documentos_com_extracao_falha_nao_entram_na_cascata(client, monkeypatch):
+    """Documento com extract_status error/empty nao tem texto -- o passo 1 nao
+    pode gastar chamada de LLM com contexto vazio."""
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    conn = toca.get_db()
+    conn.execute(
+        '''INSERT INTO wiki_training_documents
+           (session_id, file_name, original_name, file_url, file_ext, file_size,
+            extracted_text, extract_status)
+           VALUES (?, 'x.pdf', 'x.pdf', '/uploads/x.pdf', '.pdf', 10, '', 'error')''',
+        (sess['id'],))
+    conn.commit()
+    conn.close()
+    chamadas = []
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        chamadas.append(web)
+        return 'Resposta da internet.' if web else 'INSUFICIENTE'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/ask',
+                       json={'question': 'Qual o prazo de aprovacao do contrato?'})
+    _espera_task(client, resp.get_json()['task_id'])
+
+    assert chamadas == [True]  # nem passo 1 nem passo 2 tinham fonte alguma
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()['messages']
+    assert msgs[-1]['source_kind'] == 'web'
+
+
+def test_exclusao_da_instancia_durante_a_resposta_encerra_a_task(client, monkeypatch):
+    """Mesma corrida tratada no upload (Task 7): a cascata dura segundos (duas
+    ou tres chamadas de LLM) e o usuario pode excluir a capacitacao no meio. O
+    INSERT da resposta bateria na FK (PRAGMA foreign_keys=ON) e a barra de
+    progresso ficaria girando para sempre."""
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        conn = toca.get_db()
+        conn.execute('DELETE FROM wiki_training_messages WHERE session_id=?', (session_id,))
+        conn.execute('DELETE FROM wiki_training_documents WHERE session_id=?', (session_id,))
+        conn.execute('DELETE FROM wiki_training_sessions WHERE id=?', (session_id,))
+        conn.commit()
+        conn.close()
+        return 'O prazo e de cinco dias uteis.'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                       json={'question': 'Qual o prazo de aprovacao do contrato?'})
+    payload = _espera_task(client, resp.get_json()['task_id'], esperar_erro=True)
+
+    assert payload['status'] == 'done', payload
+    assert payload['result']['cancelled'] is True
+
+
+def test_pergunta_gigantesca_nao_quebra_a_cascata(client, monkeypatch):
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+    pergunta = ('Qual o prazo de aprovacao do contrato? ' + 'detalhe irrelevante ' * 600).strip()
+    prompts = []
+
+    def fake_llm(question, log_tag='llm', temperature=0.1, web=False):
+        prompts.append(question)
+        return 'O prazo e de cinco dias uteis.'
+
+    monkeypatch.setattr(toca, '_llm_prompt', fake_llm)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                       json={'question': pergunta})
+    assert resp.status_code == 202, resp.get_json()
+    _espera_task(client, resp.get_json()['task_id'])
+
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{session_id}').get_json()['messages']
+    assert msgs[-1]['source_kind'] == 'documents'
+    assert prompts and prompts[0].count(pergunta) == 1
+
+
+def test_duas_perguntas_simultaneas_na_mesma_instancia_gravam_as_duas_respostas(client, monkeypatch):
+    session_id = _prepara_capacitacao_com_doc(
+        client, monkeypatch, 'O prazo de aprovacao do contrato e de cinco dias uteis.')
+    monkeypatch.setattr(toca, '_llm_prompt',
+                        lambda *a, **k: 'O prazo e de cinco dias uteis.')
+
+    t1 = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                     json={'question': 'Qual o prazo de aprovacao do contrato?'}).get_json()['task_id']
+    t2 = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/ask',
+                     json={'question': 'O prazo de aprovacao vale para renovacao?'}).get_json()['task_id']
+    _espera_task(client, t1)
+    _espera_task(client, t2)
+
+    msgs = client.get(f'/api/wikitoca/capacitacao/sessions/{session_id}').get_json()['messages']
+    assert sum(1 for m in msgs if m['role'] == 'user') == 2
+    assert sum(1 for m in msgs if m['role'] == 'assistant') == 2

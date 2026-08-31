@@ -74,6 +74,25 @@ def _wiki_split_chunks(texto):
     return blocos
 
 
+def _wiki_build_blocks(sources):
+    """Quebra as fontes em blocos já tokenizados: [{'label', 'chunk', 'tokens'}].
+
+    Separado de `_wiki_rank_blocks` porque esta é a metade CARA e a única que
+    não depende da pergunta — medido na Task 5, com 50 documentos de 100 KB
+    (4.800 blocos) o ranking inteiro leva ~1,66 s, dos quais ~1,63 s são
+    tokenização. Sendo independente da pergunta, o resultado dá para memoizar
+    entre mensagens de chat (ver `_wiki_cap_base_blocks`).
+
+    `sources` é uma lista de {'label': str, 'text': str}.
+    """
+    blocos = []
+    for src in sources or []:
+        label = (src.get('label') or 'documento')
+        for chunk in _wiki_split_chunks(src.get('text')):
+            blocos.append({'label': label, 'chunk': chunk, 'tokens': set(_wiki_tokens(chunk))})
+    return blocos
+
+
 def _wiki_rank_chunks(sources, question, top_n=6, min_score=_WIKI_MIN_CHUNK_SCORE):
     """Seleciona os trechos mais relevantes para a pergunta.
 
@@ -103,16 +122,23 @@ def _wiki_rank_chunks(sources, question, top_n=6, min_score=_WIKI_MIN_CHUNK_SCOR
     """
     if top_n < 1:
         raise ValueError(f'top_n deve ser >= 1, recebido {top_n!r}')
+    # A checagem de top_n acontece ANTES de tokenizar (erro de programação do
+    # chamador não deve pagar 1,6 s de tokenização para depois estourar).
+    return _wiki_rank_blocks(_wiki_build_blocks(sources), question, top_n, min_score)
+
+
+def _wiki_rank_blocks(blocos, question, top_n=6, min_score=_WIKI_MIN_CHUNK_SCORE):
+    """Pontua blocos já tokenizados por `_wiki_build_blocks`. Mesmo contrato de
+    `_wiki_rank_chunks` (ver docstring acima), só que recebendo blocos prontos —
+    é o que permite reaproveitar a tokenização memoizada do acervo."""
+    if top_n < 1:
+        raise ValueError(f'top_n deve ser >= 1, recebido {top_n!r}')
 
     termos = set(_wiki_tokens(question))
     if not termos:
         return []
 
-    blocos = []
-    for src in sources or []:
-        label = (src.get('label') or 'documento')
-        for chunk in _wiki_split_chunks(src.get('text')):
-            blocos.append({'label': label, 'chunk': chunk, 'tokens': set(_wiki_tokens(chunk))})
+    blocos = blocos or []
     if not blocos:
         return []
 
@@ -156,6 +182,221 @@ def _wiki_rank_chunks(sources, question, top_n=6, min_score=_WIKI_MIN_CHUNK_SCOR
 # ═══════════════════════════════════════════════════════════════════════════
 
 _WIKI_CAP_DEFAULT_TITLE = 'Nova capacitação'
+
+# ───────────────────────────────────────────────────────────────────────────
+# NÚCLEO PURO da cascata de resposta — sem Flask, sem banco, sem rede.
+# Tudo neste bloco é entrada→saída e é testado chamando a função direto (ver
+# tests/test_wikitoca.py). Motivo prático: a revisão da Task 7 mediu 23
+# segundos para testar 12 variações de limpeza de título por HTTP (POST
+# multipart + thread + polling), quando a função pura equivalente roda em
+# milissegundos. A lógica de valor desta task (montagem de contexto, detecção
+# do sinal INSUFICIENTE, formatação de histórico, texto dos prompts) mora
+# aqui; o worker e o handler HTTP abaixo só orquestram.
+# ───────────────────────────────────────────────────────────────────────────
+
+_WIKI_CAP_MAX_CONTEXT_CHARS = 12000
+_WIKI_CAP_HISTORY_MESSAGES = 6
+# Teto do histórico inteiro (não por mensagem): nada limita o tamanho da
+# pergunta do usuário nem o de uma resposta vinda da web, então seis mensagens
+# sem teto conseguem estourar o contexto do modelo ANTES dos trechos — que são
+# justamente a parte que responde a pergunta.
+_WIKI_CAP_HISTORY_MAX_CHARS = 4000
+
+
+def _wiki_cap_e_insuficiente(bruto):
+    """True quando a resposta do LLM é o sinal "não achei nos trechos".
+
+    Critério: reduzida a apenas letras (sem acento, sem caixa, sem pontuação,
+    sem markdown, sem espaços), a resposta INTEIRA — ou a sua primeira linha
+    não vazia — é exatamente a palavra `insuficiente`.
+
+    Por que esse critério: o prompt pede a palavra sozinha, mas o modelo
+    enfeita na prática (`**INSUFICIENTE**`, `"INSUFICIENTE"`, `Insuficiente!`,
+    `INSUFICIENTE` seguido de uma justificativa na linha de baixo), e um falso
+    NEGATIVO aqui é caro — joga a string literal INSUFICIENTE na tela do
+    usuário como se fosse a resposta. Do outro lado, procurar a palavra em
+    qualquer posição do texto daria falso POSITIVO em resposta legítima que só
+    a contém ("O saldo é insuficiente para a operação"), descartando uma
+    resposta boa e escalando a cascata à toa. Exigir que a palavra seja a
+    TOTALIDADE do texto — ou da primeira linha, para cobrir o modelo que
+    justifica embaixo — fica entre os dois extremos.
+    """
+    texto = str(bruto or '').strip()
+    if not texto:
+        return False
+    candidatos = [texto]
+    linhas = [l for l in texto.splitlines() if l.strip()]
+    if linhas:
+        candidatos.append(linhas[0])
+    return any(re.sub(r'[^a-z]', '', _wiki_norm(c)) == 'insuficiente' for c in candidatos)
+
+
+def _wiki_cap_monta_contexto(trechos, max_chars=_WIKI_CAP_MAX_CONTEXT_CHARS):
+    """Blocos de contexto formatados para o prompt + labels de fato usados.
+
+    Devolve ([blocos], [labels]) — os labels na ordem de aparição e sem
+    repetir, porque é isso que vira `source_refs` da mensagem (o selo de origem
+    da UI). Blocos que não caibam no orçamento são deixados de fora.
+    """
+    blocos, labels, tamanho = [], [], 0
+    for t in trechos or []:
+        label = (t.get('label') or 'documento')
+        bloco = f'[{label}]\n{t.get("chunk") or ""}'
+        if tamanho + len(bloco) > max_chars:
+            if blocos:
+                break
+            # Primeiro bloco já acima do orçamento: TRUNCA em vez de devolver
+            # contexto vazio. Contexto vazio faria o passo da cascata ser
+            # pulado em silêncio — o usuário iria para a web tendo a resposta
+            # no próprio documento. Hoje _WIKI_CHUNK_SIZE (1200) é uma ordem de
+            # grandeza menor que o orçamento, então isto só dispara com um
+            # label absurdamente longo ou um orçamento reduzido; mesmo assim,
+            # "pular em silêncio" é caro o bastante para não ficar dependendo
+            # de duas constantes continuarem nessa proporção.
+            bloco = bloco[:max_chars]
+        blocos.append(bloco)
+        tamanho += len(bloco)
+        if label not in labels:
+            labels.append(label)
+    return blocos, labels
+
+
+def _wiki_cap_formata_historico(rows):
+    """Prefixo de histórico para o prompt, a partir das linhas do SELECT — que
+    vêm do mais NOVO para o mais antigo, e aqui são invertidas. '' quando não
+    há histórico (a primeira pergunta de uma capacitação nova)."""
+    rows = list(rows or [])
+    if not rows:
+        return ''
+    linhas = [f'{"Usuário" if (r.get("role") == "user") else "Assistente"}: {r.get("content") or ""}'
+              for r in reversed(rows)]
+    texto = '\n'.join(linhas)
+    if len(texto) > _WIKI_CAP_HISTORY_MAX_CHARS:
+        # Corta pelo INÍCIO: são as mensagens mais recentes que fazem um
+        # follow-up ("e isso vale para contrato de serviço?") ter sentido.
+        texto = '[...]\n' + texto[-_WIKI_CAP_HISTORY_MAX_CHARS:]
+    return 'Histórico recente desta conversa:\n' + texto + '\n\n'
+
+
+def _wiki_cap_monta_prompt(history, blocos, question, origem_label):
+    """Prompt dos passos 1 e 2: responder só a partir dos trechos, ou sinalizar
+    INSUFICIENTE para a cascata escalar."""
+    return (
+        f'{history}'
+        f'Você responde perguntas usando EXCLUSIVAMENTE os trechos abaixo, extraídos de {origem_label}.\n'
+        'Se os trechos não contiverem a informação necessária para responder, '
+        'responda SOMENTE a palavra INSUFICIENTE, sem mais nada.\n'
+        'Caso contrário, responda em português do Brasil, de forma direta e objetiva.\n\n'
+        'TRECHOS:\n' + '\n\n'.join(blocos) + f'\n\nPERGUNTA: {question}'
+    )
+
+
+def _wiki_cap_monta_prompt_web(history, question):
+    """Prompt do passo 3: sem trechos, com busca ativa na internet."""
+    return (
+        f'{history}Responda em português do Brasil, de forma direta e objetiva, '
+        f'usando informações atuais da internet.\n\nPERGUNTA: {question}'
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Memoização da tokenização do acervo do WikiToca (passo 2 da cascata).
+#
+# Medido na Task 5: com 50 documentos de 100 KB (4.800 blocos) o ranking leva
+# ~1,66 s, dos quais ~1,63 s são tokenização. O passo 1 da cascata é barato
+# (poucos arquivos da instância); o passo 2 varre `wiki_entries` + TODOS os
+# `wiki_documents`, e sem cache cada mensagem de chat pagaria isso antes de
+# chamar o LLM.
+#
+# Deliberadamente NÃO segue o padrão do iToca (`_itoca_get_cached_base`,
+# app.py): lá o snapshot é serializado em `app_settings` e só se atualiza numa
+# ação manual de "Base Update" — pesado demais aqui e introduziria um botão
+# que o spec não prevê. Aqui é dicionário de módulo + Lock, invalidado pela
+# própria versão das fontes.
+# ───────────────────────────────────────────────────────────────────────────
+
+_wiki_cap_base_cache = {'version': None, 'blocks': []}
+_wiki_cap_base_cache_lock = threading.Lock()
+
+
+def _wiki_cap_invalida_cache_da_base():
+    """Zera o cache. Em produção a invalidação acontece sozinha (pela versão
+    das fontes); isto existe para os testes e para uso manual."""
+    with _wiki_cap_base_cache_lock:
+        _wiki_cap_base_cache['version'] = None
+        _wiki_cap_base_cache['blocks'] = []
+
+
+def _wiki_cap_base_version(conn):
+    """Assinatura de identidade + versão de tudo que compõe a base do WikiToca.
+
+    Inclui o caminho do banco: `DB_PATH` muda entre instâncias (TOCA_DB_PATH) e
+    entre testes, e sem isso um cache montado sobre um banco serviria outro.
+
+    Junto do timestamp de versão vai o TAMANHO de cada campo, porque
+    CURRENT_TIMESTAMP do SQLite tem granularidade de segundo: duas edições da
+    mesma entrada dentro do mesmo segundo gerariam `updated_at` idêntico. Com o
+    tamanho, só escapa a edição que caia no mesmo segundo E preserve o
+    comprimento exato de todos os campos — inalcançável pela UI, e o custo
+    (uma consulta de metadados, sem ler os textos) é o que mantém o cache
+    valendo a pena.
+    """
+    partes = [('db', str(DB_PATH))]
+    for row in conn.execute(
+            "SELECT id, COALESCE(updated_at, ''), LENGTH(COALESCE(title, '')), "
+            "LENGTH(COALESCE(category, '')), LENGTH(COALESCE(content, '')) "
+            'FROM wiki_entries ORDER BY id'):
+        partes.append(('e',) + tuple(row))
+    for row in conn.execute(
+            "SELECT id, COALESCE(extracted_at, ''), LENGTH(COALESCE(extracted_text, '')) "
+            "FROM wiki_documents WHERE extract_status='ok' ORDER BY id"):
+        partes.append(('d',) + tuple(row))
+    return tuple(partes)
+
+
+def _wiki_cap_base_sources(conn):
+    """Fontes da base do WikiToca no formato de `_wiki_build_blocks`.
+    O label dos conhecimentos é prefixado ('Conhecimento: X') porque ele vai
+    para `source_refs` e aparece na UI — sem o prefixo, o título de um
+    conhecimento ficaria indistinguível de um nome de arquivo."""
+    fontes = [{'label': f'Conhecimento: {r[0]}',
+               'text': f'{r[0]}\n{r[1] or ""}\n{r[2] or ""}'}
+              for r in conn.execute('SELECT title, category, content FROM wiki_entries ORDER BY id')]
+    fontes += [{'label': r[0], 'text': r[1]} for r in conn.execute(
+        "SELECT original_name, extracted_text FROM wiki_documents "
+        "WHERE extract_status='ok' ORDER BY id")]
+    return fontes
+
+
+def _wiki_cap_base_blocks():
+    """Blocos tokenizados da base do WikiToca, memoizados por versão das fontes.
+
+    A lista devolvida é a MESMA do cache (sem copiar): `_wiki_rank_blocks` só
+    lê os blocos e monta dicionários novos, nunca os muta. Copiar 4.800 dicts
+    com set de tokens a cada mensagem desfaria parte do ganho.
+
+    O recálculo acontece FORA do lock de propósito: são ~1,6 s de CPU no pior
+    caso medido, e segurar o lock nesse intervalo travaria qualquer outra
+    conversa que só quisesse LER o cache. Duas conversas simultâneas em cache
+    frio podem calcular a mesma coisa em paralelo — desperdício aceitável e
+    idempotente, contra um gargalo garantido.
+    """
+    conn = get_db()
+    try:
+        versao = _wiki_cap_base_version(conn)
+        with _wiki_cap_base_cache_lock:
+            if _wiki_cap_base_cache['version'] == versao:
+                return _wiki_cap_base_cache['blocks']
+        fontes = _wiki_cap_base_sources(conn)
+    finally:
+        conn.close()
+    blocos = _wiki_build_blocks(fontes)
+    with _wiki_cap_base_cache_lock:
+        _wiki_cap_base_cache['version'] = versao
+        _wiki_cap_base_cache['blocks'] = blocos
+    logger.debug(f'[WikiToca] Tokenização da base recalculada: {len(fontes)} fonte(s), '
+                 f'{len(blocos)} bloco(s).')
+    return blocos
 
 
 def _wiki_cap_session_row(session_id):
@@ -686,3 +927,228 @@ def delete_wiki_capacitacao_document(document_id):
         logger.exception(f'[ERROR] DELETE .../capacitacao/documents/{document_id}: {e}')
         traceback.print_exc()
         return api_error(500, 'WIKI_CAP_DOC_DELETE_ERROR', 'Erro ao excluir documento.', details=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Chat: cascata de resposta — documentos da instância → base WikiToca → web.
+# O núcleo puro (prompts, contexto, sinal de INSUFICIENTE, cache do acervo)
+# está no topo deste arquivo; daqui para baixo é só orquestração.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _wiki_cap_history_rows(session_id, before_id):
+    """Últimas mensagens da instância (mais nova primeiro), EXCLUINDO a
+    mensagem de id >= `before_id`.
+
+    O filtro por id não é detalhe: a rota grava a pergunta do usuário ANTES de
+    disparar a thread (para a UI já poder mostrar a bolha e para a mensagem
+    sobreviver a um refresh). Sem excluí-la, a pergunta atual entraria no
+    prompt duas vezes — uma como `Usuário: X` no histórico e outra como
+    `PERGUNTA: X` no fim —, desperdiçando contexto e confundindo o modelo.
+    routes/itoca.py resolve o mesmo problema buscando o histórico antes de
+    salvar; aqui a ordem é necessariamente invertida (a thread nasce depois do
+    INSERT), então o equivalente é filtrar por id."""
+    conn = get_db()
+    rows = [dict_from_row(r) for r in conn.execute(
+        '''SELECT role, content FROM wiki_training_messages
+           WHERE session_id=? AND id < ?
+           ORDER BY created_at DESC, id DESC LIMIT ?''',
+        (session_id, before_id, _WIKI_CAP_HISTORY_MESSAGES)).fetchall()]
+    conn.close()
+    return rows
+
+
+def _wiki_cap_ask_llm(trechos, question, history, origem_label):
+    """Monta o prompt com os trechos selecionados e chama o LLM.
+
+    Devolve (status, resposta, labels), com status em:
+      'answer'       — o modelo respondeu de fato (resposta e labels preenchidos);
+      'insufficient' — o modelo respondeu, mas disse que os trechos não bastam;
+      'no_context'   — não havia trecho para mandar; nem chamou o LLM;
+      'no_provider'  — chamou, e nenhum provider de IA respondeu (SAI e
+                       OpenRouter indisponíveis).
+
+    Separar 'insufficient' de 'no_provider' é o que permite ao worker não
+    mentir na mensagem final — ver a decisão em `_wiki_cap_answer_async`.
+    """
+    blocos, labels = _wiki_cap_monta_contexto(trechos)
+    if not blocos:
+        return 'no_context', None, []
+    bruto = _llm_prompt(_wiki_cap_monta_prompt(history, blocos, question, origem_label),
+                        log_tag='WikiCapacitacao')
+    if not bruto or not str(bruto).strip():
+        return 'no_provider', None, []
+    resposta = str(bruto).strip()
+    if _wiki_cap_e_insuficiente(resposta):
+        return 'insufficient', None, []
+    return 'answer', resposta, labels
+
+
+def _wiki_cap_answer_async(task_id, session_id, question, user_message_id):
+    """Roda a cascata e grava a resposta com a origem que a UI mostra como selo.
+
+    Sobre o corte por score: `_wiki_rank_chunks`/`_wiki_rank_blocks` devolvem []
+    quando as fontes não têm NENHUM termo significativo em comum com a
+    pergunta, e é só isso que faz um passo ser pulado sem gastar chamada de
+    LLM. Quem julga relevância de verdade é o INSUFICIENTE da IA, não a
+    pontuação — deliberado: um falso positivo custa uma chamada de LLM, um
+    falso negativo mandaria o usuário para a web tendo a resposta nos próprios
+    documentos.
+    """
+    try:
+        history = _wiki_cap_formata_historico(_wiki_cap_history_rows(session_id, user_message_id))
+        resposta, refs, origem = None, [], None
+        # Um status por passo que chegou a chamar o LLM. É o que permite, na
+        # decisão final, distinguir "nenhum provider respondeu" (erro de
+        # integração) de "os providers responderam que não sabem" (resposta
+        # legítima). O código de referência do plano usava um único
+        # `houve_llm = True` marcado incondicionalmente no passo 3, o que
+        # tornava o ramo "não encontrei" código morto e fazia o usuário receber
+        # "verifique as chaves em Configurações" mesmo quando as chaves estavam
+        # certas e o modelo só não sabia a resposta.
+        status_dos_passos = []
+
+        # ── Passo 1: documentos desta capacitação ──────────────────────────
+        _bg_task_set(task_id, {'step': 'Consultando os documentos desta capacitação...', 'progress': 20})
+        conn = get_db()
+        docs = [dict_from_row(r) for r in conn.execute(
+            '''SELECT original_name, extracted_text FROM wiki_training_documents
+               WHERE session_id=? AND extract_status='ok' ORDER BY id''', (session_id,)).fetchall()]
+        conn.close()
+        # Sem memoização aqui, de propósito: são poucos arquivos por instância
+        # (o custo medido que motivou o cache está no acervo do passo 2), e
+        # cachear por instância significaria mais um mapa para invalidar a cada
+        # upload/exclusão de documento da capacitação.
+        trechos = _wiki_rank_chunks(
+            [{'label': d['original_name'], 'text': d['extracted_text']} for d in docs], question)
+        if trechos:
+            status, resposta, refs = _wiki_cap_ask_llm(
+                trechos, question, history, 'documentos anexados a esta capacitação')
+            status_dos_passos.append(status)
+            if resposta:
+                origem = 'documents'
+
+        # ── Passo 2: base do WikiToca (conhecimentos + documentos) ─────────
+        if not resposta:
+            _bg_task_set(task_id, {'step': 'Consultando a base do WikiToca...', 'progress': 50})
+            trechos = _wiki_rank_blocks(_wiki_cap_base_blocks(), question)
+            if trechos:
+                status, resposta, refs = _wiki_cap_ask_llm(
+                    trechos, question, history, 'a base de conhecimento do WikiToca')
+                status_dos_passos.append(status)
+                if resposta:
+                    origem = 'wiki'
+
+        # ── Passo 3: web ───────────────────────────────────────────────────
+        if not resposta:
+            _bg_task_set(task_id, {'step': 'Pesquisando na web...', 'progress': 75})
+            bruto = _llm_prompt(_wiki_cap_monta_prompt_web(history, question),
+                                log_tag='WikiCapacitacao', web=True)
+            if bruto and str(bruto).strip():
+                status_dos_passos.append('answer')
+                resposta, refs, origem = str(bruto).strip(), [], 'web'
+            else:
+                status_dos_passos.append('no_provider')
+
+        if not resposta:
+            if not any(s in ('answer', 'insufficient') for s in status_dos_passos):
+                # Nenhum provider devolveu conteúdo em NENHUM passo: isto é
+                # falha de integração, e é a única situação em que faz sentido
+                # mandar o usuário conferir as chaves.
+                _bg_task_set(task_id, {
+                    'status': 'error', 'progress': 100,
+                    'error': ('Nenhuma integração de IA respondeu (SAI e OpenRouter indisponíveis). '
+                              'Verifique as chaves em Configurações.')})
+                return
+            # Os providers responderam — só não havia a informação. Resposta
+            # legítima, não erro. `source_kind='none'` em vez de 'web': marcar
+            # como 'web' faria a UI acender um selo de "resposta da internet"
+            # numa mensagem que diz exatamente o contrário.
+            resposta = ('Não encontrei essa informação nos documentos desta capacitação, '
+                        'na base do WikiToca nem na web.')
+            refs, origem = [], 'none'
+
+        # Corrida tratada: o usuário pode excluir a capacitação enquanto a
+        # cascata roda (ela dura segundos, com até três chamadas de LLM). O
+        # INSERT bateria na FK (PRAGMA foreign_keys=ON) e, sem tratamento, a
+        # task ficaria pendurada ou terminaria em erro — a barra de progresso
+        # não pode girar para sempre, e a exclusão foi uma ação legítima do
+        # usuário, não uma falha (mesma decisão do `_wiki_cap_index_async`:
+        # termina em 'done' com `cancelled`). O IntegrityError é a checagem, e
+        # não um `if` antes dele, para não deixar janela de check-then-act
+        # (lição do PUT da Task 6: "o UPDATE é a própria checagem").
+        conn = get_db()
+        try:
+            c = conn.cursor()
+            c.execute('''INSERT INTO wiki_training_messages
+                         (session_id, role, content, source_kind, source_refs, created_at)
+                         VALUES (?, 'assistant', ?, ?, ?, CURRENT_TIMESTAMP)''',
+                      (session_id, resposta, origem, json.dumps(refs, ensure_ascii=False)))
+            c.execute('UPDATE wiki_training_sessions SET updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                      (session_id,))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            logger.info(f'[WikiToca] Capacitação {session_id} excluída durante a resposta; '
+                        f'encerrando a task {task_id} sem gravar a mensagem.')
+            _bg_task_set(task_id, {'status': 'done', 'step': 'Capacitação excluída.',
+                                   'progress': 100, 'result': {'cancelled': True}})
+            return
+        finally:
+            conn.close()
+
+        logger.info(f'[WikiToca] Capacitação {session_id} respondeu via "{origem}" (refs={refs})')
+        _bg_task_set(task_id, {'status': 'done', 'step': 'Concluído!', 'progress': 100,
+                               'result': {'answer': resposta, 'source_kind': origem, 'source_refs': refs}})
+    except Exception as e:
+        logger.exception(f'[WikiToca] _wiki_cap_answer_async: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e), 'progress': 100})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/wikitoca/capacitacao/sessions/<int:session_id>/ask', methods=['POST'])
+def ask_wiki_capacitacao(session_id):
+    logger.debug(f'[DEBUG] POST .../capacitacao/sessions/{session_id}/ask chamado')
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            data = {}
+        question = data.get('question')
+        # Mesma defesa do POST/PUT de sessões: `question` pode chegar como
+        # int/dict/list num corpo malformado, e só string tem .strip().
+        question = question.strip() if isinstance(question, str) else ''
+        if not question:
+            return api_error(400, 'WIKI_CAP_QUESTION_REQUIRED', 'A pergunta é obrigatória.')
+        if not _wiki_cap_session_row(session_id):
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+
+        conn = get_db()
+        try:
+            c = conn.cursor()
+            c.execute('''INSERT INTO wiki_training_messages (session_id, role, content, created_at)
+                         VALUES (?, 'user', ?, CURRENT_TIMESTAMP)''', (session_id, question))
+            conn.commit()
+            user_message_id = c.lastrowid
+        except sqlite3.IntegrityError:
+            # DELETE concorrente entre a checagem acima e este INSERT — mesmo
+            # padrão da rota de upload (Task 7).
+            conn.rollback()
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+        finally:
+            conn.close()
+
+        task_id = uuid.uuid4().hex
+        _bg_task_register_persistent(task_id, 'wiki_capacitacao_ask')
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Iniciando...', 'progress': 5})
+        thread = threading.Thread(target=_wiki_cap_answer_async,
+                                  args=(task_id, session_id, question, user_message_id), daemon=True)
+        # Sem o track, uma thread ainda viva quando um teste falha sobrevive ao
+        # teardown do monkeypatch de DB_PATH e grava no banco REAL do usuário
+        # (ver tests/conftest.py).
+        _wiki_track_thread(thread)
+        thread.start()
+        return jsonify({'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST .../capacitacao/sessions/{session_id}/ask: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_ASK_ERROR', 'Erro ao processar a pergunta.', details=str(e))
