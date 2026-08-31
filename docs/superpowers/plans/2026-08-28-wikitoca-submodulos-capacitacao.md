@@ -1136,6 +1136,25 @@ git commit -m "feat(wikitoca): CRUD das instancias de capacitacao"
 - Modify: `routes/wikitoca_capacitacao.py` (rotas e worker novos, depois do CRUD)
 - Test: `tests/test_wikitoca.py`
 
+> **Corrida exclusão × indexação — confirmada empiricamente na revisão da Task 6.**
+> Se o usuário excluir a instância enquanto a thread de indexação roda, acontecem
+> duas coisas, ambas medidas:
+>
+> 1. O `INSERT`/`UPDATE` em `wiki_training_documents` é **rejeitado** pela FK
+>    (`FOREIGN KEY constraint failed`, porque `PRAGMA foreign_keys=ON` está ativo).
+>    Não gera linha órfã, mas a thread morre com `IntegrityError` — e num daemon
+>    thread sem `try/except` isso é uma exceção **invisível** e uma barra de
+>    progresso travada para sempre na tela do usuário.
+> 2. Se o `rmtree` da exclusão roda **antes** de a thread gravar o arquivo, a
+>    thread **recria a pasta** — órfão permanente em disco que nenhuma exclusão
+>    futura alcança.
+>
+> Trate os dois: reconfira a existência da sessão dentro da própria transação do
+> worker (ou trate `IntegrityError` como "sessão excluída — aborta limpo, apaga o
+> arquivo recém-gravado e encerra a task com um passo explicativo"), e registre as
+> threads em `_wiki_indexing_threads` (o mecanismo da Task 3, em
+> `routes/wikitoca.py`) para que a exclusão possa dar `join` antes do `rmtree`.
+
 > **Restrição de projeto — não reaproveite `wiki_documents` aqui.** Os materiais
 > de treinamento vão para `wiki_training_documents`, tabela própria. Os laços de
 > snapshot do RAG do iToca em `app.py:5039` e `app.py:5463` (este já comentado
@@ -1415,6 +1434,16 @@ git commit -m "feat(wikitoca): upload de documentos da capacitacao com titulo ge
 > explícita de "Base Update" do usuário — é pesado demais para este caso e
 > introduziria um botão que o spec da Capacitação não prevê. Um dicionário de
 > módulo protegido por lock basta.
+>
+> **Antes de escrever a cascata, separe o núcleo puro das rotas.** Depois da Task 7
+> o arquivo passa de 700 linhas misturando duas coisas: helpers puros sem Flask
+> (`_wiki_rank_chunks`, `_wiki_split_chunks`, `_wiki_tokens`) e handlers HTTP. A
+> lógica de valor desta task — montagem de contexto, prompts, decisão de escalar —
+> é justamente o que dá para testar **sem** `client`, direto por função. Extraia os
+> helpers puros e as funções novas de montagem de prompt para um bloco claramente
+> separado no topo do arquivo (ou, se ficar grande, para um módulo próprio que não
+> registre rotas), e mantenha os handlers finos. Isso é o que permite testar a
+> cascata com `_llm_prompt` mockado sem subir requisição HTTP.
 >
 > **Não conte com o corte por score para discriminar relevância.** Medido na revisão
 > da Task 5: o menor score possível para um bloco que casa pelo menos um termo
@@ -2354,6 +2383,10 @@ Em `public/js/wikitoca.js`, no fim do arquivo (antes do `DOMContentLoaded`):
                 return;
             }
             const ativa = capCurrentSession?.session?.id;
+            // O título vem do banco sem sanitização — o backend aceita HTML cru
+            // (verificado na revisão da Task 6: '<img src=x onerror=alert(1)>' é
+            // armazenado literal). Todo campo do WikiToca já passa por escapeHtml;
+            // aqui não é exceção.
             el.innerHTML = capSessions.map(s => `
                 <div class="cap-session-card${s.id === ativa ? ' active' : ''}" onclick="selectCapacitacaoSession(${s.id})">
                     <h5>${escapeHtml(s.title || 'Nova capacitação')}</h5>
