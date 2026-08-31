@@ -805,9 +805,13 @@ WIKI_MIN_CHUNK_SCORE = 1.0
 
 
 def _wiki_tokens(texto):
-    """Termos significativos de um texto, normalizados."""
-    import re as _re
-    brutos = _re.split(r'[^a-z0-9]+', _wiki_norm(texto))
+    """Termos significativos de um texto, normalizados.
+
+    `_wiki_norm` (definida em routes/wikitoca.py, disponível aqui pelo namespace
+    compartilhado) já derruba acento, caixa e caracteres de formatação, então o
+    split por `[^a-z0-9]+` basta.
+    """
+    brutos = re.split(r'[^a-z0-9]+', _wiki_norm(texto))
     return [t for t in brutos if len(t) >= 3 and t not in _WIKI_STOPWORDS]
 
 
