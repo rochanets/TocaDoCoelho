@@ -1396,6 +1396,25 @@ git commit -m "feat(wikitoca): upload de documentos da capacitacao com titulo ge
 - Modify: `routes/wikitoca_capacitacao.py` (worker e rota novos, no fim do arquivo)
 - Test: `tests/test_wikitoca.py`
 
+> **Requisito de performance: memoize a tokenização do acervo.** Medido na Task 5,
+> com 50 documentos de 100 KB (4.800 blocos) e pergunta de 8 termos,
+> `_wiki_rank_chunks` leva **~1,66 s** — e **~1,63 s** disso é a tokenização
+> (`_wiki_tokens` uma vez por bloco), não o laço de pontuação. O passo 1 da cascata
+> (documentos da instância) é barato, porque são poucos arquivos; o problema é o
+> passo 2, que varre `wiki_entries` + todos os `wiki_documents`. Sem cache, **toda
+> mensagem de chat** paga esse custo antes de sequer chamar o LLM.
+>
+> Memoize em processo os blocos tokenizados do passo 2, com chave que inclua a
+> identidade e a versão de cada documento (`id` + `extracted_at` para
+> `wiki_documents`, `id` + `updated_at` para `wiki_entries`), invalidando quando
+> algum documento muda. Assim só a primeira pergunta depois de uma alteração paga
+> o custo.
+>
+> **Não** replique aqui o padrão do iToca (`_itoca_get_cached_base`, `app.py:5673`),
+> que serializa um snapshot pré-normalizado em `app_settings` e depende de uma ação
+> explícita de "Base Update" do usuário — é pesado demais para este caso e
+> introduziria um botão que o spec da Capacitação não prevê. Um dicionário de
+> módulo protegido por lock basta.
 - [ ] **Step 1: Escrever o teste que falha**
 
 Acrescentar em `tests/test_wikitoca.py`:
