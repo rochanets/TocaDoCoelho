@@ -823,3 +823,286 @@ def test_rota_de_upload_serve_arquivo_legitimo_e_bloqueia_travessia(client):
 
     fuga = client.get('/uploads/wikitoca/capacitacao/../../../app.py')
     assert fuga.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 7 — upload de documentos da capacitação, indexação em background e
+# título gerado por IA.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _limpa_cache_tesseract_se_existir():
+    """Vários testes de OCR substituem `toca._itoca_find_tesseract_cmd` inteiro
+    por uma lambda via monkeypatch — nesse instante o nome no módulo não é
+    mais o objeto decorado com `lru_cache` e não tem `.cache_clear()`. Como a
+    ordem de teardown entre este fixture e o `monkeypatch` do próprio teste
+    não é garantida, esta função tem que tolerar os dois estados."""
+    limpar = getattr(toca._itoca_find_tesseract_cmd, 'cache_clear', None)
+    if limpar:
+        limpar()
+
+
+@pytest.fixture(autouse=True)
+def _limpa_cache_do_tesseract():
+    """`_itoca_find_tesseract_cmd` agora é `functools.lru_cache` (Task 7 —
+    evita um subprocess 'tesseract --version' por arquivo num lote). Os
+    testes que chamam a função de verdade (sem monkeypatch) não podem herdar
+    o resultado cacheado de um teste anterior rodado em outra ordem."""
+    _limpa_cache_tesseract_se_existir()
+    yield
+    _limpa_cache_tesseract_se_existir()
+
+
+def _sobe_doc_capacitacao(client, session_id, nome='manual.docx',
+                          texto='Prazo de aprovacao e de cinco dias uteis'):
+    from docx import Document
+    buf = io.BytesIO()
+    doc = Document()
+    doc.add_paragraph(texto)
+    doc.save(buf)
+    buf.seek(0)
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{session_id}/documents',
+                       data={'files': (buf, nome)},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 202, resp.get_json()
+    return resp.get_json()
+
+
+def _doc_capacitacao_bytes(texto):
+    from docx import Document
+    buf = io.BytesIO()
+    doc = Document()
+    doc.add_paragraph(texto)
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def test_upload_de_documento_da_capacitacao_indexa_e_gera_titulo(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Politica de Aprovacao de Contratos')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['documents'][0]['extract_status'] == 'ok'
+    assert detalhe['session']['title'] == 'Politica de Aprovacao de Contratos'
+    assert detalhe['session']['title_source'] == 'ai'
+
+
+def test_titulo_manual_nao_e_sobrescrito_pela_ia(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo Gerado Pela IA')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={'title': 'Meu Nome'}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Meu Nome'
+
+
+def test_titulo_nao_muda_quando_llm_nao_esta_configurado(client, monkeypatch):
+    """_llm_prompt devolve None quando nenhum provider está configurado (SAI
+    e OpenRouter ausentes) -- não deve virar exceção nem título vazio/'None'."""
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: None)
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Nova capacitação'
+    assert detalhe['session']['title_source'] == 'ai'
+
+
+def test_titulo_da_ia_e_limpo_de_aspas_quebras_de_linha_e_truncado(client, monkeypatch):
+    bruto = '"Politica de Contratos"\nLinha extra que deve ser descartada'
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: bruto)
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Politica de Contratos'
+
+
+def test_titulo_da_ia_gigante_e_truncado_em_120_caracteres(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'x' * 500)
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert len(detalhe['session']['title']) == 120
+
+
+def test_extensao_nao_aceita_na_capacitacao_e_rejeitada(client):
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
+                       data={'files': (io.BytesIO(b'a,b\n1,2\n'), 'planilha.xlsx')},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 400
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_INVALID_TYPE'
+
+
+def test_upload_com_lote_misto_aceita_o_valido_e_ignora_o_rejeitado(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
+                       data={'files': [
+                           (_doc_capacitacao_bytes('conteudo valido'), 'manual.docx'),
+                           (io.BytesIO(b'a,b\n1,2\n'), 'planilha.xlsx'),
+                       ]},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 202, resp.get_json()
+    assert len(resp.get_json()['documents']) == 1
+    assert resp.get_json()['documents'][0]['original_name'] == 'manual.docx'
+
+
+def test_upload_sem_nenhum_arquivo_e_rejeitado(client):
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
+                       data={},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 400
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_NO_FILE'
+
+
+def test_upload_em_instancia_inexistente_e_404(client):
+    resp = client.post('/api/wikitoca/capacitacao/sessions/999/documents',
+                       data={'files': (io.BytesIO(b'conteudo'), 'a.docx')},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 404
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_NOT_FOUND'
+
+
+def test_upload_de_arquivo_vazio_nao_trava_a_indexacao(client, monkeypatch):
+    """Um .pdf de 0 bytes é um tipo aceito mas ilegível -- a extração precisa
+    terminar com extract_status de erro/vazio, sem exceção não tratada."""
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
+                       data={'files': (io.BytesIO(b''), 'vazio.pdf')},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 202, resp.get_json()
+    assert resp.get_json()['documents'][0]['file_size'] == 0
+
+    resultado = _espera_task(client, resp.get_json()['task_id'], esperar_erro=True)
+    assert resultado['status'] == 'done'
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['documents'][0]['extract_status'] in ('error', 'empty')
+
+
+def test_upload_com_nome_que_secure_filename_esvazia_ainda_gera_arquivo_valido(client, monkeypatch):
+    """secure_filename('???.pdf') sozinho devolveria só '.pdf' (nome vazio) --
+    o prefixo cap_<timestamp>_<uuid> garante um nome de arquivo não vazio e
+    único mesmo quando o nome original não sobrevive à sanitização."""
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
+                       data={'files': (_doc_capacitacao_bytes('conteudo'), '???.pdf')},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 202, resp.get_json()
+    doc = resp.get_json()['documents'][0]
+    assert doc['file_name']
+    assert doc['original_name'] == '???.pdf'
+    assert (toca.WIKI_TRAINING_UPLOAD_DIR / str(sess['id']) / doc['file_name']).exists()
+
+
+def test_upload_multiplo_com_nomes_iguais_nao_colide_no_disco(client, monkeypatch):
+    """Dois arquivos com o mesmo nome no mesmo request precisam sobreviver os
+    dois em disco, com conteúdos distintos -- não pode haver sobrescrita."""
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
+                       data={'files': [
+                           (_doc_capacitacao_bytes('conteudo um'), 'manual.docx'),
+                           (_doc_capacitacao_bytes('conteudo dois, bem diferente do primeiro'), 'manual.docx'),
+                       ]},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 202, resp.get_json()
+    docs = resp.get_json()['documents']
+    assert len(docs) == 2
+    assert docs[0]['file_name'] != docs[1]['file_name']
+
+    _espera_task(client, resp.get_json()['task_id'])
+
+    pasta = toca.WIKI_TRAINING_UPLOAD_DIR / str(sess['id'])
+    arquivos = sorted(pasta.iterdir())
+    assert len(arquivos) == 2
+    conteudos = {p.read_bytes() for p in arquivos}
+    assert len(conteudos) == 2
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert {d['extract_status'] for d in detalhe['documents']} == {'ok'}
+
+
+def test_exclui_documento_da_capacitacao(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    doc_id = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()['documents'][0]['id']
+    assert client.delete(f'/api/wikitoca/capacitacao/documents/{doc_id}').status_code == 200
+    assert client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()['documents'] == []
+
+
+def test_excluir_documento_inexistente_e_404(client):
+    resp = client.delete('/api/wikitoca/capacitacao/documents/999')
+    assert resp.status_code == 404
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_DOC_NOT_FOUND'
+
+
+def test_exclui_documento_de_sessao_ja_excluida_e_404(client):
+    """A sessão sendo excluída já apaga os documentos em cascata -- excluir o
+    documento de novo (ex.: clique duplo do usuário) precisa dar 404, não 500."""
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    conn = toca.get_db()
+    conn.execute(
+        '''INSERT INTO wiki_training_documents
+           (session_id, file_name, original_name, file_url, file_ext, file_size, extract_status)
+           VALUES (?, 'doc.txt', 'doc.txt', '/uploads/wikitoca/capacitacao/1/doc.txt', '.txt', 10, 'ok')''',
+        (sess['id'],))
+    conn.commit()
+    doc_id = conn.execute('SELECT id FROM wiki_training_documents WHERE session_id=?',
+                          (sess['id'],)).fetchone()[0]
+    conn.close()
+
+    assert client.delete(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').status_code == 200
+
+    resp = client.delete(f'/api/wikitoca/capacitacao/documents/{doc_id}')
+    assert resp.status_code == 404
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_DOC_NOT_FOUND'
+
+
+def test_exclusao_da_instancia_durante_a_indexacao_nao_trava_a_task_nem_recria_pasta(client, monkeypatch):
+    """Corrida medida na revisão de qualidade da Task 7: se a instância é
+    excluída enquanto a thread de indexação ainda está processando um
+    documento, a task precisa terminar (não pode ficar 'processing' para
+    sempre) e a pasta de upload não pode voltar a existir depois disso."""
+    real_index = toca._wiki_index_document
+
+    def _index_devagar(*args, **kwargs):
+        time.sleep(0.3)
+        return real_index(*args, **kwargs)
+
+    monkeypatch.setattr(toca, '_wiki_index_document', _index_devagar)
+
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+
+    assert client.delete(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').status_code == 200
+
+    resultado = _espera_task(client, payload['task_id'], esperar_erro=True)
+    assert resultado.get('status') in ('done', 'error')
+
+    pasta = toca.WIKI_TRAINING_UPLOAD_DIR / str(sess['id'])
+    assert not pasta.exists()

@@ -26,6 +26,7 @@ import base64
 import mimetypes
 import uuid
 import hashlib
+import functools
 from collections import deque
 from datetime import datetime, timedelta, date
 from io import BytesIO
@@ -4710,12 +4711,24 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
     return enriched
 
 
+@functools.lru_cache(maxsize=1)
 def _itoca_find_tesseract_cmd():
     """Localiza o binário do tesseract no sistema.
     Ordem de busca:
       1. Diretório do próprio executável (bundled com o Toca do Coelho via NSIS)
       2. PATH do sistema
       3. Caminhos padrão do Windows
+
+    Cacheado (lru_cache): sem isso, um lote de N imagens/PDFs (ex.: upload de
+    documentos da Capacitação, Task 7) disparava um `subprocess.run(['tesseract',
+    '--version'])` por arquivo só para redescobrir o mesmo caminho já achado.
+    A disponibilidade do binário não muda durante a vida do processo, então
+    cachear por processo é seguro. Testes que monkeypatcham esta função
+    (`monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', ...)`) substituem
+    o nome inteiro no módulo, então não veem o cache do objeto original — mas
+    ele ainda pode contaminar o teste real (não mockado) se rodar antes de um
+    resultado desatualizado importar; `_itoca_find_tesseract_cmd.cache_clear()`
+    está disponível para quem precisar dessa garantia entre testes.
     """
     import subprocess
 
@@ -4760,6 +4773,27 @@ def _itoca_find_tesseract_cmd():
                 return p
 
     return None
+
+
+def _itoca_ocr_image(img, tess_cmd, timeout=None):
+    """OCR de uma única imagem PIL já carregada, tentando o pacote de idioma
+    'por+eng' com fallback para 'eng' (comum faltar o pacote de português em
+    máquinas novas). Núcleo compartilhado entre o ramo de PDF escaneado e o
+    de imagem solta de `_itoca_extract_text_from_file` — os dois repetiam
+    "atribuir o global tesseract_cmd → tentar por+eng → cair para eng" quase
+    palavra por palavra.
+
+    Não decide se o Tesseract está disponível (isso é `_itoca_find_tesseract_cmd`,
+    chamado por quem chama esta função) nem loga nada: cada chamador mantém sua
+    própria mensagem de contexto (nome do arquivo, número da página) e decide o
+    que fazer com uma eventual exceção — aqui a exceção do fallback 'eng' é
+    propagada, não engolida, para não mudar esse contrato dos dois chamadores.
+    """
+    pytesseract.pytesseract.tesseract_cmd = tess_cmd
+    try:
+        return pytesseract.image_to_string(img, lang='por+eng', timeout=timeout)
+    except Exception:
+        return pytesseract.image_to_string(img, lang='eng', timeout=timeout)
 
 
 def _itoca_extract_text_from_file(file_path_str):
@@ -4823,7 +4857,6 @@ def _itoca_extract_text_from_file(file_path_str):
             if not extracted and PYTESSERACT_AVAILABLE and (PYPDFIUM2_AVAILABLE or PDF2IMAGE_AVAILABLE):
                 tess_cmd = _itoca_find_tesseract_cmd()
                 if tess_cmd:
-                    pytesseract.pytesseract.tesseract_cmd = tess_cmd
                     images = []
                     try:
                         if PYPDFIUM2_AVAILABLE:
@@ -4840,10 +4873,7 @@ def _itoca_extract_text_from_file(file_path_str):
                         try:
                             ocr_parts = []
                             for img in images:
-                                try:
-                                    ocr_text = pytesseract.image_to_string(img, lang='por+eng')
-                                except Exception:
-                                    ocr_text = pytesseract.image_to_string(img, lang='eng')
+                                ocr_text = _itoca_ocr_image(img, tess_cmd)
                                 if ocr_text.strip():
                                     ocr_parts.append(ocr_text.strip())
                             if ocr_parts:
@@ -4890,21 +4920,13 @@ def _itoca_extract_text_from_file(file_path_str):
             if PYTESSERACT_AVAILABLE and PIL_AVAILABLE:
                 tess_cmd = _itoca_find_tesseract_cmd()
                 if tess_cmd:
-                    pytesseract.pytesseract.tesseract_cmd = tess_cmd
                     try:
                         with PILImage.open(str(path)) as img:
                             try:
                                 img = ImageOps.exif_transpose(img)
                             except Exception:
                                 pass
-                            try:
-                                ocr_text = pytesseract.image_to_string(
-                                    img, lang='por+eng', timeout=ITOCA_OCR_TIMEOUT_SECONDS)
-                            except Exception as e6:
-                                logger.debug(f'[iToca] OCR com lang=por+eng falhou em {path.name}, '
-                                             f'caindo para lang=eng: {e6}')
-                                ocr_text = pytesseract.image_to_string(
-                                    img, lang='eng', timeout=ITOCA_OCR_TIMEOUT_SECONDS)
+                            ocr_text = _itoca_ocr_image(img, tess_cmd, timeout=ITOCA_OCR_TIMEOUT_SECONDS)
                         if ocr_text.strip():
                             text_parts.append(ocr_text.strip())
                     except Exception as e7:

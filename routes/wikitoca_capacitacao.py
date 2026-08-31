@@ -378,3 +378,206 @@ def clear_wiki_capacitacao_messages(session_id):
 @app.route('/uploads/wikitoca/capacitacao/<path:filename>')
 def serve_wikitoca_training_upload(filename):
     return send_from_directory(str(WIKI_TRAINING_UPLOAD_DIR), filename)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Upload de documentos + indexação em background + título gerado por IA.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _wiki_cap_generate_title(session_id):
+    """Gera o título da instância a partir do primeiro documento indexado.
+    Só age quando title_source ainda é 'ai' — renomear pelo usuário (PUT
+    .../sessions/<id>) trava isso, e o WHERE title_source='ai' do UPDATE
+    abaixo é quem garante isso mesmo se o usuário renomear NO MEIO da
+    indexação (entre este SELECT e aquele UPDATE)."""
+    sess = _wiki_cap_session_row(session_id)
+    if not sess or (sess.get('title_source') or 'ai') != 'ai':
+        return
+    conn = get_db()
+    row = dict_from_row(conn.execute(
+        '''SELECT original_name, extracted_text FROM wiki_training_documents
+           WHERE session_id=? AND extract_status='ok' ORDER BY id LIMIT 1''', (session_id,)).fetchone())
+    conn.close()
+    if not row or not (row.get('extracted_text') or '').strip():
+        return
+    trecho = (row['extracted_text'] or '')[:3000]
+    bruto = _llm_prompt(
+        'Você recebe o início de um documento de treinamento corporativo. '
+        'Responda SOMENTE com um título curto em português do Brasil, no máximo 6 palavras, '
+        'sem aspas, sem ponto final e sem nenhum texto além do título.\n\n'
+        f'Arquivo: {row["original_name"]}\n\nConteúdo:\n{trecho}',
+        log_tag='WikiCapacitacao'
+    )
+    # bruto pode vir None (nenhum provider de LLM configurado), com aspas,
+    # múltiplas linhas (o modelo às vezes acrescenta uma explicação depois do
+    # título pedido) ou, no limite, centenas de caracteres — a PRIMEIRA linha
+    # é o título; as aspas são removidas dela (não do texto bruto inteiro
+    # antes de partir em linhas — um `bruto.strip('"')` ali só descasca as
+    # pontas do bloco todo, e a linha 1 isolada pode continuar com aspas
+    # coladas quando a linha seguinte não fecha o mesmo par). O [:120] cobre
+    # o resto.
+    primeira_linha = (bruto or '').strip().splitlines()[0].strip() if bruto else ''
+    titulo = primeira_linha.strip('"\'').strip() if primeira_linha else ''
+    if not titulo:
+        logger.info(f'[WikiToca] Nenhum LLM respondeu o título da capacitação {session_id}; mantendo o padrão.')
+        return
+    titulo = titulo[:120]
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''UPDATE wiki_training_sessions SET title=?, title_source='ai',
+                 updated_at=CURRENT_TIMESTAMP WHERE id=? AND title_source='ai' ''', (titulo, session_id))
+    conn.commit()
+    conn.close()
+    logger.info(f'[WikiToca] Título da capacitação {session_id} definido pela IA: {titulo}')
+
+
+def _wiki_cap_index_async(task_id, session_id, doc_ids):
+    """Indexa os documentos recém-enviados de uma instância e, ao final,
+    tenta gerar o título pela IA a partir do primeiro documento indexado.
+
+    Reconfere a existência da sessão antes de tocar em cada documento: se o
+    usuário excluir a instância enquanto esta thread roda (`DELETE
+    .../sessions/<id>` dá `rmtree` na pasta de upload e `DELETE ... CASCADE`
+    nas linhas de `wiki_training_documents`), duas coisas ruins podem
+    acontecer sem essa guarda — medido, não hipotético: (1) o `UPDATE` de
+    `_wiki_index_document` numa linha já apagada dá `rowcount=0` em
+    silêncio, sem lançar nada para o `except` genérico pegar, e a task fica
+    'processing' para sempre (barra de progresso do usuário girando à toa);
+    (2) se o `rmtree` da exclusão corre antes desta thread terminar de ler o
+    arquivo, qualquer novo acesso à pasta a essa altura recriaria um órfão em
+    disco que nenhuma exclusão futura mais alcança (o `session_id` já não
+    existe para outro DELETE mirar). Parar o laço assim que a sessão some
+    evita as duas coisas de uma vez: nada mais é lido/escrito na pasta, e a
+    task termina de forma explícita em vez de ficar pendurada.
+
+    'done' (não 'error') quando a sessão some no meio: a exclusão foi uma
+    ação legítima do usuário, não uma falha — um status 'error' sugeriria ao
+    frontend que algo quebrou e valeria a pena mostrar isso ao usuário."""
+    try:
+        total = len(doc_ids)
+        for pos, doc_id in enumerate(doc_ids, start=1):
+            if not _wiki_cap_session_row(session_id):
+                logger.info(f'[WikiToca] Capacitação {session_id} excluída durante a indexação; '
+                            f'encerrando a task {task_id} sem processar os documentos restantes.')
+                _bg_task_set(task_id, {'status': 'done', 'step': 'Capacitação excluída.',
+                                       'progress': 100, 'result': {'cancelled': True}})
+                return
+            conn = get_db()
+            row = dict_from_row(conn.execute(
+                'SELECT file_name, original_name FROM wiki_training_documents WHERE id=?',
+                (doc_id,)).fetchone())
+            conn.close()
+            if not row:
+                continue
+            _bg_task_set(task_id, {
+                'step': f'Lendo {pos} de {total} — {row["original_name"]}',
+                'progress': int(5 + (pos - 1) * 80 / max(1, total)),
+            })
+            caminho = WIKI_TRAINING_UPLOAD_DIR / str(session_id) / row['file_name']
+            _wiki_index_document('wiki_training_documents', doc_id, caminho)
+
+        if not _wiki_cap_session_row(session_id):
+            _bg_task_set(task_id, {'status': 'done', 'step': 'Capacitação excluída.',
+                                   'progress': 100, 'result': {'cancelled': True}})
+            return
+
+        _bg_task_set(task_id, {'step': 'Definindo o título da capacitação...', 'progress': 90})
+        _wiki_cap_generate_title(session_id)
+
+        _bg_task_set(task_id, {'status': 'done', 'step': 'Concluído!', 'progress': 100,
+                               'result': {'session_id': session_id}})
+    except Exception as e:
+        logger.exception(f'[WikiToca] _wiki_cap_index_async: {e}')
+        _bg_task_set(task_id, {'status': 'error', 'error': str(e), 'progress': 100})
+    finally:
+        _bg_task_cleanup(task_id)
+
+
+@app.route('/api/wikitoca/capacitacao/sessions/<int:session_id>/documents', methods=['POST'])
+def upload_wiki_capacitacao_documents(session_id):
+    logger.debug(f'[DEBUG] POST .../capacitacao/sessions/{session_id}/documents chamado')
+    try:
+        if not _wiki_cap_session_row(session_id):
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+        files = request.files.getlist('files')
+        if not files or all(not f.filename for f in files):
+            return api_error(400, 'WIKI_CAP_NO_FILE', 'Nenhum arquivo enviado.')
+
+        pasta = WIKI_TRAINING_UPLOAD_DIR / str(session_id)
+        pasta.mkdir(parents=True, exist_ok=True)
+        conn = get_db()
+        c = conn.cursor()
+        created = []
+        for f in files:
+            if not f.filename:
+                continue
+            ext = Path(f.filename).suffix.lower()
+            if ext not in ALLOWED_WIKI_TRAINING_EXTENSIONS:
+                logger.warning(f'[WikiToca] Extensão rejeitada na capacitação: {ext}')
+                continue
+            original_name = f.filename
+            # uuid no nome (não só o timestamp em segundos): dois arquivos
+            # enviados no mesmo request podem cair no mesmo segundo -- caso
+            # realista em upload múltiplo -- e sem isso o segundo sobrescreve
+            # o primeiro em disco, deixando duas linhas no banco apontando
+            # para o mesmo arquivo físico.
+            safe_name = secure_filename(
+                f'cap_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_{original_name}')
+            save_path = pasta / safe_name
+            f.save(str(save_path))
+            c.execute(
+                '''INSERT INTO wiki_training_documents
+                   (session_id, file_name, original_name, file_url, file_ext, file_size,
+                    extract_status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)''',
+                (session_id, safe_name, original_name,
+                 f'/uploads/wikitoca/capacitacao/{session_id}/{safe_name}',
+                 ext, save_path.stat().st_size)
+            )
+            conn.commit()
+            created.append(dict_from_row(c.execute(
+                'SELECT id, session_id, file_name, original_name, file_url, file_ext, '
+                'file_size, extract_status, created_at FROM wiki_training_documents WHERE id=?',
+                (c.lastrowid,)).fetchone()))
+        conn.close()
+
+        if not created:
+            return api_error(400, 'WIKI_CAP_INVALID_TYPE',
+                             'Nenhum arquivo válido enviado. Tipos aceitos: PDF, DOC, DOCX, PNG, JPG.')
+
+        task_id = uuid.uuid4().hex
+        _bg_task_register_persistent(task_id, 'wiki_indexacao')
+        _bg_task_set(task_id, {'status': 'processing', 'step': 'Enviando arquivos...', 'progress': 5})
+        thread = threading.Thread(target=_wiki_cap_index_async,
+                                  args=(task_id, session_id, [d['id'] for d in created]), daemon=True)
+        _wiki_track_thread(thread)
+        thread.start()
+        return jsonify({'documents': created, 'task_id': task_id}), 202
+    except Exception as e:
+        logger.exception(f'[ERROR] POST .../capacitacao/sessions/{session_id}/documents: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_UPLOAD_ERROR', 'Erro ao enviar documentos.', details=str(e))
+
+
+@app.route('/api/wikitoca/capacitacao/documents/<int:document_id>', methods=['DELETE'])
+def delete_wiki_capacitacao_document(document_id):
+    logger.debug(f'[DEBUG] DELETE .../capacitacao/documents/{document_id} chamado')
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        row = dict_from_row(c.execute(
+            'SELECT session_id, file_name FROM wiki_training_documents WHERE id=?', (document_id,)).fetchone())
+        if not row:
+            conn.close()
+            return api_error(404, 'WIKI_CAP_DOC_NOT_FOUND', 'Documento não encontrado.')
+        c.execute('DELETE FROM wiki_training_documents WHERE id=?', (document_id,))
+        conn.commit()
+        conn.close()
+        caminho = WIKI_TRAINING_UPLOAD_DIR / str(row['session_id']) / row['file_name']
+        if caminho.exists():
+            caminho.unlink()
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] DELETE .../capacitacao/documents/{document_id}: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_DOC_DELETE_ERROR', 'Erro ao excluir documento.', details=str(e))
