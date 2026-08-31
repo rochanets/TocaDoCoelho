@@ -1415,6 +1415,19 @@ git commit -m "feat(wikitoca): upload de documentos da capacitacao com titulo ge
 > explícita de "Base Update" do usuário — é pesado demais para este caso e
 > introduziria um botão que o spec da Capacitação não prevê. Um dicionário de
 > módulo protegido por lock basta.
+>
+> **Não conte com o corte por score para discriminar relevância.** Medido na revisão
+> da Task 5: o menor score possível para um bloco que casa pelo menos um termo
+> significativo é **1,4055**, e `_WIKI_MIN_CHUNK_SCORE` é 1.0 — o limiar é
+> matematicamente inerte. Na prática, `_wiki_rank_chunks` devolve `[]` apenas quando
+> as fontes **não têm nenhum termo significativo em comum** com a pergunta. Quem
+> julga relevância é o `INSUFICIENTE` da IA; o corte economiza a chamada só no caso
+> extremo. Isso é a direção segura: o falso positivo custa uma chamada de LLM, o
+> falso negativo mandaria o usuário para a web tendo a resposta nos próprios
+> documentos. Se você quiser um limiar que discrimine de verdade, saiba que o IDF é
+> **local à chamada** — o mesmo match perfeito mediu 27,34 num acervo de 6.667 blocos
+> e 4,22 num de 1 bloco —, então nenhum valor absoluto funciona sem normalizar o
+> score primeiro. Não faça isso nesta task.
 - [ ] **Step 1: Escrever o teste que falha**
 
 Acrescentar em `tests/test_wikitoca.py`:
