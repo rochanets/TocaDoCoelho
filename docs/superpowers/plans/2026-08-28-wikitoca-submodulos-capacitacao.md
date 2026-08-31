@@ -2633,6 +2633,12 @@ git commit -m "feat(wikitoca): chips de documentos e upload na capacitacao"
 Em `public/js/wikitoca.js`, depois de `deleteCapacitacaoDocument`:
 
 ```javascript
+        // `source_kind` tem QUATRO valores. O quarto, 'none', foi criado na Task 8
+        // para a resposta "não encontrei em lugar nenhum": marcar essa mensagem
+        // como 'web' acenderia um selo de "resposta da internet" numa mensagem que
+        // diz exatamente o contrário. Ausência da chave aqui = sem selo, que é o
+        // comportamento desejado — o `CAP_SOURCE_BADGES[m.source_kind]` devolve
+        // undefined e o template já testa por isso.
         const CAP_SOURCE_BADGES = {
             documents: { icon: '📄', label: 'Documentos desta capacitação', cls: '' },
             wiki:      { icon: '📚', label: 'Base WikiToca', cls: '' },
