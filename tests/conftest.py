@@ -9,6 +9,30 @@ import app as toca  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _bloqueia_chamada_real_de_llm(monkeypatch):
+    """Impede que a suíte chame o LLM de verdade pela rede.
+
+    Este ambiente tem a integração SAI acessível: um teste da Task 7 que
+    esquecera de mockar `_llm_prompt` chamou o provider real e passou — gastando
+    cota do usuário e ficando dependente de rede e de resposta não
+    determinística. O modo de falha é silencioso, que é o pior tipo: o teste
+    fica verde e ninguém percebe.
+
+    Qualquer teste que exercite um caminho de IA precisa mockar `_llm_prompt`
+    explicitamente (`monkeypatch.setattr(toca, '_llm_prompt', ...)`), o que
+    sobrescreve este bloqueio. Se este erro aparecer, é porque um caminho de IA
+    ficou sem mock — o conserto é mockar no teste, nunca afrouxar esta guarda.
+    """
+    def _proibido(*args, **kwargs):
+        raise AssertionError(
+            'Chamada real de _llm_prompt durante os testes. Mocke explicitamente no teste: '
+            "monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'resposta fake')"
+        )
+
+    monkeypatch.setattr(toca, '_llm_prompt', _proibido)
+
+
+@pytest.fixture(autouse=True)
 def _isola_diretorios_de_upload(tmp_path, monkeypatch):
     """Mantém os uploads dos testes fora do diretório de dados real do usuário.
 
