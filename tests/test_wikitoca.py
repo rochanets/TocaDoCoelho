@@ -1,3 +1,4 @@
+import html
 import io
 import sqlite3
 import time
@@ -362,11 +363,31 @@ def test_busca_de_documentos_casa_no_conteudo_e_devolve_snippet(client):
 
 
 def test_busca_de_documentos_ignora_acento_e_caixa(client):
-    payload = _sobe_documento(client, nome='politica.docx',
+    """Nome de arquivo neutro de propósito: se o nome contivesse 'politica',
+    `em_nome` bateria sozinho e o teste passaria mesmo com a busca por
+    conteúdo completamente quebrada, sem afirmar nada sobre o `snippet`."""
+    payload = _sobe_documento(client, nome='arquivo-x.docx',
                               texto='Politica de reembolso para viagens internacionais.')
     _espera_task(client, payload['task_id'])
 
-    assert len(client.get('/api/wikitoca/documents?q=POLÍTICA').get_json()) == 1
+    rows = client.get('/api/wikitoca/documents?q=POLÍTICA').get_json()
+
+    assert len(rows) == 1
+    assert '<mark>Politica</mark>' in rows[0]['snippet']
+
+
+def test_busca_nao_devolve_o_texto_extraido_na_resposta(client):
+    """A Task 3 já trava essa invariante na listagem SEM busca (a coluna nem
+    entra no SELECT nesse caminho). Aqui é o caminho perigoso: COM `q`, a
+    coluna é lida do banco e a única proteção é o `r.pop('extracted_text',
+    None)` -- sem esse teste, apagar o pop deixa tudo verde e a busca passa a
+    devolver o conteúdo integral de cada documento."""
+    payload = _sobe_documento(client, texto='Prazo de cinco dias uteis')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=prazo').get_json()
+
+    assert rows and 'extracted_text' not in rows[0]
 
 
 def test_filtro_por_tipo_de_arquivo(client):
@@ -377,22 +398,42 @@ def test_filtro_por_tipo_de_arquivo(client):
     assert client.get('/api/wikitoca/documents?ext=pdf').get_json() == []
 
 
-def test_busca_escapa_conteudo_malicioso_no_snippet(client):
-    """O snippet e a unica string HTML que a API devolve, e a Task 11 vai
-    injeta-lo sem escapar de novo -- se o conteudo do documento tiver uma tag,
-    ela precisa virar entidade HTML, sobrando so o <mark> que nos inserimos."""
-    payload = _sobe_documento(
-        client, nome='malicioso.docx',
-        texto='Antes <script>alert(1)</script> depois do trecho perigoso.')
+@pytest.mark.parametrize('nome, texto, termo_busca, termo_destacado', [
+    # Tag de script clássica.
+    ('script.docx', 'Antes <script>alert(1)</script> depois do trecho perigoso.',
+     'alert', 'alert'),
+    # Atributo de evento num elemento sem fechamento explícito de tag.
+    ('img.docx', 'Clique aqui: <img src=x onerror=alert(1)> para testar.',
+     'onerror', 'onerror'),
+    # Aspas simples e duplas -- html.escape com quote=True (padrão) escapa as duas.
+    ('aspas.docx', 'Ela disse: "cinco dias" ou \'cinco dias\' uteis, tanto faz.',
+     "'cinco dias'", "'cinco dias'"),
+    # O próprio texto "<mark>" aparece literalmente dentro do documento --
+    # tem que ser escapado igual a qualquer outra tag, mesmo coincidindo com
+    # a tag que a busca insere.
+    ('mark-literal.docx', 'O manual usa <mark>negrito</mark> como convencao de estilo.',
+     'mark', 'mark'),
+    # O termo de busca em si contém HTML.
+    ('termo-com-html.docx', 'Config: <b>importante</b> revisar antes de aprovar.',
+     '<b>', '<b>'),
+])
+def test_busca_escapa_conteudo_malicioso_no_snippet(client, nome, texto, termo_busca, termo_destacado):
+    """O snippet é a única string HTML que a API devolve, e a Task 11 vai
+    injetá-lo sem escapar de novo -- é a invariante mais crítica desta task.
+    Fora do próprio `<mark>` que a busca insere, nenhum '<' ou '>' cru pode
+    sobrar no snippet, não importa o que o documento (ou o termo buscado)
+    contenha."""
+    payload = _sobe_documento(client, nome=nome, texto=texto)
     _espera_task(client, payload['task_id'])
 
-    rows = client.get('/api/wikitoca/documents?q=alert').get_json()
+    rows = client.get('/api/wikitoca/documents', query_string={'q': termo_busca}).get_json()
 
     assert len(rows) == 1
     snippet = rows[0]['snippet']
-    assert '<script>' not in snippet
-    assert '&lt;script&gt;' in snippet
-    assert '<mark>alert</mark>' in snippet
+    marcado = f'<mark>{html.escape(termo_destacado)}</mark>'
+    assert marcado in snippet
+    resto = snippet.replace(marcado, '')
+    assert '<' not in resto and '>' not in resto
 
 
 def test_snippet_com_ligadura_antes_do_termo_nao_desloca_o_destaque(client):
@@ -447,3 +488,85 @@ def test_snippet_com_termo_que_normaliza_para_vazio_nao_quebra():
     e o mapa de índices seria acessado fora do range, virando 500 na busca."""
     assert toca._wiki_snippet('qualquer texto aqui', '́') == ''
     assert toca._wiki_snippet('́́', '́') == ''
+
+
+def test_wiki_norm_e_wiki_norm_indexado_produzem_a_mesma_string_normalizada():
+    """_wiki_norm compara o termo, _wiki_norm_indexado mapeia o texto -- se as
+    duas divergissem em algum caractere, a posição achada por uma não bateria
+    mais com o texto mapeado pela outra e o casamento (ou o destaque) sairia
+    errado. Cobre acento, ligadura, fração, CJK de largura completa e
+    caracteres combinantes -- a mesma família de casos que já quebrou o
+    destaque uma vez (ver commit da correção de ligadura)."""
+    amostras = [
+        'Texto simples em ASCII puro.',
+        'Acentuação: ação, café, õ, ü, à.',
+        'Ligaduras: eﬁcio (ex.: escritório com ligaduras fi/fl).',
+        'Frações: 1½ ¼ ¾.',
+        'CJK largura completa: ＡＢＣ １２３.',
+        'Combinantes: e\u0301 a\u0300 o\u0302 (acento combinado).',
+        'Formatação invisível: pra\u200bzo e pra\u00adzo.',
+        'Mix tudo: ﬁnal\u200bmente ½ café ＡＢ\u0301.',
+    ]
+    for texto in amostras:
+        normal = toca._wiki_norm(texto)
+        indexado, indices = toca._wiki_norm_indexado(texto)
+        assert normal == indexado, texto
+        assert len(indexado) == len(indices)
+
+
+def test_snippet_ignora_espaco_de_largura_zero_no_meio_do_termo(client):
+    """U+200B (espaço de largura zero) aparece de verdade em texto extraído
+    de PDF com quebra automática de linha -- mesma família do problema de
+    ligadura já corrigido: sem ignorá-lo na normalização, um caractere
+    invisível no meio da palavra quebra o casamento por completo."""
+    payload = _sobe_documento(
+        client, nome='zwsp.docx',
+        texto='O documento define o pra\u200bzo de entrega, que e de cinco dias.')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=prazo').get_json()
+
+    assert len(rows) == 1
+    assert '<mark>pra\u200bzo</mark>' in rows[0]['snippet']
+
+
+def test_snippet_ignora_hifen_suave_no_meio_do_termo(client):
+    """U+00AD (hífen suave) marca onde uma palavra PODE ser hifenizada e é
+    comum em texto extraído de PDF com hifenização -- mesmo raciocínio do
+    espaço de largura zero acima."""
+    payload = _sobe_documento(
+        client, nome='hifen-suave.docx',
+        texto='O documento define o pra\u00adzo de entrega, que e de cinco dias.')
+    _espera_task(client, payload['task_id'])
+
+    rows = client.get('/api/wikitoca/documents?q=prazo').get_json()
+
+    assert len(rows) == 1
+    assert '<mark>pra\u00adzo</mark>' in rows[0]['snippet']
+
+
+def test_snippet_limita_o_tamanho_do_match_mesmo_com_muitos_combinantes():
+    """Caracteres combinantes entre dois caracteres normalizados adjacentes
+    somem do texto normalizado mas continuam ocupando espaço no texto
+    original -- um acúmulo patológico deles (algo que acontece de verdade em
+    extração malformada de PDF, não depende do usuário) faz o trecho casado
+    no texto ORIGINAL ficar enorme mesmo para um termo de busca curto. Sem o
+    teto em `janela`, o <mark> -- que vai inteiro para innerHTML -- fica do
+    tamanho desse acúmulo."""
+    texto = 'p' + '\u0301' * 20000 + 'razo e o resto do texto aqui.'
+    snippet = toca._wiki_snippet(texto, 'prazo')
+    assert '<mark>' in snippet
+    assert len(snippet) < 1000
+
+
+def test_busca_com_termo_gigantesco_nao_trava_a_rota(client):
+    """O termo de busca é truncado antes de usar: sem isso, um `q` de dezenas
+    de milhares de caracteres tornaria o custo de `_wiki_norm(texto)` sobre
+    cada documento proporcional a esse tamanho, a cada request."""
+    payload = _sobe_documento(client, texto='Prazo de cinco dias uteis')
+    _espera_task(client, payload['task_id'])
+
+    resp = client.get('/api/wikitoca/documents', query_string={'q': 'a' * 50000})
+
+    assert resp.status_code == 200
+    assert resp.get_json() == []

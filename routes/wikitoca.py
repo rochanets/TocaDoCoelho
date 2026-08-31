@@ -250,24 +250,41 @@ _WIKI_EXT_FILTERS = {
 
 
 def _wiki_norm(texto):
-    """Minúsculas e sem acento, para casar 'POLÍTICA' com 'politica'."""
+    """Minúsculas e sem acento, para casar 'POLÍTICA' com 'politica'.
+    Ignora também caracteres de formatação Unicode (categoria 'Cf' — ex.:
+    espaço de largura zero U+200B, hífen suave U+00AD), comuns em texto
+    extraído de PDF com hifenização ou quebra de linha automática: sem
+    isso, um caractere invisível no meio da palavra quebra um casamento
+    que deveria funcionar."""
     base = unicodedata.normalize('NFKD', str(texto or ''))
-    return ''.join(ch for ch in base if not unicodedata.combining(ch)).lower()
+    return ''.join(ch for ch in base
+                   if not unicodedata.combining(ch) and unicodedata.category(ch) != 'Cf').lower()
 
 
 def _wiki_norm_indexado(texto):
     """Como _wiki_norm, mas devolve também o índice do caractere ORIGINAL que
-    gerou cada caractere normalizado.
+    gerou cada caractere normalizado. Tem que devolver exatamente a mesma
+    string que _wiki_norm (mesmos filtros) — senão a posição achada com uma
+    função não bate mais com o texto mapeado pela outra.
 
     NFKD faz decomposição de compatibilidade: 'ﬁ' vira 'fi', '½' vira '1⁄2'.
     Sem esse mapa, uma posição encontrada no texto normalizado aponta para o
     caractere errado no texto original — e o destaque sai deslocado. Ligaduras
     são comuns em texto extraído de PDF, então isso acontece de verdade.
+
+    Atalho ASCII: a esmagadora maioria dos caracteres de um documento é ASCII
+    puro (sempre 1 code point, nunca combinante, nunca 'Cf') e não precisa
+    passar pelo normalize() caractere a caractere — é o que faz a diferença
+    de performance em documentos grandes.
     """
     saida, indices = [], []
     for i, ch in enumerate(str(texto or '')):
+        if ch.isascii():
+            saida.append(ch.lower())
+            indices.append(i)
+            continue
         for nch in unicodedata.normalize('NFKD', ch):
-            if unicodedata.combining(nch):
+            if unicodedata.combining(nch) or unicodedata.category(nch) == 'Cf':
                 continue
             saida.append(nch.lower())
             indices.append(i)
@@ -278,15 +295,31 @@ def _wiki_snippet(texto, termo, janela=200):
     """Trecho em volta da primeira ocorrência do termo, com <mark> no termo.
     Tudo que veio do arquivo é escapado; só o <mark> é inserido por nós, em
     posição conhecida — é isso que permite o frontend renderizar sem escapar de
-    novo. Devolve '' se o termo não aparecer no texto."""
+    novo. Devolve '' se o termo não aparecer no texto.
+
+    O trecho dentro do próprio <mark> também é limitado a `janela` caracteres
+    do texto ORIGINAL: caracteres combinantes/de formatação entre dois
+    caracteres normalizados adjacentes (ex.: um acúmulo patológico de acentos
+    combinantes, algo que acontece de verdade em extração malformada de PDF)
+    somem do texto normalizado mas continuam ocupando espaço no original —
+    sem esse teto, um match de poucos caracteres normalizados pode
+    corresponder a dezenas de milhares de caracteres reais, e todo esse
+    tamanho vai para innerHTML na listagem."""
     if not texto or not termo:
         return ''
     texto = str(texto)
     termo_norm = _wiki_norm(termo)
-    # Um termo formado só por caracteres combinantes normaliza para string vazia;
-    # `find('')` devolveria 0 e o mapa de índices seria indexado fora do range
-    # (IndexError = 500 na rota de busca). Sem termo, não há o que destacar.
+    # Um termo formado só por caracteres combinantes/de formatação normaliza
+    # para string vazia; `find('')` devolveria 0 e o mapa de índices seria
+    # indexado fora do range (IndexError = 500 na rota de busca). Sem termo,
+    # não há o que destacar.
     if not termo_norm:
+        return ''
+    # Curto-circuito: só constrói o mapa de índices (a parte cara, porque
+    # passa o NFKD caractere a caractere para todo caractere não-ASCII) se já
+    # se sabe que há match — a maioria das buscas não bate na maioria dos
+    # documentos, e sem isso a rota fica inviável com dezenas de documentos.
+    if termo_norm not in _wiki_norm(texto):
         return ''
     norm, indices = _wiki_norm_indexado(texto)
     pos_norm = norm.find(termo_norm)
@@ -299,7 +332,7 @@ def _wiki_snippet(texto, termo, janela=200):
     fim_norm = pos_norm + termo_len_norm - 1
     # fim_norm é sempre um índice válido em `indices`: o termo foi encontrado
     # dentro de `norm`, que tem exatamente o mesmo tamanho de `indices`.
-    pos_fim = indices[fim_norm] + 1
+    pos_fim = min(indices[fim_norm] + 1, pos + janela)
     ini = max(0, pos - janela // 2)
     fim = min(len(texto), pos_fim + janela // 2)
     antes = html.escape(texto[ini:pos])
@@ -307,14 +340,17 @@ def _wiki_snippet(texto, termo, janela=200):
     depois = html.escape(texto[pos_fim:fim])
     prefixo = '…' if ini > 0 else ''
     sufixo = '…' if fim < len(texto) else ''
-    return f'{prefixo}{antes}<mark>{match}</mark>{depois}{sufixo}'.replace('\n', ' ')
+    snippet = f'{prefixo}{antes}<mark>{match}</mark>{depois}{sufixo}'
+    return re.sub(r'\s+', ' ', snippet)
 
 
 @app.route('/api/wikitoca/documents', methods=['GET'])
 def list_wiki_documents():
     logger.debug('[DEBUG] GET /api/wikitoca/documents chamado')
     try:
-        q = (request.args.get('q') or '').strip()
+        # Teto defensivo independente do teto de `janela` em _wiki_snippet: um
+        # `q` gigantesco não pode virar trabalho proporcional ao tamanho dele.
+        q = (request.args.get('q') or '').strip()[:200]
         ext_filtro = (request.args.get('ext') or '').strip().lower()
         conn = get_db()
         c = conn.cursor()
@@ -322,6 +358,13 @@ def list_wiki_documents():
         # dezenas de MB e esta rota é chamada a cada troca de aba. Só a busca
         # precisa do texto, e ainda assim ele não volta na resposta.
         colunas = _WIKI_DOC_LIST_COLUMNS + (', extracted_text' if q else '')
+        # Não filtramos por extract_status aqui de propósito: um documento
+        # 'error'/'empty' tem extracted_text vazio e só aparece se o NOME
+        # bater, e um 'pending' pode ter texto de uma indexação anterior (por
+        # exemplo, reimportado) e continua pesquisável por conteúdo enquanto a
+        # nova indexação não termina. Um `WHERE extract_status = 'ok'`
+        # pareceria uma otimização inofensiva, mas faria documentos
+        # desaparecerem também da busca por NOME.
         c.execute(f'SELECT {colunas} FROM wiki_documents ORDER BY updated_at DESC')
         rows = [dict_from_row(r) for r in c.fetchall()]
         conn.close()
@@ -391,7 +434,10 @@ def upload_wiki_documents():
             )
             conn.commit()
             doc_id = c.lastrowid
-            c.execute('SELECT * FROM wiki_documents WHERE id = ?', (doc_id,))
+            # Mesma invariante da listagem: a resposta do upload não pode
+            # trazer o texto extraído (aqui ainda é sempre NULL, só por causa
+            # do timing da indexação assíncrona -- não é para depender disso).
+            c.execute(f'SELECT {_WIKI_DOC_LIST_COLUMNS} FROM wiki_documents WHERE id = ?', (doc_id,))
             created.append(dict_from_row(c.fetchone()))
             logger.debug(f'[DEBUG] POST /api/wikitoca/documents salvo id={doc_id} nome={original_name}')
         conn.close()
