@@ -12617,7 +12617,7 @@ def handle_unexpected_exception(error):
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'autotoca_iata', 'wikitoca',
-                 'portfolio', 'config', 'home', 'reembolsos', 'feedback']
+                 'wikitoca_capacitacao', 'portfolio', 'config', 'home', 'reembolsos', 'feedback']
 
 
 def _load_route_modules():

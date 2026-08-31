@@ -570,3 +570,35 @@ def test_busca_com_termo_gigantesco_nao_trava_a_rota(client):
 
     assert resp.status_code == 200
     assert resp.get_json() == []
+
+
+def test_rank_chunks_prioriza_o_trecho_com_os_termos(db_path):
+    fontes = [
+        {'label': 'manual.pdf', 'text': 'Capitulo 1. Sobre ferias e recesso da empresa.'},
+        {'label': 'politica.pdf', 'text': 'O prazo de aprovacao do contrato e de cinco dias uteis.'},
+    ]
+    melhores = toca._wiki_rank_chunks(fontes, 'qual o prazo de aprovacao do contrato?', top_n=1)
+
+    assert len(melhores) == 1
+    assert melhores[0]['label'] == 'politica.pdf'
+    assert 'cinco dias uteis' in melhores[0]['chunk']
+
+
+def test_rank_chunks_devolve_vazio_quando_nada_e_relevante(db_path):
+    fontes = [{'label': 'manual.pdf', 'text': 'Sobre ferias e recesso da empresa.'}]
+    assert toca._wiki_rank_chunks(fontes, 'qual a cotacao do dolar hoje?', top_n=3) == []
+
+
+def test_rank_chunks_ignora_fontes_sem_texto(db_path):
+    fontes = [{'label': 'vazio.png', 'text': ''}, {'label': 'nulo.pdf', 'text': None}]
+    assert toca._wiki_rank_chunks(fontes, 'prazo de aprovacao', top_n=3) == []
+
+
+def test_rank_chunks_aceita_fonte_unica_com_um_termo_casado(db_path):
+    """Guarda-corpo da fórmula: com poucos blocos o bônus de raridade é pequeno,
+    então o piso de 1 ponto por termo é o que mantém o trecho certo acima do
+    limiar. Sem ele, a cascata pulava os documentos e ia direto para a web."""
+    fontes = [{'label': 'politica.pdf', 'text': 'O prazo de rescisao do contrato e de trinta dias.'}]
+    melhores = toca._wiki_rank_chunks(fontes, 'qual o prazo de rescisao?', top_n=3)
+    assert len(melhores) == 1
+    assert melhores[0]['score'] >= 1.0
