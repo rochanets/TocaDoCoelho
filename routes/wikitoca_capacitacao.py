@@ -147,3 +147,171 @@ def _wiki_rank_chunks(sources, question, top_n=6, min_score=_WIKI_MIN_CHUNK_SCOR
         if len(selecionados) >= top_n:
             break
     return selecionados
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CAPACITAÇÃO — instâncias com documentos próprios e chat com IA sobre eles.
+# Isolado do resto: estes documentos não entram no submódulo Documentos nem na
+# base do iToca.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_WIKI_CAP_DEFAULT_TITLE = 'Nova capacitação'
+
+
+def _wiki_cap_session_row(session_id):
+    conn = get_db()
+    row = dict_from_row(conn.execute(
+        'SELECT * FROM wiki_training_sessions WHERE id=?', (session_id,)).fetchone())
+    conn.close()
+    return row
+
+
+@app.route('/api/wikitoca/capacitacao/sessions', methods=['GET'])
+def list_wiki_capacitacao_sessions():
+    logger.debug('[DEBUG] GET /api/wikitoca/capacitacao/sessions chamado')
+    try:
+        conn = get_db()
+        rows = [dict_from_row(r) for r in conn.execute('''
+            SELECT s.*,
+                   (SELECT COUNT(*) FROM wiki_training_documents d WHERE d.session_id = s.id) AS documents_count,
+                   (SELECT MAX(created_at) FROM wiki_training_messages m WHERE m.session_id = s.id) AS last_message_at
+            FROM wiki_training_sessions s
+            ORDER BY COALESCE(
+                (SELECT MAX(created_at) FROM wiki_training_messages m WHERE m.session_id = s.id),
+                s.updated_at
+            ) DESC
+        ''').fetchall()]
+        conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/wikitoca/capacitacao/sessions: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_LIST_ERROR', 'Erro ao listar capacitações.', details=str(e))
+
+
+@app.route('/api/wikitoca/capacitacao/sessions', methods=['POST'])
+def create_wiki_capacitacao_session():
+    logger.debug('[DEBUG] POST /api/wikitoca/capacitacao/sessions chamado')
+    try:
+        data = request.get_json(silent=True) or {}
+        titulo = (data.get('title') or '').strip()
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''INSERT INTO wiki_training_sessions (title, title_source, created_at, updated_at)
+                     VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                  (titulo or _WIKI_CAP_DEFAULT_TITLE, 'manual' if titulo else 'ai'))
+        conn.commit()
+        session_id = c.lastrowid
+        row = dict_from_row(c.execute('SELECT * FROM wiki_training_sessions WHERE id=?', (session_id,)).fetchone())
+        conn.close()
+        row['documents_count'] = 0
+        row['last_message_at'] = None
+        logger.info(f'[WikiToca] Capacitação criada id={session_id}')
+        return jsonify(row), 201
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/wikitoca/capacitacao/sessions: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_CREATE_ERROR', 'Erro ao criar capacitação.', details=str(e))
+
+
+@app.route('/api/wikitoca/capacitacao/sessions/<int:session_id>', methods=['PUT'])
+def rename_wiki_capacitacao_session(session_id):
+    logger.debug(f'[DEBUG] PUT /api/wikitoca/capacitacao/sessions/{session_id} chamado')
+    try:
+        titulo = ((request.get_json(silent=True) or {}).get('title') or '').strip()
+        if not titulo:
+            return api_error(400, 'WIKI_CAP_TITLE_REQUIRED', 'O título é obrigatório.')
+        if not _wiki_cap_session_row(session_id):
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''UPDATE wiki_training_sessions
+                     SET title=?, title_source='manual', updated_at=CURRENT_TIMESTAMP
+                     WHERE id=?''', (titulo, session_id))
+        conn.commit()
+        conn.close()
+        return jsonify(_wiki_cap_session_row(session_id))
+    except Exception as e:
+        logger.exception(f'[ERROR] PUT /api/wikitoca/capacitacao/sessions/{session_id}: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_RENAME_ERROR', 'Erro ao renomear capacitação.', details=str(e))
+
+
+@app.route('/api/wikitoca/capacitacao/sessions/<int:session_id>', methods=['GET'])
+def get_wiki_capacitacao_session(session_id):
+    logger.debug(f'[DEBUG] GET /api/wikitoca/capacitacao/sessions/{session_id} chamado')
+    try:
+        sess = _wiki_cap_session_row(session_id)
+        if not sess:
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+        conn = get_db()
+        docs = [dict_from_row(r) for r in conn.execute(
+            '''SELECT id, session_id, file_name, original_name, file_url, file_ext,
+                      file_size, extract_status, created_at
+               FROM wiki_training_documents WHERE session_id=? ORDER BY id''', (session_id,)).fetchall()]
+        msgs = [dict_from_row(r) for r in conn.execute(
+            '''SELECT id, role, content, source_kind, source_refs, created_at
+               FROM wiki_training_messages WHERE session_id=? ORDER BY created_at, id''', (session_id,)).fetchall()]
+        conn.close()
+        for m in msgs:
+            try:
+                m['source_refs'] = json.loads(m['source_refs']) if m.get('source_refs') else []
+            except Exception:
+                m['source_refs'] = []
+        return jsonify({'session': sess, 'documents': docs, 'messages': msgs})
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/wikitoca/capacitacao/sessions/{session_id}: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_DETAIL_ERROR', 'Erro ao carregar capacitação.', details=str(e))
+
+
+@app.route('/api/wikitoca/capacitacao/sessions/<int:session_id>', methods=['DELETE'])
+def delete_wiki_capacitacao_session(session_id):
+    logger.debug(f'[DEBUG] DELETE /api/wikitoca/capacitacao/sessions/{session_id} chamado')
+    try:
+        if not _wiki_cap_session_row(session_id):
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM wiki_training_messages WHERE session_id=?', (session_id,))
+        c.execute('DELETE FROM wiki_training_documents WHERE session_id=?', (session_id,))
+        c.execute('DELETE FROM wiki_training_sessions WHERE id=?', (session_id,))
+        conn.commit()
+        conn.close()
+        # Os arquivos ficam num diretório por instância — apagar a pasta inteira
+        # evita deixar órfãos em disco.
+        import shutil
+        pasta = WIKI_TRAINING_UPLOAD_DIR / str(session_id)
+        if pasta.exists():
+            shutil.rmtree(pasta, ignore_errors=True)
+        logger.info(f'[WikiToca] Capacitação removida id={session_id}')
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] DELETE /api/wikitoca/capacitacao/sessions/{session_id}: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_DELETE_ERROR', 'Erro ao excluir capacitação.', details=str(e))
+
+
+@app.route('/api/wikitoca/capacitacao/sessions/<int:session_id>/messages', methods=['DELETE'])
+def clear_wiki_capacitacao_messages(session_id):
+    """Limpar conversa: apaga o histórico e mantém os documentos anexados."""
+    logger.debug(f'[DEBUG] DELETE .../capacitacao/sessions/{session_id}/messages chamado')
+    try:
+        if not _wiki_cap_session_row(session_id):
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('DELETE FROM wiki_training_messages WHERE session_id=?', (session_id,))
+        c.execute('UPDATE wiki_training_sessions SET updated_at=CURRENT_TIMESTAMP WHERE id=?', (session_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.exception(f'[ERROR] DELETE .../capacitacao/sessions/{session_id}/messages: {e}')
+        traceback.print_exc()
+        return api_error(500, 'WIKI_CAP_CLEAR_ERROR', 'Erro ao limpar a conversa.', details=str(e))
+
+
+@app.route('/uploads/wikitoca/capacitacao/<path:filename>')
+def serve_wikitoca_training_upload(filename):
+    return send_from_directory(str(WIKI_TRAINING_UPLOAD_DIR), filename)

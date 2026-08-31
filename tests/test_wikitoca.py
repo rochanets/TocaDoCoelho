@@ -731,3 +731,40 @@ def test_split_chunks_nao_gera_cauda_minuscula_e_redundante():
     # (2100 até o fim), inteiramente contido no 2º bloco (1050 até o fim).
     assert len(blocos) == 2
     assert len(blocos[-1]) > 150
+
+
+def test_cria_lista_renomeia_e_exclui_instancia(client):
+    criada = client.post('/api/wikitoca/capacitacao/sessions', json={})
+    assert criada.status_code == 201, criada.get_json()
+    sess = criada.get_json()
+    assert sess['title'] == 'Nova capacitação'
+    assert sess['title_source'] == 'ai'
+
+    listagem = client.get('/api/wikitoca/capacitacao/sessions').get_json()
+    assert len(listagem) == 1
+    assert listagem[0]['documents_count'] == 0
+
+    renomeada = client.put(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}',
+                           json={'title': 'Onboarding Comercial'})
+    assert renomeada.status_code == 200
+    assert renomeada.get_json()['title'] == 'Onboarding Comercial'
+    assert renomeada.get_json()['title_source'] == 'manual'
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Onboarding Comercial'
+    assert detalhe['documents'] == []
+    assert detalhe['messages'] == []
+
+    assert client.delete(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').status_code == 200
+    assert client.get('/api/wikitoca/capacitacao/sessions').get_json() == []
+
+
+def test_renomear_com_titulo_vazio_e_rejeitado(client):
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    resp = client.put(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}', json={'title': '   '})
+    assert resp.status_code == 400
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_TITLE_REQUIRED'
+
+
+def test_detalhe_de_instancia_inexistente_retorna_404(client):
+    assert client.get('/api/wikitoca/capacitacao/sessions/999').status_code == 404
