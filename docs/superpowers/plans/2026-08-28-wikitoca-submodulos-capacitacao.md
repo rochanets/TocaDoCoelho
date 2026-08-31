@@ -2628,6 +2628,36 @@ git commit -m "feat(wikitoca): chips de documentos e upload na capacitacao"
 **Files:**
 - Modify: `public/js/wikitoca.js`
 
+> **Oito coisas que o backend da Task 8 impõe a esta UI** (medidas na revisão):
+>
+> 1. **`source_kind` tem quatro valores**, não três: `documents`, `wiki`, `web` e
+>    **`none`** (resposta "não encontrei em lugar nenhum"). Sem um caso para `none`,
+>    a mensagem cai no selo de web e mostra 🌐 dizendo que não achou na web. Trate
+>    qualquer valor desconhecido ou nulo como **sem selo**.
+> 2. **`source_refs` chega como array já desserializado** (`[]` quando vazio).
+>    Conhecimentos vêm prefixados `Conhecimento: <título>`; documentos vêm com o
+>    `original_name` cru.
+> 3. **Bloqueie o envio enquanto houver task em andamento.** Comprovado: duas
+>    perguntas simultâneas gravam `U1, U2, A2, A1` e o chat fica sem pareamento
+>    entre pergunta e resposta. A correção é aqui, não no backend.
+> 4. **A task pode terminar em `done` com `result.cancelled === true`** (a
+>    capacitação foi excluída durante a resposta), sem `answer`. Trate como
+>    "conversa encerrada", não como sucesso a renderizar.
+> 5. **`POST .../ask` devolve só `{task_id}`** — não devolve a mensagem do usuário
+>    gravada. Renderize a bolha do usuário otimisticamente ou recarregue a sessão.
+> 6. **O progresso não é monotônico fino:** `5 Iniciando… → 20 documentos… →
+>    50 base WikiToca… → 75 web… → 100`. O salto de 20 direto para 100 é normal
+>    (respondeu no primeiro passo), e a barra pode ficar parada num degrau por até
+>    ~45 s por chamada de LLM. Use o coelho `.coelho-run` e não presuma avanço
+>    contínuo.
+> 7. **`GET /api/tasks/<id>` devolve 404 cinco minutos após o término** (o
+>    `_bg_task_cleanup`) e também se o app reiniciar. Trate 404 no polling como
+>    "acabou, recarregue a conversa", **não** como erro.
+> 8. **`status='error'` só acontece quando nenhuma IA respondeu.** A mensagem já é
+>    acionável ("verifique as chaves em Configurações") e deve virar bolha de
+>    sistema, sem gravar resposta em branco. "Não encontrei" **não** é erro: chega
+>    como mensagem normal com `source_kind='none'`.
+
 - [ ] **Step 1: Implementar o chat**
 
 Em `public/js/wikitoca.js`, depois de `deleteCapacitacaoDocument`:
