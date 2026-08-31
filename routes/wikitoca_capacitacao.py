@@ -314,21 +314,20 @@ def delete_wiki_capacitacao_session(session_id):
         # com órfãos em disco e o log dizendo "removida" mesmo assim.
         pasta = WIKI_TRAINING_UPLOAD_DIR / str(session_id)
         if pasta.exists():
-            falhas = []
-
-            # `onexc` (Python 3.12+; este ambiente roda 3.14) recebe a exceção
-            # já instanciada — mais direto de logar do que o `onerror` legado,
-            # que recebe exc_info como tupla (function, path, excinfo).
-            def _wiki_cap_rmtree_onexc(func, caminho, exc):
-                falhas.append((caminho, exc))
-
-            shutil.rmtree(pasta, onexc=_wiki_cap_rmtree_onexc)
-            if falhas:
-                primeiro_caminho, primeiro_erro = falhas[0]
+            # `rmtree` sem callback já levanta a primeira falha (PermissionError
+            # com handle aberto no Windows, que é o caso real: a extração de
+            # texto abre estes arquivos), e é isso que queremos logar. Nada de
+            # `onexc`/`onerror`: `onexc` exige Python 3.12+ e `onerror` está
+            # depreciado — o projeto não declara versão mínima em lugar nenhum,
+            # e um TypeError aqui derrubaria a exclusão inteira, que é pior do
+            # que o órfão em disco que estamos tentando tornar visível.
+            try:
+                shutil.rmtree(pasta)
+            except Exception as e_disco:
                 logger.warning(
-                    f'[WikiToca] Capacitação id={session_id}: {len(falhas)} item(ns) da '
-                    f'pasta {pasta} não puderam ser removidos do disco (os registros do '
-                    f'banco já foram excluídos) — primeiro: {primeiro_caminho} ({primeiro_erro})'
+                    f'[WikiToca] Capacitação id={session_id}: a pasta {pasta} não pôde ser '
+                    f'removida do disco ({type(e_disco).__name__}: {e_disco}). Os registros '
+                    f'do banco já foram excluídos, então há arquivos órfãos em disco.'
                 )
         logger.info(f'[WikiToca] Capacitação removida id={session_id}')
         return jsonify({'success': True})
