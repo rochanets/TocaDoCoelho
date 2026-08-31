@@ -39,6 +39,9 @@ NotebookLM) onde o usuário anexa documentos e conversa com a IA sobre eles.
     IA, sinalizando `INSUFICIENTE`. Há também um corte antes da chamada, mas ele
     é deliberadamente permissivo — ver "Sobre o corte por score", adiante.
 13. **"Limpar conversa"** por instância (via `uiConfirm`), preservando os arquivos.
+    Efeito colateral aceito pelo usuário em 31/08/2026: como o `updated_at` é
+    tocado e o histórico vira vazio, a instância **salta para o topo da sidebar**
+    ao ser limpa. É surpreendente mas foi decidido manter — não "corrigir" depois.
 14. **Fora de escopo nesta versão:** export/import `.zip` de instâncias de
     Capacitação.
 
@@ -127,6 +130,12 @@ O que migra sem alteração de comportamento: `loadWikiEntries`, `openWikiEntryM
 - Casa `q` (case-insensitive, sem acento) contra `original_name`, `title` e
   `extracted_text`.
 - Filtro `ext` mapeia: `pdf` → `.pdf`; `word` → `.doc`/`.docx`; `excel` → `.xls`/`.xlsx`.
+  Valor desconhecido (`?ext=lixo`, ou `?ext=docx` em vez de `word`) é **ignorado em
+  silêncio** e devolve o acervo inteiro, em vez de 400. Decisão consciente
+  (31/08/2026): é o comportamento comum em APIs de listagem, e o `<select>` da UI só
+  emite os três valores válidos. A revisão da Task 4 argumentou por 400 citando
+  precedente no próprio repositório — se um dia algo passar a montar essa URL na mão,
+  vale reconsiderar.
 - Para cada resultado com match no conteúdo, retorna `snippet`: ~200 caracteres em
   volta da primeira ocorrência, com o termo envolto em `<mark>`. O frontend renderiza
   o snippet abaixo dos metadados do documento (o restante do texto é escapado com
