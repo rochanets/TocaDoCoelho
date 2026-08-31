@@ -19,7 +19,8 @@
 | Arquivo | Responsabilidade | Ação |
 |---|---|---|
 | `app.py` | Constantes de upload, flags de dependência opcional, `_itoca_extract_text_from_file`, `SCHEMA_MIGRATIONS` | Modificar |
-| `routes/wikitoca.py` | Todas as rotas HTTP do WikiToca + helpers de indexação, ranking e cascata de resposta | Modificar |
+| `routes/wikitoca.py` | Rotas de Conhecimentos e Documentos + helpers de indexação e busca | Modificar |
+| `routes/wikitoca_capacitacao.py` | Ranking de trechos, rotas da Capacitação e cascata de resposta | Criar (Task 5) |
 | `public/index.html` | Markup dos 3 submódulos e da tela de Capacitação; `<script src="/js/wikitoca.js">` | Modificar |
 | `public/css/app.css` | Classes `.wiki-sub-*`, `.cap-*` e o responsivo da gaveta | Modificar |
 | `public/js/wikitoca.js` | **Todo** o JS do WikiToca (3 submódulos) | Criar |
@@ -723,8 +724,26 @@ git commit -m "feat(wikitoca): busca por conteudo e filtro por tipo nos document
 ## Task 5: Ranking de trechos por relevância
 
 **Files:**
-- Modify: `routes/wikitoca.py` (helper novo, junto de `_wiki_norm`)
+- Create: `routes/wikitoca_capacitacao.py`
+- Modify: `app.py` (`ROUTE_MODULES`, linha ~12618)
 - Test: `tests/test_wikitoca.py`
+
+> **Esta task cria o arquivo de rotas da Capacitação.** O ranking de trechos só é
+> consumido pela cascata de resposta (Task 8), então pertence ao domínio da
+> Capacitação, não ao de Documentos. `routes/wikitoca.py` já está em 764 linhas com
+> Conhecimentos + Documentos, e as Tasks 6, 7 e 8 somam plausivelmente 400–800
+> linhas de um domínio genuinamente diferente — juntar tudo daria um arquivo de
+> 1200–1500 linhas com dois submódulos não relacionados.
+>
+> O custo de separar é quase nulo: `_load_route_modules()` (`app.py:12623`) só faz
+> `exec(code, globals())` para cada nome de `ROUTE_MODULES`, **na ordem da lista**.
+> Acrescente `'wikitoca_capacitacao'` **depois** de `'wikitoca'` — a ordem garante
+> que `_wiki_norm`, `_wiki_index_document` e `_wiki_track_thread` já estejam no
+> `globals()` compartilhado quando este arquivo for executado. Sem blueprints, sem
+> imports, sem mudança de URL.
+>
+> O cabeçalho do arquivo novo deve seguir o de `routes/wikitoca.py`, explicando que
+> ele roda no namespace de `app.py`. As Tasks 6, 7 e 8 continuam neste arquivo.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -770,7 +789,7 @@ Expected: FAIL com `AttributeError: module 'app' has no attribute '_wiki_rank_ch
 
 - [ ] **Step 3: Implementar o ranking**
 
-Em `routes/wikitoca.py`, logo depois de `_wiki_snippet`:
+Em `routes/wikitoca_capacitacao.py` (arquivo novo), depois do cabeçalho de comentário:
 
 ```python
 # Palavras curtas e conectivos não distinguem trecho relevante de irrelevante.
@@ -861,7 +880,7 @@ Expected: PASS nos quatro.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add routes/wikitoca.py tests/test_wikitoca.py
+git add routes/wikitoca_capacitacao.py app.py tests/test_wikitoca.py
 git commit -m "feat(wikitoca): ranking de trechos por relevancia para o contexto da IA"
 ```
 
@@ -870,7 +889,7 @@ git commit -m "feat(wikitoca): ranking de trechos por relevancia para o contexto
 ## Task 6: CRUD das instâncias de Capacitação
 
 **Files:**
-- Modify: `routes/wikitoca.py` (rotas novas, depois de `serve_wikitoca_upload`)
+- Modify: `routes/wikitoca_capacitacao.py` (criado na Task 5; rotas novas depois do helper de ranking)
 - Test: `tests/test_wikitoca.py`
 
 - [ ] **Step 1: Escrever o teste que falha**
@@ -922,7 +941,7 @@ Expected: FAIL com 404 em todas as rotas — elas ainda não existem.
 
 - [ ] **Step 3: Implementar o CRUD**
 
-Em `routes/wikitoca.py`, no fim do arquivo (depois de `serve_wikitoca_upload`):
+Em `routes/wikitoca_capacitacao.py`, no fim do arquivo:
 
 ```python
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1101,7 +1120,7 @@ Expected: PASS em todos.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add routes/wikitoca.py tests/test_wikitoca.py
+git add routes/wikitoca_capacitacao.py tests/test_wikitoca.py
 git commit -m "feat(wikitoca): CRUD das instancias de capacitacao"
 ```
 
@@ -1110,7 +1129,7 @@ git commit -m "feat(wikitoca): CRUD das instancias de capacitacao"
 ## Task 7: Upload de documentos da Capacitação + título por IA
 
 **Files:**
-- Modify: `routes/wikitoca.py` (rotas e worker novos, depois do CRUD)
+- Modify: `routes/wikitoca_capacitacao.py` (rotas e worker novos, depois do CRUD)
 - Test: `tests/test_wikitoca.py`
 
 > **Restrição de projeto — não reaproveite `wiki_documents` aqui.** Os materiais
@@ -1204,7 +1223,7 @@ Expected: FAIL com 404 nas rotas de documento da capacitação.
 
 - [ ] **Step 3: Implementar upload, indexação e título**
 
-Em `routes/wikitoca.py`, no fim do arquivo:
+Em `routes/wikitoca_capacitacao.py`, no fim do arquivo:
 
 ```python
 def _wiki_cap_generate_title(session_id):
@@ -1361,7 +1380,7 @@ Expected: PASS em todos.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add routes/wikitoca.py tests/test_wikitoca.py
+git add routes/wikitoca_capacitacao.py tests/test_wikitoca.py
 git commit -m "feat(wikitoca): upload de documentos da capacitacao com titulo gerado por IA"
 ```
 
@@ -1370,7 +1389,7 @@ git commit -m "feat(wikitoca): upload de documentos da capacitacao com titulo ge
 ## Task 8: Cascata de resposta (documentos → base WikiToca → web)
 
 **Files:**
-- Modify: `routes/wikitoca.py` (worker e rota novos, no fim do arquivo)
+- Modify: `routes/wikitoca_capacitacao.py` (worker e rota novos, no fim do arquivo)
 - Test: `tests/test_wikitoca.py`
 
 - [ ] **Step 1: Escrever o teste que falha**
@@ -1478,7 +1497,7 @@ Expected: FAIL com 404 em `POST .../ask`.
 
 - [ ] **Step 3: Implementar a cascata**
 
-Em `routes/wikitoca.py`, no fim do arquivo:
+Em `routes/wikitoca_capacitacao.py`, no fim do arquivo:
 
 ```python
 WIKI_CAP_MAX_CONTEXT_CHARS = 12000
@@ -1649,7 +1668,7 @@ Expected: PASS em tudo (nenhuma regressão nos módulos existentes).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add routes/wikitoca.py tests/test_wikitoca.py
+git add routes/wikitoca_capacitacao.py tests/test_wikitoca.py
 git commit -m "feat(wikitoca): cascata de resposta documentos->base->web na capacitacao"
 ```
 
