@@ -35,8 +35,9 @@ NotebookLM) onde o usuário anexa documentos e conversa com a IA sobre eles.
     aceitando só PDF/Excel/Word.
 11. **Indexação:** no upload (assíncrona, com barra + coelho) e botão
     **"Reindexar documentos"** para o backfill dos arquivos já existentes.
-12. **Escalada para os passos seguintes da cascata:** a IA sinaliza `INSUFICIENTE`
-    **e** há corte por score mínimo de relevância antes mesmo de chamar a IA.
+12. **Escalada para os passos seguintes da cascata:** quem decide relevância é a
+    IA, sinalizando `INSUFICIENTE`. Há também um corte antes da chamada, mas ele
+    é deliberadamente permissivo — ver "Sobre o corte por score", adiante.
 13. **"Limpar conversa"** por instância (via `uiConfirm`), preservando os arquivos.
 14. **Fora de escopo nesta versão:** export/import `.zip` de instâncias de
     Capacitação.
@@ -245,7 +246,9 @@ normaliza (minúsculas, sem acento) e pontua cada bloco pela quantidade de termo
 pergunta que ele contém, ponderada pela raridade do termo no conjunto.
 
 **Passo 1 — documentos da instância.** Se nenhum bloco atingir o score mínimo, pula
-direto ao passo 2 sem gastar chamada de LLM. Caso contrário, monta a pergunta com os
+direto ao passo 2 sem gastar chamada de LLM. Na prática esse atalho só dispara
+quando os documentos **não têm nenhum termo significativo em comum** com a
+pergunta — ver "Sobre o corte por score". Caso contrário, monta a pergunta com os
 melhores blocos (limite de ~12000 caracteres), os nomes dos arquivos e as **últimas 6
 mensagens** da instância (para follow-up), e instrui explicitamente: *responder
 somente `INSUFICIENTE` se os trechos não cobrirem a pergunta*. Chama `_llm_prompt()`
@@ -314,8 +317,9 @@ vez em banco novo; `tests/test_schema_migrations.py` falha se isso acontecer.
   tabelas em banco novo e em banco legado.
 - Teste de `_itoca_extract_text_from_file()` para imagem, cobrindo o caso sem o
   binário do Tesseract instalado (não pode levantar exceção).
-- Teste de `_wiki_rank_chunks()`: pergunta com termo presente pontua acima do limiar;
-  pergunta sem relação fica abaixo (garante que o passo 1 é pulado).
+- Teste de `_wiki_rank_chunks()`: pergunta sem nenhum termo em comum devolve `[]`
+  (garante que o passo 1 é pulado); pergunta com termos em comum devolve os trechos
+  em ordem decrescente de score, truncados em `top_n`.
 - Teste de rota da busca de documentos: `q` casando em `extracted_text` retorna o
   documento com `snippet`; filtro `ext` restringe corretamente.
 - Teste da cascata com `_llm_prompt` mockado: `INSUFICIENTE` no passo 1 leva ao passo 2;
