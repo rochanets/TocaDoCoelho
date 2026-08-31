@@ -314,6 +314,22 @@ def delete_wiki_capacitacao_session(session_id):
         # com órfãos em disco e o log dizendo "removida" mesmo assim.
         pasta = WIKI_TRAINING_UPLOAD_DIR / str(session_id)
         if pasta.exists():
+            # As threads de indexação (Task 3 e Task 7, registradas em
+            # _wiki_indexing_threads por _wiki_track_thread) mantêm o arquivo
+            # aberto enquanto extraem o texto (python-docx, pdfplumber, PIL...).
+            # Medido: um `rmtree` disparado enquanto uma dessas threads ainda
+            # está lendo o arquivo esbarra em WinError 32 (handle aberto) — e
+            # como as linhas do banco desta sessão já foram apagadas ACIMA,
+            # nenhum DELETE futuro consegue mirar este session_id de novo: o
+            # arquivo vira órfão permanente em disco. Dar `join` (com timeout
+            # -- não travar a exclusão pra sempre se algo realmente travou,
+            # ex. um OCR pendurado) dá tempo das threads fecharem os arquivos
+            # antes da tentativa de remoção abaixo. A lista pode ter threads
+            # de OUTRAS sessões/uploads em andamento -- join nelas também é
+            # aceitável aqui (só atrasa um pouco a exclusão, não quebra nada).
+            for _t in list(_wiki_indexing_threads):
+                if _t.is_alive():
+                    _t.join(timeout=5)
             # `rmtree` sem callback já levanta a primeira falha (PermissionError
             # com handle aberto no Windows, que é o caso real: a extração de
             # texto abre estes arquivos), e é isso que queremos logar. Nada de
@@ -384,6 +400,37 @@ def serve_wikitoca_training_upload(filename):
 # Upload de documentos + indexação em background + título gerado por IA.
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _wiki_cap_clean_ai_title(bruto):
+    """Limpa a resposta crua do LLM até virar um título de uma linha, ou ''
+    se não sobrar nada aproveitável.
+
+    `bruto` pode vir None (nenhum provider de LLM configurado -- `_llm_prompt`
+    filtra resposta em branco no ramo padrão, mas o ramo `web=True`, usado
+    pela Task 8, repassa o fallback do SAI sem filtrar, então uma resposta só
+    de espaços É um caso real, não hipotético), com aspas, markdown
+    (**negrito**, # cabeçalho, cercas de código ```), preâmbulo antes do
+    título de verdade ('Aqui está o título:\\nX'), múltiplas linhas, ou
+    centenas de caracteres. Nenhum desses formatos pode virar exceção — em
+    especial `''.splitlines()` é `[]`, e pegar `[0]` direto disso é
+    IndexError; monta-se a lista de linhas não vazias primeiro e só depois
+    se pega a primeira, se houver alguma."""
+    linhas = [l.strip() for l in (bruto or '').splitlines() if l.strip()]
+    # Cerca de código (```): a linguagem/cerca em si nunca é o título.
+    linhas = [l for l in linhas if not l.startswith('```')]
+    if not linhas:
+        return ''
+    primeira = linhas[0]
+    # Preâmbulo ('Aqui está o título:', 'Título sugerido:'...): quando a
+    # primeira linha só introduz o que vem a seguir (termina em ':') e existe
+    # uma segunda linha, o título de verdade é essa segunda linha.
+    if primeira.endswith(':') and len(linhas) > 1:
+        primeira = linhas[1]
+    primeira = re.sub(r'^#{1,6}\s*', '', primeira).strip()  # cabeçalho markdown
+    primeira = re.sub(r'^\*{1,3}(.*?)\*{1,3}$', r'\1', primeira).strip()  # **negrito**/*itálico*
+    primeira = primeira.strip('"\'“”‘’').strip()
+    return primeira
+
+
 def _wiki_cap_generate_title(session_id):
     """Gera o título da instância a partir do primeiro documento indexado.
     Só age quando title_source ainda é 'ai' — renomear pelo usuário (PUT
@@ -408,16 +455,7 @@ def _wiki_cap_generate_title(session_id):
         f'Arquivo: {row["original_name"]}\n\nConteúdo:\n{trecho}',
         log_tag='WikiCapacitacao'
     )
-    # bruto pode vir None (nenhum provider de LLM configurado), com aspas,
-    # múltiplas linhas (o modelo às vezes acrescenta uma explicação depois do
-    # título pedido) ou, no limite, centenas de caracteres — a PRIMEIRA linha
-    # é o título; as aspas são removidas dela (não do texto bruto inteiro
-    # antes de partir em linhas — um `bruto.strip('"')` ali só descasca as
-    # pontas do bloco todo, e a linha 1 isolada pode continuar com aspas
-    # coladas quando a linha seguinte não fecha o mesmo par). O [:120] cobre
-    # o resto.
-    primeira_linha = (bruto or '').strip().splitlines()[0].strip() if bruto else ''
-    titulo = primeira_linha.strip('"\'').strip() if primeira_linha else ''
+    titulo = _wiki_cap_clean_ai_title(bruto)
     if not titulo:
         logger.info(f'[WikiToca] Nenhum LLM respondeu o título da capacitação {session_id}; mantendo o padrão.')
         return
@@ -504,42 +542,96 @@ def upload_wiki_capacitacao_documents(session_id):
             return api_error(400, 'WIKI_CAP_NO_FILE', 'Nenhum arquivo enviado.')
 
         pasta = WIKI_TRAINING_UPLOAD_DIR / str(session_id)
-        pasta.mkdir(parents=True, exist_ok=True)
         conn = get_db()
         c = conn.cursor()
         created = []
-        for f in files:
-            if not f.filename:
-                continue
-            ext = Path(f.filename).suffix.lower()
-            if ext not in ALLOWED_WIKI_TRAINING_EXTENSIONS:
-                logger.warning(f'[WikiToca] Extensão rejeitada na capacitação: {ext}')
-                continue
-            original_name = f.filename
-            # uuid no nome (não só o timestamp em segundos): dois arquivos
-            # enviados no mesmo request podem cair no mesmo segundo -- caso
-            # realista em upload múltiplo -- e sem isso o segundo sobrescreve
-            # o primeiro em disco, deixando duas linhas no banco apontando
-            # para o mesmo arquivo físico.
-            safe_name = secure_filename(
-                f'cap_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_{original_name}')
-            save_path = pasta / safe_name
-            f.save(str(save_path))
-            c.execute(
-                '''INSERT INTO wiki_training_documents
-                   (session_id, file_name, original_name, file_url, file_ext, file_size,
-                    extract_status, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)''',
-                (session_id, safe_name, original_name,
-                 f'/uploads/wikitoca/capacitacao/{session_id}/{safe_name}',
-                 ext, save_path.stat().st_size)
-            )
-            conn.commit()
-            created.append(dict_from_row(c.execute(
-                'SELECT id, session_id, file_name, original_name, file_url, file_ext, '
-                'file_size, extract_status, created_at FROM wiki_training_documents WHERE id=?',
-                (c.lastrowid,)).fetchone()))
-        conn.close()
+        arquivos_gravados = []
+        try:
+            for f in files:
+                if not f.filename:
+                    continue
+                ext = Path(f.filename).suffix.lower()
+                if ext not in ALLOWED_WIKI_TRAINING_EXTENSIONS:
+                    logger.warning(f'[WikiToca] Extensão rejeitada na capacitação: {ext}')
+                    continue
+                original_name = f.filename
+                # uuid no nome (não só o timestamp em segundos): dois arquivos
+                # enviados no mesmo request podem cair no mesmo segundo -- caso
+                # realista em upload múltiplo -- e sem isso o segundo sobrescreve
+                # o primeiro em disco, deixando duas linhas no banco apontando
+                # para o mesmo arquivo físico.
+                safe_name = secure_filename(
+                    f'cap_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_{original_name}')
+                # Trunca preservando a extensão: um nome de arquivo enviado pelo
+                # usuário pode passar de 150-200 caracteres (raro, mas real --
+                # tests/conftest.py documenta uma falha de suíte causada por
+                # exatamente essa classe de nome estourando o limite de caminho
+                # do Windows). O caminho completo já soma o diretório de uploads
+                # + o id da sessão antes do nome do arquivo, então 150 aqui é
+                # generoso o bastante sem se aproximar do MAX_PATH de 260.
+                if len(safe_name) > 150:
+                    manter = max(150 - len(ext), 1)
+                    safe_name = safe_name[:manter].rstrip('_') + ext
+
+                # A pasta só nasce quando o primeiro arquivo aceito chega -- um
+                # lote 100% rejeitado (ex.: só .xlsx numa capacitação que só
+                # aceita PDF/DOC/DOCX/PNG/JPG) não pode deixar uma pasta vazia
+                # para trás.
+                if not pasta.exists():
+                    pasta.mkdir(parents=True, exist_ok=True)
+                save_path = pasta / safe_name
+                f.save(str(save_path))
+                arquivos_gravados.append(save_path)
+
+                try:
+                    c.execute(
+                        '''INSERT INTO wiki_training_documents
+                           (session_id, file_name, original_name, file_url, file_ext, file_size,
+                            extract_status, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)''',
+                        (session_id, safe_name, original_name,
+                         f'/uploads/wikitoca/capacitacao/{session_id}/{safe_name}',
+                         ext, save_path.stat().st_size)
+                    )
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    # Check-then-act: a checagem de existência no topo desta
+                    # rota passou, mas um DELETE concorrente pode excluir a
+                    # sessão em qualquer ponto do loop de gravação (que num
+                    # lote grande dura segundos) -- mesmo raciocínio do PUT de
+                    # renomear (Task 6: "o UPDATE é a própria checagem"), só
+                    # que aqui o INSERT tem FK (PRAGMA foreign_keys=ON) contra
+                    # um session_id que acabou de sumir. Sem isto, o
+                    # IntegrityError virava 500 com a mensagem crua do SQLite
+                    # e os arquivos já gravados neste request ficavam órfãos
+                    # em disco (a sessão já não existe pra nenhum DELETE
+                    # futuro limpar). Limpa o que este request gravou e
+                    # devolve 404, como se a capacitação nunca tivesse
+                    # existido — que é exatamente o que virou verdade.
+                    logger.warning(
+                        f'[WikiToca] Capacitação {session_id} excluída durante o upload; '
+                        f'descartando {len(arquivos_gravados)} arquivo(s) já gravados neste request.'
+                    )
+                    for gravado in arquivos_gravados:
+                        try:
+                            gravado.unlink(missing_ok=True)
+                        except Exception as e_limpeza:
+                            logger.warning(f'[WikiToca] Falha ao limpar {gravado} após corrida de '
+                                           f'exclusão: {e_limpeza}')
+                    try:
+                        if pasta.exists() and not any(pasta.iterdir()):
+                            pasta.rmdir()
+                    except Exception as e_limpeza:
+                        logger.warning(f'[WikiToca] Falha ao remover pasta {pasta} vazia após corrida '
+                                       f'de exclusão: {e_limpeza}')
+                    return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+
+                created.append(dict_from_row(c.execute(
+                    'SELECT id, session_id, file_name, original_name, file_url, file_ext, '
+                    'file_size, extract_status, created_at FROM wiki_training_documents WHERE id=?',
+                    (c.lastrowid,)).fetchone()))
+        finally:
+            conn.close()
 
         if not created:
             return api_error(400, 'WIKI_CAP_INVALID_TYPE',
@@ -574,8 +666,21 @@ def delete_wiki_capacitacao_document(document_id):
         conn.commit()
         conn.close()
         caminho = WIKI_TRAINING_UPLOAD_DIR / str(row['session_id']) / row['file_name']
-        if caminho.exists():
-            caminho.unlink()
+        # Mesmo padrão do DELETE da instância (Task 6): a linha do banco já
+        # foi apagada e commitada acima -- se o disco falhar agora (handle
+        # aberto por uma extração em andamento, antivírus varrendo o
+        # arquivo...) o usuário não pode ver um 500 depois que a exclusão já
+        # aconteceu de verdade. Loga como órfão em disco, não engole em
+        # silêncio.
+        try:
+            if caminho.exists():
+                caminho.unlink()
+        except Exception as e_disco:
+            logger.warning(
+                f'[WikiToca] Documento id={document_id}: o arquivo {caminho} não pôde ser removido '
+                f'do disco ({type(e_disco).__name__}: {e_disco}). O registro do banco já foi excluído, '
+                f'então há um arquivo órfão em disco.'
+            )
         return jsonify({'success': True})
     except Exception as e:
         logger.exception(f'[ERROR] DELETE .../capacitacao/documents/{document_id}: {e}')

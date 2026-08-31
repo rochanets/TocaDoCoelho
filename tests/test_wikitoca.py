@@ -1,8 +1,10 @@
 import html
 import io
 import sqlite3
+import threading
 import time
 import unicodedata
+from pathlib import Path
 
 import pytest
 
@@ -150,6 +152,46 @@ def test_ocr_cai_para_ingles_quando_o_pacote_portugues_falta(tmp_path, monkeypat
     monkeypatch.setattr(toca.pytesseract, 'image_to_string', _so_ingles)
 
     assert 'Approval flow' in toca._itoca_extract_text_from_file(str(destino))
+
+
+def test_tesseract_instalado_apos_o_primeiro_upload_e_encontrado_sem_reiniciar(monkeypatch):
+    """`_itoca_find_tesseract_cmd` cacheava (via `functools.lru_cache`) até
+    uma resposta 'não encontrado' -- e o Toca do Coelho é um app desktop que
+    fica horas aberto na bandeja: quem instala o Tesseract DEPOIS do
+    primeiro upload sem ele ficava com o OCR morto em silêncio pelo resto do
+    processo, sem nenhum jeito de resolver sem reiniciar o app. Cachear só o
+    resultado positivo remove essa armadilha sem reintroduzir o custo que
+    motivou o cache (1 `subprocess.run(['tesseract', '--version'])` por
+    arquivo do lote em vez de 1 por processo)."""
+    def _procura_none(*a, **k):
+        return None
+
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd_uncached', _procura_none)
+    assert toca._itoca_find_tesseract_cmd() is None
+    assert toca._itoca_find_tesseract_cmd() is None  # ainda não "instalado" -- não pode ficar preso
+
+    def _procura_ok(*a, **k):
+        return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd_uncached', _procura_ok)
+    # Sem reiniciar o processo nem chamar nenhum "cache_clear" manual -- é
+    # exatamente o cenário em que o cache antigo (lru_cache, cacheava None)
+    # ficava preso até o processo reiniciar.
+    assert toca._itoca_find_tesseract_cmd() == r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+
+def test_tesseract_encontrado_fica_cacheado_positivamente(monkeypatch):
+    """O ganho que motivou o cache: uma vez achado, não busca de novo."""
+    chamadas = []
+
+    def _procura_ok(*a, **k):
+        chamadas.append(1)
+        return 'tesseract-real'
+
+    monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd_uncached', _procura_ok)
+    assert toca._itoca_find_tesseract_cmd() == 'tesseract-real'
+    assert toca._itoca_find_tesseract_cmd() == 'tesseract-real'
+    assert len(chamadas) == 1  # a segunda chamada veio do cache, não rodou a busca de novo
 
 
 def _espera_task(client, task_id, timeout=15.0, esperar_erro=False):
@@ -830,28 +872,6 @@ def test_rota_de_upload_serve_arquivo_legitimo_e_bloqueia_travessia(client):
 # título gerado por IA.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _limpa_cache_tesseract_se_existir():
-    """Vários testes de OCR substituem `toca._itoca_find_tesseract_cmd` inteiro
-    por uma lambda via monkeypatch — nesse instante o nome no módulo não é
-    mais o objeto decorado com `lru_cache` e não tem `.cache_clear()`. Como a
-    ordem de teardown entre este fixture e o `monkeypatch` do próprio teste
-    não é garantida, esta função tem que tolerar os dois estados."""
-    limpar = getattr(toca._itoca_find_tesseract_cmd, 'cache_clear', None)
-    if limpar:
-        limpar()
-
-
-@pytest.fixture(autouse=True)
-def _limpa_cache_do_tesseract():
-    """`_itoca_find_tesseract_cmd` agora é `functools.lru_cache` (Task 7 —
-    evita um subprocess 'tesseract --version' por arquivo num lote). Os
-    testes que chamam a função de verdade (sem monkeypatch) não podem herdar
-    o resultado cacheado de um teste anterior rodado em outra ordem."""
-    _limpa_cache_tesseract_se_existir()
-    yield
-    _limpa_cache_tesseract_se_existir()
-
-
 def _sobe_doc_capacitacao(client, session_id, nome='manual.docx',
                           texto='Prazo de aprovacao e de cinco dias uteis'):
     from docx import Document
@@ -938,6 +958,70 @@ def test_titulo_da_ia_gigante_e_truncado_em_120_caracteres(client, monkeypatch):
     assert len(detalhe['session']['title']) == 120
 
 
+def test_titulo_da_ia_so_de_espacos_nao_quebra_a_task_com_indexerror(client, monkeypatch):
+    """bruto = '   ' é truthy -- `_llm_prompt(web=True)` (a Task 8 usa esse
+    ramo) não filtra respostas em branco antes de repassar o fallback do SAI
+    -- mas `.strip()` vira '' e `''.splitlines()` é `[]`. Pegar `[0]` direto
+    dessa lista vazia é IndexError, que sobe pro `except` genérico do worker
+    e termina a task em 'error' (barra vermelha) num caso que a função já
+    tinha caminho pronto para tratar como 'nenhum título válido'."""
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: '   ')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    resultado = _espera_task(client, payload['task_id'])
+    assert resultado['status'] == 'done'
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Nova capacitação'
+    assert detalhe['session']['title_source'] == 'ai'
+
+
+def test_titulo_da_ia_com_preambulo_usa_a_linha_seguinte(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt',
+                        lambda *a, **k: 'Aqui está o título:\nPolítica de Aprovação')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Política de Aprovação'
+
+
+def test_titulo_da_ia_com_markdown_e_limpo(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: '**Política de Aprovação**')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Política de Aprovação'
+
+
+def test_titulo_da_ia_com_cabecalho_markdown_e_limpo(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: '# Política de Aprovação')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Política de Aprovação'
+
+
+def test_titulo_da_ia_com_cerca_de_codigo_e_limpo(client, monkeypatch):
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: '```\nPolítica de Aprovação\n```')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['session']['title'] == 'Política de Aprovação'
+
+
 def test_extensao_nao_aceita_na_capacitacao_e_rejeitada(client):
     sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
     resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
@@ -945,6 +1029,9 @@ def test_extensao_nao_aceita_na_capacitacao_e_rejeitada(client):
                        content_type='multipart/form-data')
     assert resp.status_code == 400
     assert resp.get_json()['error_code'] == 'WIKI_CAP_INVALID_TYPE'
+    # Lote 100% rejeitado não pode deixar uma pasta vazia órfã em disco -- a
+    # pasta só nasce quando o primeiro arquivo ACEITO chega.
+    assert not (toca.WIKI_TRAINING_UPLOAD_DIR / str(sess['id'])).exists()
 
 
 def test_upload_com_lote_misto_aceita_o_valido_e_ignora_o_rejeitado(client, monkeypatch):
@@ -977,6 +1064,49 @@ def test_upload_em_instancia_inexistente_e_404(client):
                        content_type='multipart/form-data')
     assert resp.status_code == 404
     assert resp.get_json()['error_code'] == 'WIKI_CAP_NOT_FOUND'
+
+
+def test_upload_com_delete_concorrente_no_meio_do_loop_vira_404_nao_500(client, monkeypatch):
+    """Corrida medida na revisão de qualidade da Task 7 (Via 2): entre a
+    checagem de existência no topo da rota de upload e o INSERT de um
+    arquivo específico, a sessão pode ser excluída por um request
+    concorrente -- check-then-act, mesma classe de corrida que o PUT de
+    renomear já tratou na Task 6 ("o UPDATE é a própria checagem"). Com a FK
+    ligada (PRAGMA foreign_keys=ON), o INSERT levanta sqlite3.IntegrityError;
+    sem tratamento isso vira 500 com a mensagem crua do SQLite na cara do
+    usuário, e o arquivo (e a pasta, se ela só existia por causa deste
+    request) ficam órfãos em disco -- a sessão já não existe mais para
+    nenhum DELETE futuro limpar depois."""
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+
+    real_secure_filename = toca.secure_filename
+    apagou = {'ok': False}
+
+    def _secure_filename_com_delete_concorrente(nome):
+        resultado = real_secure_filename(nome)
+        # Simula o DELETE concorrente acontecendo bem no meio do processamento
+        # deste arquivo -- depois do nome sanitizado, antes do save/INSERT.
+        if not apagou['ok']:
+            apagou['ok'] = True
+            conn = toca.get_db()
+            conn.execute('DELETE FROM wiki_training_sessions WHERE id=?', (sess['id'],))
+            conn.commit()
+            conn.close()
+        return resultado
+
+    monkeypatch.setattr(toca, 'secure_filename', _secure_filename_com_delete_concorrente)
+
+    resp = client.post(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/documents',
+                       data={'files': (_doc_capacitacao_bytes('conteudo'), 'a.docx')},
+                       content_type='multipart/form-data')
+
+    assert resp.status_code == 404, resp.get_json()
+    assert resp.get_json()['error_code'] == 'WIKI_CAP_NOT_FOUND'
+
+    pasta = toca.WIKI_TRAINING_UPLOAD_DIR / str(sess['id'])
+    assert not pasta.exists() or list(pasta.iterdir()) == [], (
+        'arquivo/pasta orfaos em disco depois do DELETE concorrente durante o upload'
+    )
 
 
 def test_upload_de_arquivo_vazio_nao_trava_a_indexacao(client, monkeypatch):
@@ -1055,6 +1185,32 @@ def test_exclui_documento_da_capacitacao(client, monkeypatch):
     assert client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()['documents'] == []
 
 
+def test_exclui_documento_com_arquivo_travado_ainda_retorna_sucesso(client, monkeypatch):
+    """Mesmo padrão já corrigido no DELETE da sessão (Task 6): se o arquivo
+    em disco estiver com handle aberto (extração em andamento, antivírus
+    varrendo o arquivo, etc.), a linha do banco já foi apagada e commitada
+    -- o usuário não pode ver um 500 depois que a exclusão já aconteceu de
+    verdade. O chip da Task 13 ficaria preso na tela até um refresh."""
+    monkeypatch.setattr(toca, '_llm_prompt', lambda *a, **k: 'Titulo')
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    payload = _sobe_doc_capacitacao(client, sess['id'])
+    _espera_task(client, payload['task_id'])
+
+    doc_id = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()['documents'][0]['id']
+
+    def _unlink_que_falha(self, *a, **k):
+        raise PermissionError('[WinError 32] arquivo em uso')
+
+    monkeypatch.setattr(Path, 'unlink', _unlink_que_falha)
+
+    resp = client.delete(f'/api/wikitoca/capacitacao/documents/{doc_id}')
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()['success'] is True
+
+    # o registro foi mesmo removido do banco, apesar do disco ter falhado
+    assert client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()['documents'] == []
+
+
 def test_excluir_documento_inexistente_e_404(client):
     resp = client.delete('/api/wikitoca/capacitacao/documents/999')
     assert resp.status_code == 404
@@ -1085,19 +1241,41 @@ def test_exclui_documento_de_sessao_ja_excluida_e_404(client):
 
 def test_exclusao_da_instancia_durante_a_indexacao_nao_trava_a_task_nem_recria_pasta(client, monkeypatch):
     """Corrida medida na revisão de qualidade da Task 7: se a instância é
-    excluída enquanto a thread de indexação ainda está processando um
-    documento, a task precisa terminar (não pode ficar 'processing' para
-    sempre) e a pasta de upload não pode voltar a existir depois disso."""
+    excluída enquanto a thread de indexação ainda tem o arquivo ABERTO (ex.:
+    dentro de python-docx/pdfplumber), o DELETE precisa dar `join` nessa
+    thread antes do `rmtree` -- sem isso o rmtree esbarra num handle aberto
+    (WinError 32 no Windows), a pasta e o arquivo ficam órfãos em disco pra
+    sempre (as linhas do banco já foram apagadas, então nenhum DELETE futuro
+    mira este session_id de novo), e a task precisa terminar mesmo assim
+    (não pode ficar 'processing' para sempre).
+
+    O sleep tem que acontecer DENTRO da extração, segurando o arquivo aberto
+    -- um sleep ANTES de abrir o arquivo dá ao rmtree uma janela livre de
+    handle, e o teste passaria mesmo sem o `join`, validando o cenário
+    errado (foi exatamente o que aconteceu numa primeira versão deste
+    teste). E não basta só isso: chamar DELETE logo depois do upload, sem
+    sincronizar, também deixa passar por acidente -- a thread em background
+    pode nem ter sido escalonada ainda, então o DELETE roda o rmtree antes
+    de QUALQUER handle existir. Um `threading.Event` aceso só depois do
+    arquivo estar de fato aberto garante que o DELETE sempre chega no meio
+    da janela perigosa."""
     real_index = toca._wiki_index_document
+    arquivo_aberto = threading.Event()
 
-    def _index_devagar(*args, **kwargs):
-        time.sleep(0.3)
-        return real_index(*args, **kwargs)
+    def _index_com_arquivo_aberto(table, row_id, file_path):
+        caminho = Path(file_path)
+        with open(caminho, 'rb') as fh:
+            fh.read(1)
+            arquivo_aberto.set()
+            time.sleep(0.3)
+        return real_index(table, row_id, file_path)
 
-    monkeypatch.setattr(toca, '_wiki_index_document', _index_devagar)
+    monkeypatch.setattr(toca, '_wiki_index_document', _index_com_arquivo_aberto)
 
     sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
     payload = _sobe_doc_capacitacao(client, sess['id'])
+
+    assert arquivo_aberto.wait(timeout=5), 'a thread de indexação não chegou a abrir o arquivo'
 
     assert client.delete(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').status_code == 200
 
@@ -1105,4 +1283,7 @@ def test_exclusao_da_instancia_durante_a_indexacao_nao_trava_a_task_nem_recria_p
     assert resultado.get('status') in ('done', 'error')
 
     pasta = toca.WIKI_TRAINING_UPLOAD_DIR / str(sess['id'])
-    assert not pasta.exists()
+    assert not pasta.exists(), (
+        'pasta/arquivo orfaos em disco -- o DELETE nao esperou a thread de '
+        'indexacao fechar o arquivo antes do rmtree'
+    )

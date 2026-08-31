@@ -26,7 +26,6 @@ import base64
 import mimetypes
 import uuid
 import hashlib
-import functools
 from collections import deque
 from datetime import datetime, timedelta, date
 from io import BytesIO
@@ -4711,24 +4710,16 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
     return enriched
 
 
-@functools.lru_cache(maxsize=1)
-def _itoca_find_tesseract_cmd():
+def _itoca_find_tesseract_cmd_uncached():
     """Localiza o binário do tesseract no sistema.
     Ordem de busca:
       1. Diretório do próprio executável (bundled com o Toca do Coelho via NSIS)
       2. PATH do sistema
       3. Caminhos padrão do Windows
 
-    Cacheado (lru_cache): sem isso, um lote de N imagens/PDFs (ex.: upload de
-    documentos da Capacitação, Task 7) disparava um `subprocess.run(['tesseract',
-    '--version'])` por arquivo só para redescobrir o mesmo caminho já achado.
-    A disponibilidade do binário não muda durante a vida do processo, então
-    cachear por processo é seguro. Testes que monkeypatcham esta função
-    (`monkeypatch.setattr(toca, '_itoca_find_tesseract_cmd', ...)`) substituem
-    o nome inteiro no módulo, então não veem o cache do objeto original — mas
-    ele ainda pode contaminar o teste real (não mockado) se rodar antes de um
-    resultado desatualizado importar; `_itoca_find_tesseract_cmd.cache_clear()`
-    está disponível para quem precisar dessa garantia entre testes.
+    Faz a busca de verdade a cada chamada — quem quer o resultado cacheado
+    (o caso comum) chama `_itoca_find_tesseract_cmd()` abaixo, não esta
+    função diretamente.
     """
     import subprocess
 
@@ -4775,7 +4766,41 @@ def _itoca_find_tesseract_cmd():
     return None
 
 
-def _itoca_ocr_image(img, tess_cmd, timeout=None):
+# Cache do caminho do tesseract — só guarda resultado POSITIVO, nunca `None`.
+# Existe para não disparar um `subprocess.run(['tesseract', '--version'])` por
+# arquivo num lote (ex.: upload de documentos da Capacitação, Task 7). Não use
+# `functools.lru_cache` aqui: ele cachearia `None` do mesmo jeito, e o Toca do
+# Coelho é um app desktop que fica horas aberto na bandeja — quem instala o
+# Tesseract DEPOIS do primeiro upload sem ele ficaria com o OCR morto em
+# silêncio pelo resto do processo (só um reinício resolveria). Um positivo
+# cacheado nunca precisa ser invalidado (o caminho encontrado não muda depois
+# de achado), então isto também elimina qualquer necessidade de limpar cache
+# entre testes por causa de contaminação — só `_itoca_reset_tesseract_cache()`
+# (usado pelos testes que exercitam o cache em si) zera este estado.
+_itoca_tesseract_cmd_cache = None
+
+
+def _itoca_reset_tesseract_cache():
+    """Só para os testes: zera o cache positivo de `_itoca_find_tesseract_cmd`
+    (ver `tests/conftest.py`)."""
+    global _itoca_tesseract_cmd_cache
+    _itoca_tesseract_cmd_cache = None
+
+
+def _itoca_find_tesseract_cmd():
+    """Caminho do binário do tesseract, com cache positivo por processo.
+    A busca de verdade é `_itoca_find_tesseract_cmd_uncached` (ver lá a ordem
+    de busca e por que o cache não guarda `None`)."""
+    global _itoca_tesseract_cmd_cache
+    if _itoca_tesseract_cmd_cache:
+        return _itoca_tesseract_cmd_cache
+    resultado = _itoca_find_tesseract_cmd_uncached()
+    if resultado:
+        _itoca_tesseract_cmd_cache = resultado
+    return resultado
+
+
+def _itoca_ocr_image(img, tess_cmd, timeout=None, context=''):
     """OCR de uma única imagem PIL já carregada, tentando o pacote de idioma
     'por+eng' com fallback para 'eng' (comum faltar o pacote de português em
     máquinas novas). Núcleo compartilhado entre o ramo de PDF escaneado e o
@@ -4784,15 +4809,17 @@ def _itoca_ocr_image(img, tess_cmd, timeout=None):
     palavra por palavra.
 
     Não decide se o Tesseract está disponível (isso é `_itoca_find_tesseract_cmd`,
-    chamado por quem chama esta função) nem loga nada: cada chamador mantém sua
-    própria mensagem de contexto (nome do arquivo, número da página) e decide o
-    que fazer com uma eventual exceção — aqui a exceção do fallback 'eng' é
+    chamado por quem chama esta função) — aqui a exceção do fallback 'eng' é
     propagada, não engolida, para não mudar esse contrato dos dois chamadores.
+    `context` é só para o log de diagnóstico do fallback de idioma (nome do
+    arquivo, "página N"...); cada chamador passa o que faz sentido pra ele.
     """
     pytesseract.pytesseract.tesseract_cmd = tess_cmd
     try:
         return pytesseract.image_to_string(img, lang='por+eng', timeout=timeout)
-    except Exception:
+    except Exception as e:
+        sufixo = f' em {context}' if context else ''
+        logger.debug(f'[iToca] OCR com lang=por+eng falhou{sufixo}, caindo para lang=eng: {e}')
         return pytesseract.image_to_string(img, lang='eng', timeout=timeout)
 
 
@@ -4872,8 +4899,8 @@ def _itoca_extract_text_from_file(file_path_str):
                     if images:
                         try:
                             ocr_parts = []
-                            for img in images:
-                                ocr_text = _itoca_ocr_image(img, tess_cmd)
+                            for pagina, img in enumerate(images, start=1):
+                                ocr_text = _itoca_ocr_image(img, tess_cmd, context=f'{path.name} (página {pagina})')
                                 if ocr_text.strip():
                                     ocr_parts.append(ocr_text.strip())
                             if ocr_parts:
@@ -4926,7 +4953,8 @@ def _itoca_extract_text_from_file(file_path_str):
                                 img = ImageOps.exif_transpose(img)
                             except Exception:
                                 pass
-                            ocr_text = _itoca_ocr_image(img, tess_cmd, timeout=ITOCA_OCR_TIMEOUT_SECONDS)
+                            ocr_text = _itoca_ocr_image(img, tess_cmd, timeout=ITOCA_OCR_TIMEOUT_SECONDS,
+                                                        context=path.name)
                         if ocr_text.strip():
                             text_parts.append(ocr_text.strip())
                     except Exception as e7:
