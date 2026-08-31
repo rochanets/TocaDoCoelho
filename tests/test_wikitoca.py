@@ -768,3 +768,58 @@ def test_renomear_com_titulo_vazio_e_rejeitado(client):
 
 def test_detalhe_de_instancia_inexistente_retorna_404(client):
     assert client.get('/api/wikitoca/capacitacao/sessions/999').status_code == 404
+
+
+def test_limpar_conversa_preserva_documentos(client):
+    """A promessa central de 'Limpar conversa': apaga o histórico, não os
+    documentos anexados -- apagar os dois seria perda de dados do usuário.
+    O upload (Task 7) e o chat (Task 8) ainda não existem, então documento e
+    mensagem entram direto pelo banco aqui."""
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    conn = toca.get_db()
+    conn.execute(
+        '''INSERT INTO wiki_training_documents
+           (session_id, file_name, original_name, file_url, file_ext, file_size, extract_status)
+           VALUES (?, 'doc.txt', 'doc.txt', '/uploads/wikitoca/capacitacao/1/doc.txt', '.txt', 10, 'ok')''',
+        (sess['id'],))
+    conn.execute(
+        "INSERT INTO wiki_training_messages (session_id, role, content) VALUES (?, 'user', 'oi')",
+        (sess['id'],))
+    conn.commit()
+    conn.close()
+
+    resp = client.delete(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}/messages')
+    assert resp.status_code == 200
+
+    detalhe = client.get(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}').get_json()
+    assert detalhe['messages'] == []
+    assert len(detalhe['documents']) == 1
+    assert detalhe['documents'][0]['file_name'] == 'doc.txt'
+
+
+def test_excluir_instancia_remove_a_pasta_de_uploads(client):
+    sess = client.post('/api/wikitoca/capacitacao/sessions', json={}).get_json()
+    pasta = toca.WIKI_TRAINING_UPLOAD_DIR / str(sess['id'])
+    pasta.mkdir(parents=True, exist_ok=True)
+    (pasta / 'arquivo.txt').write_text('conteudo', encoding='utf-8')
+    assert pasta.exists()
+
+    resp = client.delete(f'/api/wikitoca/capacitacao/sessions/{sess["id"]}')
+
+    assert resp.status_code == 200
+    assert not pasta.exists()
+
+
+def test_rota_de_upload_serve_arquivo_legitimo_e_bloqueia_travessia(client):
+    """Cobre a rota com a maior superfície do módulo -- a primeira do projeto
+    a usar `<path:filename>` -- que até aqui não tinha nenhum teste."""
+    pasta = toca.WIKI_TRAINING_UPLOAD_DIR / '1'
+    pasta.mkdir(parents=True, exist_ok=True)
+    (pasta / 'arquivo.txt').write_text('conteudo do arquivo', encoding='utf-8')
+
+    ok = client.get('/uploads/wikitoca/capacitacao/1/arquivo.txt')
+    assert ok.status_code == 200
+    assert ok.data == b'conteudo do arquivo'
+
+    fuga = client.get('/uploads/wikitoca/capacitacao/../../../app.py')
+    assert fuga.status_code == 404

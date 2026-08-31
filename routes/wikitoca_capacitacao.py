@@ -159,9 +159,19 @@ _WIKI_CAP_DEFAULT_TITLE = 'Nova capacitação'
 
 
 def _wiki_cap_session_row(session_id):
+    """Sessão + os mesmos dois campos calculados que a listagem devolve
+    (documents_count, last_message_at). Centralizado aqui para que GET, PUT
+    e POST devolvam os três o mesmo shape — sem isso, um consumidor que só
+    tem a resposta do PUT (ex.: renomear inline na sidebar da Task 12) não
+    teria como atualizar a contagem de documentos exibida."""
     conn = get_db()
-    row = dict_from_row(conn.execute(
-        'SELECT * FROM wiki_training_sessions WHERE id=?', (session_id,)).fetchone())
+    row = dict_from_row(conn.execute('''
+        SELECT s.*,
+               (SELECT COUNT(*) FROM wiki_training_documents d WHERE d.session_id = s.id) AS documents_count,
+               (SELECT MAX(created_at) FROM wiki_training_messages m WHERE m.session_id = s.id) AS last_message_at
+        FROM wiki_training_sessions s
+        WHERE s.id=?
+    ''', (session_id,)).fetchone())
     conn.close()
     return row
 
@@ -179,7 +189,7 @@ def list_wiki_capacitacao_sessions():
             ORDER BY COALESCE(
                 (SELECT MAX(created_at) FROM wiki_training_messages m WHERE m.session_id = s.id),
                 s.updated_at
-            ) DESC
+            ) DESC, s.id DESC
         ''').fetchall()]
         conn.close()
         return jsonify(rows)
@@ -193,8 +203,17 @@ def list_wiki_capacitacao_sessions():
 def create_wiki_capacitacao_session():
     logger.debug('[DEBUG] POST /api/wikitoca/capacitacao/sessions chamado')
     try:
-        data = request.get_json(silent=True) or {}
-        titulo = (data.get('title') or '').strip()
+        data = request.get_json(silent=True)
+        # Corpo ausente vira {} (comportamento antigo); corpo presente mas de
+        # tipo errado (lista, número, string solta...) também vira {} em vez
+        # de estourar no .get() logo abaixo.
+        if not isinstance(data, dict):
+            data = {}
+        titulo = data.get('title')
+        # `title` pode chegar como int/dict/list num corpo JSON malformado —
+        # só string tem .strip(); qualquer outro tipo é tratado como "sem
+        # título" em vez de propagar AttributeError como erro 500.
+        titulo = titulo.strip()[:200] if isinstance(titulo, str) else ''
         conn = get_db()
         c = conn.cursor()
         c.execute('''INSERT INTO wiki_training_sessions (title, title_source, created_at, updated_at)
@@ -202,12 +221,9 @@ def create_wiki_capacitacao_session():
                   (titulo or _WIKI_CAP_DEFAULT_TITLE, 'manual' if titulo else 'ai'))
         conn.commit()
         session_id = c.lastrowid
-        row = dict_from_row(c.execute('SELECT * FROM wiki_training_sessions WHERE id=?', (session_id,)).fetchone())
         conn.close()
-        row['documents_count'] = 0
-        row['last_message_at'] = None
         logger.info(f'[WikiToca] Capacitação criada id={session_id}')
-        return jsonify(row), 201
+        return jsonify(_wiki_cap_session_row(session_id)), 201
     except Exception as e:
         logger.exception(f'[ERROR] POST /api/wikitoca/capacitacao/sessions: {e}')
         traceback.print_exc()
@@ -218,18 +234,30 @@ def create_wiki_capacitacao_session():
 def rename_wiki_capacitacao_session(session_id):
     logger.debug(f'[DEBUG] PUT /api/wikitoca/capacitacao/sessions/{session_id} chamado')
     try:
-        titulo = ((request.get_json(silent=True) or {}).get('title') or '').strip()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            data = {}
+        titulo = data.get('title')
+        titulo = titulo.strip()[:200] if isinstance(titulo, str) else ''
         if not titulo:
             return api_error(400, 'WIKI_CAP_TITLE_REQUIRED', 'O título é obrigatório.')
-        if not _wiki_cap_session_row(session_id):
-            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
+        # Sem checagem prévia de existência: o UPDATE é a própria checagem.
+        # Checar antes e agir depois (check-then-act) deixa uma janela para um
+        # DELETE concorrente — medido: a sessão some entre a checagem e o
+        # UPDATE, o WHERE não casa nenhuma linha, e o SELECT final devolve
+        # None, virando um 200 com corpo `null` (sucesso aparente para quem
+        # chama). `rowcount` do próprio UPDATE é a fonte de verdade: 0 linhas
+        # afetadas = a sessão não existe (mais), sem essa janela.
         conn = get_db()
         c = conn.cursor()
         c.execute('''UPDATE wiki_training_sessions
                      SET title=?, title_source='manual', updated_at=CURRENT_TIMESTAMP
                      WHERE id=?''', (titulo, session_id))
         conn.commit()
+        encontrada = c.rowcount > 0
         conn.close()
+        if not encontrada:
+            return api_error(404, 'WIKI_CAP_NOT_FOUND', 'Capacitação não encontrada.')
         return jsonify(_wiki_cap_session_row(session_id))
     except Exception as e:
         logger.exception(f'[ERROR] PUT /api/wikitoca/capacitacao/sessions/{session_id}: {e}')
@@ -279,11 +307,29 @@ def delete_wiki_capacitacao_session(session_id):
         conn.commit()
         conn.close()
         # Os arquivos ficam num diretório por instância — apagar a pasta inteira
-        # evita deixar órfãos em disco.
-        import shutil
+        # evita deixar órfãos em disco. Os registros do banco já foram
+        # removidos acima; se o disco falhar (arquivo com handle aberto,
+        # permissão, etc.) o registro não pode ficar bloqueado por isso —
+        # mas a falha também não pode ficar muda, senão o suporte fica cego
+        # com órfãos em disco e o log dizendo "removida" mesmo assim.
         pasta = WIKI_TRAINING_UPLOAD_DIR / str(session_id)
         if pasta.exists():
-            shutil.rmtree(pasta, ignore_errors=True)
+            falhas = []
+
+            # `onexc` (Python 3.12+; este ambiente roda 3.14) recebe a exceção
+            # já instanciada — mais direto de logar do que o `onerror` legado,
+            # que recebe exc_info como tupla (function, path, excinfo).
+            def _wiki_cap_rmtree_onexc(func, caminho, exc):
+                falhas.append((caminho, exc))
+
+            shutil.rmtree(pasta, onexc=_wiki_cap_rmtree_onexc)
+            if falhas:
+                primeiro_caminho, primeiro_erro = falhas[0]
+                logger.warning(
+                    f'[WikiToca] Capacitação id={session_id}: {len(falhas)} item(ns) da '
+                    f'pasta {pasta} não puderam ser removidos do disco (os registros do '
+                    f'banco já foram excluídos) — primeiro: {primeiro_caminho} ({primeiro_erro})'
+                )
         logger.info(f'[WikiToca] Capacitação removida id={session_id}')
         return jsonify({'success': True})
     except Exception as e:
@@ -312,6 +358,24 @@ def clear_wiki_capacitacao_messages(session_id):
         return api_error(500, 'WIKI_CAP_CLEAR_ERROR', 'Erro ao limpar a conversa.', details=str(e))
 
 
+# `<path:filename>` (não `<filename>`) é necessário aqui porque o layout em
+# disco é `<session_id>/<file_name>` — o conversor padrão do Flask não casa
+# barra. Esta é a PRIMEIRA rota do projeto a usar `<path:>` (as outras quatro
+# rotas de upload do WikiToca usam `<filename>`, que não aceita subdiretório).
+#
+# A proteção contra travessia de caminho (`../`, caminho absoluto `/etc/...`,
+# drive absoluto `C:/...`) NÃO vem só do `safe_join` que o `send_from_directory`
+# usa por baixo — para um `filename` começando com `/`, o `safe_join` do
+# Werkzeug 2.3.7 devolve o caminho absoluto sem erro (no Python 3.13+,
+# `ntpath.isabs('/x')` passou a ser False, então essa camada sozinha deixaria
+# passar). Quem fecha esse buraco de verdade é o REGEX do conversor `path`
+# do Werkzeug (`[^/].*?`, que exige que o primeiro caractere do segmento não
+# seja `/`) combinado com o `merge_slashes` do roteamento — confirmado
+# empiricamente que `//etc/passwd` nem chega a casar a rota (404 antes de
+# tocar o filesystem). Ou seja: **não troque o conversor `<path:>` por algo
+# "mais simples" nem faça upgrade de Werkzeug sem revalidar travessia** — é
+# esse regex, não o `safe_join`, que impede o caminho absoluto de escapar.
+# O teste de travessia (test_wikitoca.py) trava esse comportamento.
 @app.route('/uploads/wikitoca/capacitacao/<path:filename>')
 def serve_wikitoca_training_upload(filename):
     return send_from_directory(str(WIKI_TRAINING_UPLOAD_DIR), filename)
