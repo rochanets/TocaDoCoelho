@@ -2,6 +2,7 @@ import html
 import io
 import sqlite3
 import time
+import unicodedata
 
 import pytest
 
@@ -514,6 +515,34 @@ def test_wiki_norm_e_wiki_norm_indexado_produzem_a_mesma_string_normalizada():
         assert len(indexado) == len(indices)
 
 
+def test_wiki_norm_com_atalho_ascii_bate_com_implementacao_ingenua_em_todo_o_unicode():
+    """_wiki_norm ganhou um atalho ASCII por caractere para performance (~1,4-1,6x
+    medido em português acentuado real -- ver comentário na função). A
+    implementação ingênua -- NFKD na string inteira de uma vez, como o código
+    antes da otimização -- é o oráculo: se o atalho divergir dela em QUALQUER
+    ponto do Unicode, a otimização tem que ser revertida, porque a igualdade
+    entre _wiki_norm (usada no termo) e _wiki_norm_indexado (usada no texto)
+    é o que faz o casamento/destaque de busca funcionar. Varre todos os planos
+    (0x0 a 0x10FFFF), pulando os surrogates (0xD800-0xDFFF), que não são
+    caracteres válidos isolados."""
+    def _wiki_norm_ingenuo(texto):
+        base = unicodedata.normalize('NFKD', str(texto or ''))
+        return ''.join(ch for ch in base
+                       if not unicodedata.combining(ch) and unicodedata.category(ch) != 'Cf').lower()
+
+    for cp in range(0, 0x110000):
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        ch = chr(cp)
+        esperado = _wiki_norm_ingenuo(ch)
+        obtido = toca._wiki_norm(ch)
+        assert obtido == esperado, f'U+{cp:04X}'
+
+        indexado, indices = toca._wiki_norm_indexado(ch)
+        assert obtido == indexado, f'U+{cp:04X}'
+        assert len(indexado) == len(indices)
+
+
 def test_snippet_ignora_espaco_de_largura_zero_no_meio_do_termo(client):
     """U+200B (espaço de largura zero) aparece de verdade em texto extraído
     de PDF com quebra automática de linha -- mesma família do problema de
@@ -602,3 +631,103 @@ def test_rank_chunks_aceita_fonte_unica_com_um_termo_casado(db_path):
     melhores = toca._wiki_rank_chunks(fontes, 'qual o prazo de rescisao?', top_n=3)
     assert len(melhores) == 1
     assert melhores[0]['score'] >= 1.0
+
+
+def test_rank_chunks_ignora_function_words_em_ingles(db_path):
+    """Regressão: sem as function words em inglês na stopword list, a pergunta
+    "how can you set the retry policy for when a request fails" contava
+    how/can/you/for/when como termos de conteúdo, e um FAQ de ruído (que só
+    repete essas palavras comuns) vencia o documento que realmente responde —
+    e só se autocorrigia em acervos grandes (a partir de ~200 blocos), regime
+    que o passo 1 da cascata (documentos da instância) normalmente não tem."""
+    faq_ruido = ('How do you reset your password? How can you update your profile? '
+                'How can you change your email notification settings for when a '
+                'message arrives?')
+    doc_correto = ('To set the retry policy, configure max_retries and backoff in '
+                   'the client options; the request fails only after all retries '
+                   'are exhausted.')
+    fontes = [
+        {'label': 'faq_ruido.md', 'text': faq_ruido},
+        {'label': 'doc_correto.md', 'text': doc_correto},
+    ]
+    melhores = toca._wiki_rank_chunks(
+        fontes, 'how can you set the retry policy for when a request fails', top_n=2)
+
+    assert len(melhores) == 1
+    assert melhores[0]['label'] == 'doc_correto.md'
+
+
+def test_rank_chunks_ordena_por_score_decrescente_e_respeita_top_n(db_path):
+    """Trava a ordenação (decrescente, não crescente) e o corte em top_n contra
+    mutação silenciosa: com 3 blocos que casam 1, 2 e 3 termos respectivamente,
+    o de 3 termos tem que vir primeiro e o resultado tem que ter exatamente
+    top_n itens."""
+    fontes = [
+        {'label': 'so_prazo.pdf', 'text': 'O prazo para envio de documentos e de dez dias.'},
+        {'label': 'prazo_aprovacao.pdf', 'text': 'O prazo de aprovacao do pedido depende da area.'},
+        {'label': 'completo.pdf', 'text': 'O prazo de aprovacao do contrato e de cinco dias uteis.'},
+    ]
+    melhores = toca._wiki_rank_chunks(fontes, 'qual o prazo de aprovacao do contrato', top_n=3)
+
+    assert len(melhores) == 3
+    assert melhores[0]['label'] == 'completo.pdf'
+    scores = [m['score'] for m in melhores]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_rank_chunks_bonus_de_raridade_faz_termo_raro_vencer_termo_comum(db_path):
+    """Trava a fórmula do bônus de raridade (IDF) contra a mutação de removê-lo:
+    'manual' aparece em 3 dos 4 blocos e 'confidencial' só no bloco raro — sem
+    o bônus, todos os 4 blocos empatariam em 1 termo casado = mesmo score, e o
+    bloco raro perderia a prioridade que deveria ter."""
+    fontes = [
+        {'label': 'comum1.pdf', 'text': 'Este e o manual de boas vindas da empresa.'},
+        {'label': 'comum2.pdf', 'text': 'Este manual descreve o processo de integracao.'},
+        {'label': 'comum3.pdf', 'text': 'Consulte o manual para mais detalhes tecnicos.'},
+        {'label': 'raro.pdf', 'text': 'Este documento e estritamente confidencial e nao deve circular.'},
+    ]
+    melhores = toca._wiki_rank_chunks(fontes, 'manual confidencial', top_n=4)
+
+    assert melhores[0]['label'] == 'raro.pdf'
+    assert melhores[0]['score'] > melhores[1]['score']
+
+
+def test_rank_chunks_nao_repete_o_mesmo_conteudo_no_resultado(db_path):
+    """Documento repetitivo gera vários blocos com o mesmo conteúdo (sobreposição
+    intencional em _wiki_split_chunks) — a seleção final não pode devolver o
+    mesmo trecho mais de uma vez, senão o orçamento de contexto do LLM (Task 8)
+    é gasto em texto duplicado."""
+    texto_repetitivo = 'O prazo de aprovacao do contrato e de cinco dias uteis. ' * 40
+    fontes = [{'label': 'repetitivo.pdf', 'text': texto_repetitivo}]
+
+    melhores = toca._wiki_rank_chunks(fontes, 'prazo de aprovacao do contrato', top_n=6)
+
+    chunks_distintos = {m['chunk'] for m in melhores}
+    assert len(chunks_distintos) == len(melhores)
+
+
+def test_rank_chunks_rejeita_top_n_menor_que_um(db_path):
+    """top_n < 1 é erro de programação do chamador, não deve devolver [] em
+    silêncio — [] é o sinal reservado para "nada relevante o bastante"."""
+    fontes = [{'label': 'a.pdf', 'text': 'O prazo de aprovacao do contrato e de dez dias.'}]
+    with pytest.raises(ValueError):
+        toca._wiki_rank_chunks(fontes, 'prazo de aprovacao', top_n=0)
+    with pytest.raises(ValueError):
+        toca._wiki_rank_chunks(fontes, 'prazo de aprovacao', top_n=-1)
+
+
+def test_split_chunks_nao_gera_cauda_minuscula_e_redundante():
+    """12,2% dos casos reais medidos geram um último bloco que é puro substring
+    do anterior quando o texto termina pouco além de um múltiplo do passo —
+    ex.: [1200, 1088, 38], onde os 38 caracteres finais já estavam cobertos
+    pelo bloco anterior. Um texto de 2200 caracteres reproduz o caso: o bloco
+    que começaria em 2100 teria só 100 caracteres, todos já dentro do bloco
+    anterior (que vai de 1050 a 2200) — a guarda deve suprimi-lo."""
+    texto = 'x' * 2200
+
+    blocos = toca._wiki_split_chunks(texto)
+
+    # Sem a guarda, esta iteração geraria um 3º bloco de 100 caracteres
+    # (2100 até o fim), inteiramente contido no 2º bloco (1050 até o fim).
+    assert len(blocos) == 2
+    assert len(blocos[-1]) > 150
