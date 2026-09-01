@@ -4968,6 +4968,7 @@ def _itoca_extract_text_from_file(file_path_str):
 
         elif ext in ('.xlsx', '.xls'):
             if OPENPYXL_AVAILABLE:
+                wb = None
                 try:
                     wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
                     for sheet in wb.worksheets:
@@ -4977,6 +4978,17 @@ def _itoca_extract_text_from_file(file_path_str):
                                 text_parts.append(row_text)
                 except Exception as e5:
                     logger.warning(f'[iToca] openpyxl falhou em {path.name}: {e5}')
+                finally:
+                    # `read_only=True` mantém o handle do zip aberto até o close
+                    # explícito. Sem isto, no Windows o arquivo fica travado e
+                    # NENHUMA planilha podia ser excluída pelo WikiToca — o
+                    # unlink da rota levantava WinError 32. Mesmo cuidado que
+                    # routes/clients.py já toma ao ler xlsx.
+                    if wb is not None:
+                        try:
+                            wb.close()
+                        except Exception as e_close:
+                            logger.debug(f'[iToca] falha ao fechar workbook de {path.name}: {e_close}')
 
         elif ext in ('.png', '.jpg', '.jpeg'):
             if PYTESSERACT_AVAILABLE and PIL_AVAILABLE:

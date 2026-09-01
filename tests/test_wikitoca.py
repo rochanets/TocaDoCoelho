@@ -1985,3 +1985,34 @@ def test_import_xlsx_de_conhecimentos_funciona_no_windows():
 
     assert resp.status_code == 200, resp.get_json()
     assert resp.get_json()['imported'] == 1, resp.get_json()
+
+
+def test_documento_xlsx_pode_ser_excluido_depois_de_indexado(client):
+    """Regressão: excluir um documento .xlsx devolvia 500 no Windows.
+
+    `openpyxl.load_workbook(..., read_only=True)` mantém o handle do zip aberto
+    até `wb.close()`, que nunca era chamado — então o `unlink` da rota de
+    exclusão levantava PermissionError (WinError 32) e NENHUMA planilha podia
+    ser removida. O submódulo Documentos passou a exercitar esse caminho a cada
+    upload de .xlsx, e é a mesma classe de bug já corrigida no import.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.active.append(['Produto', 'Preco'])
+    wb.active.append(['Cadeira', '250'])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    resp = client.post('/api/wikitoca/documents',
+                       data={'files': (buf, 'tabela.xlsx')},
+                       content_type='multipart/form-data')
+    assert resp.status_code == 201, resp.get_json()
+    payload = resp.get_json()
+    _espera_task(client, payload['task_id'])
+
+    doc_id = payload['documents'][0]['id']
+    resp_del = client.delete(f'/api/wikitoca/documents/{doc_id}')
+    assert resp_del.status_code == 200, resp_del.get_json()
+    assert client.get('/api/wikitoca/documents').get_json() == []
