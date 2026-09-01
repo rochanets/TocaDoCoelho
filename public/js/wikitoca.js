@@ -229,6 +229,7 @@
                     ${doc.snippet ? `<div class="wiki-doc-snippet">${doc.snippet}</div>` : ''}
                     <div style="display:flex; gap:8px;">
                         <a class="btn btn-secondary btn-small" href="${doc.file_url}" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Abrir</a>
+                        <a class="btn btn-secondary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
                         <button class="btn btn-danger btn-small" onclick="deleteWikiDocument(${doc.id})"><i class="fas fa-trash"></i></button>
                     </div>
                 </div>`;
@@ -406,7 +407,10 @@
         function toggleWikiEntriesSort() {
             wikiEntriesSortOrder = wikiEntriesSortOrder === 'az' ? 'za' : 'az';
             updateWikiSortButtonLabel();
-            loadWikiEntries();
+            // Via loadWikiEntriesFromSearch, e não loadWikiEntries() direto: a
+            // versão anterior chamava sem parâmetro e a lista voltava completa,
+            // perdendo em silêncio o termo que o usuário tinha buscado.
+            loadWikiEntriesFromSearch();
         }
 
         function clearWikiSearch() {
