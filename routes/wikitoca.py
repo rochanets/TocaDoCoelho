@@ -63,6 +63,17 @@ def _wiki_index_document(table, row_id, file_path):
     except Exception as e:
         logger.exception(f'[WikiToca] Falha ao gravar texto extraído ({table} id={row_id}): {e}')
         return 'error'
+    if table == 'wiki_documents':
+        # Invalidação no lado da ESCRITA para o cache de tokenização da cascata
+        # da Capacitação (routes/wikitoca_capacitacao.py). A assinatura por
+        # versão que aquele cache usa fecha adição, exclusão e mudança de
+        # status sozinha, mas não fecha ESTE caso: reindexar um documento no
+        # mesmo segundo em que outro foi indexado deixa COUNT, MAX(id) e
+        # MAX(extracted_at) idênticos — `CURRENT_TIMESTAMP` do SQLite tem
+        # granularidade de segundo — e a cascata seguiria respondendo com o
+        # texto antigo. Esta é a única função que altera `extracted_text` de
+        # `wiki_documents`, então avisar daqui fecha o caso por completo.
+        _wiki_cap_invalida_cache_da_base()
     return status
 
 
