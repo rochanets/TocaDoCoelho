@@ -17,10 +17,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_toca_db_path_redireciona_o_banco_inteiro(tmp_path):
     destino = tmp_path / 'banco-isolado.db'
-    env = dict(os.environ, TOCA_DB_PATH=str(destino))
+    # PYTHONIOENCODING + encoding='utf-8' fixam o encoding dos dois lados do
+    # pipe: sem isso, num console Windows cp1252 o filho escreve "será" como
+    # 0xe1 e a thread leitora do subprocess morre num UnicodeDecodeError
+    # silencioso, deixando out.stdout = None.
+    env = dict(os.environ, TOCA_DB_PATH=str(destino), PYTHONIOENCODING='utf-8')
     out = subprocess.run(
         [sys.executable, '-c', 'import app; print(app.DB_PATH)'],
-        capture_output=True, text=True, env=env, cwd=str(REPO_ROOT), timeout=300)
+        capture_output=True, encoding='utf-8', errors='replace',
+        env=env, cwd=str(REPO_ROOT), timeout=300)
     assert out.returncode == 0, out.stderr[-2000:]
     assert str(destino) in out.stdout
     assert destino.exists(), 'as migrações do import deviam ter criado o banco no caminho apontado'

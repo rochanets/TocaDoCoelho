@@ -1309,8 +1309,12 @@
                         <div style="font-weight:700; color:var(--t-primary);">Atas de reunião</div>
                         <div class="history-meta" style="margin:0; font-weight:400;">Gerente Comercial → Conta → Oportunidade, com o status da ata anterior carregado.</div>
                     </div>
-                    <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
+                        <button class="btn btn-auto-mapping btn-small" onclick="openIAtaMeuResumoModal()"><span class="ai-star-icon">✦</span> Meu resumo</button>
+                    </div>
                 </div>
+                <div id="iataMeuResumoContent" style="display:none; margin-bottom:16px;"></div>
                 <div id="iataContent"></div>
             </div>
             <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
@@ -1636,6 +1640,18 @@
                         </button>
                     </div>
 
+                    <div id="feedbackWatcherCard" style="display:none; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:10px;">
+                        <span style="font-size:20px;"><i class="fas fa-robot" style="color:#10b981;"></i></span>
+                        <div style="flex:1; min-width:150px;">
+                            <div style="font-weight:600; font-size:13.5px; color:#111827;">Watcher de Feedback (dev)</div>
+                            <div id="feedbackWatcherStatus" style="margin-top:2px; font-size:12px; color:#6b7280;"></div>
+                        </div>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; font-size:13px; color:#4b5563;">
+                            <input type="checkbox" id="feedbackWatcherToggle" onchange="onFeedbackWatcherToggle(this.checked)" style="width:17px; height:17px; cursor:pointer; accent-color:#10b981;">
+                            Analisar feedbacks com Claude Code
+                        </label>
+                    </div>
+
                     <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; font-size:13px; color:#4b5563;">
                         <input type="checkbox" id="waStartupCheckToggle" onchange="onWaStartupCheckToggle(this.checked)" style="width:17px; height:17px; cursor:pointer; accent-color:#10b981;">
                         Verificar conexões na abertura do sistema (WhatsApp, Outlook e chaves de integração)
@@ -1943,7 +1959,12 @@
                 <h2><i class="fas fa-envelope" style="margin-right:8px;color:#10b981;"></i>Sincronizando com Outlook</h2>
             </div>
             <div style="padding:20px;">
-                <div class="outlook-progress-track"><div class="outlook-progress-fill"></div></div>
+                <div class="outlook-progress-track">
+                    <div id="outlookSyncFill" class="outlook-progress-fill">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div id="outlookSyncPct" style="font-size:11px;color:#6b7280;text-align:right;margin:0 18px 8px 0;">5%</div>
                 <p id="outlookProgressMsg" style="font-size:13px;color:#374151;margin:0 0 4px;">Conectando ao Outlook...</p>
                 <p id="outlookProgressCount" style="font-size:12px;color:#9ca3af;margin:0;min-height:16px;"></p>
                 <div style="margin-top:16px;text-align:right;">
@@ -2005,7 +2026,12 @@
                     onmouseover="this.style.color='#374151'" onmouseout="this.style.color='#6b7280'">⊟</button>
             </div>
             <div id="outlookImportProgressArea" style="padding:20px;">
-                <div class="outlook-progress-track"><div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;"></div></div>
+                <div class="outlook-progress-track">
+                    <div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div id="outlookImportPct" style="font-size:11px;color:#6b7280;text-align:right;margin:0 18px 0 0;">5%</div>
                 <p id="outlookImportStep" style="font-size:13px;color:#374151;margin:8px 0 0;">Iniciando...</p>
             </div>
         </div>
@@ -2126,9 +2152,11 @@
     <script src="/js/account-planning.js"></script>
     <script src="/js/radar.js"></script>
     <script src="/js/waha-dispatch.js"></script>
+    <script src="/js/email-dispatch.js"></script>
     <script src="/js/radar-actions.js"></script>
     <script src="/js/scheduled-sends.js"></script>
     <script src="/js/relatorio-semanal.js"></script>
+    <script src="/js/iata-meu-resumo.js"></script>
     <script src="/js/wikitoca.js"></script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>

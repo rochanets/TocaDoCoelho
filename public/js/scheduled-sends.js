@@ -150,6 +150,23 @@
             });
         }
 
+        function scheduleMailingViaOutlook() {
+            const pending = (autoTocaMailingDispatchDrafts || [])
+                .filter(d => d.status !== 'sent' && String(d.contact.email || '').trim());
+            if (!pending.length) { showInfo('Nenhum contato pendente com e-mail.'); return; }
+            openScheduleSendModal({
+                channel: 'email',
+                items: pending.map(d => ({
+                    client_id: d.contact.id, email_to: d.contact.email,
+                    subject: d.subject, message: d.body, name: d.contact.name
+                })),
+                onScheduled: () => {
+                    closeAutoTocaMailingDispatchModal();
+                    showInfo('Fila da mala direta agendada — os e-mails sairão pela sua conta Microsoft no horário marcado.');
+                },
+            });
+        }
+
         // =====================================================
         // Avisos de inicialização (rodam uma vez por sessão)
         // =====================================================
