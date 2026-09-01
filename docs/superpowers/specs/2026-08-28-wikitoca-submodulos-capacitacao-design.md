@@ -96,7 +96,7 @@ O que migra sem alteração de comportamento: `loadWikiEntries`, `openWikiEntryM
 
 ## Submódulo Documentos — busca por conteúdo
 
-### Schema (migração 19)
+### Schema (migração 33)
 
 `wiki_documents` ganha:
 
@@ -144,7 +144,7 @@ O que migra sem alteração de comportamento: `loadWikiEntries`, `openWikiEntryM
 
 ## Submódulo Capacitação
 
-### Schema (migração 19)
+### Schema (migração 33)
 
 ```sql
 CREATE TABLE IF NOT EXISTS wiki_training_sessions (
@@ -300,7 +300,7 @@ de `app.py`, com `logger.debug`/`logger.exception` por rota).
 
 ## Migração de banco
 
-Entrada `(19, 'wikitoca_submodulos_capacitacao', [...])` em `SCHEMA_MIGRATIONS`
+Entrada `(33, 'wikitoca_submodulos_capacitacao', [...])` em `SCHEMA_MIGRATIONS`
 (`app.py:1311`) — próxima da linhagem `main`, que hoje termina em 18. Contém os
 `ALTER TABLE` de `wiki_documents` (guardados por checagem de coluna existente, no
 padrão do arquivo) e os três `CREATE TABLE IF NOT EXISTS` da Capacitação.
@@ -322,7 +322,7 @@ vez em banco novo; `tests/test_schema_migrations.py` falha se isso acontecer.
 
 ## Testes
 
-- `tests/test_schema_migrations.py` (já existente) valida que a migração 19 cria as
+- `tests/test_schema_migrations.py` (já existente) valida que a migração 33 cria as
   tabelas em banco novo e em banco legado.
 - Teste de `_itoca_extract_text_from_file()` para imagem, cobrindo o caso sem o
   binário do Tesseract instalado (não pode levantar exceção).

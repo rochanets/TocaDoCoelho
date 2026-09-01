@@ -27,7 +27,7 @@ def _columns(path, table):
         conn.close()
 
 
-def test_migracao_19_cria_tabelas_de_capacitacao(db_path):
+def test_migracao_33_cria_tabelas_de_capacitacao(db_path):
     assert {
         'wiki_training_sessions',
         'wiki_training_documents',
@@ -35,13 +35,23 @@ def test_migracao_19_cria_tabelas_de_capacitacao(db_path):
     } <= _tables(db_path)
 
 
-def test_migracao_19_adiciona_colunas_de_extracao_em_wiki_documents(db_path):
+def test_migracao_33_adiciona_colunas_de_extracao_em_wiki_documents(db_path):
     cols = _columns(db_path, 'wiki_documents')
     assert {'extracted_text', 'extracted_at', 'extract_status'} <= cols
 
 
-def test_migracao_19_roda_em_banco_legado_sem_as_colunas(tmp_path, monkeypatch):
-    """Banco antigo com wiki_documents no formato original precisa ser curado."""
+def test_migracao_33_roda_no_banco_de_producao_com_as_duas_linhagens(tmp_path, monkeypatch):
+    """Reproduz o banco REAL do usuário: `wiki_documents` no formato original e
+    `schema_version` com as duas linhagens de build — 1–19 da `main` e **20–32
+    da `Live`**.
+
+    A faixa 20–32 é o ponto do teste, não detalhe de cenário. Como
+    `_run_schema_migrations` confere cada versão individualmente, qualquer
+    número já gravado é pulado em silêncio: numerar esta migração como 20
+    faria as tabelas da Capacitação nunca serem criadas em produção, repetindo
+    a falha do `outlook_oauth_attempts`. Sem esta faixa no teste, a colisão de
+    numeração passa verde aqui e quebra na máquina do usuário.
+    """
     legado = tmp_path / 'legado.db'
     conn = sqlite3.connect(str(legado))
     conn.execute('''CREATE TABLE wiki_documents (
@@ -56,7 +66,7 @@ def test_migracao_19_roda_em_banco_legado_sem_as_colunas(tmp_path, monkeypatch):
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
     conn.execute('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, name TEXT, applied_at TIMESTAMP)')
-    for v in range(1, 19):
+    for v in list(range(1, 20)) + list(range(20, 33)):
         conn.execute('INSERT INTO schema_version (version, name) VALUES (?, ?)', (v, f'legado_{v}'))
     conn.commit()
     conn.close()
@@ -68,10 +78,29 @@ def test_migracao_19_roda_em_banco_legado_sem_as_colunas(tmp_path, monkeypatch):
     assert 'wiki_training_sessions' in _tables(legado)
 
 
-def test_migracao_19_e_idempotente(db_path):
+def test_a_migracao_do_wikitoca_nao_colide_com_numero_ja_usado_no_banco_do_usuario():
+    """Guarda de numeração: o banco de produção tem 1–19 (main) e 20–32 (Live).
+
+    Este teste existe porque a colisão real aconteceu: esta migração nasceu
+    como 19 e a `main` tomou o 19 para `feedback_auto_jobs` enquanto o trabalho
+    estava em andamento. Um número duplicado ou dentro da faixa queimada não
+    falha em lugar nenhum — só deixa de rodar, calado, na máquina do usuário.
+    """
+    versoes = [v for v, _nome, _stmts in toca.SCHEMA_MIGRATIONS]
+    nossa = [v for v, nome, _ in toca.SCHEMA_MIGRATIONS if nome == 'wikitoca_submodulos_capacitacao']
+
+    assert len(nossa) == 1, f'esperava uma entrada da WikiToca, achei {len(nossa)}'
+    assert versoes.count(nossa[0]) == 1, f'versão {nossa[0]} duplicada em SCHEMA_MIGRATIONS'
+    assert nossa[0] > 32, (
+        f'versão {nossa[0]} está na faixa já gravada pela linhagem Live (20–32) no banco '
+        'de produção — seria pulada em silêncio e as tabelas nunca seriam criadas'
+    )
+
+
+def test_migracao_33_e_idempotente(db_path):
     """Se a linha da 19 sumir do schema_version, rodar de novo não pode quebrar."""
     conn = sqlite3.connect(str(db_path))
-    conn.execute('DELETE FROM schema_version WHERE version = 19')
+    conn.execute('DELETE FROM schema_version WHERE version = 33')
     conn.commit()
     conn.close()
 

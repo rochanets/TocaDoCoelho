@@ -31,7 +31,7 @@
 
 ---
 
-## Task 1: Migração 19 — schema de busca e de Capacitação
+## Task 1: Migração 33 — schema de busca e de Capacitação
 
 **Files:**
 - Modify: `app.py` (constantes de upload perto da linha 198; callable de migração antes de `SCHEMA_MIGRATIONS` na linha 1311; entrada nova no fim da lista, linha ~1527)
@@ -150,7 +150,7 @@ Em `app.py`, após a entrada `(18, 'iata_opportunity_match_confidence', [...])` 
     # `Live` ocupa 20–32 no banco de produção do usuário; como o
     # _run_schema_migrations confere cada versão individualmente, a 19 roda
     # normalmente lá. Nada aqui pode nascer só dentro do init_db().
-    (19, 'wikitoca_submodulos_capacitacao', [
+    (33, 'wikitoca_submodulos_capacitacao', [
         _wiki_add_document_extract_columns,
         '''CREATE TABLE IF NOT EXISTS wiki_training_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

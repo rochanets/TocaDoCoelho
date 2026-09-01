@@ -1321,7 +1321,7 @@ def _wiki_add_document_extract_columns(conn):
     c = conn.cursor()
     existentes = {r[1] for r in c.execute('PRAGMA table_info(wiki_documents)')}
     if not existentes:
-        logger.warning('[Migração 19] wiki_documents não existe — colunas de extração '
+        logger.warning('[Migração 33] wiki_documents não existe — colunas de extração '
                        'não foram adicionadas. Busca por conteúdo ficará inativa.')
         return
     if 'extracted_text' not in existentes:
@@ -1552,11 +1552,23 @@ SCHEMA_MIGRATIONS = [
         _iata_add_opportunity_match_confidence_column,
     ]),
     # WikiToca: busca por conteúdo nos Documentos + submódulo Capacitação.
-    # 19 é o próximo número da linhagem `main` (que ia até 18). A linhagem
-    # `Live` ocupa 20–32 no banco de produção do usuário; como o
-    # _run_schema_migrations confere cada versão individualmente, a 19 roda
-    # normalmente lá. Nada aqui pode nascer só dentro do init_db().
-    (19, 'wikitoca_submodulos_capacitacao', [
+    #
+    # Por que 33 e não 20, com um vão de 20 a 32 na lista: o banco de produção
+    # do usuário tem as versões 20–32 gravadas pela linhagem `Live` (ver o
+    # comentário de test_banco_antigo_sem_a_tabela_de_oauth_e_curado, em
+    # tests/test_schema_migrations.py). Como `_run_schema_migrations` confere
+    # cada versão individualmente, qualquer número já presente naquele banco é
+    # PULADO EM SILÊNCIO — e as tabelas desta migração nunca seriam criadas
+    # lá, repetindo exatamente a falha do `outlook_oauth_attempts`. Esta
+    # migração nasceu como 19, mas a 19 foi tomada por `feedback_auto_jobs`
+    # na `main` enquanto este trabalho estava em andamento; 20–32 estão
+    # queimados pela `Live`, então 33 é o primeiro número seguro.
+    #
+    # Vão na numeração é inofensivo: o runner itera a lista e confere versão
+    # por versão, sem depender de sequência contínua.
+    #
+    # Nada aqui pode nascer só dentro do init_db().
+    (33, 'wikitoca_submodulos_capacitacao', [
         _wiki_add_document_extract_columns,
         '''CREATE TABLE IF NOT EXISTS wiki_training_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
