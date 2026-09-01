@@ -1890,6 +1890,8 @@
         .wiki-import-export { display:flex; gap:6px; }
         .wiki-search-input:focus { outline:none; border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
         .wiki-action-btn { border-radius:10px; }
+        .wiki-submodule-bar { display:flex; gap:10px; flex-wrap:wrap; margin:16px 0; }
+        .wiki-submodule-bar .btn { border-radius:10px; }
         .wiki-sort-toggle {
             border: 1px solid #86efac;
             background: #ecfdf5;

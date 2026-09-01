@@ -463,49 +463,79 @@
                 </div>
             </div>
 
-            <div class="wiki-toolbar-search">
-                <input id="wikiSearchInput" class="wiki-search-input" placeholder="Pesquisar">
-                <button class="btn btn-primary wiki-action-btn" onclick="loadWikiTocaData()"><i class="fas fa-search"></i> Buscar</button>
-                <button class="btn btn-secondary wiki-action-btn" onclick="clearWikiSearch()" title="Limpar pesquisa"><i class="fas fa-times"></i> Limpar</button>
+            <div class="wiki-submodule-bar">
+                <button id="wikiSubBtn_conhecimentos" class="btn btn-auto-mapping" onclick="toggleWikiSubmodule('conhecimentos')"><i class="fas fa-book"></i> Conhecimentos</button>
+                <button id="wikiSubBtn_documentos" class="btn btn-secondary" onclick="toggleWikiSubmodule('documentos')"><i class="fas fa-file-lines"></i> Documentos</button>
+                <button id="wikiSubBtn_capacitacao" class="btn btn-secondary" onclick="toggleWikiSubmodule('capacitacao')"><span class="ai-star-icon">✦</span> Capacitação</button>
             </div>
 
-            <div class="wiki-grid">
-                <section class="wiki-card">
-                    <div class="wiki-section-header">
-                        <h3 class="wiki-section-title">Conhecimentos registrados</h3>
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                            <button id="wikiSortToggleBtn" type="button" class="wiki-sort-toggle" onclick="toggleWikiEntriesSort()">A-Z</button>
-                            <div class="wiki-import-export">
-                                <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiEntries()" title="Exportar conhecimentos"><i class="fas fa-file-export"></i> Exportar</button>
-                                <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiImportModal()" title="Importar conhecimentos"><i class="fas fa-file-import"></i> Importar</button>
-                            </div>
-                            <button class="btn btn-primary btn-small wiki-action-btn" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
-                        </div>
-                    </div>
-                    <div id="wikiEntriesList"></div>
-                </section>
-                <section class="wiki-card">
-                    <div class="wiki-section-header">
-                        <h3 class="wiki-section-title" style="margin-bottom:0;">Documentos (PDF, Excel, Word)</h3>
+            <!-- ── Submódulo: Conhecimentos ───────────────────────────────── -->
+            <section id="wikiSubConhecimentos" class="wiki-card">
+                <div class="wiki-section-header">
+                    <h3 class="wiki-section-title">Conhecimentos registrados</h3>
+                    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                        <button id="wikiSortToggleBtn" type="button" class="wiki-sort-toggle" onclick="toggleWikiEntriesSort()">A-Z</button>
                         <div class="wiki-import-export">
-                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiDocuments()" title="Exportar documentos"><i class="fas fa-file-export"></i> Exportar</button>
-                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiDocImportModal()" title="Importar documentos"><i class="fas fa-file-import"></i> Importar</button>
+                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiEntries()" title="Exportar conhecimentos"><i class="fas fa-file-export"></i> Exportar</button>
+                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiImportModal()" title="Importar conhecimentos"><i class="fas fa-file-import"></i> Importar</button>
+                        </div>
+                        <button class="btn btn-primary btn-small wiki-action-btn" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
+                    </div>
+                </div>
+                <div class="wiki-toolbar-search">
+                    <input id="wikiSearchInput" class="wiki-search-input" placeholder="Pesquisar nos conhecimentos">
+                    <button class="btn btn-primary wiki-action-btn" onclick="loadWikiEntriesFromSearch()"><i class="fas fa-search"></i> Buscar</button>
+                    <button class="btn btn-secondary wiki-action-btn" onclick="clearWikiSearch()" title="Limpar pesquisa"><i class="fas fa-times"></i> Limpar</button>
+                </div>
+                <div id="wikiEntriesList"></div>
+            </section>
+
+            <!-- ── Submódulo: Documentos ──────────────────────────────────── -->
+            <section id="wikiSubDocumentos" class="wiki-card" style="display:none;">
+                <div class="wiki-section-header">
+                    <h3 class="wiki-section-title" style="margin-bottom:0;">Documentos (PDF, Excel, Word)</h3>
+                    <div class="wiki-import-export">
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="reindexWikiDocuments()" title="Reprocessar o texto dos documentos pendentes para a busca por conteúdo"><i class="fas fa-rotate"></i> Reindexar documentos</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="reindexWikiDocuments(true)" title="Reprocessar TODOS os documentos, inclusive os já indexados — use depois de instalar o Tesseract"><i class="fas fa-rotate-right"></i> Reindexar tudo</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiDocuments()" title="Exportar documentos"><i class="fas fa-file-export"></i> Exportar</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiDocImportModal()" title="Importar documentos"><i class="fas fa-file-import"></i> Importar</button>
+                    </div>
+                </div>
+                <div class="wiki-toolbar-search">
+                    <input id="wikiDocSearchInput" class="wiki-search-input" placeholder="Pesquisar por nome ou pelo conteúdo do arquivo">
+                    <select id="wikiDocExtFilter" class="wiki-search-input" style="flex:0 0 150px; min-width:0;" onchange="searchWikiDocuments()">
+                        <option value="">Todos os tipos</option>
+                        <option value="pdf">PDF</option>
+                        <option value="word">Word</option>
+                        <option value="excel">Excel</option>
+                    </select>
+                    <button class="btn btn-primary wiki-action-btn" onclick="searchWikiDocuments()"><i class="fas fa-search"></i> Buscar</button>
+                    <button class="btn btn-secondary wiki-action-btn" onclick="clearWikiDocSearch()" title="Limpar pesquisa"><i class="fas fa-times"></i> Limpar</button>
+                </div>
+                <div class="wiki-doc-upload-row">
+                    <div class="wiki-doc-upload-main">
+                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
+                        <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
+                    </div>
+                    <span id="wikiFileName" class="wiki-file-name"></span>
+                    <button id="wikiFileClearBtn" type="button" onclick="clearWikiFileSelection()" title="Cancelar seleção" style="display:none; background:none; border:none; cursor:pointer; color:#ef4444; font-size:15px; padding:0 2px; line-height:1; vertical-align:middle;"><i class="fas fa-times-circle"></i></button>
+                    <div class="wiki-upload-actions">
+                        <button id="wikiUploadBtn" class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
+                    </div>
+                </div>
+                <div id="wikiDocProgressWrap" style="display:none; margin-bottom:12px;">
+                    <div style="font-size:12px; color:#6b7280; margin-bottom:6px;" id="wikiDocProgressStep">Iniciando...</div>
+                    <div style="position:relative; background:#d1fae5; border-radius:99px; height:8px; overflow:visible; margin:0 2px;">
+                        <div id="wikiDocProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                            <img src="/images/coelho-correndo.webp" class="coelho-run" alt="" style="height:18px;right:-14px;">
                         </div>
                     </div>
-                    <div class="wiki-doc-upload-row">
-                        <div class="wiki-doc-upload-main">
-                                                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
-                            <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
-                        </div>
-                        <span id="wikiFileName" class="wiki-file-name"></span>
-                        <button id="wikiFileClearBtn" type="button" onclick="clearWikiFileSelection()" title="Cancelar seleção" style="display:none; background:none; border:none; cursor:pointer; color:#ef4444; font-size:15px; padding:0 2px; line-height:1; vertical-align:middle;"><i class="fas fa-times-circle"></i></button>
-                        <div class="wiki-upload-actions">
-                            <button id="wikiUploadBtn" class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
-                        </div>
-                    </div>
-                    <div id="wikiDocumentsList"></div>
-                </section>
-            </div>
+                </div>
+                <div id="wikiDocumentsList"></div>
+            </section>
+
+            <!-- ── Submódulo: Capacitação (markup na Task 12) ─────────────── -->
+            <div id="wikiSubCapacitacao" style="display:none;"></div>
         </div>
 
         <!-- Modal de Importação WikiToca -->

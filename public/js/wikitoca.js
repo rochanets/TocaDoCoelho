@@ -9,13 +9,45 @@
         let wikiDocuments = [];
         let wikiEntriesSortOrder = "az";
 
+        const WIKI_SUBMODULES = {
+            conhecimentos: { panel: 'wikiSubConhecimentos', btn: 'wikiSubBtn_conhecimentos' },
+            documentos:    { panel: 'wikiSubDocumentos',    btn: 'wikiSubBtn_documentos' },
+            capacitacao:   { panel: 'wikiSubCapacitacao',   btn: 'wikiSubBtn_capacitacao' },
+        };
+        let wikiActiveSubmodule = null;
+
+        // Ao contrário do AutoToca, o WikiToca nunca fica sem painel: clicar no
+        // botão já ativo não fecha nada.
+        function toggleWikiSubmodule(key) {
+            const alvo = WIKI_SUBMODULES[key];
+            if (!alvo) return;
+            Object.values(WIKI_SUBMODULES).forEach(({ panel, btn }) => {
+                const el = document.getElementById(panel);
+                if (el) el.style.display = 'none';
+                const b = document.getElementById(btn);
+                if (b) { b.classList.remove('btn-auto-mapping'); b.classList.add('btn-secondary'); }
+            });
+            const painel = document.getElementById(alvo.panel);
+            if (painel) painel.style.display = 'block';
+            const botao = document.getElementById(alvo.btn);
+            if (botao) { botao.classList.remove('btn-secondary'); botao.classList.add('btn-auto-mapping'); }
+
+            wikiActiveSubmodule = key;
+            if (key === 'conhecimentos') loadWikiEntriesFromSearch();
+            if (key === 'documentos') searchWikiDocuments();
+            if (key === 'capacitacao' && typeof loadCapacitacaoSessions === 'function') loadCapacitacaoSessions();
+        }
+
         async function loadWikiTocaData() {
+            toggleWikiSubmodule(wikiActiveSubmodule || 'conhecimentos');
+        }
+
+        async function loadWikiEntriesFromSearch() {
             const query = (document.getElementById('wikiSearchInput')?.value || '').trim();
-            const params = query ? `?q=${encodeURIComponent(query)}` : '';
-            const results = await Promise.allSettled([loadWikiEntries(params), loadWikiDocuments(params)]);
-            const failed = results.some(result => result.status === 'rejected');
-            if (failed) {
-                showError('Não foi possível atualizar todos os dados do WikiToca. Tente novamente.');
+            try {
+                await loadWikiEntries(query ? `?q=${encodeURIComponent(query)}` : '');
+            } catch (err) {
+                showError('Não foi possível carregar os conhecimentos do WikiToca.');
             }
         }
 
@@ -285,7 +317,7 @@
         function clearWikiSearch() {
             const input = document.getElementById('wikiSearchInput');
             if (input) input.value = '';
-            loadWikiTocaData();
+            loadWikiEntriesFromSearch();
         }
 
         function exportWikiEntries() {
@@ -426,7 +458,16 @@
                 wikiSearchInput.addEventListener('keydown', (event) => {
                     if (event.key === 'Enter') {
                         event.preventDefault();
-                        loadWikiTocaData();
+                        loadWikiEntriesFromSearch();
+                    }
+                });
+            }
+            const wikiDocSearchInput = document.getElementById('wikiDocSearchInput');
+            if (wikiDocSearchInput) {
+                wikiDocSearchInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        searchWikiDocuments();
                     }
                 });
             }
