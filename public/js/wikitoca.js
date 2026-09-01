@@ -706,6 +706,98 @@
             document.getElementById('capSidebar')?.classList.remove('open');
         }
 
+        const CAP_EXT_ICONS = {
+            '.pdf': 'fa-file-pdf', '.doc': 'fa-file-word', '.docx': 'fa-file-word',
+            '.png': 'fa-file-image', '.jpg': 'fa-file-image', '.jpeg': 'fa-file-image',
+        };
+
+        function renderCapacitacaoChips() {
+            const el = document.getElementById('capDocChips');
+            if (!el || !capCurrentSession) return;
+            const chips = (capCurrentSession.documents || []).map(doc => {
+                const ext = String(doc.file_ext || '').toLowerCase();
+                // hasOwnProperty: `file_ext` vem do banco e um valor como
+                // 'constructor' devolveria a função do Object.prototype no
+                // lookup direto, virando `class="fas function Object()..."`.
+                const icone = Object.prototype.hasOwnProperty.call(CAP_EXT_ICONS, ext)
+                    ? CAP_EXT_ICONS[ext] : 'fa-file';
+                const status = doc.extract_status || 'pending';
+                const aviso = status === 'pending'
+                    ? '<i class="fas fa-spinner fa-spin" title="Processando o texto deste arquivo..."></i>'
+                    : (status === 'ok' ? '' :
+                       '<i class="fas fa-triangle-exclamation" title="Sem texto extraído — a IA não consegue consultar este arquivo. Para imagens e PDFs escaneados, instale o Tesseract: https://github.com/UB-Mannheim/tesseract/wiki"></i>');
+                const classe = (status === 'empty' || status === 'error') ? 'cap-chip warn' : 'cap-chip';
+                return `
+                    <span class="${classe}">
+                        <i class="fas ${icone}"></i>
+                        <a href="${escapeHtml(doc.file_url || '#')}" target="_blank" rel="noopener" title="${escapeHtml(doc.original_name)}">${escapeHtml(doc.original_name)}</a>
+                        ${aviso}
+                        <button onclick="deleteCapacitacaoDocument(${doc.id})" title="Remover documento">&times;</button>
+                    </span>`;
+            }).join('');
+            el.innerHTML = chips + `
+                <button class="btn btn-secondary btn-small" onclick="document.getElementById('capFileInput').click()">
+                    <i class="fas fa-paperclip"></i> Anexar
+                </button>`;
+        }
+
+        function _capSetProgress(pct, step) {
+            const wrap = document.getElementById('capProgressWrap');
+            const bar = document.getElementById('capProgressBar');
+            const label = document.getElementById('capProgressStep');
+            if (wrap) wrap.style.display = 'block';
+            if (bar) bar.style.width = `${Math.max(5, Math.min(100, pct))}%`;
+            if (label) label.textContent = step || '';
+        }
+
+        function _capHideProgress() {
+            const wrap = document.getElementById('capProgressWrap');
+            if (wrap) wrap.style.display = 'none';
+        }
+
+        async function uploadCapacitacaoDocuments(event) {
+            const input = event?.target;
+            const files = Array.from(input?.files || []);
+            if (!capCurrentSession || !files.length) { if (input) input.value = ''; return; }
+            const sessionId = capCurrentSession.session.id;
+            const formData = new FormData();
+            files.forEach(f => formData.append('files', f));
+            try {
+                _capSetProgress(5, 'Enviando arquivos...');
+                const resp = await fetch(
+                    `${API_BASE}/wikitoca/capacitacao/sessions/${sessionId}/documents`,
+                    { method: 'POST', body: formData });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Não foi possível enviar os arquivos.');
+                await _wikiFollowTask(payload.task_id, _capSetProgress);
+                _capHideProgress();
+                await loadCapacitacaoSessions();
+                showSuccess('Documento(s) adicionado(s) à capacitação.');
+            } catch (err) {
+                _capHideProgress();
+                showError(err.message || 'Erro ao enviar documentos.');
+                // Recarrega a instância pelo id capturado no início: a task pode
+                // ter demorado e o usuário já ter trocado de capacitação.
+                if (capCurrentSession?.session?.id === sessionId) {
+                    await selectCapacitacaoSession(sessionId);
+                }
+            } finally {
+                if (input) input.value = '';
+            }
+        }
+
+        async function deleteCapacitacaoDocument(documentId) {
+            if (!await uiConfirm('Remover este documento da capacitação?', 'Remover documento')) return;
+            try {
+                const resp = await fetch(`${API_BASE}/wikitoca/capacitacao/documents/${documentId}`,
+                    { method: 'DELETE' });
+                if (!resp.ok) throw new Error('Não foi possível remover o documento.');
+                await loadCapacitacaoSessions();
+            } catch (err) {
+                showError(err.message || 'Erro ao remover documento.');
+            }
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
             const wikiSearchInput = document.getElementById('wikiSearchInput');
             if (wikiSearchInput) {
