@@ -374,7 +374,6 @@
         let selectedCompanyForActivity = '';
         let positionGroupings = [];
         let _orgMapOpenContext = null; // { company, position } quando aberto pelo + do mapeamento organizacional
-        let wikiEntriesSortOrder = "az";
         let autoPicGoogleTab = null;
         let autoPicSlots = [null, null, null];
         let autoPicActiveSlot = 0;
