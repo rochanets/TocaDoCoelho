@@ -28,7 +28,12 @@
                 if (b) { b.classList.remove('btn-auto-mapping'); b.classList.add('btn-secondary'); }
             });
             const painel = document.getElementById(alvo.panel);
-            if (painel) painel.style.display = 'block';
+            // `display = ''` remove o inline e devolve o controle à folha de
+            // estilo, e não 'block': o painel da Capacitação é `.cap-layout`
+            // (display:grid, com a sidebar de instâncias na segunda coluna) e um
+            // 'block' inline vencia o grid, empilhando a sidebar embaixo do chat
+            // — inclusive acima de 1100px, onde ela deveria ficar à direita.
+            if (painel) painel.style.display = '';
             const botao = document.getElementById(alvo.btn);
             if (botao) { botao.classList.remove('btn-secondary'); botao.classList.add('btn-auto-mapping'); }
 
@@ -131,18 +136,34 @@
         }
 
         // Acompanha uma task de background até done/error, atualizando a barra.
-        // O 404 é esperado: o backend limpa a task 5 minutos após o término (e
-        // ela também desaparece se o app reiniciar), então 404 significa "não
-        // tenho mais notícias", não "falhou".
+        // Os dois motivos de falha são sinalizados em propriedades do Error
+        // (`taskGone` e `taskFailed`) porque quem chama precisa distinguí-los —
+        // a mensagem em si continua a mesma de antes para quem só usa
+        // `err.message` (upload e reindexação de Documentos, Task 11):
+        //
+        // - `taskGone`: HTTP 404. Esperado — o backend limpa a task 5 minutos
+        //   após o término (`_bg_task_cleanup`) e ela também desaparece se o
+        //   app reiniciar. Significa "não tenho mais notícias", não "falhou":
+        //   o resultado provavelmente já está gravado no banco.
+        // - `taskFailed`: a task terminou em `status='error'`, com mensagem
+        //   própria do backend.
         async function _wikiFollowTask(taskId, onStep) {
             while (true) {
                 await new Promise(r => setTimeout(r, 800));
                 const resp = await fetch(`${API_BASE}/tasks/${taskId}`);
-                if (resp.status === 404) throw new Error('A tarefa expirou ou foi cancelada.');
+                if (resp.status === 404) {
+                    const gone = new Error('A tarefa expirou ou foi cancelada.');
+                    gone.taskGone = true;
+                    throw gone;
+                }
                 const task = await resp.json();
                 if (onStep) onStep(task.progress || 5, task.step || '');
                 if (task.status === 'done') return task;
-                if (task.status === 'error') throw new Error(task.error || 'Falha no processamento.');
+                if (task.status === 'error') {
+                    const falhou = new Error(task.error || 'Falha no processamento.');
+                    falhou.taskFailed = true;
+                    throw falhou;
+                }
             }
         }
 
@@ -798,6 +819,167 @@
             }
         }
 
+        // `source_kind` tem QUATRO valores. O quarto, 'none', foi criado na Task 8
+        // para a resposta "não encontrei em lugar nenhum": marcar essa mensagem
+        // como 'web' acenderia um selo de "resposta da internet" numa mensagem que
+        // diz exatamente o contrário. Ausência da chave aqui = sem selo, que é o
+        // comportamento desejado.
+        const CAP_SOURCE_BADGES = {
+            documents: { icon: '📄', label: 'Documentos desta capacitação', cls: '' },
+            wiki:      { icon: '📚', label: 'Base WikiToca', cls: '' },
+            web:       { icon: '🌐', label: 'Pesquisa na web', cls: 'web' },
+        };
+
+        // Qualquer valor desconhecido ou nulo de `source_kind` (inclusive 'none')
+        // resulta em "sem selo", nunca em erro de render. O hasOwnProperty não é
+        // preciosismo: `source_kind` vem do banco, e um lookup direto em
+        // `CAP_SOURCE_BADGES['constructor']` devolveria a função do
+        // Object.prototype — objeto truthy, e o template imprimiria
+        // "undefined undefined" dentro do selo.
+        function _capSourceBadge(kind) {
+            if (!kind || typeof kind !== 'string') return null;
+            if (!Object.prototype.hasOwnProperty.call(CAP_SOURCE_BADGES, kind)) return null;
+            return CAP_SOURCE_BADGES[kind];
+        }
+
+        // Trava de concorrência do chat. Vive no módulo, e não no `disabled` do
+        // botão, porque o Enter do textarea chama askCapacitacao() direto e
+        // passaria por cima de um botão desabilitado. Duas perguntas
+        // simultâneas na mesma instância gravam U1, U2, A2, A1 (medido no
+        // backend da Task 8) e o chat perde o pareamento pergunta→resposta.
+        let capPerguntaEmAndamento = false;
+        // Bolha de sistema (erro de integração de IA), amarrada à instância em
+        // que aconteceu: { sessionId, text }. Assim trocar de capacitação não
+        // arrasta o erro de uma para a outra, e voltar não precisa limpá-lo.
+        let capSystemMessage = null;
+
+        function renderCapacitacaoMessages(pendente = null) {
+            const el = document.getElementById('capMessages');
+            if (!el || !capCurrentSession) return;
+            const msgs = capCurrentSession.messages || [];
+
+            // `status='error'` no backend só acontece quando NENHUMA IA
+            // respondeu, e a mensagem já é acionável ("verifique as chaves em
+            // Configurações"). Renderizada como bolha no lugar onde o usuário
+            // esperava a resposta — o toast desaparece e ele fica sem explicação.
+            const sistema = (capSystemMessage && capSystemMessage.sessionId === capCurrentSession.session?.id)
+                ? `
+                    <div class="itoca-msg error">
+                        <div class="itoca-msg-avatar"><i class="fas fa-circle-exclamation"></i></div>
+                        <div class="itoca-msg-bubble">${escapeHtml(capSystemMessage.text)}</div>
+                    </div>`
+                : '';
+
+            if (!msgs.length && !pendente && !sistema) {
+                el.innerHTML = '<div class="wiki-meta">Anexe documentos e faça a primeira pergunta.</div>';
+                return;
+            }
+            const bolhas = msgs.map(m => {
+                if (m.role === 'user') {
+                    return `
+                        <div class="itoca-msg user">
+                            <div class="itoca-msg-avatar"><span class="itoca-avatar-initial">🧑</span></div>
+                            <div class="itoca-msg-bubble">${escapeHtml(m.content)}</div>
+                        </div>`;
+                }
+                const badge = _capSourceBadge(m.source_kind);
+                const refs = (m.source_refs || []).map(r => escapeHtml(r)).join(', ');
+                return `
+                    <div class="itoca-msg assistant">
+                        <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt=""></div>
+                        <div class="itoca-msg-bubble itoca-markdown">
+                            ${_itocaRenderMarkdown(m.content || '')}
+                            ${badge ? `<div class="cap-source-badge ${badge.cls}">${badge.icon} ${escapeHtml(badge.label)}</div>` : ''}
+                            ${refs ? `<div class="cap-source-refs">${refs}</div>` : ''}
+                        </div>
+                    </div>`;
+            }).join('');
+
+            const digitando = pendente ? `
+                <div class="itoca-msg assistant">
+                    <div class="itoca-msg-avatar"><img src="/images/itoca-avatar.png" alt=""></div>
+                    <div class="itoca-msg-bubble"><i class="fas fa-spinner fa-spin"></i> ${escapeHtml(pendente)}</div>
+                </div>` : '';
+
+            el.innerHTML = bolhas + sistema + digitando;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        // Recarrega o histórico pelo id capturado antes da task: se o usuário
+        // trocou de capacitação enquanto a IA respondia, sobrescrever a tela com
+        // a conversa antiga seria pior do que não fazer nada.
+        async function _capRecarregaConversa(sessionId) {
+            if (capCurrentSession?.session?.id !== sessionId) return;
+            await selectCapacitacaoSession(sessionId);
+        }
+
+        async function askCapacitacao() {
+            if (!capCurrentSession) return;
+            if (capPerguntaEmAndamento) {
+                showError('Aguarde a resposta da pergunta anterior antes de enviar outra.');
+                return;
+            }
+            const input = document.getElementById('capQuestionInput');
+            const botao = document.getElementById('capAskBtn');
+            const pergunta = (input?.value || '').trim();
+            if (!pergunta) { showError('Digite uma pergunta.'); return; }
+
+            const sessionId = capCurrentSession.session.id;
+            capPerguntaEmAndamento = true;
+            capSystemMessage = null;
+            // O POST /ask devolve só { task_id }: a bolha do usuário é
+            // otimista, e o histórico real vem no recarregamento do fim.
+            capCurrentSession.messages.push({ role: 'user', content: pergunta, source_refs: [] });
+            if (input) input.value = '';
+            if (botao) botao.disabled = true;
+            renderCapacitacaoMessages('Consultando os documentos...');
+
+            try {
+                const resp = await fetch(
+                    `${API_BASE}/wikitoca/capacitacao/sessions/${sessionId}/ask`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ question: pergunta })
+                    });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Não foi possível enviar a pergunta.');
+                const task = await _wikiFollowTask(payload.task_id,
+                    (_pct, step) => renderCapacitacaoMessages(step || 'Processando...'));
+
+                // A task pode terminar em 'done' com `result.cancelled`: a
+                // capacitação foi excluída enquanto a cascata rodava. Não existe
+                // `answer`, e recarregar a sessão tomaria 404 e mostraria erro.
+                // É conversa encerrada, não falha.
+                if (task?.result?.cancelled) {
+                    capCurrentSession = null;
+                    capSystemMessage = null;
+                    await loadCapacitacaoSessions(false);
+                    showSuccess('A capacitação foi excluída durante a resposta. A conversa foi encerrada.');
+                    return;
+                }
+                await _capRecarregaConversa(sessionId);
+            } catch (err) {
+                if (err?.taskGone) {
+                    // 404 no polling = "não tenho mais notícias". A resposta
+                    // provavelmente já está no banco: recarrega e deixa o
+                    // histórico falar, sem alarme falso.
+                    await _capRecarregaConversa(sessionId);
+                } else if (err?.taskFailed) {
+                    capSystemMessage = { sessionId, text: err.message || 'Falha no processamento.' };
+                    await _capRecarregaConversa(sessionId);
+                    renderCapacitacaoMessages();
+                } else {
+                    showError(err.message || 'Erro ao consultar a IA.');
+                    // A pergunta já foi gravada no banco, mas a resposta não veio.
+                    await _capRecarregaConversa(sessionId);
+                }
+            } finally {
+                capPerguntaEmAndamento = false;
+                if (botao) botao.disabled = false;
+            }
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
             const wikiSearchInput = document.getElementById('wikiSearchInput');
             if (wikiSearchInput) {
@@ -814,6 +996,18 @@
                     if (event.key === 'Enter') {
                         event.preventDefault();
                         searchWikiDocuments();
+                    }
+                });
+            }
+            const capInput = document.getElementById('capQuestionInput');
+            if (capInput) {
+                capInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        // A trava de concorrência está dentro de askCapacitacao()
+                        // (flag de módulo), justamente porque este caminho não
+                        // passa pelo `disabled` do botão.
+                        askCapacitacao();
                     }
                 });
             }
