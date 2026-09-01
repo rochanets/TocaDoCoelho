@@ -416,6 +416,99 @@ def whatsapp_task_poll(task_id):
     return jsonify(task)
 
 
+def _whatsapp_followup_title(item):
+    """Título do compromisso — o mesmo no calendário interno e no do usuário."""
+    title = (item.get('followup_title') or '').strip() or 'Retorno combinado (WhatsApp)'
+    return (title[:117] + '...') if len(title) > 120 else title
+
+
+def _whatsapp_followup_calendar_entry(item, title=None):
+    """Evento do calendário do usuário para um item aprovado, ou None quando o
+    item não pede (ou não pode) ir para o calendário Microsoft.
+
+    Compartilhado entre /approve e o reenvio: os dois precisam produzir
+    exatamente o mesmo evento, senão a segunda tentativa criaria um compromisso
+    diferente do que o usuário revisou."""
+    if not item.get('followup_enabled', True) or not item.get('followup_to_outlook'):
+        return None
+    due_date = (item.get('followup_date') or '').strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', due_date):
+        return None
+    due_time = (item.get('followup_time') or '').strip()
+    if not _HHMM_RE.match(due_time):
+        due_time = ''
+    client_name = (item.get('client_name') or '').strip()
+    summary = (item.get('summary') or '').strip()
+    notes = f'Follow-up combinado no WhatsApp com {client_name or "o contato"}.'
+    if summary:
+        notes += f'\n\n{summary}'
+    return {
+        'client_name': client_name,
+        'title': title or _whatsapp_followup_title(item),
+        'date': due_date,
+        'time': due_time,
+        'notes': notes,
+    }
+
+
+def _whatsapp_followup_calendar_push(followups):
+    """Cria no calendário do PRÓPRIO usuário (Microsoft 365 via OAuth delegado)
+    os follow-ups que ele marcou no modal de revisão do WhatsApp Update.
+
+    Roda DEPOIS do commit das atividades e fora da transação: uma falha do
+    Graph (token caído, permissão de calendário ainda não consentida, rede)
+    nunca desfaz a importação no CRM nem o compromisso do calendário interno —
+    volta apenas como aviso na resposta, com `calendar_needs_reauth` quando o
+    caminho de saída é reconectar a conta Microsoft."""
+    result = {
+        'calendar_events': 0,
+        'calendar_links': [],
+        'calendar_errors': [],
+        'calendar_needs_reauth': False,
+    }
+    if not followups:
+        return result
+
+    try:
+        token = _outlook_graph_access_token()
+    except OutlookOAuthError as exc:
+        # Inclui OutlookReauthRequiredError/OutlookConsentRequiredError: em todos
+        # os casos o usuário precisa reconectar, então nem tenta os eventos.
+        result['calendar_needs_reauth'] = True
+        result['calendar_errors'].append(str(exc))
+        logger.warning('[WhatsApp] %s follow-up(s) não foram ao calendário do usuário: %s',
+                       len(followups), exc)
+        return result
+
+    for fu in followups:
+        client_name = fu.get('client_name') or 'Contato'
+        try:
+            event = _outlook_create_followup_event(
+                fu.get('title'), fu.get('date'), fu.get('time'),
+                notes=fu.get('notes') or '', access_token=token
+            )
+            result['calendar_events'] += 1
+            result['calendar_links'].append({
+                'client_name': client_name,
+                'title': fu.get('title') or '',
+                'date': fu.get('date') or '',
+                'time': fu.get('time') or '',
+                'web_link': event.get('web_link') or '',
+            })
+        except (OutlookCalendarPermissionError, OutlookReauthRequiredError) as exc:
+            # Falta de permissão/autorização vale para todos os eventos do lote:
+            # repetir só geraria a mesma recusa N vezes.
+            result['calendar_needs_reauth'] = True
+            result['calendar_errors'].append(str(exc))
+            logger.warning('[WhatsApp] Calendário do usuário indisponível para os follow-ups: %s', exc)
+            break
+        except Exception as exc:
+            result['calendar_errors'].append(f'{client_name}: {exc}')
+            logger.warning('[WhatsApp] Falha ao criar evento de follow-up de %s no calendário: %s',
+                           client_name, exc)
+    return result
+
+
 @app.route('/api/whatsapp/approve', methods=['POST'])
 def whatsapp_approve():
     data = request.get_json(force=True) or {}
@@ -427,6 +520,7 @@ def whatsapp_approve():
     c = db.cursor()
     inserted = 0
     commitments_created = 0
+    pending_calendar = []
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     for item in items:
@@ -439,7 +533,9 @@ def whatsapp_approve():
         message_count = int(item.get('message_count') or 0)
         last_message_ts = int(item.get('last_message_ts') or 0)
         followup_date = (item.get('followup_date') or '').strip()
-        followup_title = (item.get('followup_title') or '').strip()
+        followup_time = (item.get('followup_time') or '').strip()
+        if not _HHMM_RE.match(followup_time):
+            followup_time = ''
         # Permite que o usuário desmarque o FUP no modal de revisão
         followup_enabled = item.get('followup_enabled', True)
 
@@ -465,19 +561,52 @@ def whatsapp_approve():
 
         # Compromisso de follow-up (FUP) → calendário do sistema
         if followup_enabled and re.match(r'^\d{4}-\d{2}-\d{2}$', followup_date):
-            title = followup_title or 'Retorno combinado (WhatsApp)'
-            if len(title) > 120:
-                title = title[:117] + '...'
+            title = _whatsapp_followup_title(item)
             c.execute(
                 '''INSERT INTO commitments (client_id, activity_id, title, notes, due_date, due_time, source_type)
                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (client_id, activity_id, title, summary, followup_date, None, 'whatsapp')
+                (client_id, activity_id, title, summary, followup_date, followup_time or None, 'whatsapp')
             )
             commitments_created += 1
+            # …e, se pedido, também no calendário Microsoft do próprio usuário
+            entry = _whatsapp_followup_calendar_entry(item, title)
+            if entry:
+                pending_calendar.append(entry)
 
     db.commit()
     db.close()
-    return jsonify({'ok': True, 'inserted': inserted, 'commitments': commitments_created})
+
+    calendar = _whatsapp_followup_calendar_push(pending_calendar)
+    response = {'ok': True, 'inserted': inserted, 'commitments': commitments_created}
+    response.update(calendar)
+    return jsonify(response)
+
+
+@app.route('/api/whatsapp/calendar-followups', methods=['POST'])
+def whatsapp_calendar_followups():
+    """Reenvia ao calendário do usuário os follow-ups que o /approve não
+    conseguiu criar (token caído, permissão de calendário ainda não consentida).
+
+    Não toca o banco: a atividade e o compromisso interno já foram gravados na
+    aprovação — o dedup por content_hash impediria de refazer aquele caminho, e
+    é justamente por isso que o reenvio precisa existir separado."""
+    data = request.get_json(force=True) or {}
+    items = data.get('items', [])
+    if not isinstance(items, list):
+        return jsonify({'ok': False, 'error': 'items deve ser uma lista'}), 400
+
+    followups = []
+    for item in items:
+        entry = _whatsapp_followup_calendar_entry(item)
+        if entry:
+            followups.append(entry)
+    if not followups:
+        return jsonify({'ok': False, 'error': 'Nenhum follow-up marcado para o calendário Microsoft.'}), 400
+
+    result = _whatsapp_followup_calendar_push(followups)
+    response = {'ok': True, 'requested': len(followups)}
+    response.update(result)
+    return jsonify(response)
 
 
 # ===========================================================================

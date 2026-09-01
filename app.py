@@ -46,6 +46,8 @@ except Exception:
 from werkzeug.exceptions import HTTPException
 from autotoca import AccountAddressService
 from integrations.outlook_graph import (
+    CALENDAR_DEFAULT_TIMEZONE as OUTLOOK_CALENDAR_DEFAULT_TIMEZONE,
+    OutlookCalendarPermissionError,
     OutlookConsentRequiredError,
     OutlookOAuthError,
     OutlookReauthRequiredError,
@@ -53,6 +55,7 @@ from integrations.outlook_graph import (
     build_admin_consent_url as outlook_graph_build_admin_consent_url,
     build_authorize_url as outlook_graph_build_authorize_url,
     consume_oauth_state as outlook_graph_consume_oauth_state,
+    create_calendar_event as outlook_graph_create_calendar_event,
     ensure_schema as outlook_graph_ensure_schema,
     exchange_code_and_store as outlook_graph_exchange_code_and_store,
     fetch_message_attachments as outlook_graph_fetch_message_attachments,
@@ -7334,7 +7337,7 @@ def _graph_make_settings(redirect_uri=''):
         'tenant': (_resolve_setting('outlook_graph_tenant_id', 'OUTLOOK_GRAPH_TENANT_ID') or _GRAPH_DEFAULT_TENANT).strip(),
         'client_id': (_resolve_setting('outlook_graph_client_id', 'OUTLOOK_GRAPH_CLIENT_ID') or _GRAPH_DEFAULT_CLIENT_ID).strip(),
         'redirect_uri': redirect_uri or (_resolve_setting('outlook_graph_redirect_uri', 'OUTLOOK_GRAPH_REDIRECT_URI') or '').strip(),
-        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read Mail.Send User.Read').strip(),
+        'scope': (_resolve_setting('outlook_graph_scope', 'OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read Mail.Send User.Read Calendars.ReadWrite').strip(),
     }
 
 
@@ -7761,6 +7764,79 @@ def _outlook_send_mail(to, subject, body_html, attachments=None):
     outlook_graph_send_mail(access_token, recipient, subject, body_html, attachments)
     logger.info(f'[Outlook] E-mail "{subject}" enviado para {recipient}')
     return recipient
+
+
+# Hora combinada do follow-up: além do formato, valida a faixa — o horário pode
+# vir de LLM (que alucina '25:00') e não só do <input type="time">.
+_HHMM_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
+def _outlook_calendar_timezone():
+    return (_resolve_setting('outlook_calendar_timezone', 'OUTLOOK_CALENDAR_TIMEZONE')
+            or OUTLOOK_CALENDAR_DEFAULT_TIMEZONE).strip() or OUTLOOK_CALENDAR_DEFAULT_TIMEZONE
+
+
+def _outlook_graph_access_token(user_id=1):
+    """Token OAuth válido do Microsoft Graph do próprio usuário.
+
+    Fica separado das chamadas para poder ser obtido UMA vez e reaproveitado num
+    lote (ex.: vários follow-ups aprovados de uma só vez) — cada chamada abre
+    conexão com o banco e pode disparar um refresh de token."""
+    graph_settings = _graph_make_settings(redirect_uri=_graph_redirect_uri())
+    conn = get_db()
+    try:
+        return outlook_graph_get_valid_access_token(conn=conn, user_id=user_id, settings=graph_settings)
+    finally:
+        conn.close()
+
+
+def _outlook_graph_is_connected(user_id=1):
+    """Se existe um grant utilizável (sem tocar a rede) — para a UI decidir se
+    oferece o envio ao calendário do usuário."""
+    try:
+        conn = get_db()
+        try:
+            return bool(outlook_graph_get_integration_state(conn, user_id).get('connected'))
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug(f'[_outlook_graph_is_connected] exceção ignorada: {exc}')
+        return False
+
+
+def _outlook_create_followup_event(title, due_date, due_time=None, notes='',
+                                   access_token=None, duration_minutes=30):
+    """Cria o compromisso no calendário do PRÓPRIO usuário (Microsoft 365, via
+    OAuth delegado) — complementa o compromisso do calendário interno do Toca.
+
+    Sem hora combinada o evento entra como dia inteiro, em vez de inventar um
+    horário que não foi acordado na conversa. Retorna o dict do evento criado
+    ({'id', 'web_link', 'subject'})."""
+    due_date = (due_date or '').strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', due_date):
+        raise OutlookSyncError('Data do compromisso inválida (esperado YYYY-MM-DD).')
+    time_str = (due_time or '').strip()
+    all_day = not _HHMM_RE.match(time_str)
+    if all_day:
+        start = f'{due_date}T00:00:00'
+        end = (datetime.strptime(due_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%dT00:00:00')
+    else:
+        start_dt = datetime.strptime(f'{due_date} {time_str}', '%Y-%m-%d %H:%M')
+        start = start_dt.strftime('%Y-%m-%dT%H:%M:00')
+        end = (start_dt + timedelta(minutes=max(5, int(duration_minutes)))).strftime('%Y-%m-%dT%H:%M:00')
+    token = access_token or _outlook_graph_access_token()
+    event = outlook_graph_create_calendar_event(
+        token,
+        subject=(title or '').strip() or 'Retorno combinado',
+        start=start,
+        end=end,
+        time_zone=_outlook_calendar_timezone(),
+        body_text=notes or '',
+        all_day=all_day,
+    )
+    logger.info('[Outlook] Evento "%s" criado no calendário do usuário em %s%s.',
+                event.get('subject'), due_date, f' {time_str}' if not all_day else ' (dia inteiro)')
+    return event
 
 
 def _outlook_confirm_async(task_id, activities_to_import):
@@ -11577,9 +11653,11 @@ def _whatsapp_sync_async(task_id, period_days):
                 "Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois) no formato:\n"
                 '{"resumo": "resumo conciso em 2 a 4 frases em português, formato log de atividade CRM, '
                 'mencionando tópicos tratados, decisões e pendências, sem aspas nem markdown", '
-                '"followup": {"data": "YYYY-MM-DD", "titulo": "descrição curta do retorno/compromisso combinado"}}\n'
+                '"followup": {"data": "YYYY-MM-DD", "hora": "HH:MM ou null", '
+                '"titulo": "descrição curta do retorno/compromisso combinado"}}\n'
                 "Se houver uma data combinada de retorno, reunião, ligação ou follow-up (FUP) na conversa, "
                 "preencha o objeto 'followup' resolvendo datas relativas (ex.: 'amanhã', 'semana que vem') a partir de hoje. "
+                "Preencha 'hora' SOMENTE se um horário foi combinado explicitamente (formato 24h); caso contrário use null. "
                 "Se NÃO houver compromisso de data combinado, use \"followup\": null.\n\n"
                 f"Conversa:\n{conversation_text}"
             )
@@ -11615,6 +11693,7 @@ def _whatsapp_sync_async(task_id, period_days):
             # Parse da resposta: JSON {resumo, followup} ou texto puro (fallback retrocompatível)
             summary = ''
             followup_date = ''
+            followup_time = ''
             followup_title = ''
             parsed = _extract_json_object_from_text(raw_llm) if raw_llm else None
             if isinstance(parsed, dict):
@@ -11625,6 +11704,9 @@ def _whatsapp_sync_async(task_id, period_days):
                     if re.match(r'^\d{4}-\d{2}-\d{2}$', fu_data):
                         followup_date = fu_data
                         followup_title = (fu.get('titulo') or fu.get('title') or '').strip()
+                        fu_hora = str(fu.get('hora') or fu.get('time') or '').strip()
+                        if _HHMM_RE.match(fu_hora):
+                            followup_time = fu_hora
             elif raw_llm:
                 summary = raw_llm.strip()
 
@@ -11650,6 +11732,7 @@ def _whatsapp_sync_async(task_id, period_days):
                 'last_message_ts': last_ts,
                 'period_days': period_days,
                 'followup_date': followup_date,
+                'followup_time': followup_time,
                 'followup_title': followup_title or (f'Retorno combinado com {client_name}' if followup_date else ''),
             })
             imported += 1

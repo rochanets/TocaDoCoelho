@@ -27,6 +27,54 @@
     let _waLastDiagnosticsRunId = '';
     let _waLastDiagnosticText = '';
 
+    // Estado do OAuth Microsoft 365 — decide se o WhatsApp Update pode lançar o
+    // follow-up direto no calendário do próprio usuário.
+    let _waGraphStatus = { connected: false, email: '', error: '' };
+    let _waGraphReconnectPoll = null;
+
+    async function _waCheckGraphStatus() {
+      try {
+        const res = await fetch('/api/outlook/graph-status');
+        const data = await res.json();
+        _waGraphStatus = {
+          connected: !!data.connected,
+          email: data.email || '',
+          error: data.error || ''
+        };
+      } catch (e) {
+        _waGraphStatus = { connected: false, email: '', error: 'Não foi possível verificar a conexão Microsoft 365.' };
+      }
+      return _waGraphStatus.connected;
+    }
+
+    // Conectar a conta Microsoft sem sair da revisão: abre o OAuth em popup e
+    // redesenha a lista quando o grant aparece, para o usuário não precisar
+    // refazer a sincronização inteira só para ligar o calendário.
+    function _waConnectGraphFromReview() {
+      if (typeof connectMicrosoft365 !== 'function') {
+        showInfo('Conecte a conta Microsoft 365 em Configurações > Integrações.');
+        return;
+      }
+      connectMicrosoft365();
+      if (_waGraphReconnectPoll) clearInterval(_waGraphReconnectPoll);
+      let tries = 0;
+      _waGraphReconnectPoll = setInterval(async function() {
+        tries++;
+        const connected = await _waCheckGraphStatus();
+        if (connected || tries >= 40) {
+          clearInterval(_waGraphReconnectPoll);
+          _waGraphReconnectPoll = null;
+          if (connected) {
+            _waReviewItems.forEach(function(item) {
+              if (item.followup_date) item.followup_to_outlook = true;
+            });
+            _waRenderReviewList();
+            showInfo('Conta Microsoft conectada — os follow-ups aceitos vão para o seu calendário.');
+          }
+        }
+      }, 3000);
+    }
+
     function openWhatsappUpdateWithWarning() {
       setActiveAutoTocaModuleButton('autoTocaBtn_whatsapp-update');
       if (localStorage.getItem('wa_ban_warning_ok') === '1') {
@@ -54,6 +102,7 @@
     function openWhatsappSyncModal() {
       document.getElementById('whatsappSyncModal').style.display = 'block';
       _waShowSection('loading');
+      _waCheckGraphStatus();
       _waCheckStatus();
     }
 
@@ -201,48 +250,18 @@
         box.style.border = '1px solid #93c5fd';
         box.innerHTML = `<div style="font-weight:700; color:#1e40af; margin-bottom:4px;"><i class="fab fa-whatsapp" style="margin-right:6px;"></i>Análise concluída — revise os resumos</div><div style="color:#374151; font-size:13px;">${items.length} conversa(s) encontrada(s). Aceite ou rejeite cada uma antes de inserir no CRM.</div>`;
 
-        _waReviewItems = items.map((item, idx) => Object.assign({}, item, {idx, state: 'accept', followup_enabled: !!item.followup_date}));
+        _waReviewItems = items.map((item, idx) => Object.assign({}, item, {
+          idx,
+          state: 'accept',
+          followup_enabled: !!item.followup_date,
+          followup_time: item.followup_time || '',
+          // Calendário do próprio usuário: já vem ligado quando a conta Microsoft
+          // está conectada — é o destino que o usuário espera ao aceitar a sugestão
+          // (o calendário interno do Toca continua recebendo o compromisso também).
+          followup_to_outlook: !!item.followup_date && _waGraphStatus.connected
+        }));
 
-        const list = document.getElementById('waReviewList');
-        list.innerHTML = '';
-        _waReviewItems.forEach(function(item) {
-          const card = document.createElement('div');
-          card.id = 'waReviewCard_' + item.idx;
-          card.style.cssText = 'border:1px solid #d1fae5; border-radius:8px; padding:12px 14px; background:#f0fdf4; transition:background .15s,border-color .15s;';
-          const dateStr = item.activity_date ? item.activity_date.substring(0,10) : '';
-          // Bloco de follow-up (FUP) — só aparece quando a IA detectou uma data combinada
-          let fupHtml = '';
-          if (item.followup_date) {
-            const fd = item.followup_date.split('-');
-            const fupBr = fd.length === 3 ? (fd[2] + '/' + fd[1] + '/' + fd[0]) : item.followup_date;
-            fupHtml =
-              '<div style="display:flex; align-items:center; gap:8px; margin-top:8px; padding:7px 10px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px;">' +
-                '<span style="font-size:12px; color:#1e40af; flex:1; min-width:0;">📅 <strong>Follow-up:</strong> ' + fupBr +
-                  (item.followup_title ? ' — <span style="color:#374151;">' + item.followup_title + '</span>' : '') +
-                  '<br><span style="font-size:10px; color:#6b7280;">Adicionar ao calendário do sistema</span>' +
-                '</span>' +
-                '<label class="wa-switch wa-switch-sm" title="Adicionar follow-up ao calendário">' +
-                  '<input type="checkbox" id="waFupChk_' + item.idx + '" checked onchange="_waToggleFup(' + item.idx + ', this.checked)">' +
-                  '<span class="wa-switch-slider"></span>' +
-                '</label>' +
-              '</div>';
-          }
-          card.innerHTML =
-            '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">' +
-              '<strong style="font-size:13px; color:#111827; flex:1; min-width:0; word-break:break-word;">' + (item.client_name || '') + '</strong>' +
-              '<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">' +
-                '<span id="waStateLabel_' + item.idx + '" class="wa-state-label" style="color:#059669;">Incluir</span>' +
-                '<label class="wa-switch" title="Incluir ou rejeitar esta conversa">' +
-                  '<input type="checkbox" id="waSwitch_' + item.idx + '" checked onchange="_waToggleItem(' + item.idx + ', this.checked ? \'accept\' : \'reject\')">' +
-                  '<span class="wa-switch-slider"></span>' +
-                '</label>' +
-              '</div>' +
-            '</div>' +
-            '<div style="font-size:13px; color:#374151; margin-top:8px; line-height:1.5;">' + (item.summary || '') + '</div>' +
-            fupHtml +
-            '<div style="font-size:11px; color:#9ca3af; margin-top:6px;">' + item.message_count + ' mensagem(ns)' + (dateStr ? ' · ' + dateStr : '') + '</div>';
-          list.appendChild(card);
-        });
+        _waRenderReviewList();
 
         reviewContainer.style.display = '';
         noItemsFooter.style.display = 'none';
@@ -294,6 +313,84 @@
         reviewContainer.style.display = 'none';
         noItemsFooter.style.display = '';
       }
+    }
+
+    // Renderiza (ou re-renderiza) os cards de revisão a partir de _waReviewItems.
+    // Fica separado de _waShowResult porque o estado do OAuth Microsoft pode
+    // mudar depois da lista já estar na tela (o usuário conecta a conta no meio
+    // da revisão) — aí basta redesenhar sem perder o que ele já marcou.
+    function _waRenderReviewList() {
+      const list = document.getElementById('waReviewList');
+      if (!list) return;
+      list.innerHTML = '';
+      const graphOn = _waGraphStatus.connected;
+      _waReviewItems.forEach(function(item) {
+        const card = document.createElement('div');
+        card.id = 'waReviewCard_' + item.idx;
+        card.style.cssText = 'border:1px solid #d1fae5; border-radius:8px; padding:12px 14px; background:#f0fdf4; transition:background .15s,border-color .15s;';
+        const dateStr = item.activity_date ? item.activity_date.substring(0,10) : '';
+        // Bloco de follow-up (FUP) — só aparece quando a IA detectou uma data combinada
+        let fupHtml = '';
+        if (item.followup_date) {
+          const fd = item.followup_date.split('-');
+          const fupBr = fd.length === 3 ? (fd[2] + '/' + fd[1] + '/' + fd[0]) : item.followup_date;
+          const outlookRow = graphOn
+            ? '<label class="wa-switch wa-switch-sm" title="Criar o compromisso no seu calendário Microsoft 365">' +
+                '<input type="checkbox" id="waFupOutlookChk_' + item.idx + '"' + (item.followup_to_outlook ? ' checked' : '') +
+                  ' onchange="_waToggleFupOutlook(' + item.idx + ', this.checked)">' +
+                '<span class="wa-switch-slider"></span>' +
+              '</label>'
+            : '<button type="button" class="btn btn-secondary btn-small" onclick="_waConnectGraphFromReview()" style="flex-shrink:0;">' +
+                '<i class="fas fa-plug"></i> Conectar' +
+              '</button>';
+          fupHtml =
+            '<div style="margin-top:8px; padding:8px 10px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px;">' +
+              '<div style="display:flex; align-items:center; gap:8px;">' +
+                '<span style="font-size:12px; color:#1e40af; flex:1; min-width:0;">📅 <strong>Follow-up:</strong> ' + fupBr +
+                  (item.followup_title ? ' — <span style="color:#374151;">' + escapeHtml(item.followup_title) + '</span>' : '') +
+                  '<br><span style="font-size:10px; color:#6b7280;">Adicionar ao calendário do sistema</span>' +
+                '</span>' +
+                '<input type="time" id="waFupTime_' + item.idx + '" value="' + (item.followup_time || '') + '"' +
+                  ' onchange="_waSetFupTime(' + item.idx + ', this.value)"' +
+                  ' title="Horário combinado (em branco = compromisso de dia inteiro)"' +
+                  ' style="flex-shrink:0; width:92px; font-size:12px; padding:3px 6px; border:1px solid #bfdbfe; border-radius:5px; color:#1e40af; background:#fff;">' +
+                '<label class="wa-switch wa-switch-sm" title="Adicionar follow-up ao calendário">' +
+                  '<input type="checkbox" id="waFupChk_' + item.idx + '"' + (item.followup_enabled ? ' checked' : '') +
+                    ' onchange="_waToggleFup(' + item.idx + ', this.checked)">' +
+                  '<span class="wa-switch-slider"></span>' +
+                '</label>' +
+              '</div>' +
+              '<div id="waFupOutlookRow_' + item.idx + '" style="display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px dashed #bfdbfe;' +
+                (item.followup_enabled ? '' : ' opacity:.5;') + '">' +
+                '<span style="font-size:12px; color:#1e40af; flex:1; min-width:0;">🗓️ <strong>Meu calendário Microsoft 365</strong>' +
+                  '<br><span style="font-size:10px; color:#6b7280;">' +
+                    (graphOn
+                      ? 'Cria o compromisso direto no seu Outlook, via OAuth' +
+                        (item.followup_time ? '' : ' (dia inteiro se você não informar o horário)')
+                      : 'Conecte sua conta Microsoft para lançar no seu próprio calendário') +
+                  '</span>' +
+                '</span>' +
+                outlookRow +
+              '</div>' +
+            '</div>';
+        }
+        card.innerHTML =
+          '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">' +
+            '<strong style="font-size:13px; color:#111827; flex:1; min-width:0; word-break:break-word;">' + escapeHtml(item.client_name || '') + '</strong>' +
+            '<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">' +
+              '<span id="waStateLabel_' + item.idx + '" class="wa-state-label" style="color:#059669;">Incluir</span>' +
+              '<label class="wa-switch" title="Incluir ou rejeitar esta conversa">' +
+                '<input type="checkbox" id="waSwitch_' + item.idx + '" checked onchange="_waToggleItem(' + item.idx + ', this.checked ? \'accept\' : \'reject\')">' +
+                '<span class="wa-switch-slider"></span>' +
+              '</label>' +
+            '</div>' +
+          '</div>' +
+          '<div style="font-size:13px; color:#374151; margin-top:8px; line-height:1.5; white-space:pre-wrap;">' + escapeHtml(item.summary || '') + '</div>' +
+          fupHtml +
+          '<div style="font-size:11px; color:#9ca3af; margin-top:6px;">' + item.message_count + ' mensagem(ns)' + (dateStr ? ' · ' + dateStr : '') + '</div>';
+        list.appendChild(card);
+        if (item.state === 'reject') _waToggleItem(item.idx, 'reject');
+      });
     }
 
     function _waShowConnectedForm() {
@@ -392,7 +489,28 @@
 
     function _waToggleFup(idx, enabled) {
       const item = _waReviewItems.find(function(i){ return i.idx === idx; });
-      if (item) item.followup_enabled = !!enabled;
+      if (!item) return;
+      item.followup_enabled = !!enabled;
+      // Sem compromisso no calendário interno não há evento no calendário do
+      // usuário: o backend cria os dois no mesmo passo.
+      const outlookRow = document.getElementById('waFupOutlookRow_' + idx);
+      if (outlookRow) outlookRow.style.opacity = enabled ? '' : '.5';
+      const outlookChk = document.getElementById('waFupOutlookChk_' + idx);
+      if (outlookChk) {
+        outlookChk.disabled = !enabled;
+        if (!enabled) { outlookChk.checked = false; item.followup_to_outlook = false; }
+      }
+    }
+
+    function _waToggleFupOutlook(idx, enabled) {
+      const item = _waReviewItems.find(function(i){ return i.idx === idx; });
+      if (item) item.followup_to_outlook = !!enabled;
+    }
+
+    function _waSetFupTime(idx, value) {
+      const item = _waReviewItems.find(function(i){ return i.idx === idx; });
+      if (!item) return;
+      item.followup_time = /^([01]\d|2[0-3]):[0-5]\d$/.test(value || '') ? value : '';
     }
 
     function _waSelectAllItems(action) {
@@ -407,6 +525,8 @@
     }
 
     let _waLastInsertedItems = [];
+    let _waLastCalendarResult = null;
+    let _waLastApproveResult = null;
 
     async function _waConfirmSelection() {
       var accepted = _waReviewItems.filter(function(i){ return i.state === 'accept'; });
@@ -416,13 +536,24 @@
         return;
       }
       var btn = document.getElementById('waConfirmBtn');
-      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Inserindo...'; }
+      // Quando há follow-up indo para o calendário Microsoft, a confirmação faz
+      // chamadas ao Graph: o rótulo diz o que está acontecendo em vez de deixar
+      // o usuário achando que travou em "Inserindo...".
+      var comCalendario = accepted.some(function(i){ return i.followup_enabled && i.followup_date && i.followup_to_outlook; });
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = comCalendario
+          ? '<i class="fas fa-spinner fa-spin"></i> Inserindo e agendando no seu calendário...'
+          : '<i class="fas fa-spinner fa-spin"></i> Inserindo...';
+      }
       fetch('/api/whatsapp/approve', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:accepted})})
         .then(function(r){ return r.json(); })
         .then(function(d){
           if (d.ok) {
             _waLastInsertedItems = accepted;
-            _waShowFinalResult(d.inserted, _waReviewItems.length, d.commitments || 0);
+            _waLastCalendarResult = d;
+            _waLastApproveResult = d;
+            _waShowFinalResult(d, _waReviewItems.length);
           } else {
             alert('Erro ao inserir atividades: ' + (d.error || 'Erro desconhecido'));
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Confirmar e inserir aceitos'; }
@@ -434,26 +565,97 @@
         });
     }
 
-    function _waShowFinalResult(inserted, total, commitments) {
+    function _waShowFinalResult(result, total) {
       _waShowSection('result');
       const box = document.getElementById('waSyncResultBox');
       const reviewContainer = document.getElementById('waReviewContainer');
       const noItemsFooter = document.getElementById('waNoItemsFooter');
+      const inserted = (result && result.inserted) || 0;
+      const commitments = (result && result.commitments) || 0;
+      const events = (result && result.calendar_events) || 0;
+      const calendarErrors = (result && result.calendar_errors) || [];
       box.style.background = '#ecfdf5';
       box.style.border = '1px solid #6ee7b7';
-      var fupLine = (commitments && commitments > 0)
+      var fupLine = commitments > 0
         ? '<div style="color:#1e40af; margin-top:6px; font-size:13px;">📅 ' + commitments + ' follow-up(s) adicionado(s) ao calendário do sistema.</div>'
         : '';
-      box.innerHTML = '<div style="font-weight:700; color:#065f46; margin-bottom:8px;"><i class="fas fa-check-circle" style="margin-right:6px;"></i>Atividades inseridas!</div><div style="color:#374151;"><a href="javascript:void(0)" onclick="_waShowDetailsModal()" style="color:#065f46; font-weight:600; text-decoration:underline;">' + inserted + ' atividade(s) inserida(s) no CRM com sucesso.</a></div>' + fupLine;
+      var eventLine = events > 0
+        ? '<div style="color:#1e40af; margin-top:4px; font-size:13px;">🗓️ ' + events + ' compromisso(s) criado(s) no seu calendário Microsoft 365' +
+          (_waGraphStatus.email ? ' (' + escapeHtml(_waGraphStatus.email) + ')' : '') + '.</div>'
+        : '';
+      var errorLine = calendarErrors.length
+        ? '<div style="margin-top:8px; padding:8px 10px; background:#fffbeb; border:1px solid #fde68a; border-radius:6px; color:#78350f; font-size:12px;">' +
+            '<strong>O compromisso ficou só no calendário do sistema.</strong> ' +
+            escapeHtml(calendarErrors.join(' · ')) +
+            '<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">' +
+              (result.calendar_needs_reauth
+                ? '<button type="button" class="btn btn-secondary btn-small" onclick="_waConnectGraphFromReview()">' +
+                    '<i class="fas fa-plug"></i> Reconectar Microsoft 365</button>'
+                : '') +
+              '<button type="button" id="waRetryCalendarBtn" class="btn btn-secondary btn-small" onclick="_waRetryCalendarFollowups()">' +
+                '<i class="fas fa-rotate-right"></i> Tentar de novo no calendário</button>' +
+            '</div>' +
+          '</div>'
+        : '';
+      box.innerHTML = '<div style="font-weight:700; color:#065f46; margin-bottom:8px;"><i class="fas fa-check-circle" style="margin-right:6px;"></i>Atividades inseridas!</div><div style="color:#374151;"><a href="javascript:void(0)" onclick="_waShowDetailsModal()" style="color:#065f46; font-weight:600; text-decoration:underline;">' + inserted + ' atividade(s) inserida(s) no CRM com sucesso.</a></div>' + fupLine + eventLine + errorLine;
       reviewContainer.style.display = 'none';
       noItemsFooter.style.display = '';
     }
 
+    // Reenvia ao calendário Microsoft os follow-ups que falharam na confirmação.
+    // Sem isto o usuário ficaria sem saída: as atividades já foram inseridas, e o
+    // dedup por content_hash faz uma nova sincronização ignorar as mesmas
+    // conversas — o compromisso nunca chegaria ao calendário dele.
+    async function _waRetryCalendarFollowups() {
+      const items = (_waLastInsertedItems || []).filter(function(i) {
+        return i.followup_enabled && i.followup_date && i.followup_to_outlook;
+      });
+      if (!items.length) { showInfo('Nenhum follow-up marcado para o seu calendário.'); return; }
+      const btn = document.getElementById('waRetryCalendarBtn');
+      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enviando ao calendário...'; }
+      await _waCheckGraphStatus();
+      try {
+        const res = await fetch('/api/whatsapp/calendar-followups', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({items: items})
+        });
+        const d = await res.json();
+        if (!d.ok) {
+          showInfo(d.error || 'Não foi possível criar os compromissos no seu calendário.');
+          if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-rotate-right"></i> Tentar de novo no calendário'; }
+          return;
+        }
+        _waLastCalendarResult = d;
+        _waShowFinalResult(Object.assign({}, _waLastApproveResult || {}, {
+          calendar_events: d.calendar_events,
+          calendar_errors: d.calendar_errors,
+          calendar_needs_reauth: d.calendar_needs_reauth
+        }), items.length);
+      } catch (e) {
+        showInfo('Erro ao falar com o servidor: ' + e);
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-rotate-right"></i> Tentar de novo no calendário'; }
+      }
+    }
+
     function _waShowDetailsModal() {
       const items = _waLastInsertedItems || [];
+      const eventsByName = {};
+      ((_waLastCalendarResult && _waLastCalendarResult.calendar_links) || []).forEach(function(ev) {
+        eventsByName[ev.client_name || ''] = ev;
+      });
       const rows = items.map(function(item) {
+        const when = escapeHtml(item.followup_date || '') + (item.followup_time ? ' às ' + escapeHtml(item.followup_time) : ' (dia inteiro)');
+        const ev = eventsByName[item.client_name || ''];
+        // Só afirma que foi para o calendário do usuário quando o backend
+        // confirmou o evento — pedir não é o mesmo que criar.
+        const outlookLine = item.followup_to_outlook
+          ? (ev
+              ? '<div style="margin-top:2px; font-size:12px; color:#065f46;">🗓️ No seu calendário Microsoft 365' +
+                (ev.web_link ? ' — <a href="' + escapeHtml(ev.web_link) + '" target="_blank" rel="noopener" style="color:#065f46;">abrir evento</a>' : '') + '</div>'
+              : '<div style="margin-top:2px; font-size:12px; color:#92400e;">🗓️ Não foi possível criar no seu calendário Microsoft 365</div>')
+          : '';
         const fup = (item.followup_enabled && item.followup_date)
-          ? '<div style="margin-top:4px; font-size:12px; color:#1e40af;">📅 Compromisso: ' + escapeHtml(item.followup_title || 'Follow-up') + ' — ' + escapeHtml(item.followup_date) + '</div>'
+          ? '<div style="margin-top:4px; font-size:12px; color:#1e40af;">📅 Compromisso: ' + escapeHtml(item.followup_title || 'Follow-up') + ' — ' + when + '</div>' + outlookLine
           : '<div style="margin-top:4px; font-size:12px; color:#9ca3af;">Sem compromisso criado</div>';
         return '<div style="border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; margin-bottom:8px;">'
           + '<div style="font-weight:600; color:#111827;">' + escapeHtml(item.client_name || 'Contato') + '</div>'

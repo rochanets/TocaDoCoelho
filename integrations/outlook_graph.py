@@ -60,6 +60,15 @@ class OutlookSyncError(Exception):
     pass
 
 
+class OutlookCalendarPermissionError(OutlookSyncError):
+    """O grant atual não cobre Calendars.ReadWrite (escopo novo: a conta foi
+    conectada antes de o calendário existir no app, ou o tenant ainda não
+    consentiu a permissão). É recuperável reconectando a conta, então precisa
+    ser distinguível de uma falha genérica do Graph para a UI poder oferecer a
+    reconexão em vez de mandar o usuário 'tentar novamente'."""
+    pass
+
+
 class TokenProtectionError(OutlookOAuthError):
     """Nenhum mecanismo de criptografia disponível para proteger o token — a
     aplicação recusa persistir o token em vez de gravá-lo em texto puro."""
@@ -180,11 +189,11 @@ def _http_form_post(url, form_data):
         )
         if _is_consent_error(body, err):
             raise OutlookConsentRequiredError(
-                'As permissões de e-mail não estão concedidas para esta conta no Azure. '
-                'Reconecte usando "Conectar pedindo consentimento". Se a empresa exigir '
-                'aprovação do administrador, peça que ele conceda o consentimento do tipo '
-                'DELEGADO (não "Aplicativo") para Mail.Read, Mail.Send, offline_access e '
-                'User.Read no aplicativo do Toca.'
+                'As permissões de e-mail/calendário não estão concedidas para esta conta '
+                'no Azure. Reconecte usando "Conectar pedindo consentimento". Se a empresa '
+                'exigir aprovação do administrador, peça que ele conceda o consentimento do '
+                'tipo DELEGADO (não "Aplicativo") para Mail.Read, Mail.Send, '
+                'Calendars.ReadWrite, offline_access e User.Read no aplicativo do Toca.'
             ) from e
         if str(body.get('error') or '') in _REAUTH_ERROR_CODES:
             raise OutlookReauthRequiredError(
@@ -401,7 +410,8 @@ def consume_oauth_state(conn, state: str):
 
 _TENANT_RE = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9.\-]{0,90}[a-zA-Z0-9])?$')
 _CLIENT_ID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-_ALLOWED_SCOPES = {'openid', 'profile', 'email', 'offline_access', 'User.Read', 'Mail.Read', 'Mail.Send'}
+_ALLOWED_SCOPES = {'openid', 'profile', 'email', 'offline_access', 'User.Read', 'Mail.Read',
+                   'Mail.Send', 'Calendars.ReadWrite'}
 _ALLOWED_REDIRECT_SCHEMES = {'http', 'https'}
 
 
@@ -423,12 +433,12 @@ def _oauth_config(settings=None):
         tenant = (settings.get('tenant') or 'common').strip()
         client_id = (settings.get('client_id') or '').strip()
         redirect_uri = (settings.get('redirect_uri') or '').strip()
-        scope = (settings.get('scope') or 'offline_access Mail.Read Mail.Send').strip()
+        scope = (settings.get('scope') or 'offline_access Mail.Read Mail.Send Calendars.ReadWrite').strip()
     else:
         tenant = (os.environ.get('OUTLOOK_GRAPH_TENANT_ID') or 'common').strip()
         client_id = (os.environ.get('OUTLOOK_GRAPH_CLIENT_ID') or '').strip()
         redirect_uri = (os.environ.get('OUTLOOK_GRAPH_REDIRECT_URI') or '').strip()
-        scope = (os.environ.get('OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read Mail.Send').strip()
+        scope = (os.environ.get('OUTLOOK_GRAPH_SCOPE') or 'offline_access Mail.Read Mail.Send Calendars.ReadWrite').strip()
 
     if not client_id or not redirect_uri:
         raise OutlookOAuthError(
@@ -909,3 +919,91 @@ def send_mail(access_token: str, to: str, subject: str, body_html: str, attachme
         logger.error(f'[OutlookGraph] Falha ao enviar e-mail via Graph: HTTP {status}')
         raise OutlookSyncError('Falha ao enviar e-mail via Microsoft Graph.')
     return True
+
+
+# ── Calendário do próprio usuário ────────────────────────────────────────────
+
+# Fuso padrão dos eventos criados. O Graph aceita nomes de fuso do Windows sem
+# precisar do header `Prefer: outlook.timezone`, então o padrão do projeto
+# (Brasil) vai como nome Windows mesmo.
+CALENDAR_DEFAULT_TIMEZONE = 'E. South America Standard Time'
+
+_GRAPH_DATETIME_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$')
+_MAX_EVENT_SUBJECT = 255
+_MAX_EVENT_BODY_BYTES = 256 * 1024
+
+
+def create_calendar_event(access_token: str, subject: str, start: str, end: str,
+                          time_zone: str = None, body_text: str = '',
+                          location: str = '', all_day: bool = False,
+                          reminder_minutes: int = 15):
+    """Cria um evento no calendário padrão do usuário conectado
+    (POST /me/events — requer o escopo delegado Calendars.ReadWrite).
+
+    `start`/`end` são datas-hora LOCAIS do fuso `time_zone`, sem offset
+    ('YYYY-MM-DDTHH:MM:SS') — é o formato que o Graph espera junto de
+    `timeZone`. Em evento de dia inteiro o Graph exige ambos à meia-noite e
+    `end` no dia seguinte ao último dia do evento.
+
+    Como o escopo Calendars.ReadWrite entrou depois do Mail.*, uma conta
+    conectada antes disso tem um grant sem a permissão: nesse caso o Graph
+    responde 403 e a chamada levanta OutlookCalendarPermissionError, para a UI
+    poder pedir a reconexão em vez de repetir a tentativa.
+    """
+    subject = (subject or '').strip() or 'Compromisso'
+    if not _GRAPH_DATETIME_RE.match(start or '') or not _GRAPH_DATETIME_RE.match(end or ''):
+        raise OutlookSyncError('Data/hora do evento em formato inválido (esperado YYYY-MM-DDTHH:MM:SS).')
+    if end <= start:
+        raise OutlookSyncError('O fim do evento precisa ser posterior ao início.')
+
+    body_text = body_text or ''
+    if len(body_text.encode('utf-8')) > _MAX_EVENT_BODY_BYTES:
+        body_text = body_text.encode('utf-8')[:_MAX_EVENT_BODY_BYTES].decode('utf-8', errors='ignore')
+
+    tz = (time_zone or CALENDAR_DEFAULT_TIMEZONE).strip() or CALENDAR_DEFAULT_TIMEZONE
+    event = {
+        'subject': subject[:_MAX_EVENT_SUBJECT],
+        'body': {'contentType': 'Text', 'content': body_text},
+        'start': {'dateTime': start, 'timeZone': tz},
+        'end': {'dateTime': end, 'timeZone': tz},
+        'isAllDay': bool(all_day),
+        'isReminderOn': not all_day and reminder_minutes is not None,
+    }
+    if event['isReminderOn']:
+        event['reminderMinutesBeforeStart'] = max(0, int(reminder_minutes))
+    if (location or '').strip():
+        event['location'] = {'displayName': location.strip()[:255]}
+
+    req = urllib.request.Request(
+        f'{GRAPH_BASE_URL}/me/events',
+        data=json.dumps(event).encode('utf-8'),
+        method='POST',
+        headers={'Authorization': f'Bearer {access_token}',
+                 'Content-Type': 'application/json',
+                 'Accept': 'application/json'},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = _safe_json_loads(resp.read()) or {}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')[:500]
+        logger.error(f'[OutlookGraph] Falha ao criar evento no calendário: HTTP {e.code} — {body}')
+        if e.code == 403:
+            raise OutlookCalendarPermissionError(
+                'A conta Microsoft conectada não autorizou o acesso ao calendário '
+                '(permissão Calendars.ReadWrite). Reconecte o Microsoft 365 para liberar.'
+            ) from e
+        if e.code == 401:
+            raise OutlookReauthRequiredError(
+                'A autorização da conta Microsoft expirou. Reconecte o Microsoft 365.'
+            ) from e
+        raise OutlookSyncError(f'O Microsoft Graph recusou a criação do evento (HTTP {e.code}).') from e
+    except Exception as e:
+        logger.error(f'[OutlookGraph] Falha de conexão ao criar evento no calendário: {e}')
+        raise OutlookSyncError('Falha de conexão com o Microsoft Graph ao criar o evento.') from e
+
+    return {
+        'id': payload.get('id') or '',
+        'web_link': payload.get('webLink') or '',
+        'subject': payload.get('subject') or subject,
+    }
