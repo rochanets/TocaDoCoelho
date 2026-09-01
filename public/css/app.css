@@ -1892,6 +1892,10 @@
         .wiki-action-btn { border-radius:10px; }
         .wiki-submodule-bar { display:flex; gap:10px; flex-wrap:wrap; margin:16px 0; }
         .wiki-submodule-bar .btn { border-radius:10px; }
+        .wiki-index-badge { display:inline-flex; align-items:center; gap:4px; margin-left:8px; font-size:11px; color:#047857; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:99px; padding:1px 8px; }
+        .wiki-index-badge.warn { color:#92400e; background:#fffbeb; border-color:#fde68a; }
+        .wiki-doc-snippet { font-size:12px; color:#374151; background:#f9fafb; border-left:3px solid #a7f3d0; border-radius:0 6px 6px 0; padding:6px 10px; margin:6px 0 8px; line-height:1.5; }
+        .wiki-doc-snippet mark { background:#fde68a; color:#78350f; border-radius:3px; padding:0 2px; }
         .wiki-sort-toggle {
             border: 1px solid #86efac;
             background: #ecfdf5;

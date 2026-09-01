@@ -116,6 +116,84 @@
             `).join('');
         }
 
+        function _wikiDocSetProgress(pct, step) {
+            const wrap = document.getElementById('wikiDocProgressWrap');
+            const bar = document.getElementById('wikiDocProgressBar');
+            const label = document.getElementById('wikiDocProgressStep');
+            if (wrap) wrap.style.display = 'block';
+            if (bar) bar.style.width = `${Math.max(5, Math.min(100, pct))}%`;
+            if (label) label.textContent = step || '';
+        }
+
+        function _wikiDocHideProgress() {
+            const wrap = document.getElementById('wikiDocProgressWrap');
+            if (wrap) wrap.style.display = 'none';
+        }
+
+        // Acompanha uma task de background até done/error, atualizando a barra.
+        // O 404 é esperado: o backend limpa a task 5 minutos após o término (e
+        // ela também desaparece se o app reiniciar), então 404 significa "não
+        // tenho mais notícias", não "falhou".
+        async function _wikiFollowTask(taskId, onStep) {
+            while (true) {
+                await new Promise(r => setTimeout(r, 800));
+                const resp = await fetch(`${API_BASE}/tasks/${taskId}`);
+                if (resp.status === 404) throw new Error('A tarefa expirou ou foi cancelada.');
+                const task = await resp.json();
+                if (onStep) onStep(task.progress || 5, task.step || '');
+                if (task.status === 'done') return task;
+                if (task.status === 'error') throw new Error(task.error || 'Falha no processamento.');
+            }
+        }
+
+        function searchWikiDocuments() {
+            const q = (document.getElementById('wikiDocSearchInput')?.value || '').trim();
+            const ext = (document.getElementById('wikiDocExtFilter')?.value || '').trim();
+            const params = new URLSearchParams();
+            if (q) params.set('q', q);
+            if (ext) params.set('ext', ext);
+            const query = params.toString();
+            return loadWikiDocuments(query ? `?${query}` : '');
+        }
+
+        function clearWikiDocSearch() {
+            const input = document.getElementById('wikiDocSearchInput');
+            const filtro = document.getElementById('wikiDocExtFilter');
+            if (input) input.value = '';
+            if (filtro) filtro.value = '';
+            searchWikiDocuments();
+        }
+
+        // `force` reprocessa também os documentos já marcados como 'ok' e 'empty'.
+        // Sem esse caminho, quem instala o Tesseract DEPOIS de subir um PDF
+        // escaneado fica preso: o documento ficou 'empty', e o reindex normal
+        // (que só pega NULL/pending/error) nunca mais o alcança.
+        async function reindexWikiDocuments(force = false) {
+            const pergunta = force
+                ? 'Reprocessar o texto de TODOS os documentos, inclusive os já indexados? '
+                  + 'Use isto depois de instalar o Tesseract. Pode levar vários minutos.'
+                : 'Reprocessar o texto dos documentos pendentes? Isso pode levar alguns minutos.';
+            if (!await uiConfirm(pergunta, 'Reindexar documentos')) return;
+            try {
+                const resp = await fetch(`${API_BASE}/wikitoca/documents/reindex`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force })
+                });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Não foi possível iniciar a reindexação.');
+                if (!payload.total) { showSuccess('Todos os documentos já estão indexados.'); return; }
+                _wikiDocSetProgress(5, 'Iniciando...');
+                await _wikiFollowTask(payload.task_id, _wikiDocSetProgress);
+                _wikiDocHideProgress();
+                showSuccess('Documentos reindexados.');
+                searchWikiDocuments();
+            } catch (err) {
+                _wikiDocHideProgress();
+                showError(err.message || 'Erro ao reindexar documentos.');
+            }
+        }
+
         async function loadWikiDocuments(params = '') {
             const el = document.getElementById('wikiDocumentsList');
             if (!el) return;
@@ -136,17 +214,25 @@
                 el.innerHTML = '<p style="color:#6b7280;">Nenhum documento cadastrado ainda.</p>';
                 return;
             }
-            el.innerHTML = wikiDocuments.map(doc => `
+            el.innerHTML = wikiDocuments.map(doc => {
+                const status = doc.extract_status || 'pending';
+                const selo = {
+                    pending: '<span class="wiki-index-badge" title="O texto deste arquivo ainda está sendo processado."><i class="fas fa-spinner fa-spin"></i> Indexando…</span>',
+                    empty: '<span class="wiki-index-badge warn" title="Nenhum texto foi extraído deste arquivo. Se for um PDF escaneado, instale o Tesseract e use Reindexar tudo."><i class="fas fa-triangle-exclamation"></i> Sem texto extraído</span>',
+                    error: '<span class="wiki-index-badge warn" title="A extração de texto falhou, ou o arquivo não foi encontrado no disco. Use Reindexar documentos para tentar de novo."><i class="fas fa-circle-exclamation"></i> Falha na indexação</span>',
+                    ok: ''
+                }[status] || '';
+                return `
                 <div class="wiki-doc-item">
-                    <h4>${escapeHtml(doc.title || doc.original_name || 'Documento')}</h4>
-                    <div class="wiki-meta">${formatFileSize(doc.file_size)} • ${formatDateBr(doc.updated_at)}</div>
+                    <h4>${escapeHtml(doc.original_name || doc.title || '')}</h4>
+                    <div class="wiki-meta">${formatFileSize(doc.file_size)} • ${formatDateBr(doc.updated_at)} ${selo}</div>
+                    ${doc.snippet ? `<div class="wiki-doc-snippet">${doc.snippet}</div>` : ''}
                     <div style="display:flex; gap:8px;">
-                        <a class="btn btn-primary btn-small" href="${doc.file_url}" target="_blank"><i class="fas fa-eye"></i> Visualizar</a>
-                        <a class="btn btn-primary btn-small" href="${doc.file_url}" download="${escapeHtml(doc.original_name || '')}"><i class="fas fa-download"></i> Baixar</a>
+                        <a class="btn btn-secondary btn-small" href="${doc.file_url}" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Abrir</a>
                         <button class="btn btn-danger btn-small" onclick="deleteWikiDocument(${doc.id})"><i class="fas fa-trash"></i></button>
                     </div>
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
         }
 
         function openWikiEntryModal(entryId = null) {
@@ -223,18 +309,27 @@
             files.forEach((file) => formData.append('files', file));
             formData.append('title', '');
             const response = await fetch(`${API_BASE}/wikitoca/documents`, { method: 'POST', body: formData });
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                return showError(err.error || 'Falha ao enviar documento(s).');
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) return showError(payload.error || 'Falha ao enviar documento(s).');
+
+            clearWikiFileSelection();
+            // A versão antiga limpava #wikiSearchInput, que agora é a busca de
+            // Conhecimentos — limpar a busca do próprio submódulo é o correto.
+            const docSearch = document.getElementById('wikiDocSearchInput');
+            if (docSearch) docSearch.value = '';
+            await searchWikiDocuments();
+
+            if (payload.task_id) {
+                _wikiDocSetProgress(5, 'Indexando documentos...');
+                try {
+                    await _wikiFollowTask(payload.task_id, _wikiDocSetProgress);
+                } catch (err) {
+                    showError(`Arquivo enviado, mas a indexação falhou: ${err.message}`);
+                }
+                _wikiDocHideProgress();
+                await searchWikiDocuments();
             }
-            if (fileInput) fileInput.value = '';
-            const fileName = document.getElementById('wikiFileName');
-            if (fileName) fileName.textContent = '';
-            document.getElementById('wikiUploadBtn')?.classList.remove('wiki-upload-btn-pending');
-            document.getElementById('wikiFileClearBtn')?.style && (document.getElementById('wikiFileClearBtn').style.display = 'none');
-            document.getElementById('wikiSearchInput').value = '';
             showSuccess(files.length > 1 ? 'Documentos enviados com sucesso!' : 'Documento enviado com sucesso!');
-            await loadWikiTocaData();
         }
 
         async function deleteWikiDocument(documentId) {
