@@ -765,16 +765,17 @@ def import_wikitoca_xlsx():
         if not OPENPYXL_AVAILABLE:
             return jsonify({'error': 'Importação XLSX requer openpyxl instalado'}), 500
         import openpyxl
-        import tempfile, os as _os
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-            file.save(tmp.name)
-            tmp_path = tmp.name
-        try:
-            wb = openpyxl.load_workbook(tmp_path, data_only=True)
-            ws = wb.active
-            rows_data = list(ws.iter_rows(values_only=True))
-        finally:
-            _os.unlink(tmp_path)
+        # Lê da memória em vez de arquivo temporário. A versão anterior salvava
+        # num NamedTemporaryFile e apagava no `finally`, mas o openpyxl mantém o
+        # handle do zip aberto: no Windows o unlink levantava PermissionError
+        # (WinError 32) e a rota devolvia 500 para TODO arquivo válido — a
+        # importação de conhecimentos nunca funcionou nesta plataforma.
+        # Ler de BytesIO elimina a classe de problema em vez de só fechar o
+        # handle, e some com a ida ao disco. Planilhas de conhecimento são
+        # textos digitados à mão, então cabem em memória sem preocupação.
+        wb = openpyxl.load_workbook(BytesIO(file.read()), data_only=True)
+        ws = wb.active
+        rows_data = list(ws.iter_rows(values_only=True))
         if not rows_data:
             return jsonify({'error': 'Arquivo vazio'}), 400
         # Detectar colunas pelo cabeçalho

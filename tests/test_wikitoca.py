@@ -1955,3 +1955,33 @@ def test_reindexacao_no_mesmo_segundo_invalida_o_cache_da_base(client, monkeypat
         assert 'REEXTRAIDO' in toca._wiki_cap_base_blocks()[0]['chunk']
     finally:
         toca._wiki_cap_invalida_cache_da_base()
+
+
+def test_import_xlsx_de_conhecimentos_funciona_no_windows():
+    """Regressão: a importação de conhecimentos nunca funcionou no Windows.
+
+    `openpyxl.load_workbook(caminho)` mantém o handle do zip aberto, então o
+    `os.unlink` do `finally` levantava PermissionError (WinError 32) e a rota
+    devolvia 500 — sempre, em qualquer arquivo válido. Reproduzido por curl,
+    sem JS no meio. O conserto foi ler direto de BytesIO, sem arquivo
+    temporário, o que elimina a classe de problema em vez de fechar o handle.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(['Título', 'Categoria', 'Descrição'])
+    ws.append(['Politica de ferias', 'RH', 'Trinta dias corridos por ano.'])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    import app as _toca
+    _toca.app.config['TESTING'] = True
+    with _toca.app.test_client() as c:
+        resp = c.post('/api/wikitoca/entries/import-xlsx',
+                      data={'file': (buf, 'conhecimentos.xlsx')},
+                      content_type='multipart/form-data')
+
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()['imported'] == 1, resp.get_json()
