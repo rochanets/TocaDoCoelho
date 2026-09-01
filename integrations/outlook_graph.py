@@ -657,25 +657,64 @@ def get_integration_state(conn, user_id: int):
         'needs_consent': False,
         'reason': '',
         'expires_at': row['expires_at'],
+        # O escopo guardado é o que o Azure REALMENTE concedeu: com o fallback do
+        # refresh, uma conta pode estar conectada para e-mail e sem calendário.
+        'calendar_authorized': scope_has_calendar(row['scope']),
     }
+
+
+# Escopos que o app pede ALÉM do núcleo de e-mail. Um escopo novo aqui não pode
+# derrubar o que já funciona: se o tenant ainda não consentiu (AADSTS65001), o
+# refresh com o escopo completo falha e o grant inteiro seria invalidado —
+# levando junto o sync de e-mail, o briefing e os envios. O refresh cai então
+# para o escopo reduzido, mantendo o e-mail vivo, e só o extra fica indisponível
+# até o consentimento (do usuário ou do administrador) chegar.
+_OPTIONAL_SCOPES = frozenset({'Calendars.ReadWrite'})
+
+
+def _scope_without_optional(scope: str) -> str:
+    return ' '.join(s for s in (scope or '').split() if s not in _OPTIONAL_SCOPES)
+
+
+def scope_has_calendar(scope: str) -> bool:
+    return 'Calendars.ReadWrite' in (scope or '').split()
 
 
 def _refresh_tokens(conn, user_id: int, refresh_token: str, settings=None):
     cfg = _oauth_config(settings)
-    body = {
-        'client_id': cfg['client_id'],
-        'grant_type': 'refresh_token',
-        'refresh_token': refresh_token,
-        'scope': cfg['scope'],
-    }
+
+    def _post(scope):
+        return _http_form_post(cfg['token_url'], {
+            'client_id': cfg['client_id'],
+            'grant_type': 'refresh_token',
+            'refresh_token': refresh_token,
+            'scope': scope,
+        })
+
     try:
-        payload = _http_form_post(cfg['token_url'], body)
+        payload = _post(cfg['scope'])
+    except OutlookConsentRequiredError as e:
+        reduced = _scope_without_optional(cfg['scope'])
+        if reduced == cfg['scope']:
+            # Falta consentimento no próprio núcleo: não há o que degradar.
+            _invalidate_integration(conn, user_id, str(e), needs_consent=True)
+            raise
+        try:
+            payload = _post(reduced)
+        except OutlookOAuthError:
+            # Nem o escopo reduzido passa — aí o grant realmente morreu.
+            _invalidate_integration(conn, user_id, str(e), needs_consent=True)
+            raise e from None
+        logger.warning(
+            '[OutlookGraph] Escopo opcional sem consentimento (%s): token renovado '
+            'apenas com "%s". E-mail segue funcionando; o calendário do usuário fica '
+            'indisponível até o consentimento ser concedido.',
+            ', '.join(sorted(_OPTIONAL_SCOPES)), reduced,
+        )
     except OutlookReauthRequiredError as e:
         # O refresh token guardado não vale mais. Descarta agora, senão todo
         # sync seguinte repete o mesmo erro sem nunca oferecer a reconexão.
-        _invalidate_integration(
-            conn, user_id, str(e), needs_consent=isinstance(e, OutlookConsentRequiredError)
-        )
+        _invalidate_integration(conn, user_id, str(e), needs_consent=False)
         raise
     if not payload.get('access_token'):
         raise OutlookOAuthError('Falha ao renovar token OAuth: access_token ausente.')

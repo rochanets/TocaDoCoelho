@@ -11,7 +11,7 @@ Roteiro para validar manualmente cada ponto alterado no PR #236. Siga na ordem �
 | SAI (ou OpenRouter) | Rascunhos IA, briefings, gatilhos, follow-up por e-mail | Regra: SAI primeiro, OpenRouter fallback (exceção: busca web = OpenRouter primeiro) |
 | Tavily | Account Planning (Bloco 4) | Sem ela, o botão mostra erro claro (isso também é um teste ✓) |
 | WAHA conectado | Pendentes de Resposta, envio direto, agendamento WhatsApp | QR code lido e sessão ativa |
-| Outlook (Graph) | Follow-up por e-mail, briefing matinal, revisão de sexta, agendamento de e-mail, follow-up do WhatsApp Update no calendário do usuário | ⚠️ **Reconectar a integração uma vez** — os escopos `Mail.Send` e `Calendars.ReadWrite` exigem novo consentimento (delegado) |
+| Outlook (Graph) | Follow-up por e-mail, briefing matinal, revisão de sexta, agendamento de e-mail, follow-up do WhatsApp Update no calendário do usuário | ⚠️ **Reconectar a integração uma vez** — os escopos `Mail.Send` e `Calendars.ReadWrite` exigem novo consentimento (delegado). Sem o consentimento do calendário, o e-mail segue funcionando e só o calendário fica indisponível |
 
 **Dica:** rode com `python app.py` e deixe o terminal visível — os logs (`[Database]`, `[Inbound]`, `[Jobs]`, `[Agendados]`) confirmam vários testes.
 
@@ -93,6 +93,7 @@ Gestão de Conta > botão **✦ Account Planning**.
 | 7.5 | WhatsApp Update → seu calendário | Outlook conectado > AutoToca > WhatsApp Update > sincronizar uma conversa com data combinada | No card de revisão aparecem o horário (editável) e o switch **Meu calendário Microsoft 365**, já ligado |
 | 7.6 | Evento criado via OAuth | Confirmar com o switch ligado | Resultado informa "compromisso(s) criado(s) no seu calendário Microsoft 365"; o evento está no Outlook do usuário (dia inteiro se o horário ficou em branco) |
 | 7.7 | Sem conta conectada | Desconectar o Microsoft 365 e sincronizar de novo | No lugar do switch aparece **Conectar**; conectando ali mesmo, a lista se atualiza sem refazer a sincronização |
+| 7.7b | Conectado sem permissão de calendário | Estado normal logo após o update (token antigo, sem `Calendars.ReadWrite`) | Sync de e-mail/briefing **continuam funcionando**; no card aparecem **Liberar calendário** e **Admin**, com o aviso de que pode exigir aprovação do administrador |
 | 7.8 | Falha no Graph | Confirmar com a autorização inválida (ex.: revogar o acesso antes) | Atividade e compromisso interno permanecem; aviso "ficou só no calendário do sistema" com **Reconectar** e **Tentar de novo no calendário** |
 
 ## Bloco 8 — Envio via WAHA

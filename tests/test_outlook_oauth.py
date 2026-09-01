@@ -305,3 +305,107 @@ def test_callback_de_admin_consent_recusado_segue_no_fluxo_de_erro(client):
     q = urllib.parse.parse_qs(destino.query)
     assert 'error' in q
     assert q.get('admin_consent') != ['1']
+
+# ── Escopo novo sem consentimento não pode derrubar o e-mail ─────────────────
+# Cenário real: o tenant consentiu Mail.*/User.Read meses atrás; Calendars.ReadWrite
+# entrou depois. Sem o fallback, o primeiro refresh pedindo o escopo novo recebe
+# AADSTS65001, o app invalida o grant inteiro e o usuário perde sync de e-mail,
+# briefing e envios — por causa de uma permissão de calendário que ele nem usou.
+
+_SETTINGS_COM_CALENDARIO = dict(_SETTINGS, scope='offline_access Mail.Read Mail.Send Calendars.ReadWrite')
+
+
+def _token_endpoint_por_escopo(monkeypatch, escopos_consentidos):
+    """Simula o Azure no nível do HTTP (a classificação AADSTS fica no
+    _http_form_post real): recusa se pedirem escopo não consentido."""
+    pedidos = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self):
+            return json.dumps(self._payload).encode('utf-8')
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, *args, **kwargs):
+        form = urllib.parse.parse_qs((req.data or b'').decode('utf-8'))
+        scope = (form.get('scope') or [''])[0]
+        pedidos.append(scope)
+        if set(scope.split()) - set(escopos_consentidos):
+            raise urllib.error.HTTPError(
+                _TOKEN_URL, 400, 'Bad Request', {},
+                io.BytesIO(json.dumps(_CONSENT_BODY).encode('utf-8')),
+            )
+        return _Resp({'access_token': 'access-novo', 'refresh_token': 'refresh-novo',
+                      'scope': scope, 'token_type': 'Bearer', 'expires_in': 3600})
+
+    monkeypatch.setattr(urllib.request, 'urlopen', _fake_urlopen)
+    return pedidos
+
+
+def test_calendario_sem_consentimento_nao_derruba_o_email(conn, monkeypatch):
+    consentidos = ['offline_access', 'Mail.Read', 'Mail.Send']
+    pedidos = _token_endpoint_por_escopo(monkeypatch, consentidos)
+    _seed_token(conn)
+
+    token = outlook_graph.get_valid_access_token(conn, 1, settings=_SETTINGS_COM_CALENDARIO)
+
+    assert token == 'access-novo'                      # e-mail continua funcionando
+    assert 'Calendars.ReadWrite' in pedidos[0]         # tentou o escopo completo
+    assert 'Calendars.ReadWrite' not in pedidos[1]     # e caiu para o reduzido
+    estado = outlook_graph.get_integration_state(conn, 1)
+    assert estado['connected'] is True
+    assert estado['calendar_authorized'] is False      # UI não promete o calendário
+
+
+def test_calendario_consentido_mantem_o_escopo_completo(conn, monkeypatch):
+    pedidos = _token_endpoint_por_escopo(
+        monkeypatch, ['offline_access', 'Mail.Read', 'Mail.Send', 'Calendars.ReadWrite'])
+    _seed_token(conn)
+
+    outlook_graph.get_valid_access_token(conn, 1, settings=_SETTINGS_COM_CALENDARIO)
+
+    assert len(pedidos) == 1                           # sem fallback desnecessário
+    assert outlook_graph.get_integration_state(conn, 1)['calendar_authorized'] is True
+
+
+def test_falta_de_consentimento_no_nucleo_ainda_invalida_o_grant(conn, monkeypatch):
+    """Se nem Mail.Read passa, não há o que degradar — o grant morreu de verdade
+    e precisa voltar para a reconexão, como antes."""
+    _token_endpoint_por_escopo(monkeypatch, ['offline_access'])
+    _seed_token(conn)
+
+    with pytest.raises(outlook_graph.OutlookConsentRequiredError):
+        outlook_graph.get_valid_access_token(conn, 1, settings=_SETTINGS_COM_CALENDARIO)
+
+    estado = outlook_graph.get_integration_state(conn, 1)
+    assert estado['connected'] is False
+    assert estado['needs_consent'] is True
+
+
+def test_refresh_token_revogado_nao_tenta_escopo_reduzido(conn, monkeypatch):
+    """invalid_grant sem AADSTS de consentimento = token morto: insistir com
+    escopo menor só gastaria uma chamada."""
+    pedidos = []
+
+    def _fake_urlopen(req, *args, **kwargs):
+        form = urllib.parse.parse_qs((req.data or b'').decode('utf-8'))
+        pedidos.append((form.get('scope') or [''])[0])
+        raise urllib.error.HTTPError(
+            _TOKEN_URL, 400, 'Bad Request', {},
+            io.BytesIO(json.dumps({'error': 'invalid_grant',
+                                   'error_description': 'AADSTS50173: token revogado.'}).encode('utf-8')),
+        )
+
+    monkeypatch.setattr(urllib.request, 'urlopen', _fake_urlopen)
+    _seed_token(conn)
+
+    with pytest.raises(outlook_graph.OutlookReauthRequiredError):
+        outlook_graph.get_valid_access_token(conn, 1, settings=_SETTINGS_COM_CALENDARIO)
+    assert len(pedidos) == 1

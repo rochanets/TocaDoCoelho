@@ -7790,20 +7790,6 @@ def _outlook_graph_access_token(user_id=1):
         conn.close()
 
 
-def _outlook_graph_is_connected(user_id=1):
-    """Se existe um grant utilizável (sem tocar a rede) — para a UI decidir se
-    oferece o envio ao calendário do usuário."""
-    try:
-        conn = get_db()
-        try:
-            return bool(outlook_graph_get_integration_state(conn, user_id).get('connected'))
-        finally:
-            conn.close()
-    except Exception as exc:
-        logger.debug(f'[_outlook_graph_is_connected] exceção ignorada: {exc}')
-        return False
-
-
 def _outlook_create_followup_event(title, due_date, due_time=None, notes='',
                                    access_token=None, duration_minutes=30):
     """Cria o compromisso no calendário do PRÓPRIO usuário (Microsoft 365, via

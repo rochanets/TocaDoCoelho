@@ -29,7 +29,9 @@
 
     // Estado do OAuth Microsoft 365 — decide se o WhatsApp Update pode lançar o
     // follow-up direto no calendário do próprio usuário.
-    let _waGraphStatus = { connected: false, email: '', error: '' };
+    // calendarOk é separado de connected: a conta pode estar ligada para e-mail e
+    // ainda sem o consentimento de Calendars.ReadWrite (novo escopo).
+    let _waGraphStatus = { connected: false, calendarOk: false, email: '', error: '' };
     let _waGraphReconnectPoll = null;
 
     async function _waCheckGraphStatus() {
@@ -38,13 +40,15 @@
         const data = await res.json();
         _waGraphStatus = {
           connected: !!data.connected,
+          calendarOk: !!data.connected && !!data.calendar_authorized,
           email: data.email || '',
           error: data.error || ''
         };
       } catch (e) {
-        _waGraphStatus = { connected: false, email: '', error: 'Não foi possível verificar a conexão Microsoft 365.' };
+        _waGraphStatus = { connected: false, calendarOk: false, email: '',
+                           error: 'Não foi possível verificar a conexão Microsoft 365.' };
       }
-      return _waGraphStatus.connected;
+      return _waGraphStatus.calendarOk;
     }
 
     // Conectar a conta Microsoft sem sair da revisão: abre o OAuth em popup e
@@ -55,7 +59,9 @@
         showInfo('Conecte a conta Microsoft 365 em Configurações > Integrações.');
         return;
       }
-      connectMicrosoft365();
+      // Conta já conectada e sem calendário = escopo novo sem consentimento:
+      // aí o fluxo que resolve é o de consentimento explícito.
+      connectMicrosoft365(_waGraphStatus.connected && !_waGraphStatus.calendarOk);
       if (_waGraphReconnectPoll) clearInterval(_waGraphReconnectPoll);
       let tries = 0;
       _waGraphReconnectPoll = setInterval(async function() {
@@ -64,7 +70,7 @@
         if (connected || tries >= 40) {
           clearInterval(_waGraphReconnectPoll);
           _waGraphReconnectPoll = null;
-          if (connected) {
+          if (connected) {   // connected aqui = calendário liberado
             _waReviewItems.forEach(function(item) {
               if (item.followup_date) item.followup_to_outlook = true;
             });
@@ -258,7 +264,7 @@
           // Calendário do próprio usuário: já vem ligado quando a conta Microsoft
           // está conectada — é o destino que o usuário espera ao aceitar a sugestão
           // (o calendário interno do Toca continua recebendo o compromisso também).
-          followup_to_outlook: !!item.followup_date && _waGraphStatus.connected
+          followup_to_outlook: !!item.followup_date && _waGraphStatus.calendarOk
         }));
 
         _waRenderReviewList();
@@ -323,7 +329,7 @@
       const list = document.getElementById('waReviewList');
       if (!list) return;
       list.innerHTML = '';
-      const graphOn = _waGraphStatus.connected;
+      const graphOn = _waGraphStatus.calendarOk;
       _waReviewItems.forEach(function(item) {
         const card = document.createElement('div');
         card.id = 'waReviewCard_' + item.idx;
@@ -340,9 +346,22 @@
                   ' onchange="_waToggleFupOutlook(' + item.idx + ', this.checked)">' +
                 '<span class="wa-switch-slider"></span>' +
               '</label>'
-            : '<button type="button" class="btn btn-secondary btn-small" onclick="_waConnectGraphFromReview()" style="flex-shrink:0;">' +
-                '<i class="fas fa-plug"></i> Conectar' +
-              '</button>';
+            : (_waGraphStatus.connected
+                // Conectada mas sem o escopo do calendário: o caminho é o
+                // consentimento explícito e, em tenant que bloqueia
+                // consentimento de usuário, o link de aprovação do admin.
+                ? '<div style="display:flex; gap:6px; flex-shrink:0;">' +
+                    '<button type="button" class="btn btn-secondary btn-small" onclick="_waConnectGraphFromReview()">' +
+                      '<i class="fas fa-unlock"></i> Liberar calendário' +
+                    '</button>' +
+                    '<button type="button" class="btn btn-secondary btn-small" onclick="openGraphAdminConsent()" ' +
+                      'title="Gera o link de aprovação do administrador (copiado para a área de transferência)">' +
+                      '<i class="fas fa-user-shield"></i> Admin' +
+                    '</button>' +
+                  '</div>'
+                : '<button type="button" class="btn btn-secondary btn-small" onclick="_waConnectGraphFromReview()" style="flex-shrink:0;">' +
+                    '<i class="fas fa-plug"></i> Conectar' +
+                  '</button>');
           fupHtml =
             '<div style="margin-top:8px; padding:8px 10px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px;">' +
               '<div style="display:flex; align-items:center; gap:8px;">' +
@@ -367,7 +386,9 @@
                     (graphOn
                       ? 'Cria o compromisso direto no seu Outlook, via OAuth' +
                         (item.followup_time ? '' : ' (dia inteiro se você não informar o horário)')
-                      : 'Conecte sua conta Microsoft para lançar no seu próprio calendário') +
+                      : (_waGraphStatus.connected
+                          ? 'Falta liberar a permissão de calendário da conta Microsoft (pode exigir aprovação do administrador)'
+                          : 'Conecte sua conta Microsoft para lançar no seu próprio calendário')) +
                   '</span>' +
                 '</span>' +
                 outlookRow +

@@ -345,6 +345,7 @@ def outlook_graph_status_endpoint():
                 'connected': False,
                 'needs_reauth': bool(state.get('needs_reauth')),
                 'needs_consent': bool(state.get('needs_consent')),
+                'calendar_authorized': False,
                 'error': state.get('reason') or '',
             })
         email = None
@@ -369,12 +370,16 @@ def outlook_graph_status_endpoint():
                 'connected': False,
                 'needs_reauth': True,
                 'needs_consent': isinstance(e, OutlookConsentRequiredError),
+                'calendar_authorized': False,
                 'error': str(e),
             })
         except Exception as e:
             # Falha de rede/Graph não invalida a conexão — segue conectado sem email.
             logger.debug(f'[outlook_graph_status_endpoint] exceção ignorada: {e}')
-        return jsonify({'connected': True, 'email': email, 'expires_at': state.get('expires_at')})
+        # calendar_authorized: a conta pode estar conectada para e-mail e ainda sem
+        # o consentimento de Calendars.ReadWrite (fallback de escopo no refresh).
+        return jsonify({'connected': True, 'email': email, 'expires_at': state.get('expires_at'),
+                        'calendar_authorized': bool(state.get('calendar_authorized'))})
     except Exception as e:
         return jsonify({'connected': False, 'error': str(e)})
 
