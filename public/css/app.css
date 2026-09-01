@@ -1896,6 +1896,49 @@
         .wiki-index-badge.warn { color:#92400e; background:#fffbeb; border-color:#fde68a; }
         .wiki-doc-snippet { font-size:12px; color:#374151; background:#f9fafb; border-left:3px solid #a7f3d0; border-radius:0 6px 6px 0; padding:6px 10px; margin:6px 0 8px; line-height:1.5; }
         .wiki-doc-snippet mark { background:#fde68a; color:#78350f; border-radius:3px; padding:0 2px; }
+
+        /* ---- WikiToca › Capacitação ---- */
+        .cap-layout { display:grid; grid-template-columns: 1fr 260px; gap:16px; align-items:start; }
+        .cap-main { min-width:0; }
+        .cap-header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+        .cap-header-actions { display:flex; gap:6px; }
+        .cap-drawer-toggle { display:none; }
+        .cap-empty { text-align:center; padding:36px 16px; color:#4b5563; }
+        .cap-empty h3 { color:#065f46; margin:12px 0 6px; }
+        .cap-empty p { font-size:13px; margin-bottom:16px; }
+
+        .cap-chips { display:flex; gap:8px; flex-wrap:wrap; padding-bottom:12px; border-bottom:1px solid #d1fae5; margin-bottom:12px; }
+        .cap-chip { display:inline-flex; align-items:center; gap:6px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:99px; padding:4px 10px; font-size:12px; color:#065f46; max-width:220px; }
+        .cap-chip a { color:inherit; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .cap-chip button { background:none; border:none; cursor:pointer; color:#ef4444; font-size:12px; padding:0; line-height:1; }
+        .cap-chip.warn { background:#fffbeb; border-color:#fde68a; color:#92400e; }
+
+        .cap-messages { max-height:460px; }
+        .cap-source-badge { display:inline-flex; align-items:center; gap:5px; margin-top:8px; font-size:11px; color:#047857; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:99px; padding:2px 9px; }
+        .cap-source-badge.web { color:#1e40af; background:#eff6ff; border-color:#bfdbfe; }
+        .cap-source-refs { font-size:11px; color:#6b7280; margin-top:4px; }
+
+        .cap-composer { display:flex; gap:8px; align-items:flex-end; margin-top:12px; }
+        .cap-composer textarea { flex:1; border:1px solid #bbf7d0; border-radius:10px; padding:10px 12px; font-family:inherit; font-size:14px; resize:vertical; }
+        .cap-composer textarea:focus { outline:none; border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.15); }
+
+        .cap-sidebar { background:#fff; border:1px solid rgba(15,118,110,.15); border-radius:16px; padding:12px; box-shadow:0 6px 18px rgba(15,118,110,.08); }
+        .cap-sidebar-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:12px; font-weight:700; color:#047857; text-transform:uppercase; letter-spacing:.5px; }
+        .cap-session-list { display:flex; flex-direction:column; gap:8px; max-height:520px; overflow-y:auto; }
+        .cap-session-card { border:1px solid #d1fae5; border-radius:10px; padding:10px; cursor:pointer; transition:background .15s, border-color .15s; }
+        .cap-session-card:hover { background:#f0fdf4; }
+        .cap-session-card.active { background:#ecfdf5; border-color:#10b981; }
+        .cap-session-card h5 { margin:0 0 4px; font-size:13px; color:#065f46; }
+        .cap-session-card .cap-session-meta { font-size:11px; color:#6b7280; }
+
+        @media (max-width: 1100px) {
+            .cap-layout { grid-template-columns: 1fr; }
+            .cap-drawer-toggle { display:inline-flex; }
+            .cap-sidebar { position:fixed; top:0; right:0; height:100vh; width:280px; border-radius:0; z-index:1100;
+                           transform:translateX(105%); transition:transform .25s ease; overflow-y:auto; }
+            .cap-sidebar.open { transform:translateX(0); }
+        }
+
         .wiki-sort-toggle {
             border: 1px solid #86efac;
             background: #ecfdf5;

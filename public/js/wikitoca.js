@@ -35,7 +35,7 @@
             wikiActiveSubmodule = key;
             if (key === 'conhecimentos') loadWikiEntriesFromSearch();
             if (key === 'documentos') searchWikiDocuments();
-            if (key === 'capacitacao' && typeof loadCapacitacaoSessions === 'function') loadCapacitacaoSessions();
+            if (key === 'capacitacao') loadCapacitacaoSessions();
         }
 
         async function loadWikiTocaData() {
@@ -549,6 +549,161 @@
                 if (progress) progress.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-times-circle"></i> Erro de conexão: ${err.message}</span>`;
                 if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
             }
+        }
+
+        // =====================================================
+        // WikiToca › Capacitação
+        // =====================================================
+        let capSessions = [];
+        let capCurrentSession = null;   // { session, documents, messages }
+
+        async function loadCapacitacaoSessions(keepSelection = true) {
+            try {
+                const resp = await fetch(`${API_BASE}/wikitoca/capacitacao/sessions`);
+                if (!resp.ok) throw new Error('Falha ao carregar as capacitações.');
+                capSessions = await resp.json();
+            } catch (err) {
+                showError(err.message || 'Não foi possível carregar as capacitações.');
+                capSessions = [];
+            }
+            renderCapacitacaoSidebar();
+
+            const empty = document.getElementById('capEmptyState');
+            const workspace = document.getElementById('capWorkspace');
+            if (!capSessions.length) {
+                if (empty) empty.style.display = 'block';
+                if (workspace) workspace.style.display = 'none';
+                capCurrentSession = null;
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+            if (workspace) workspace.style.display = 'block';
+
+            const atual = keepSelection && capCurrentSession
+                ? capSessions.find(s => s.id === capCurrentSession.session.id)
+                : null;
+            await selectCapacitacaoSession((atual || capSessions[0]).id);
+        }
+
+        function renderCapacitacaoSidebar() {
+            const el = document.getElementById('capSessionList');
+            if (!el) return;
+            const contador = document.getElementById('capDrawerCount');
+            if (contador) contador.textContent = `Capacitações (${capSessions.length})`;
+            if (!capSessions.length) {
+                el.innerHTML = '<div class="wiki-meta">Nenhuma capacitação ainda.</div>';
+                return;
+            }
+            const ativa = capCurrentSession?.session?.id;
+            // O título vem do banco sem sanitização — o backend aceita HTML cru
+            // (verificado na revisão da Task 6: '<img src=x onerror=alert(1)>' é
+            // armazenado literal). Todo campo do WikiToca já passa por escapeHtml;
+            // aqui não é exceção.
+            el.innerHTML = capSessions.map(s => `
+                <div class="cap-session-card${s.id === ativa ? ' active' : ''}" onclick="selectCapacitacaoSession(${s.id})">
+                    <h5>${escapeHtml(s.title || 'Nova capacitação')}</h5>
+                    <div class="cap-session-meta">${s.documents_count || 0} doc(s) • ${formatDateBr(s.last_message_at || s.updated_at)}</div>
+                </div>`).join('');
+        }
+
+        async function selectCapacitacaoSession(sessionId) {
+            try {
+                const resp = await fetch(`${API_BASE}/wikitoca/capacitacao/sessions/${sessionId}`);
+                if (!resp.ok) throw new Error('Capacitação não encontrada.');
+                capCurrentSession = await resp.json();
+            } catch (err) {
+                showError(err.message || 'Não foi possível abrir a capacitação.');
+                return;
+            }
+            const titulo = document.getElementById('capSessionTitle');
+            if (titulo) titulo.textContent = capCurrentSession.session.title || 'Nova capacitação';
+            renderCapacitacaoSidebar();
+            renderCapacitacaoChips();
+            renderCapacitacaoMessages();
+            closeCapacitacaoDrawer();
+        }
+
+        async function createCapacitacaoSession() {
+            try {
+                const resp = await fetch(`${API_BASE}/wikitoca/capacitacao/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Não foi possível criar a capacitação.');
+                capCurrentSession = { session: payload, documents: [], messages: [] };
+                await loadCapacitacaoSessions();
+                document.getElementById('capFileInput')?.click();
+            } catch (err) {
+                showError(err.message || 'Erro ao criar capacitação.');
+            }
+        }
+
+        async function renameCapacitacaoSession() {
+            if (!capCurrentSession) return;
+            const novo = await uiPrompt('Novo nome da capacitação:',
+                capCurrentSession.session.title || '', 'Renomear capacitação');
+            // openSystemDialog resolve `false` no botão Cancelar e `null` no
+            // clique fora do modal — sem checar os dois, um cancelamento
+            // renomearia a capacitação para "false".
+            if (novo === null || novo === false) return;
+            const titulo = String(novo).trim();
+            if (!titulo) { showError('O título não pode ficar vazio.'); return; }
+            try {
+                const resp = await fetch(`${API_BASE}/wikitoca/capacitacao/sessions/${capCurrentSession.session.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: titulo })
+                });
+                const payload = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(payload.error || 'Não foi possível renomear.');
+                await loadCapacitacaoSessions();
+                showSuccess('Capacitação renomeada.');
+            } catch (err) {
+                showError(err.message || 'Erro ao renomear capacitação.');
+            }
+        }
+
+        async function deleteCapacitacaoSession() {
+            if (!capCurrentSession) return;
+            const nome = capCurrentSession.session.title || 'esta capacitação';
+            if (!await uiConfirm(`Excluir "${nome}"? Os documentos anexados e todo o histórico da conversa serão apagados.`,
+                'Excluir capacitação')) return;
+            try {
+                const resp = await fetch(`${API_BASE}/wikitoca/capacitacao/sessions/${capCurrentSession.session.id}`,
+                    { method: 'DELETE' });
+                if (!resp.ok) throw new Error('Não foi possível excluir a capacitação.');
+                capCurrentSession = null;
+                await loadCapacitacaoSessions(false);
+                showSuccess('Capacitação excluída.');
+            } catch (err) {
+                showError(err.message || 'Erro ao excluir capacitação.');
+            }
+        }
+
+        async function clearCapacitacaoConversation() {
+            if (!capCurrentSession) return;
+            if (!await uiConfirm('Apagar todo o histórico desta conversa? Os documentos anexados serão mantidos.',
+                'Limpar conversa')) return;
+            try {
+                const resp = await fetch(
+                    `${API_BASE}/wikitoca/capacitacao/sessions/${capCurrentSession.session.id}/messages`,
+                    { method: 'DELETE' });
+                if (!resp.ok) throw new Error('Não foi possível limpar a conversa.');
+                await selectCapacitacaoSession(capCurrentSession.session.id);
+                showSuccess('Conversa limpa.');
+            } catch (err) {
+                showError(err.message || 'Erro ao limpar a conversa.');
+            }
+        }
+
+        function toggleCapacitacaoDrawer() {
+            document.getElementById('capSidebar')?.classList.toggle('open');
+        }
+
+        function closeCapacitacaoDrawer() {
+            document.getElementById('capSidebar')?.classList.remove('open');
         }
 
         window.addEventListener('DOMContentLoaded', () => {

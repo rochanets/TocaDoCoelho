@@ -534,8 +534,56 @@
                 <div id="wikiDocumentsList"></div>
             </section>
 
-            <!-- ── Submódulo: Capacitação (markup na Task 12) ─────────────── -->
-            <div id="wikiSubCapacitacao" style="display:none;"></div>
+            <!-- ── Submódulo: Capacitação ─────────────────────────────────── -->
+            <div id="wikiSubCapacitacao" class="cap-layout" style="display:none;">
+                <section class="wiki-card cap-main">
+                    <div id="capEmptyState" class="cap-empty">
+                        <img src="/coelho_wiki.png" alt="" style="width:64px; height:64px; object-fit:contain; opacity:.8;">
+                        <h3>Crie sua primeira capacitação</h3>
+                        <p>Anexe PDFs, documentos Word ou imagens e converse com a IA sobre eles.</p>
+                        <button class="btn btn-auto-mapping" onclick="createCapacitacaoSession()"><i class="fas fa-plus"></i> Nova capacitação</button>
+                    </div>
+
+                    <div id="capWorkspace" style="display:none;">
+                        <div class="cap-header">
+                            <h3 class="wiki-section-title" id="capSessionTitle">—</h3>
+                            <div class="cap-header-actions">
+                                <button class="btn btn-secondary btn-small" onclick="renameCapacitacaoSession()" title="Renomear capacitação"><i class="fas fa-pen"></i></button>
+                                <button class="btn btn-secondary btn-small" onclick="clearCapacitacaoConversation()" title="Limpar conversa (mantém os documentos)"><i class="fas fa-broom"></i></button>
+                                <button class="btn btn-danger btn-small" onclick="deleteCapacitacaoSession()" title="Excluir capacitação"><i class="fas fa-trash"></i></button>
+                                <button class="btn btn-secondary btn-small cap-drawer-toggle" onclick="toggleCapacitacaoDrawer()"><i class="fas fa-layer-group"></i> <span id="capDrawerCount">Capacitações</span></button>
+                            </div>
+                        </div>
+
+                        <div class="cap-chips" id="capDocChips"></div>
+                        <input id="capFileInput" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" multiple style="display:none;" onchange="uploadCapacitacaoDocuments(event)">
+
+                        <div id="capProgressWrap" style="display:none; margin:10px 0;">
+                            <div style="font-size:12px; color:#6b7280; margin-bottom:6px;" id="capProgressStep">Iniciando...</div>
+                            <div style="position:relative; background:#d1fae5; border-radius:99px; height:8px; overflow:visible; margin:0 2px;">
+                                <div id="capProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="" style="height:18px;right:-14px;">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="itoca-chat-messages cap-messages" id="capMessages"></div>
+
+                        <div class="cap-composer">
+                            <textarea id="capQuestionInput" rows="2" placeholder="Pergunte sobre os documentos desta capacitação..."></textarea>
+                            <button class="btn btn-auto-mapping" id="capAskBtn" onclick="askCapacitacao()"><i class="fas fa-paper-plane"></i> Enviar</button>
+                        </div>
+                    </div>
+                </section>
+
+                <aside class="cap-sidebar" id="capSidebar">
+                    <div class="cap-sidebar-header">
+                        <span>Capacitações</span>
+                        <button class="btn btn-auto-mapping btn-small" onclick="createCapacitacaoSession()"><i class="fas fa-plus"></i> Nova</button>
+                    </div>
+                    <div id="capSessionList" class="cap-session-list"></div>
+                </aside>
+            </div>
         </div>
 
         <!-- Modal de Importação WikiToca -->
