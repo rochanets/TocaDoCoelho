@@ -227,9 +227,21 @@
                 '</label>' +
               '</div>';
           }
+          // Item casado por CONTA (nome do chat/grupo bate com uma conta; contato
+          // não cadastrado no Toca) — vira atividade direto na conta.
+          var accountBadge = '';
+          var titleHtml = escapeHtml(item.client_name || '');
+          if (item.account_id) {
+            var origemLabel = item.is_group ? 'grupo' : 'conversa';
+            titleHtml = '🏢 ' + escapeHtml(item.account_name || 'Conta');
+            accountBadge =
+              '<div style="font-size:11px; color:#4338ca; background:#eef2ff; border:1px solid #c7d2fe; border-radius:6px; padding:4px 8px; margin-top:6px;">' +
+                'Atividade direto na conta — via ' + origemLabel + ' "' + escapeHtml(item.chat_name || '') + '" (contato não cadastrado no Toca)' +
+              '</div>';
+          }
           card.innerHTML =
             '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">' +
-              '<strong style="font-size:13px; color:#111827; flex:1; min-width:0; word-break:break-word;">' + (item.client_name || '') + '</strong>' +
+              '<strong style="font-size:13px; color:#111827; flex:1; min-width:0; word-break:break-word;">' + titleHtml + '</strong>' +
               '<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">' +
                 '<span id="waStateLabel_' + item.idx + '" class="wa-state-label" style="color:#059669;">Incluir</span>' +
                 '<label class="wa-switch" title="Incluir ou rejeitar esta conversa">' +
@@ -239,6 +251,7 @@
               '</div>' +
             '</div>' +
             '<div style="font-size:13px; color:#374151; margin-top:8px; line-height:1.5;">' + (item.summary || '') + '</div>' +
+            accountBadge +
             fupHtml +
             '<div style="font-size:11px; color:#9ca3af; margin-top:6px;">' + item.message_count + ' mensagem(ns)' + (dateStr ? ' · ' + dateStr : '') + '</div>';
           list.appendChild(card);
@@ -261,7 +274,8 @@
           invalid_response: 'Resposta inválida',
           no_messages_in_period: 'Sem mensagens no período',
           no_supported_content: 'Sem conteúdo importável',
-          already_processed: 'Já importada'
+          already_processed: 'Já importada',
+          account_scan_unavailable: 'Varredura por conta indisponível (WAHA-lite antigo — reinicie o app)'
         };
         const reasonLines = Object.entries(diagnostics.counts || {})
           .filter(function(entry){ return entry[1] > 0 && entry[0] !== 'ready_for_review'; })
