@@ -463,48 +463,126 @@
                 </div>
             </div>
 
-            <div class="wiki-toolbar-search">
-                <input id="wikiSearchInput" class="wiki-search-input" placeholder="Pesquisar">
-                <button class="btn btn-primary wiki-action-btn" onclick="loadWikiTocaData()"><i class="fas fa-search"></i> Buscar</button>
-                <button class="btn btn-secondary wiki-action-btn" onclick="clearWikiSearch()" title="Limpar pesquisa"><i class="fas fa-times"></i> Limpar</button>
+            <div class="wiki-submodule-bar">
+                <button id="wikiSubBtn_conhecimentos" class="btn btn-auto-mapping" onclick="toggleWikiSubmodule('conhecimentos')"><i class="fas fa-book"></i> Conhecimentos</button>
+                <button id="wikiSubBtn_documentos" class="btn btn-secondary" onclick="toggleWikiSubmodule('documentos')"><i class="fas fa-file-lines"></i> Documentos</button>
+                <button id="wikiSubBtn_capacitacao" class="btn btn-secondary" onclick="toggleWikiSubmodule('capacitacao')"><span class="ai-star-icon">✦</span> Capacitação</button>
             </div>
 
-            <div class="wiki-grid">
-                <section class="wiki-card">
-                    <div class="wiki-section-header">
-                        <h3 class="wiki-section-title">Conhecimentos registrados</h3>
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                            <button id="wikiSortToggleBtn" type="button" class="wiki-sort-toggle" onclick="toggleWikiEntriesSort()">A-Z</button>
-                            <div class="wiki-import-export">
-                                <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiEntries()" title="Exportar conhecimentos"><i class="fas fa-file-export"></i> Exportar</button>
-                                <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiImportModal()" title="Importar conhecimentos"><i class="fas fa-file-import"></i> Importar</button>
-                            </div>
-                            <button class="btn btn-primary btn-small wiki-action-btn" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
-                        </div>
-                    </div>
-                    <div id="wikiEntriesList"></div>
-                </section>
-                <section class="wiki-card">
-                    <div class="wiki-section-header">
-                        <h3 class="wiki-section-title" style="margin-bottom:0;">Documentos (PDF, Excel, Word)</h3>
+            <!-- ── Submódulo: Conhecimentos ───────────────────────────────── -->
+            <section id="wikiSubConhecimentos" class="wiki-card">
+                <div class="wiki-section-header">
+                    <h3 class="wiki-section-title">Conhecimentos registrados</h3>
+                    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                        <button id="wikiSortToggleBtn" type="button" class="wiki-sort-toggle" onclick="toggleWikiEntriesSort()">A-Z</button>
                         <div class="wiki-import-export">
-                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiDocuments()" title="Exportar documentos"><i class="fas fa-file-export"></i> Exportar</button>
-                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiDocImportModal()" title="Importar documentos"><i class="fas fa-file-import"></i> Importar</button>
+                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiEntries()" title="Exportar conhecimentos"><i class="fas fa-file-export"></i> Exportar</button>
+                            <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiImportModal()" title="Importar conhecimentos"><i class="fas fa-file-import"></i> Importar</button>
+                        </div>
+                        <button class="btn btn-primary btn-small wiki-action-btn" onclick="openWikiEntryModal()"><i class="fas fa-plus"></i> Novo conhecimento</button>
+                    </div>
+                </div>
+                <div class="wiki-toolbar-search">
+                    <input id="wikiSearchInput" class="wiki-search-input" placeholder="Pesquisar nos conhecimentos">
+                    <button class="btn btn-primary wiki-action-btn" onclick="loadWikiEntriesFromSearch()"><i class="fas fa-search"></i> Buscar</button>
+                    <button class="btn btn-secondary wiki-action-btn" onclick="clearWikiSearch()" title="Limpar pesquisa"><i class="fas fa-times"></i> Limpar</button>
+                </div>
+                <div id="wikiEntriesList"></div>
+            </section>
+
+            <!-- ── Submódulo: Documentos ──────────────────────────────────── -->
+            <section id="wikiSubDocumentos" class="wiki-card" style="display:none;">
+                <div class="wiki-section-header">
+                    <h3 class="wiki-section-title" style="margin-bottom:0;">Documentos (PDF, Excel, Word)</h3>
+                    <div class="wiki-import-export">
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="reindexWikiDocuments()" title="Reprocessar o texto dos documentos pendentes para a busca por conteúdo"><i class="fas fa-rotate"></i> Reindexar documentos</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="reindexWikiDocuments(true)" title="Reprocessar TODOS os documentos, inclusive os já indexados — use depois de instalar o Tesseract"><i class="fas fa-rotate-right"></i> Reindexar tudo</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="exportWikiDocuments()" title="Exportar documentos"><i class="fas fa-file-export"></i> Exportar</button>
+                        <button class="btn btn-secondary btn-small wiki-action-btn" onclick="openWikiDocImportModal()" title="Importar documentos"><i class="fas fa-file-import"></i> Importar</button>
+                    </div>
+                </div>
+                <div class="wiki-toolbar-search">
+                    <input id="wikiDocSearchInput" class="wiki-search-input" placeholder="Pesquisar por nome ou pelo conteúdo do arquivo">
+                    <select id="wikiDocExtFilter" class="wiki-search-input" style="flex:0 0 150px; min-width:0;" onchange="searchWikiDocuments()">
+                        <option value="">Todos os tipos</option>
+                        <option value="pdf">PDF</option>
+                        <option value="word">Word</option>
+                        <option value="excel">Excel</option>
+                    </select>
+                    <button class="btn btn-primary wiki-action-btn" onclick="searchWikiDocuments()"><i class="fas fa-search"></i> Buscar</button>
+                    <button class="btn btn-secondary wiki-action-btn" onclick="clearWikiDocSearch()" title="Limpar pesquisa"><i class="fas fa-times"></i> Limpar</button>
+                </div>
+                <div class="wiki-doc-upload-row">
+                    <div class="wiki-doc-upload-main">
+                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
+                        <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
+                    </div>
+                    <span id="wikiFileName" class="wiki-file-name"></span>
+                    <button id="wikiFileClearBtn" type="button" onclick="clearWikiFileSelection()" title="Cancelar seleção" style="display:none; background:none; border:none; cursor:pointer; color:#ef4444; font-size:15px; padding:0 2px; line-height:1; vertical-align:middle;"><i class="fas fa-times-circle"></i></button>
+                    <div class="wiki-upload-actions">
+                        <button id="wikiUploadBtn" class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
+                    </div>
+                </div>
+                <div id="wikiDocProgressWrap" style="display:none; margin-bottom:12px;">
+                    <div style="font-size:12px; color:#6b7280; margin-bottom:6px;" id="wikiDocProgressStep">Iniciando...</div>
+                    <div style="position:relative; background:#d1fae5; border-radius:99px; height:8px; overflow:visible; margin:0 2px;">
+                        <div id="wikiDocProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                            <img src="/images/coelho-correndo.webp" class="coelho-run" alt="" style="height:18px;right:-14px;">
                         </div>
                     </div>
-                    <div class="wiki-doc-upload-row">
-                        <div class="wiki-doc-upload-main">
-                                                        <input id="wikiDocumentFile" type="file" accept=".pdf,.xls,.xlsx,.doc,.docx" multiple style="display:none;" onchange="onWikiFileSelected(event)">
-                            <button type="button" class="btn btn-primary wiki-action-btn" onclick="document.getElementById('wikiDocumentFile').click()"><i class="fas fa-paperclip"></i> Escolher arquivo(s)</button>
+                </div>
+                <div id="wikiDocumentsList"></div>
+            </section>
+
+            <!-- ── Submódulo: Capacitação ─────────────────────────────────── -->
+            <div id="wikiSubCapacitacao" class="cap-layout" style="display:none;">
+                <section class="wiki-card cap-main">
+                    <div id="capEmptyState" class="cap-empty">
+                        <img src="/coelho_wiki.png" alt="" style="width:64px; height:64px; object-fit:contain; opacity:.8;">
+                        <h3>Crie sua primeira capacitação</h3>
+                        <p>Anexe PDFs, documentos Word ou imagens e converse com a IA sobre eles.</p>
+                        <button class="btn btn-auto-mapping" onclick="createCapacitacaoSession()"><i class="fas fa-plus"></i> Nova capacitação</button>
+                    </div>
+
+                    <div id="capWorkspace" style="display:none;">
+                        <div class="cap-header">
+                            <h3 class="wiki-section-title" id="capSessionTitle">—</h3>
+                            <div class="cap-header-actions">
+                                <button class="btn btn-secondary btn-small" onclick="renameCapacitacaoSession()" title="Renomear capacitação"><i class="fas fa-pen"></i></button>
+                                <button class="btn btn-secondary btn-small" onclick="clearCapacitacaoConversation()" title="Limpar conversa (mantém os documentos)"><i class="fas fa-broom"></i></button>
+                                <button class="btn btn-danger btn-small" onclick="deleteCapacitacaoSession()" title="Excluir capacitação"><i class="fas fa-trash"></i></button>
+                                <button class="btn btn-secondary btn-small cap-drawer-toggle" onclick="toggleCapacitacaoDrawer()"><i class="fas fa-layer-group"></i> <span id="capDrawerCount">Capacitações</span></button>
+                            </div>
                         </div>
-                        <span id="wikiFileName" class="wiki-file-name"></span>
-                        <button id="wikiFileClearBtn" type="button" onclick="clearWikiFileSelection()" title="Cancelar seleção" style="display:none; background:none; border:none; cursor:pointer; color:#ef4444; font-size:15px; padding:0 2px; line-height:1; vertical-align:middle;"><i class="fas fa-times-circle"></i></button>
-                        <div class="wiki-upload-actions">
-                            <button id="wikiUploadBtn" class="btn btn-primary wiki-action-btn" onclick="uploadWikiDocument()"><i class="fas fa-upload"></i> Enviar</button>
+
+                        <div class="cap-chips" id="capDocChips"></div>
+                        <input id="capFileInput" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" multiple style="display:none;" onchange="uploadCapacitacaoDocuments(event)">
+
+                        <div id="capProgressWrap" style="display:none; margin:10px 0;">
+                            <div style="font-size:12px; color:#6b7280; margin-bottom:6px;" id="capProgressStep">Iniciando...</div>
+                            <div style="position:relative; background:#d1fae5; border-radius:99px; height:8px; overflow:visible; margin:0 2px;">
+                                <div id="capProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                    <img src="/images/coelho-correndo.webp" class="coelho-run" alt="" style="height:18px;right:-14px;">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="itoca-chat-messages cap-messages" id="capMessages"></div>
+
+                        <div class="cap-composer">
+                            <textarea id="capQuestionInput" rows="2" placeholder="Pergunte sobre os documentos desta capacitação..."></textarea>
+                            <button class="btn btn-auto-mapping" id="capAskBtn" onclick="askCapacitacao()"><i class="fas fa-paper-plane"></i> Enviar</button>
                         </div>
                     </div>
-                    <div id="wikiDocumentsList"></div>
                 </section>
+
+                <aside class="cap-sidebar" id="capSidebar">
+                    <div class="cap-sidebar-header">
+                        <span>Capacitações</span>
+                        <button class="btn btn-auto-mapping btn-small" onclick="createCapacitacaoSession()"><i class="fas fa-plus"></i> Nova</button>
+                    </div>
+                    <div id="capSessionList" class="cap-session-list"></div>
+                </aside>
             </div>
         </div>
 
@@ -1231,8 +1309,12 @@
                         <div style="font-weight:700; color:var(--t-primary);">Atas de reunião</div>
                         <div class="history-meta" style="margin:0; font-weight:400;">Gerente Comercial → Conta → Oportunidade, com o status da ata anterior carregado.</div>
                     </div>
-                    <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button class="btn btn-auto-mapping btn-small" onclick="openIAtaModal()"><span class="ai-star-icon">✦</span> + Nova Ata</button>
+                        <button class="btn btn-auto-mapping btn-small" onclick="openIAtaMeuResumoModal()"><span class="ai-star-icon">✦</span> Meu resumo</button>
+                    </div>
                 </div>
+                <div id="iataMeuResumoContent" style="display:none; margin-bottom:16px;"></div>
                 <div id="iataContent"></div>
             </div>
             <div id="reportsPanel_preparar-reuniao" style="display:none; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px;">
@@ -1558,6 +1640,18 @@
                         </button>
                     </div>
 
+                    <div id="feedbackWatcherCard" style="display:none; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:10px;">
+                        <span style="font-size:20px;"><i class="fas fa-robot" style="color:#10b981;"></i></span>
+                        <div style="flex:1; min-width:150px;">
+                            <div style="font-weight:600; font-size:13.5px; color:#111827;">Watcher de Feedback (dev)</div>
+                            <div id="feedbackWatcherStatus" style="margin-top:2px; font-size:12px; color:#6b7280;"></div>
+                        </div>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; font-size:13px; color:#4b5563;">
+                            <input type="checkbox" id="feedbackWatcherToggle" onchange="onFeedbackWatcherToggle(this.checked)" style="width:17px; height:17px; cursor:pointer; accent-color:#10b981;">
+                            Analisar feedbacks com Claude Code
+                        </label>
+                    </div>
+
                     <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; font-size:13px; color:#4b5563;">
                         <input type="checkbox" id="waStartupCheckToggle" onchange="onWaStartupCheckToggle(this.checked)" style="width:17px; height:17px; cursor:pointer; accent-color:#10b981;">
                         Verificar conexões na abertura do sistema (WhatsApp, Outlook e chaves de integração)
@@ -1865,7 +1959,12 @@
                 <h2><i class="fas fa-envelope" style="margin-right:8px;color:#10b981;"></i>Sincronizando com Outlook</h2>
             </div>
             <div style="padding:20px;">
-                <div class="outlook-progress-track"><div class="outlook-progress-fill"></div></div>
+                <div class="outlook-progress-track">
+                    <div id="outlookSyncFill" class="outlook-progress-fill">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div id="outlookSyncPct" style="font-size:11px;color:#6b7280;text-align:right;margin:0 18px 8px 0;">5%</div>
                 <p id="outlookProgressMsg" style="font-size:13px;color:#374151;margin:0 0 4px;">Conectando ao Outlook...</p>
                 <p id="outlookProgressCount" style="font-size:12px;color:#9ca3af;margin:0;min-height:16px;"></p>
                 <div style="margin-top:16px;text-align:right;">
@@ -1927,7 +2026,12 @@
                     onmouseover="this.style.color='#374151'" onmouseout="this.style.color='#6b7280'">⊟</button>
             </div>
             <div id="outlookImportProgressArea" style="padding:20px;">
-                <div class="outlook-progress-track"><div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;"></div></div>
+                <div class="outlook-progress-track">
+                    <div id="outlookImportFill" class="outlook-progress-fill" style="width:5%;">
+                        <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
+                    </div>
+                </div>
+                <div id="outlookImportPct" style="font-size:11px;color:#6b7280;text-align:right;margin:0 18px 0 0;">5%</div>
                 <p id="outlookImportStep" style="font-size:13px;color:#374151;margin:8px 0 0;">Iniciando...</p>
             </div>
         </div>
@@ -2048,9 +2152,12 @@
     <script src="/js/account-planning.js"></script>
     <script src="/js/radar.js"></script>
     <script src="/js/waha-dispatch.js"></script>
+    <script src="/js/email-dispatch.js"></script>
     <script src="/js/radar-actions.js"></script>
     <script src="/js/scheduled-sends.js"></script>
     <script src="/js/relatorio-semanal.js"></script>
+    <script src="/js/iata-meu-resumo.js"></script>
+    <script src="/js/wikitoca.js"></script>
     <!-- marked.js para renderização de Markdown nas respostas do iToca -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <!-- html2canvas + jsPDF para exportação do resumo LinkedIn -->

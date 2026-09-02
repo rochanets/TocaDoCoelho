@@ -1,7 +1,82 @@
 """Envio via WAHA (Bloco 8): validação e limite diário."""
 from pathlib import Path
+import json
 import os
 import subprocess
+
+
+class _FakeWahaResp:
+    """Resposta HTTP simulada do sidecar WAHA-lite."""
+
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+        self.text = json.dumps(body, ensure_ascii=False)
+
+    def json(self):
+        return self._body
+
+
+def _post_send(client, sample_client_id):
+    return client.post('/api/whatsapp/send', json={
+        'client_id': sample_client_id, 'phone': '+55 11 99999-9999', 'message': 'Olá!'
+    })
+
+
+def test_send_com_sessao_parada_retorna_erro_amigavel(client, sample_client_id, db_path, monkeypatch):
+    """Sessão STOPPED: o usuário via o corpo cru do sidecar
+    ('HTTP 503: {"error":"WhatsApp não conectado","status":"STOPPED"}').
+    O backend deve traduzir para uma orientação acionável e sinalizar ao
+    front que a reconexão resolve (feedback Netto v5.6.0.0, 11/08/2026)."""
+    import app as toca
+
+    monkeypatch.setattr(toca.requests, 'post', lambda *a, **k: _FakeWahaResp(
+        503, {'error': 'WhatsApp não conectado', 'status': 'STOPPED'}))
+    resp = _post_send(client, sample_client_id)
+    assert resp.status_code == 502
+    payload = resp.get_json()
+    assert payload['whatsapp_disconnected'] is True
+    assert 'HTTP 503' not in payload['error']
+    assert '{' not in payload['error']
+    assert 'reconect' in payload['error'].lower()
+
+
+def test_send_com_sessao_iniciando_pede_para_aguardar(client, sample_client_id, db_path, monkeypatch):
+    import app as toca
+
+    monkeypatch.setattr(toca.requests, 'post', lambda *a, **k: _FakeWahaResp(
+        503, {'error': 'WhatsApp não conectado', 'status': 'STARTING'}))
+    resp = _post_send(client, sample_client_id)
+    assert resp.status_code == 502
+    payload = resp.get_json()
+    assert 'aguarde' in payload['error'].lower()
+    assert not payload.get('whatsapp_disconnected')
+
+
+def test_send_com_qr_pendente_orienta_ler_o_qr(client, sample_client_id, db_path, monkeypatch):
+    import app as toca
+
+    monkeypatch.setattr(toca.requests, 'post', lambda *a, **k: _FakeWahaResp(
+        503, {'error': 'WhatsApp não conectado', 'status': 'SCAN_QR_CODE'}))
+    resp = _post_send(client, sample_client_id)
+    assert resp.status_code == 502
+    payload = resp.get_json()
+    assert payload['whatsapp_disconnected'] is True
+    assert 'qr' in payload['error'].lower()
+
+
+def test_send_com_falha_do_sidecar_usa_o_erro_do_corpo(client, sample_client_id, db_path, monkeypatch):
+    """Falha real de envio (502 do sidecar): mostra o erro reportado, sem
+    embrulhar em 'HTTP 502: {json}'."""
+    import app as toca
+
+    monkeypatch.setattr(toca.requests, 'post', lambda *a, **k: _FakeWahaResp(
+        502, {'error': 'Evaluation failed: sessão expirou'}))
+    resp = _post_send(client, sample_client_id)
+    assert resp.status_code == 502
+    payload = resp.get_json()
+    assert payload['error'] == 'Evaluation failed: sessão expirou'
+    assert not payload.get('whatsapp_disconnected')
 
 
 def test_send_valida_campos(client, db_path):

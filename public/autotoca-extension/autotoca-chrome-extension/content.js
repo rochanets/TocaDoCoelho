@@ -72,7 +72,28 @@
            /\/in\/[^/?#]+/.test(window.location.pathname);
   }
 
+  // Um content script fica ÓRFÃO quando a extensão é recarregada (auto-update
+  // via chrome.runtime.reload()), removida ou quebra: os listeners DOM (ping/
+  // comando) continuam vivos, mas todo o canal chrome.* morre. Um órfão NUNCA
+  // deve responder ping/comando — senão a página acha a extensão pronta e o
+  // sendMessage estoura "Could not establish connection. Receiving end does
+  // not exist.". Quem responde é o script novo, re-injetado pelo background
+  // (ver _reinjectContentScripts em background.js).
+  function extensionContextAlive() {
+    try { return !!(chrome.runtime && chrome.runtime.id); }
+    catch (_) { return false; }
+  }
+
+  function friendlyChannelError(error) {
+    const raw = String(error?.message || error || '');
+    if (/could not establish connection|receiving end does not exist|extension context invalidated|message port closed/i.test(raw)) {
+      return 'A extensão AutoToca foi atualizada e perdeu a conexão com esta página. Recarregue a página (F5) e tente novamente.';
+    }
+    return raw || 'Erro inesperado na extensão.';
+  }
+
   function emitPong() {
+    if (!extensionContextAlive()) return;
     window.dispatchEvent(new CustomEvent(WEB_PONG_EVENT, {
       detail: {
         ok: true,
@@ -617,7 +638,7 @@
           message: response?.ok ? 'e-Reembolso aberto em uma nova aba.' : (response?.error || 'Falha ao abrir a aba.'),
         });
       } catch (error) {
-        emitResult({ ok: false, command, taskId: detail?.taskId, message: error?.message || String(error) });
+        emitResult({ ok: false, command, taskId: detail?.taskId, message: friendlyChannelError(error) });
       }
       return;
     }
@@ -733,10 +754,22 @@
 
   window.addEventListener(WEB_PING_EVENT, emitPong);
   window.addEventListener(WEB_COMMAND_EVENT, event => {
+    // Órfão fica MUDO: se respondesse com erro, ganharia a corrida do resultado
+    // contra o script vivo re-injetado que atende o mesmo comando.
+    if (!extensionContextAlive()) return;
     handleCommand(event?.detail || {}).catch(err =>
-      emitResult({ ok: false, command: event?.detail?.command || 'unknown', message: err?.message || 'Erro inesperado na extensão.' })
+      emitResult({ ok: false, command: event?.detail?.command || 'unknown', message: friendlyChannelError(err) })
     );
   });
+
+  // O background usa este ping para saber se a aba já tem um content script
+  // VIVO deste contexto antes de re-injetar (órfãos não recebem a mensagem).
+  try {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message?.type === 'autotoca_cs_ping') sendResponse({ ok: true, version: _extVersion });
+      return false;
+    });
+  } catch (_) {}
 
   emitPong();
 

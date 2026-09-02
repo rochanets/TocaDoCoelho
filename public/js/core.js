@@ -374,7 +374,6 @@
         let selectedCompanyForActivity = '';
         let positionGroupings = [];
         let _orgMapOpenContext = null; // { company, position } quando aberto pelo + do mapeamento organizacional
-        let wikiEntriesSortOrder = "az";
         let autoPicGoogleTab = null;
         let autoPicSlots = [null, null, null];
         let autoPicActiveSlot = 0;
@@ -928,7 +927,7 @@
             // Abrir modal de progresso
             const modal = document.getElementById('outlookProgressModal');
             if (modal) modal.style.display = 'flex';
-            _setOutlookProgress('Conectando ao Outlook...', '');
+            _setOutlookProgress('Conectando ao Outlook...', '', 5);
 
             // Fechar stream anterior se existir
             if (_outlookEventSource) { _outlookEventSource.close(); _outlookEventSource = null; }
@@ -939,11 +938,11 @@
                 try {
                     const data = JSON.parse(e.data);
                     if (data.phase === 'connecting') {
-                        _setOutlookProgress(data.message, '');
+                        _setOutlookProgress(data.message, '', 10);
                     } else if (data.phase === 'reading') {
-                        _setOutlookProgress(data.message, data.count ? `${data.count} email(s) lidos até agora` : '');
+                        _setOutlookProgress(data.message, data.count ? `${data.count} email(s) lidos até agora` : '', Math.min(20 + (data.count || 0), 70));
                     } else if (data.phase === 'matching') {
-                        _setOutlookProgress(data.message, `${data.count} emails no total`);
+                        _setOutlookProgress(data.message, `${data.count} emails no total`, 85);
                     } else if (data.phase === 'done') {
                         _outlookEventSource.close(); _outlookEventSource = null;
                         _closeOutlookProgressModal();
@@ -967,11 +966,18 @@
             };
         }
 
-        function _setOutlookProgress(msg, count) {
+        function _setOutlookProgress(msg, count, pct) {
             const m = document.getElementById('outlookProgressMsg');
             const c = document.getElementById('outlookProgressCount');
             if (m) m.textContent = msg;
             if (c) c.textContent = count || '';
+            if (typeof pct === 'number') {
+                const fill = document.getElementById('outlookSyncFill');
+                const pctEl = document.getElementById('outlookSyncPct');
+                const clamped = Math.max(5, Math.min(100, Math.round(pct)));
+                if (fill) fill.style.width = `${clamped}%`;
+                if (pctEl) pctEl.textContent = `${clamped}%`;
+            }
         }
 
         function _closeOutlookProgressModal() {
@@ -1339,11 +1345,13 @@
             // Mostrar modal de progresso de import
             const importFill = document.getElementById('outlookImportFill');
             const importStep = document.getElementById('outlookImportStep');
+            const importPct = document.getElementById('outlookImportPct');
             const importMiniStep = document.getElementById('outlookImportMiniStep');
             _outlookImportMinimized = false;
             document.getElementById('outlookImportProgressModal').style.display = 'flex';
             document.getElementById('outlookImportMini').style.display = 'none';
             if (importFill) importFill.style.width = '5%';
+            if (importPct) importPct.textContent = '5%';
             if (importStep) importStep.textContent = 'Iniciando...';
 
             try {
@@ -1364,6 +1372,7 @@
                             const statusRes = await fetch(`/api/outlook/confirm-tasks/${taskId}`);
                             const taskData = await statusRes.json();
                             if (importFill) importFill.style.width = `${taskData.progress || 5}%`;
+                            if (importPct) importPct.textContent = `${taskData.progress || 5}%`;
                             if (importStep) importStep.textContent = taskData.step || '';
                             if (importMiniStep) importMiniStep.textContent = taskData.step || 'Importando...';
                             if (taskData.status === 'done') {
@@ -2512,17 +2521,19 @@
                        <div style="font-size:12px; color:#4b5563; margin-top:4px;"><strong>Assunto:</strong> ${escapeHtml(d.subject || '(sem assunto)')}</div>`;
                 const btnIcon = isWpp ? '<i class="fab fa-whatsapp"></i>' : '<i class="fas fa-paper-plane"></i>';
                 const btnLabel = isWpp ? 'Abrir no WhatsApp' : 'Abrir no Outlook';
-                const wahaBtn = isWpp
+                // Envio direto (sem abrir janela): WAHA no WhatsApp, conta
+                // Microsoft conectada (OAuth/Graph) no e-mail.
+                const directBtn = isWpp
                     ? `<button id="mailingWahaBtn_${i}" class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaWahaOne(${i})" title="Enviar direto via WAHA, sem abrir janela do navegador"><i class="fas fa-bolt"></i> WAHA</button>`
-                    : '';
+                    : `<button id="mailingOauthBtn_${i}" class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaOutlookOne(${i})" title="Enviar direto pela sua conta Microsoft conectada, sem abrir janela"><i class="fas fa-bolt"></i> Enviar</button>`;
                 return `
-                <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto${isWpp ? ' auto' : ''}; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
+                <div id="mailingDispatchRow_${i}" style="display:grid; grid-template-columns:1fr auto auto auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff;">
                     <div style="min-width:0; overflow:hidden;">
                         <div style="font-weight:600; color:#065f46;">${escapeHtml(d.contact.name || '-')}</div>
                         ${subInfo}
                     </div>
                     <span class="mailing-dispatch-status" id="mailingDispatchStatus_${i}" style="font-size:12px; color:#92400e; white-space:nowrap;">Pendente</span>
-                    ${wahaBtn}
+                    ${directBtn}
                     <button id="mailingDispatchBtn_${i}" class="btn btn-primary btn-small" onclick="sendAutoTocaMailingDispatchOne(${i})">${btnIcon} ${btnLabel}</button>
                 </div>`;
             }).join('');
@@ -2532,13 +2543,16 @@
                    <button class="btn btn-secondary btn-small" onclick="scheduleMailingViaWaha()" title="Agendar o envio de toda a fila via WAHA para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
                    <span id="mailingWahaQuota" style="font-size:12px; color:#6b7280;"></span>
                    <button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-forward-step"></i> Abrir próximo no WhatsApp</button>`
-                : `<button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;
+                : `<button id="mailingOutlookBatchBtn" class="btn btn-auto-mapping btn-small" onclick="dispatchMailingViaOutlookAll()" title="Envia toda a fila pela sua conta Microsoft conectada, sem abrir janelas"><span class="ai-star-icon">✦</span> Enviar todos via Outlook</button>
+                   <button id="mailingOutlookScheduleBtn" class="btn btn-secondary btn-small" onclick="scheduleMailingViaOutlook()" title="Agendar o envio de toda a fila para uma data e horário"><i class="fas fa-clock"></i> Agendar</button>
+                   <span id="mailingOutlookStatus" style="font-size:12px; color:#6b7280;">verificando conta Microsoft...</span>
+                   <button id="mailingDispatchBatchBtn" class="btn btn-secondary btn-small" onclick="sendAutoTocaMailingDispatchAll()"><i class="fas fa-bolt"></i> Tentar abrir todos de uma vez</button>`;
 
             const batchNote = isWpp
                 ? `Cada mensagem WhatsApp deve ser aberta e enviada individualmente — o sistema reutiliza a mesma aba do WhatsApp Web. Use <strong>Abrir próximo no WhatsApp</strong> para ciclar pelos contatos em sequência, ou <strong>Abrir no WhatsApp</strong> em cada linha para enviar um por vez.`
-                : `Para evitar o bloqueador de pop-ups do navegador, cada janela do Outlook é aberta por um clique individual.
-                   Clique em <strong>Abrir no Outlook</strong> em cada linha para disparar a janela correspondente e registrar automaticamente a atividade daquele contato.
-                   Se você já autorizou pop-ups deste site, pode tentar o modo em lote no botão abaixo.`;
+                : `Com a conta Microsoft conectada, <strong>Enviar todos via Outlook</strong> dispara a fila inteira de uma vez pela sua própria caixa,
+                   sem abrir janelas — cada e-mail vai para os Itens Enviados e a atividade é registrada automaticamente.
+                   O modo antigo continua disponível: <strong>Abrir no Outlook</strong> monta a mensagem no Outlook Web para você revisar e enviar na mão.`;
 
             const skippedNote = skipped
                 ? `<p style="color:#92400e; font-size:12px; margin-bottom:10px;">${skipped} contato(s) sem ${isWpp ? 'telefone' : 'e-mail'} foram ignorados.</p>`
@@ -2554,10 +2568,10 @@
                             ${batchBtnHtml}
                             <span id="mailingDispatchCounter" style="font-size:12px; color:#6b7280;">0 de ${drafts.length} enviados</span>
                         </div>
-                        <div id="mailingWahaProgress" style="display:none; padding:8px 4px 12px;">
-                            <div style="font-size:13px; color:#6b7280; margin-bottom:8px; text-align:center;" id="mailingWahaProgressStep">Iniciando...</div>
+                        <div id="mailingDispatchProgress" style="display:none; padding:8px 4px 12px;">
+                            <div style="font-size:13px; color:#6b7280; margin-bottom:8px; text-align:center;" id="mailingDispatchProgressStep">Iniciando...</div>
                             <div style="position:relative; background:#d1fae5; border-radius:99px; height:12px; overflow:visible; margin:0 16px;">
-                                <div id="mailingWahaProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
+                                <div id="mailingDispatchProgressBar" style="position:relative; height:100%; width:5%; background:linear-gradient(90deg,#059669,#10b981,#34d399); border-radius:99px; transition:width .6s ease;">
                                     <img src="/images/coelho-correndo.webp" class="coelho-run" alt="">
                                 </div>
                             </div>
@@ -2573,6 +2587,7 @@
             `;
             document.body.insertAdjacentHTML('beforeend', html);
             if (isWpp && typeof _wahaRefreshQuota === 'function') _wahaRefreshQuota();
+            if (!isWpp && typeof _mailingOutlookRefreshStatus === 'function') _mailingOutlookRefreshStatus();
             tocaDebug('mala-direta.dispatch-modal', 'Modal de despacho aberto', { total: drafts.length, channel: drafts[0]?.channel });
         }
 
@@ -2598,6 +2613,56 @@
             if (rowEl) {
                 rowEl.style.background = 'rgba(236,253,245,.55)';
                 rowEl.style.borderColor = 'rgba(16,185,129,.35)';
+            }
+            const sentCount = autoTocaMailingDispatchDrafts.filter(d => d.status === 'sent').length;
+            const counterEl = document.getElementById('mailingDispatchCounter');
+            if (counterEl) counterEl.textContent = `${sentCount} de ${autoTocaMailingDispatchDrafts.length} enviados`;
+        }
+
+        /** Barra de progresso do despacho em lote — compartilhada pelos dois
+         *  canais de envio direto (WAHA no WhatsApp, OAuth/Graph no e-mail). */
+        function _mailingSetDispatchProgress(pct, step) {
+            const wrap = document.getElementById('mailingDispatchProgress');
+            const bar = document.getElementById('mailingDispatchProgressBar');
+            const stepEl = document.getElementById('mailingDispatchProgressStep');
+            if (wrap) wrap.style.display = 'block';
+            if (bar) bar.style.width = Math.max(5, pct) + '%';
+            if (stepEl) stepEl.textContent = step || '';
+        }
+
+        function _mailingHideDispatchProgress() {
+            const wrap = document.getElementById('mailingDispatchProgress');
+            if (wrap) wrap.style.display = 'none';
+        }
+
+        /** Resultado de um envio direto na linha correspondente da fila.
+         *  `viaLabel` identifica o canal usado ("WAHA", "Outlook"). */
+        function _mailingMarkDispatchRow(idx, status, error, viaLabel) {
+            const draft = autoTocaMailingDispatchDrafts[idx];
+            const statusEl = document.getElementById(`mailingDispatchStatus_${idx}`);
+            const actionBtns = [
+                document.getElementById(`mailingWahaBtn_${idx}`),
+                document.getElementById(`mailingOauthBtn_${idx}`),
+                document.getElementById(`mailingDispatchBtn_${idx}`)
+            ];
+            if (statusEl) statusEl.title = error || '';
+            if (status === 'sent') {
+                if (draft) draft.status = 'sent';
+                if (statusEl) {
+                    statusEl.textContent = `Enviado ✓${viaLabel ? ` (${viaLabel})` : ''}`;
+                    statusEl.style.color = '#059669';
+                }
+                actionBtns.forEach(btn => { if (btn) btn.style.display = 'none'; });
+            } else if (status === 'blocked') {
+                if (statusEl) {
+                    statusEl.textContent = viaLabel === 'WAHA' ? 'Limite diário' : 'Não enviado';
+                    statusEl.style.color = '#b45309';
+                }
+            } else if (status === 'error') {
+                if (statusEl) {
+                    statusEl.textContent = `Falha: ${(error || 'erro').slice(0, 60)}`;
+                    statusEl.style.color = '#ef4444';
+                }
             }
             const sentCount = autoTocaMailingDispatchDrafts.filter(d => d.status === 'sent').length;
             const counterEl = document.getElementById('mailingDispatchCounter');
@@ -3800,11 +3865,22 @@
             return null;
         }
 
+        function _reembFriendlyExtensionError(message) {
+            // Um content script órfão (extensão auto-atualizada com a página
+            // aberta) pode deixar vazar o erro cru do Chrome — o remédio real
+            // é recarregar a página, e é isso que o usuário precisa ler.
+            const raw = String(message || '');
+            if (/could not establish connection|receiving end does not exist|extension context invalidated|message port closed/i.test(raw)) {
+                return 'A extensão AutoToca foi atualizada e perdeu a conexão com esta página. Recarregue a página (F5) e tente novamente.';
+            }
+            return raw;
+        }
+
         function _reembOpenExtensionTab(taskData) {
             return new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
                     window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
-                    reject(new Error('A extensão AutoToca não confirmou a abertura da aba. Recarregue a extensão e tente novamente.'));
+                    reject(new Error('A extensão AutoToca não confirmou a abertura da aba. Recarregue a página (F5) e tente novamente.'));
                 }, 6000);
                 const onResult = event => {
                     const detail = event?.detail || {};
@@ -3812,7 +3888,7 @@
                     clearTimeout(timeout);
                     window.removeEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
                     if (detail.ok) resolve(detail);
-                    else reject(new Error(detail.message || 'A extensão não conseguiu abrir o e-Reembolso.'));
+                    else reject(new Error(_reembFriendlyExtensionError(detail.message) || 'A extensão não conseguiu abrir o e-Reembolso.'));
                 };
                 window.addEventListener(AUTOTOCA_EXTENSION_RESULT_EVENT, onResult);
                 window.dispatchEvent(new CustomEvent(AUTOTOCA_EXTENSION_COMMAND_EVENT, {
@@ -4012,6 +4088,45 @@
             if (response.ok) integrationConfig = await response.json();
         }
 
+        async function loadFeedbackWatcherConfig() {
+            // Recurso do desenvolvedor: o card só aparece na máquina que tem o
+            // Claude Code instalado (ou onde o watcher já foi ligado).
+            try {
+                const response = await fetch(`${API_BASE}/config/feedback-watcher`);
+                if (!response.ok) return;
+                const cfg = await response.json();
+                const card = document.getElementById('feedbackWatcherCard');
+                if (!card) return;
+                const relevante = Boolean(cfg.claude_exe) || cfg.enabled;
+                card.style.display = relevante ? 'flex' : 'none';
+                if (!relevante) return;
+                document.getElementById('feedbackWatcherToggle').checked = Boolean(cfg.enabled);
+                const st = document.getElementById('feedbackWatcherStatus');
+                if (!cfg.enabled) {
+                    st.textContent = 'Desligado. Ao ligar, e-mails de feedback disparam análise automática com Claude Code (branch + PR).';
+                } else if (cfg.active) {
+                    st.textContent = `Ativo — monitorando a caixa de entrada (repo: ${cfg.repo}).`;
+                } else {
+                    st.textContent = `Ligado, mas inativo: ${cfg.reason || 'motivo desconhecido'}`;
+                }
+            } catch (e) { /* silencioso: recurso de desenvolvedor */ }
+        }
+
+        async function onFeedbackWatcherToggle(checked) {
+            const response = await fetch(`${API_BASE}/config/feedback-watcher`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: checked })
+            });
+            if (response.ok) {
+                showSuccess(checked ? 'Watcher de feedback ligado.' : 'Watcher de feedback desligado.');
+            } else {
+                const result = await response.json().catch(() => ({}));
+                showError(result.error || 'Erro ao salvar a configuração do watcher.');
+            }
+            loadFeedbackWatcherConfig();
+        }
+
         async function loadUpdateSourceConfig() {
             const response = await fetch(`${API_BASE}/config/update-source`);
             if (response.ok) updateSourceConfig = await response.json();
@@ -4093,6 +4208,8 @@
             document.getElementById('currentVersionLabel').textContent = `Versão instalada: ${updateSourceConfig?.current_version || '-'}`;
             const updateResult = document.getElementById('updateCheckResult');
             if (updateResult) updateResult.textContent = '';
+
+            loadFeedbackWatcherConfig();
         }
 
         async function saveIntegrationConfig(event) {

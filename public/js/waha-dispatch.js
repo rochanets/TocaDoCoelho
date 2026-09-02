@@ -24,6 +24,15 @@
             });
         }
 
+        /** Sessão do WhatsApp fora do ar durante um envio: além da mensagem de
+         *  erro, abre o modal de reconexão — o usuário resolve ali mesmo e
+         *  reenvia, sem precisar achar o caminho em Configurações. */
+        function _wahaMaybeOfferReconnect(payload) {
+            if (payload && payload.whatsapp_disconnected && typeof openWhatsappConnectModal === 'function') {
+                openWhatsappConnectModal();
+            }
+        }
+
         async function _wahaRefreshQuota() {
             try {
                 const q = await (await fetch(`${API_BASE}/whatsapp/send-quota`)).json();
@@ -33,34 +42,10 @@
             } catch (e) { return null; }
         }
 
-        function _wahaSetDispatchProgress(pct, step) {
-            const wrap = document.getElementById('mailingWahaProgress');
-            const bar = document.getElementById('mailingWahaProgressBar');
-            const stepEl = document.getElementById('mailingWahaProgressStep');
-            if (wrap) wrap.style.display = 'block';
-            if (bar) bar.style.width = Math.max(5, pct) + '%';
-            if (stepEl) stepEl.textContent = step || '';
-        }
-
-        function _wahaMarkRow(idx, status, error) {
-            const draft = autoTocaMailingDispatchDrafts[idx];
-            const statusEl = document.getElementById(`mailingDispatchStatus_${idx}`);
-            const wahaBtn = document.getElementById(`mailingWahaBtn_${idx}`);
-            const openBtn = document.getElementById(`mailingDispatchBtn_${idx}`);
-            if (status === 'sent') {
-                if (draft) draft.status = 'sent';
-                if (statusEl) { statusEl.textContent = 'Enviado ✓ (WAHA)'; statusEl.style.color = '#059669'; }
-                if (wahaBtn) wahaBtn.style.display = 'none';
-                if (openBtn) openBtn.style.display = 'none';
-            } else if (status === 'blocked') {
-                if (statusEl) { statusEl.textContent = 'Limite diário'; statusEl.style.color = '#b45309'; }
-            } else if (status === 'error') {
-                if (statusEl) { statusEl.textContent = `Falha: ${(error || 'erro').slice(0, 60)}`; statusEl.style.color = '#ef4444'; }
-            }
-            const sentCount = autoTocaMailingDispatchDrafts.filter(d => d.status === 'sent').length;
-            const counterEl = document.getElementById('mailingDispatchCounter');
-            if (counterEl) counterEl.textContent = `${sentCount} de ${autoTocaMailingDispatchDrafts.length} enviados`;
-        }
+        // A barra de progresso e a marcação de linha são compartilhadas com o
+        // despacho por e-mail (core.js) — aqui só fica o que é do WAHA.
+        const _wahaSetDispatchProgress = (pct, step) => _mailingSetDispatchProgress(pct, step);
+        const _wahaMarkRow = (idx, status, error) => _mailingMarkDispatchRow(idx, status, error, 'WAHA');
 
         async function dispatchMailingViaWahaOne(idx) {
             const draft = autoTocaMailingDispatchDrafts[idx];
@@ -74,7 +59,10 @@
                     body: JSON.stringify({ client_id: draft.contact.id, phone: draft.phone, message: draft.body })
                 });
                 const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) throw new Error(payload.error || 'Falha no envio via WAHA.');
+                if (!resp.ok) {
+                    _wahaMaybeOfferReconnect(payload);
+                    throw new Error(payload.error || 'Falha no envio via WAHA.');
+                }
                 _wahaMarkRow(idx, 'sent');
                 _wahaRefreshQuota();
                 if (payload.activity_id) {
@@ -124,8 +112,7 @@
                             const idx = pending[j] ? pending[j].i : null;
                             if (idx !== null) _wahaMarkRow(idx, det.status, det.error);
                         });
-                        const wrap = document.getElementById('mailingWahaProgress');
-                        if (wrap) wrap.style.display = 'none';
+                        _mailingHideDispatchProgress();
                         _wahaRefreshQuota();
                         const msg = `Despacho concluído: ${result.sent} enviado(s)` +
                             (result.failed ? `, ${result.failed} falha(s)` : '') +
@@ -135,8 +122,7 @@
                         try { loadActivities(); loadDashboard(); } catch (e) { /* opcional */ }
                     },
                     (errMsg) => {
-                        const wrap = document.getElementById('mailingWahaProgress');
-                        if (wrap) wrap.style.display = 'none';
+                        _mailingHideDispatchProgress();
                         showError(errMsg || 'Erro no despacho via WAHA.');
                     },
                     (pct, step) => _wahaSetDispatchProgress(pct, step)
@@ -237,7 +223,12 @@
                     body: JSON.stringify({ client_id: clientId, phone: client.phone, message })
                 });
                 const payload = await resp.json().catch(() => ({}));
-                if (!resp.ok) throw new Error(payload.error || 'Falha no envio via WAHA.');
+                if (!resp.ok) {
+                    // Mantém o modal do contato rápido aberto: a mensagem já
+                    // digitada é preservada para reenviar após reconectar.
+                    _wahaMaybeOfferReconnect(payload);
+                    throw new Error(payload.error || 'Falha no envio via WAHA.');
+                }
                 document.getElementById('quickContactModal')?.remove();
                 if (payload.activity_id) {
                     showUndoToast('Mensagem enviada — atividade registrada. Desfazer registro?', async () => {
