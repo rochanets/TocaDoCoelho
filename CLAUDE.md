@@ -151,6 +151,73 @@ para ela (`gh pr list --head <branch>`). Se não houver, abra uma imediatamente
 (`git push -u origin <branch>` + `gh pr create` com base `main`), sem perguntar.
 Branch commitada sem PR fica invisível no fluxo de revisão/integração do usuário.
 
+### WikiToca — três submódulos
+
+O WikiToca segue o padrão de submódulo do AutoToca: uma barra de botões
+(`.wiki-submodule-bar`) alterna painéis via `toggleWikiSubmodule(key)`, em
+`public/js/wikitoca.js`. Duas diferenças em relação ao AutoToca:
+
+- **Nunca fica sem painel** — clicar no botão já ativo não fecha nada.
+- O painel é revelado com `style.display = ''`, **não** `'block'`. O painel da
+  Capacitação é `.cap-layout` (`display:grid`), e um `block` inline vence o grid
+  e empilha a sidebar de instâncias embaixo do chat.
+
+Todo o JS do módulo vive em `public/js/wikitoca.js` (não em `itoca-autotoca.js`).
+O backend está dividido em `routes/wikitoca.py` (Conhecimentos e Documentos) e
+`routes/wikitoca_capacitacao.py` (Capacitação) — o segundo é registrado em
+`ROUTE_MODULES` **depois** do primeiro, porque `_load_route_modules()` faz `exec`
+na ordem da lista e a Capacitação usa helpers definidos lá (`_wiki_norm`,
+`_wiki_index_document`, `_wiki_track_thread`).
+
+**Busca por conteúdo.** O texto extraído dos arquivos fica cacheado em
+`wiki_documents.extracted_text`, com `extract_status` em `pending`/`ok`/`empty`/
+`error`. Qualquer feature que precise buscar dentro de arquivos deve usar esse
+cache, nunca reprocessar o arquivo. A listagem **não** devolve o
+`extracted_text`: ela seleciona colunas explícitas (`_WIKI_DOC_LIST_COLUMNS`), e
+o texto só sai do banco quando há termo de busca — um DOCX ou XLSX grande gera
+dezenas de MB e a rota é chamada a cada troca de aba.
+
+**O `snippet` é o único campo em que a API do WikiToca devolve HTML.** O backend
+escapa todo o texto vindo do arquivo com `html.escape` e insere só o
+`<mark>`/`</mark>` em posição conhecida; o frontend injeta com `innerHTML` sem
+escapar de novo, senão o destaque viraria texto literal. Há teste parametrizado
+travando essa invariante (`test_busca_escapa_conteudo_malicioso_no_snippet`).
+Todos os outros campos passam por `escapeHtml`.
+
+**Capacitação.** Os documentos (`wiki_training_documents`) são isolados por
+instância: não aparecem no submódulo Documentos nem entram na base do iToca.
+Nunca grave material de capacitação em `wiki_documents` — os laços de snapshot do
+RAG do iToca iteram aquela tabela inteira a cada rebuild, o que quebraria o
+isolamento e rodaria OCR de todas as imagens repetidamente.
+
+A cascata de resposta (`documentos → base WikiToca → web`) grava `source_kind`
+com **quatro** valores: `documents`, `wiki`, `web` e `none` (o "não encontrei em
+lugar nenhum"). Tratar `none` como `web` acenderia um selo de "resposta da
+internet" numa mensagem que diz o contrário — qualquer valor desconhecido deve
+resultar em "sem selo".
+
+Quem decide se a resposta está nos documentos é a IA, devolvendo o sentinela
+`SEM_RESPOSTA_NOS_TRECHOS`. O corte por score de relevância que existe antes da
+chamada é deliberadamente permissivo: ele só evita a chamada quando as fontes não
+têm **nenhum** termo em comum com a pergunta. Isso é a direção segura — o falso
+positivo custa uma chamada de LLM, enquanto o falso negativo mandaria o usuário
+para a web tendo a resposta nos próprios documentos.
+
+### Migrações de banco — escolha do número
+
+Ver também a seção de padrões acima. O banco de produção carrega migrações de
+**duas linhagens**: 1–19 da `main` e 20–32 da branch `Live`. Como
+`_run_schema_migrations` confere cada versão **individualmente**, qualquer número
+já gravado é pulado em silêncio — e a tabela nunca é criada, sem erro nenhum na
+tela. Foi assim que `outlook_oauth_attempts` quebrou o "Conectar Microsoft 365"
+em produção.
+
+Ao criar migração nova: **não** assuma que o próximo número é `MAX(version) + 1`
+da lista, e **não** use nada na faixa 20–32. A migração da WikiToca é a 33, com
+um vão deliberado de 20 a 32 (vãos são inofensivos: o runner itera a lista).
+`tests/test_wikitoca.py` tem uma guarda que falha se a versão duplicar ou cair na
+faixa queimada.
+
 ### Diálogos de confirmação — NUNCA usar `confirm()` nativo
 
 **Proibido:** `confirm(...)`, `window.confirm(...)` — abre janela padrão do sistema operacional, fora do tema visual.

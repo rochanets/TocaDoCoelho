@@ -105,6 +105,10 @@ except ImportError:
     pytesseract = None
     PYTESSERACT_AVAILABLE = False
 
+# Teto de tempo por chamada de OCR. Sem isso, uma imagem patológica pendura a
+# thread de background e a barra de progresso do usuário congela para sempre.
+ITOCA_OCR_TIMEOUT_SECONDS = 60
+
 try:
     from pdf2image import convert_from_path
     PDF2IMAGE_AVAILABLE = True
@@ -200,6 +204,8 @@ ACCOUNT_UPLOAD_DIR = UPLOAD_DIR / 'accounts'
 ACCOUNT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 WIKI_UPLOAD_DIR = UPLOAD_DIR / 'wikitoca'
 WIKI_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+WIKI_TRAINING_UPLOAD_DIR = WIKI_UPLOAD_DIR / 'capacitacao'
+WIKI_TRAINING_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 AUTOTOCA_UPLOAD_DIR = UPLOAD_DIR / 'autotoca'
 AUTOTOCA_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Pasta ESTÁVEL onde a extensão AutoToca é publicada para o "carregar sem compactação"
@@ -1310,6 +1316,24 @@ def _iata_add_opportunity_match_confidence_column(conn):
     if 'match_confidence' not in existentes:
         c.execute('ALTER TABLE iata_opportunities ADD COLUMN match_confidence TEXT')
 
+
+def _wiki_add_document_extract_columns(conn):
+    """Colunas de cache do texto extraído dos documentos do WikiToca, usadas
+    pela busca por conteúdo. ALTER TABLE condicional, no mesmo padrão de
+    `_iata_add_record_columns` — tolerante à tabela ainda não existir."""
+    c = conn.cursor()
+    existentes = {r[1] for r in c.execute('PRAGMA table_info(wiki_documents)')}
+    if not existentes:
+        logger.warning('[Migração 33] wiki_documents não existe — colunas de extração '
+                       'não foram adicionadas. Busca por conteúdo ficará inativa.')
+        return
+    if 'extracted_text' not in existentes:
+        c.execute('ALTER TABLE wiki_documents ADD COLUMN extracted_text TEXT')
+    if 'extracted_at' not in existentes:
+        c.execute('ALTER TABLE wiki_documents ADD COLUMN extracted_at TIMESTAMP')
+    if 'extract_status' not in existentes:
+        c.execute('ALTER TABLE wiki_documents ADD COLUMN extract_status TEXT')
+
 # ---------------------------------------------------------------------------
 SCHEMA_MIGRATIONS = [
     (1, 'baseline_legacy_init', None),  # None => roda init_db()
@@ -1549,6 +1573,58 @@ SCHEMA_MIGRATIONS = [
             finished_at TIMESTAMP
         )''',
         'CREATE INDEX IF NOT EXISTS idx_feedback_auto_jobs_status ON feedback_auto_jobs(status)',
+    ]),
+    # WikiToca: busca por conteúdo nos Documentos + submódulo Capacitação.
+    #
+    # Por que 33 e não 20, com um vão de 20 a 32 na lista: o banco de produção
+    # do usuário tem as versões 20–32 gravadas pela linhagem `Live` (ver o
+    # comentário de test_banco_antigo_sem_a_tabela_de_oauth_e_curado, em
+    # tests/test_schema_migrations.py). Como `_run_schema_migrations` confere
+    # cada versão individualmente, qualquer número já presente naquele banco é
+    # PULADO EM SILÊNCIO — e as tabelas desta migração nunca seriam criadas
+    # lá, repetindo exatamente a falha do `outlook_oauth_attempts`. Esta
+    # migração nasceu como 19, mas a 19 foi tomada por `feedback_auto_jobs`
+    # na `main` enquanto este trabalho estava em andamento; 20–32 estão
+    # queimados pela `Live`, então 33 é o primeiro número seguro.
+    #
+    # Vão na numeração é inofensivo: o runner itera a lista e confere versão
+    # por versão, sem depender de sequência contínua.
+    #
+    # Nada aqui pode nascer só dentro do init_db().
+    (33, 'wikitoca_submodulos_capacitacao', [
+        _wiki_add_document_extract_columns,
+        '''CREATE TABLE IF NOT EXISTS wiki_training_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            title_source TEXT DEFAULT 'ai',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''',
+        '''CREATE TABLE IF NOT EXISTS wiki_training_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            file_url TEXT NOT NULL,
+            file_ext TEXT,
+            file_size INTEGER,
+            extracted_text TEXT,
+            extract_status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES wiki_training_sessions(id) ON DELETE CASCADE
+        )''',
+        '''CREATE TABLE IF NOT EXISTS wiki_training_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+            content TEXT NOT NULL,
+            source_kind TEXT,
+            source_refs TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES wiki_training_sessions(id) ON DELETE CASCADE
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_wiki_training_docs_session ON wiki_training_documents(session_id)',
+        'CREATE INDEX IF NOT EXISTS idx_wiki_training_msgs_session ON wiki_training_messages(session_id, created_at)',
     ]),
 ]
 
@@ -4669,12 +4745,16 @@ def _itoca_enrich_snippet_with_joins(cursor, table, row_dict):
     return enriched
 
 
-def _itoca_find_tesseract_cmd():
+def _itoca_find_tesseract_cmd_uncached():
     """Localiza o binário do tesseract no sistema.
     Ordem de busca:
       1. Diretório do próprio executável (bundled com o Toca do Coelho via NSIS)
       2. PATH do sistema
       3. Caminhos padrão do Windows
+
+    Faz a busca de verdade a cada chamada — quem quer o resultado cacheado
+    (o caso comum) chama `_itoca_find_tesseract_cmd()` abaixo, não esta
+    função diretamente.
     """
     import subprocess
 
@@ -4719,6 +4799,63 @@ def _itoca_find_tesseract_cmd():
                 return p
 
     return None
+
+
+# Cache do caminho do tesseract — só guarda resultado POSITIVO, nunca `None`.
+# Existe para não disparar um `subprocess.run(['tesseract', '--version'])` por
+# arquivo num lote (ex.: upload de documentos da Capacitação, Task 7). Não use
+# `functools.lru_cache` aqui: ele cachearia `None` do mesmo jeito, e o Toca do
+# Coelho é um app desktop que fica horas aberto na bandeja — quem instala o
+# Tesseract DEPOIS do primeiro upload sem ele ficaria com o OCR morto em
+# silêncio pelo resto do processo (só um reinício resolveria). Um positivo
+# cacheado nunca precisa ser invalidado (o caminho encontrado não muda depois
+# de achado), então isto também elimina qualquer necessidade de limpar cache
+# entre testes por causa de contaminação — só `_itoca_reset_tesseract_cache()`
+# (usado pelos testes que exercitam o cache em si) zera este estado.
+_itoca_tesseract_cmd_cache = None
+
+
+def _itoca_reset_tesseract_cache():
+    """Só para os testes: zera o cache positivo de `_itoca_find_tesseract_cmd`
+    (ver `tests/conftest.py`)."""
+    global _itoca_tesseract_cmd_cache
+    _itoca_tesseract_cmd_cache = None
+
+
+def _itoca_find_tesseract_cmd():
+    """Caminho do binário do tesseract, com cache positivo por processo.
+    A busca de verdade é `_itoca_find_tesseract_cmd_uncached` (ver lá a ordem
+    de busca e por que o cache não guarda `None`)."""
+    global _itoca_tesseract_cmd_cache
+    if _itoca_tesseract_cmd_cache:
+        return _itoca_tesseract_cmd_cache
+    resultado = _itoca_find_tesseract_cmd_uncached()
+    if resultado:
+        _itoca_tesseract_cmd_cache = resultado
+    return resultado
+
+
+def _itoca_ocr_image(img, tess_cmd, timeout=None, context=''):
+    """OCR de uma única imagem PIL já carregada, tentando o pacote de idioma
+    'por+eng' com fallback para 'eng' (comum faltar o pacote de português em
+    máquinas novas). Núcleo compartilhado entre o ramo de PDF escaneado e o
+    de imagem solta de `_itoca_extract_text_from_file` — os dois repetiam
+    "atribuir o global tesseract_cmd → tentar por+eng → cair para eng" quase
+    palavra por palavra.
+
+    Não decide se o Tesseract está disponível (isso é `_itoca_find_tesseract_cmd`,
+    chamado por quem chama esta função) — aqui a exceção do fallback 'eng' é
+    propagada, não engolida, para não mudar esse contrato dos dois chamadores.
+    `context` é só para o log de diagnóstico do fallback de idioma (nome do
+    arquivo, "página N"...); cada chamador passa o que faz sentido pra ele.
+    """
+    pytesseract.pytesseract.tesseract_cmd = tess_cmd
+    try:
+        return pytesseract.image_to_string(img, lang='por+eng', timeout=timeout)
+    except Exception as e:
+        sufixo = f' em {context}' if context else ''
+        logger.debug(f'[iToca] OCR com lang=por+eng falhou{sufixo}, caindo para lang=eng: {e}')
+        return pytesseract.image_to_string(img, lang='eng', timeout=timeout)
 
 
 def _itoca_extract_text_from_file(file_path_str):
@@ -4782,7 +4919,6 @@ def _itoca_extract_text_from_file(file_path_str):
             if not extracted and PYTESSERACT_AVAILABLE and (PYPDFIUM2_AVAILABLE or PDF2IMAGE_AVAILABLE):
                 tess_cmd = _itoca_find_tesseract_cmd()
                 if tess_cmd:
-                    pytesseract.pytesseract.tesseract_cmd = tess_cmd
                     images = []
                     try:
                         if PYPDFIUM2_AVAILABLE:
@@ -4798,11 +4934,8 @@ def _itoca_extract_text_from_file(file_path_str):
                     if images:
                         try:
                             ocr_parts = []
-                            for img in images:
-                                try:
-                                    ocr_text = pytesseract.image_to_string(img, lang='por+eng')
-                                except Exception:
-                                    ocr_text = pytesseract.image_to_string(img, lang='eng')
+                            for pagina, img in enumerate(images, start=1):
+                                ocr_text = _itoca_ocr_image(img, tess_cmd, context=f'{path.name} (página {pagina})')
                                 if ocr_text.strip():
                                     ocr_parts.append(ocr_text.strip())
                             if ocr_parts:
@@ -4835,6 +4968,7 @@ def _itoca_extract_text_from_file(file_path_str):
 
         elif ext in ('.xlsx', '.xls'):
             if OPENPYXL_AVAILABLE:
+                wb = None
                 try:
                     wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
                     for sheet in wb.worksheets:
@@ -4844,6 +4978,37 @@ def _itoca_extract_text_from_file(file_path_str):
                                 text_parts.append(row_text)
                 except Exception as e5:
                     logger.warning(f'[iToca] openpyxl falhou em {path.name}: {e5}')
+                finally:
+                    # `read_only=True` mantém o handle do zip aberto até o close
+                    # explícito. Sem isto, no Windows o arquivo fica travado e
+                    # NENHUMA planilha podia ser excluída pelo WikiToca — o
+                    # unlink da rota levantava WinError 32. Mesmo cuidado que
+                    # routes/clients.py já toma ao ler xlsx.
+                    if wb is not None:
+                        try:
+                            wb.close()
+                        except Exception as e_close:
+                            logger.debug(f'[iToca] falha ao fechar workbook de {path.name}: {e_close}')
+
+        elif ext in ('.png', '.jpg', '.jpeg'):
+            if PYTESSERACT_AVAILABLE and PIL_AVAILABLE:
+                tess_cmd = _itoca_find_tesseract_cmd()
+                if tess_cmd:
+                    try:
+                        with PILImage.open(str(path)) as img:
+                            try:
+                                img = ImageOps.exif_transpose(img)
+                            except Exception:
+                                pass
+                            ocr_text = _itoca_ocr_image(img, tess_cmd, timeout=ITOCA_OCR_TIMEOUT_SECONDS,
+                                                        context=path.name)
+                        if ocr_text.strip():
+                            text_parts.append(ocr_text.strip())
+                    except Exception as e7:
+                        logger.warning(f'[iToca] OCR de imagem falhou em {path.name}: {e7}')
+                else:
+                    logger.info(f'[iToca] Tesseract não encontrado — {path.name} ficará sem texto extraído. '
+                                'Instale em https://github.com/UB-Mannheim/tesseract/wiki')
 
         elif ext == '.txt':
             try:
@@ -10535,6 +10700,10 @@ def _automapping_process_async(task_id, company, country, industry, force, reque
 # ─────────────────────────────────────────────────────────────
 
 ALLOWED_WIKI_EXTENSIONS = {'.pdf', '.xls', '.xlsx', '.doc', '.docx'}
+# A Capacitação aceita imagens (via OCR) além dos tipos de texto. `.doc` legado
+# entra por consistência com o submódulo Documentos, mas o python-docx não o lê:
+# nesse caso o documento fica com extract_status='empty', como já acontece hoje.
+ALLOWED_WIKI_TRAINING_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg'}
 
 
 # WikiToca - Export/Import XLSX
@@ -12545,7 +12714,7 @@ def handle_unexpected_exception(error):
 # ---------------------------------------------------------------------------
 ROUTE_MODULES = ['clients', 'accounts', 'activities_agenda', 'kanban', 'campaigns',
                  'whatsapp', 'outlook', 'itoca', 'autotoca', 'autotoca_iata', 'wikitoca',
-                 'portfolio', 'config', 'home', 'reembolsos', 'feedback']
+                 'wikitoca_capacitacao', 'portfolio', 'config', 'home', 'reembolsos', 'feedback']
 
 
 def _load_route_modules():
