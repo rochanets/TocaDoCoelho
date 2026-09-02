@@ -9,6 +9,10 @@ MUI_WELCOMEFINISHPAGE_BITMAP):
 NSIS exige BMP Windows 3.x de 24 bits sem compressao nesses tamanhos exatos —
 por isso os bitmaps sao gerados em vez de editados a mao.
 
+O header usa o coelho correndo do icone (coelho_icon_transparent.ico); a lateral
+de boas-vindas usa a ilustracao do coelho com a prancheta
+(installer_assets/coelho-boas-vindas.png).
+
 Dependencias: pip install pillow
 Uso: python scripts/gerar_assets_instalador.py  (a partir da raiz do projeto)
 """
@@ -19,6 +23,7 @@ from PIL import Image
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONE = os.path.join(RAIZ, 'coelho_icon_transparent.ico')
 SAIDA = os.path.join(RAIZ, 'installer_assets')
+COELHO_BOAS_VINDAS = os.path.join(SAIDA, 'coelho-boas-vindas.png')
 
 VERDE_ESCURO = (6, 78, 59)     # #065f46
 VERDE_MEDIO = (5, 150, 105)    # #059669
@@ -65,8 +70,11 @@ def main():
     colar_icone_ajustado(header, icone, 48, 48, 150 - 30, 57 // 2)
     header.convert('RGB').save(os.path.join(SAIDA, 'header.bmp'), 'BMP')
 
+    coelho_bruto = Image.open(COELHO_BOAS_VINDAS).convert('RGBA')
+    coelho = coelho_bruto.crop(coelho_bruto.getbbox())
+
     lateral = gradiente_vertical(164, 314, VERDE_CLARO, VERDE_ESCURO)
-    colar_icone_ajustado(lateral, icone, 118, 118, 164 // 2, 95)
+    colar_icone_ajustado(lateral, coelho, 152, 280, 164 // 2, 314 // 2)
     lateral.convert('RGB').save(os.path.join(SAIDA, 'welcome.bmp'), 'BMP')
 
     print('Gerado:', os.listdir(SAIDA))
