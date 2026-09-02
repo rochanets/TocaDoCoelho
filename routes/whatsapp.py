@@ -634,6 +634,19 @@ def _waha_daily_quota(c):
     return limit, used
 
 
+# Mensagens canônicas do envio com sessão fora do ar. O front usa
+# _WAHA_SEND_RECONNECT_MSGS (via flag whatsapp_disconnected) para oferecer a
+# reconexão em um clique, então a comparação é por igualdade — se mudar o
+# texto aqui, o conjunto continua válido sozinho.
+_WAHA_MSG_SESSAO_PARADA = ('WhatsApp não conectado. Reconecte pelo indicador do WhatsApp '
+                           '(ou em Configurações > Integrações) e tente novamente.')
+_WAHA_MSG_QR_PENDENTE = ('WhatsApp aguardando leitura do QR code — conclua a conexão '
+                         'para enviar mensagens.')
+_WAHA_MSG_CONECTANDO = ('WhatsApp ainda conectando (abrindo o Chrome e restaurando a '
+                        'sessão)... aguarde alguns instantes e tente novamente.')
+_WAHA_SEND_RECONNECT_MSGS = {_WAHA_MSG_SESSAO_PARADA, _WAHA_MSG_QR_PENDENTE}
+
+
 def _waha_send_text(chat_id, text):
     """Envia texto via WAHA sendText. Retorna (ok, erro)."""
     api_url, api_key, session = _waha_settings()
@@ -646,6 +659,23 @@ def _waha_send_text(chat_id, text):
         )
         if resp.status_code in (200, 201):
             return True, None
+        try:
+            body = resp.json() or {}
+        except Exception:
+            body = {}
+        # O sidecar responde 503 sempre que a sessão não está WORKING; repassar
+        # o corpo cru ('HTTP 503: {"error":...,"status":"STOPPED"}') era a
+        # mensagem que chegava ao usuário na ficha do contato. Traduz para uma
+        # orientação acionável conforme o estado real da sessão.
+        if resp.status_code == 503:
+            status = (body.get('status') or '').upper()
+            if status == 'STARTING':
+                return False, _WAHA_MSG_CONECTANDO
+            if status == 'SCAN_QR_CODE':
+                return False, _WAHA_MSG_QR_PENDENTE
+            return False, _WAHA_MSG_SESSAO_PARADA
+        if body.get('error'):
+            return False, str(body['error'])[:300]
         return False, f'HTTP {resp.status_code}: {resp.text[:180]}'
     except Exception as e:
         return False, str(e)
@@ -701,6 +731,10 @@ def whatsapp_send_single():
                                          register_activity=data.get('register_activity', True))
         conn.commit()
         conn.close()
+        # Sessão fora do ar: o front abre o modal de reconexão do WhatsApp em
+        # vez de só exibir o erro (o usuário estava a um clique de resolver).
+        if result.get('error') in _WAHA_SEND_RECONNECT_MSGS:
+            result['whatsapp_disconnected'] = True
         status = 200 if result.get('ok') else (429 if result.get('limit_reached') else 502)
         return jsonify(result), status
     except Exception as e:
