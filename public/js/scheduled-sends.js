@@ -189,17 +189,90 @@
             } catch (e) { /* segue */ }
 
             // 2) Envios agendados perdidos (sistema estava desligado na hora)
+            let abriuModal = false;
             try {
                 const missed = await (await fetch(`${API_BASE}/scheduled-sends/missed`)).json();
-                if (Array.isArray(missed) && missed.length) _showMissedSendsModal(missed);
+                if (Array.isArray(missed) && missed.length) {
+                    _showMissedSendsModal(missed);
+                    abriuModal = true;
+                }
             } catch (e) { /* segue */ }
 
             // 3) Update trouxe extensão nova → avisar para baixar/reinstalar o plugin
             if (!firstRun) {
                 try {
                     const ext = await (await fetch(`${API_BASE}/extension/update-status`)).json();
-                    if (ext.update_available) _showExtensionUpdateModal(ext);
+                    if (ext.update_available) {
+                        _showExtensionUpdateModal(ext);
+                        abriuModal = true;
+                    }
                 } catch (e) { /* segue */ }
+            }
+
+            // 4) Oferta do guia em PDF. Fica para a próxima abertura se já houver
+            //    outro modal na tela — dois modais empilhados escondem um ao outro,
+            //    e nada é gravado aqui, então a oferta não se perde.
+            if (!abriuModal) {
+                try {
+                    const t = await (await fetch(`${API_BASE}/config/tutorial-prompt`)).json();
+                    if (t.show) _showTutorialPdfModal(t);
+                } catch (e) { /* segue */ }
+            }
+        }
+
+        function _showTutorialPdfModal(t) {
+            document.getElementById('tutorialPdfModal')?.remove();
+            const tamanho = t.size_mb ? ` (${String(t.size_mb).replace('.', ',')} MB)` : '';
+            const html = `
+                <div class="modal active" id="tutorialPdfModal" onclick="if(event.target===this) tutorialPromptClose()">
+                    <div class="modal-content" style="max-width:520px;">
+                        <div class="modal-header">
+                            <h2 class="modal-title">📘 Guia de primeiro acesso</h2>
+                            <button class="modal-close" onclick="tutorialPromptClose()" title="Fechar">&#215;</button>
+                        </div>
+                        <div style="display:flex; gap:14px; align-items:flex-start; margin-bottom:16px;">
+                            <img src="/images/coelho-correndo.webp" alt="" style="width:56px; height:56px; object-fit:contain; flex:none;">
+                            <p style="color:#4b5563; font-size:13.5px; line-height:1.55; margin:0;">
+                                Quer baixar o tutorial em PDF? São <b>23 passos na ordem em que as
+                                dependências exigem</b>, do cadastro do usuário até o assistente
+                                respondendo sobre os seus dados — cada passo com a tela real do
+                                sistema e o ponto exato em destaque.
+                            </p>
+                        </div>
+                        <label style="display:flex; align-items:center; gap:9px; cursor:pointer; user-select:none; font-size:13px; color:#4b5563; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:14px;">
+                            <input type="checkbox" id="tutorialPdfDontAsk" style="width:16px; height:16px; cursor:pointer; accent-color:#10b981;">
+                            Não perguntar de novo
+                        </label>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap;">
+                            <button class="btn btn-secondary btn-small" onclick="tutorialPromptClose()">Agora não</button>
+                            <a class="btn btn-primary btn-small" href="${escapeHtml(t.url)}" download
+                               onclick="tutorialPromptClose(true)">
+                                <i class="fas fa-file-pdf"></i> Baixar o guia${tamanho}
+                            </a>
+                        </div>
+                        <p style="color:#9ca3af; font-size:11.5px; margin:12px 0 0; text-align:right;">
+                            Depois, o guia fica em Configurações &rsaquo; Ajuda e Atualizações.
+                        </p>
+                    </div>
+                </div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        /** Fecha a oferta e grava a preferência. `baixou` só muda a mensagem. */
+        async function tutorialPromptClose(baixou) {
+            const naoPerguntar = !!document.getElementById('tutorialPdfDontAsk')?.checked;
+            document.getElementById('tutorialPdfModal')?.remove();
+            try {
+                await fetch(`${API_BASE}/config/tutorial-prompt/seen`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dont_ask_again: naoPerguntar }),
+                });
+            } catch (e) { /* preferência é conveniência; não vale travar a abertura */ }
+            if (baixou) {
+                showSuccess('Guia baixado! Ele também fica em Configurações › Ajuda e Atualizações.');
+            } else if (naoPerguntar) {
+                showInfo('Ok, não perguntarei mais. O guia continua em Configurações › Ajuda e Atualizações.');
             }
         }
 

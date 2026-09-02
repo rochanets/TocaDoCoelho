@@ -1,0 +1,26 @@
+# Assets binários: nunca passar por conversão de fim de linha.
+#
+# O repositório é clonado com core.autocrlf=true no Windows. Sem declaração
+# explícita, o git decide texto-ou-binário por heurística (presença de NUL) —
+# funciona para PDF e PNG, mas é uma aposta silenciosa: quando erra, o arquivo
+# chega corrompido no checkout e não no commit, então o build quebra na máquina
+# de quem clonou, não na de quem subiu.
+#
+# `binary` também desliga o diff textual. O Git for Windows traz
+# `*.pdf diff=astextplain` no gitattributes global, que faz um PDF de 3 MB
+# aparecer como 1580 linhas no diff da PR.
+
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.ico   binary
+*.gif   binary
+*.mp4   binary
+*.db    binary
+*.docx  binary
+*.xlsx  binary
+*.crx   binary
+*.zip   binary
+*.exe   binary

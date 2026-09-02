@@ -4088,6 +4088,23 @@
             if (response.ok) integrationConfig = await response.json();
         }
 
+        async function loadTutorialPdfRow() {
+            // Acesso permanente ao guia — é para cá que o pop-up de abertura
+            // aponta quando o usuário marca "não perguntar de novo". A linha só
+            // aparece se o PDF veio no build, senão o link daria 404.
+            try {
+                const response = await fetch(`${API_BASE}/config/tutorial-prompt`);
+                if (!response.ok) return;
+                const t = await response.json();
+                const row = document.getElementById('tutorialPdfRow');
+                if (!row) return;
+                row.style.display = t.available ? 'flex' : 'none';
+                if (!t.available) return;
+                const link = document.getElementById('tutorialPdfLink');
+                if (link) link.href = t.url;
+            } catch (e) { /* card de configurações não depende disso */ }
+        }
+
         async function loadFeedbackWatcherConfig() {
             // Recurso do desenvolvedor: o card só aparece na máquina que tem o
             // Claude Code instalado (ou onde o watcher já foi ligado).
@@ -4210,6 +4227,7 @@
             if (updateResult) updateResult.textContent = '';
 
             loadFeedbackWatcherConfig();
+            loadTutorialPdfRow();
         }
 
         async function saveIntegrationConfig(event) {
