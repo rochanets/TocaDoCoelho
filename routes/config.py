@@ -1056,6 +1056,55 @@ def config_first_run_seen():
         return jsonify({'error': str(e)}), 500
 
 
+TUTORIAL_PDF_NAME = 'Toca-do-Coelho-Primeiro-Acesso.pdf'
+TUTORIAL_PDF_URL = f'/assets/tutorial/{TUTORIAL_PDF_NAME}'
+
+
+def _tutorial_pdf_path():
+    return Path(app.static_folder) / 'assets' / 'tutorial' / TUTORIAL_PDF_NAME
+
+
+@app.route('/api/config/tutorial-prompt', methods=['GET'])
+def config_tutorial_prompt():
+    """Oferta do guia em PDF na abertura do sistema.
+
+    `available` diz se o arquivo veio no build — sem isso o link em
+    Configurações apontaria para um 404. `show` é o que decide o pop-up: cai
+    para False assim que o usuário marca "não perguntar de novo".
+    """
+    try:
+        path = _tutorial_pdf_path()
+        available = path.is_file()
+        dismissed = bool(_resolve_setting('tutorial_pdf_prompt_dismissed', ''))
+        return jsonify({
+            'available': available,
+            'show': available and not dismissed,
+            'dismissed': dismissed,
+            'url': TUTORIAL_PDF_URL,
+            'filename': TUTORIAL_PDF_NAME,
+            'size_mb': round(path.stat().st_size / (1024 * 1024), 1) if available else 0,
+        })
+    except Exception as e:
+        logger.exception(f'[ERROR] GET /api/config/tutorial-prompt: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/tutorial-prompt/seen', methods=['POST'])
+def config_tutorial_prompt_seen():
+    """Fecha a oferta. Só grava quando o usuário pediu para não perguntar mais —
+    fechar sem marcar o checkbox deixa o pop-up voltar na próxima abertura."""
+    try:
+        data = request.get_json(silent=True) or {}
+        dont_ask = bool(data.get('dont_ask_again'))
+        if dont_ask:
+            _save_app_setting('tutorial_pdf_prompt_dismissed',
+                              datetime.now().isoformat(timespec='seconds'))
+        return jsonify({'ok': True, 'dismissed': dont_ask})
+    except Exception as e:
+        logger.exception(f'[ERROR] POST /api/config/tutorial-prompt/seen: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/extension/update-status', methods=['GET'])
 def extension_update_status():
     """Após um update do app que trouxe extensão nova, avisa o usuário para
