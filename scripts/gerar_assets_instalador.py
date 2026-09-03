@@ -4,14 +4,19 @@
 Saidas (usadas por installer.nsi via MUI_HEADERIMAGE_BITMAP /
 MUI_WELCOMEFINISHPAGE_BITMAP):
   - installer_assets/header.bmp   (150x57  — banner do topo das paginas internas)
-  - installer_assets/welcome.bmp  (164x314 — ilustracao lateral de boas-vindas/conclusao)
+  - installer_assets/welcome.bmp  (164x314 — ilustracao lateral de boas-vindas)
+  - installer_assets/finish.bmp   (164x314 — ilustracao lateral da conclusao)
 
 NSIS exige BMP Windows 3.x de 24 bits sem compressao nesses tamanhos exatos —
 por isso os bitmaps sao gerados em vez de editados a mao.
 
 O header usa o coelho correndo do icone (coelho_icon_transparent.ico); a lateral
-de boas-vindas usa a ilustracao do coelho com a prancheta
-(installer_assets/coelho-boas-vindas.png).
+de boas-vindas usa o coelho com a prancheta (coelho-boas-vindas.png) e a da
+conclusao, o coelho com o joinha (coelho-conclusao.png).
+
+A tela de conclusao precisa de um BMP proprio porque o MUI2 usa um unico define
+(MUI_WELCOMEFINISHPAGE_BITMAP) para as duas paginas — installer.nsi troca a
+imagem em tempo de execucao no callback SHOW da pagina final.
 
 Dependencias: pip install pillow
 Uso: python scripts/gerar_assets_instalador.py  (a partir da raiz do projeto)
@@ -24,6 +29,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONE = os.path.join(RAIZ, 'coelho_icon_transparent.ico')
 SAIDA = os.path.join(RAIZ, 'installer_assets')
 COELHO_BOAS_VINDAS = os.path.join(SAIDA, 'coelho-boas-vindas.png')
+COELHO_CONCLUSAO = os.path.join(SAIDA, 'coelho-conclusao.png')
 
 VERDE_ESCURO = (6, 78, 59)     # #065f46
 VERDE_MEDIO = (5, 150, 105)    # #059669
@@ -61,6 +67,14 @@ def colar_icone_ajustado(base, icone, largura_max, altura_max, centro_x, centro_
     base.paste(redimensionado, (x, y), redimensionado)
 
 
+def lateral_com_coelho(caminho_png, largura_max, altura_max):
+    coelho_bruto = Image.open(caminho_png).convert('RGBA')
+    coelho = coelho_bruto.crop(coelho_bruto.getbbox())
+    painel = gradiente_vertical(164, 314, VERDE_CLARO, VERDE_ESCURO)
+    colar_icone_ajustado(painel, coelho, largura_max, altura_max, 164 // 2, 314 // 2)
+    return painel.convert('RGB')
+
+
 def main():
     os.makedirs(SAIDA, exist_ok=True)
     icone_bruto = Image.open(ICONE).convert('RGBA')
@@ -70,12 +84,10 @@ def main():
     colar_icone_ajustado(header, icone, 48, 48, 150 - 30, 57 // 2)
     header.convert('RGB').save(os.path.join(SAIDA, 'header.bmp'), 'BMP')
 
-    coelho_bruto = Image.open(COELHO_BOAS_VINDAS).convert('RGBA')
-    coelho = coelho_bruto.crop(coelho_bruto.getbbox())
-
-    lateral = gradiente_vertical(164, 314, VERDE_CLARO, VERDE_ESCURO)
-    colar_icone_ajustado(lateral, coelho, 152, 280, 164 // 2, 314 // 2)
-    lateral.convert('RGB').save(os.path.join(SAIDA, 'welcome.bmp'), 'BMP')
+    lateral_com_coelho(COELHO_BOAS_VINDAS, 152, 280).save(
+        os.path.join(SAIDA, 'welcome.bmp'), 'BMP')
+    lateral_com_coelho(COELHO_CONCLUSAO, 152, 280).save(
+        os.path.join(SAIDA, 'finish.bmp'), 'BMP')
 
     print('Gerado:', os.listdir(SAIDA))
 

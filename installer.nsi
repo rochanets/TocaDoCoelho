@@ -20,6 +20,9 @@ OutFile "TocaDoCoelho-${APP_VERSION}-Setup.exe"
 !define MUI_HEADERIMAGE_UNBITMAP "installer_assets\header.bmp"
 
 ; Ilustração verde com o coelho na lateral das páginas de boas-vindas/conclusão.
+; O MUI2 tem um único define para as duas páginas, e ambas carregam o mesmo
+; $PLUGINSDIR\modern-wizard.bmp — por isso a conclusão troca a imagem em tempo
+; de execução (ver MostrarCoelhoDaConclusao, mais abaixo).
 !define MUI_WELCOMEFINISHPAGE_BITMAP "installer_assets\welcome.bmp"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "installer_assets\welcome.bmp"
 
@@ -58,12 +61,25 @@ FunctionEnd
 !define MUI_FINISHPAGE_TITLE "Instalação concluída"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\TocaDoCoelho.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Iniciar o Toca do Coelho agora"
+; Coelho comemorando (joinha) no lugar do coelho de boas-vindas.
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW MostrarCoelhoDaConclusao
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_WELCOME
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
+
+; Substitui a ilustração lateral da página de conclusão. Roda no callback SHOW,
+; depois que o MUI já criou o controle de imagem com o welcome.bmp: o bitmap
+; antigo é liberado e o novo entra no lugar (o handle fica na mesma variável que
+; o MUI libera ao destruir a página, então não vaza).
+Function MostrarCoelhoDaConclusao
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\finish-wizard.bmp" "installer_assets\finish.bmp"
+    ${NSD_FreeImage} $mui.FinishPage.Image.Bitmap
+    ${NSD_SetStretchedImage} $mui.FinishPage.Image "$PLUGINSDIR\finish-wizard.bmp" $mui.FinishPage.Image.Bitmap
+FunctionEnd
 
 !insertmacro MUI_LANGUAGE "PortugueseBR"
 
