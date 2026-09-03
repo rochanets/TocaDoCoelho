@@ -5984,6 +5984,31 @@ def _itoca_compose_context_text(context_rows, history_rows=None):
     return '\n'.join(lines)
 
 
+def _itoca_compose_fallback_prompt(question, context_text):
+    """Monta um prompt único para a cascata `_llm_prompt` quando o template SAI
+    dedicado do iToca está indisponível.
+
+    O template dedicado (`itoca_sai_template_id`) recebe `question` e
+    `context_sources` em campos separados e guarda o system prompt do lado do
+    SAI. A cascata de fallback aceita só um texto livre, então o papel do
+    assistente e o contrato de saída (o mesmo JSON que o parser de
+    `_itoca_call_sai_llm` espera) precisam viajar aqui dentro.
+    """
+    return (
+        'Você é o iToca, assistente interno do sistema Toca do Coelho (CRM de vendas '
+        'B2B da Stefanini). Responda à pergunta do usuário usando SOMENTE as '
+        'informações do contexto interno abaixo. Se o contexto não tiver a resposta, '
+        'diga isso e peça os detalhes que faltam — nunca invente dados.\n\n'
+        f'{context_text}\n\n'
+        f'=== PERGUNTA DO USUÁRIO ===\n{question}\n\n'
+        '=== FORMATO DA RESPOSTA ===\n'
+        'Retorne SOMENTE um JSON válido, sem cercas de código, com estes campos: '
+        '{"answer": "sua resposta em português, seguindo as instruções de formatação '
+        'acima", "confidence_percent": 0-100, "needs_refinement": true|false, '
+        '"refinement_hint": "o que o usuário deve detalhar, ou string vazia"}'
+    )
+
+
 def _itoca_call_sai_llm(question, context_rows, history_rows=None):
     """Chama a API SAI LLM com a pergunta e o contexto. Retorna dict com answer, confidence_percent, needs_refinement, refinement_hint."""
     settings_map = _load_app_settings_map(['itoca_sai_api_key', 'itoca_sai_template_id', 'itoca_sai_base_url'])
@@ -6028,18 +6053,41 @@ def _itoca_call_sai_llm(question, context_rows, history_rows=None):
             'context_sources': context_text if context_text else 'Nenhum dado encontrado na base interna para esta pergunta.'
         }
     }
+    raw = None
+    sai_error = None
     try:
         resp = requests.post(url, json=payload, headers={'X-Api-Key': api_key}, timeout=60)
-        if not resp.ok:
+        if resp.ok:
+            logger.info(f'[iToca][SAI] OK ({len(resp.text)} chars)')
+            raw = resp.text
+        else:
             logger.error(f'[iToca][SAI] HTTPError {resp.status_code}: {resp.text[:400]}')
-            raise RuntimeError(f'Erro na API SAI (HTTP {resp.status_code}): {resp.text[:200]}')
-        logger.info(f'[iToca][SAI] OK ({len(resp.text)} chars)')
-        raw = resp.text
-    except RuntimeError:
-        raise
+            sai_error = f'Erro na API SAI (HTTP {resp.status_code}): {resp.text[:200]}'
     except Exception as e:
         logger.error(f'[iToca][SAI] Erro de conexão: {e}')
-        raise RuntimeError(f'Falha ao conectar com a API SAI: {str(e)}')
+        sai_error = f'Falha ao conectar com a API SAI: {str(e)}'
+
+    if raw is None:
+        # O template dedicado do iToca tem cota própria e é o primeiro a estourar
+        # (HTTP 429 "Template usage limit exceeded"), porque é chamado em toda
+        # pergunta do chat. Antes desta cascata esse 429 virava RuntimeError na
+        # cara do usuário e o módulo inteiro ficava morto até a cota virar —
+        # mesmo com o template "Geral Claude" (chave e cota separadas) e o
+        # OpenRouter ociosos. Ver CLAUDE.md: toda automação com IA usa
+        # `_llm_prompt` (SAI → OpenRouter).
+        #
+        # Não há retry com backoff aqui de propósito: "usage limit exceeded" é
+        # cota esgotada, não rate limit transitório, então repetir só somaria
+        # segundos a uma espera que o usuário já está olhando.
+        raw = _llm_prompt(
+            _itoca_compose_fallback_prompt(question, context_text),
+            log_tag='iToca'
+        )
+        if not raw or not str(raw).strip():
+            raise RuntimeError(sai_error or 'Nenhum provedor de IA respondeu à pergunta.')
+        logger.warning('[iToca] Template dedicado indisponível — resposta obtida pela '
+                       'cascata de fallback (_llm_prompt).')
+        raw = str(raw)
 
     # ─── Parsing robusto da resposta da API SAI ───────────────────────────────────────────────
     # A API SAI pode retornar o JSON do LLM de várias formas:
