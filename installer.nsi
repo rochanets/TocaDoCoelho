@@ -85,6 +85,135 @@ FunctionEnd
 
 BrandingText "Toca do Coelho"
 
+; ---------------------------------------------------------------------------
+; Liberação de arquivos travados por processos de TERCEIROS
+;
+; O taskkill da seção de instalação só resolve o que é NOSSO. O que quebrava
+; toda atualização era outra coisa: um processo alheio ao Toca — no caso real
+; investigado, o host de mensagens nativas de uma extensão do Chrome — havia
+; carregado `_internal\VCRUNTIME140.dll` de dentro da pasta de instalação e
+; seguia com a DLL mapeada muito depois de o Toca ter sido encerrado (o Chrome
+; foi aberto PELO app, então a pasta de instalação entrou no caminho de busca
+; de DLL dele e de tudo que ele lança depois). Sem nenhum processo nosso vivo
+; para matar — e sem poder matar o navegador do usuário —, a extração batia em
+; "Erro ao abrir o arquivo pra gravação: ...\_internal\vcruntime140.dll", o
+; usuário clicava em Ignorar e a instalação terminava "com sucesso" com a DLL
+; do runtime C de um build antigo convivendo com .pyd novos — receita de crash
+; silencioso depois.
+;
+; A saída é a mesma que os atualizadores de navegador usam: no Windows um
+; arquivo EM USO não pode ser aberto para escrita, mas PODE ser renomeado.
+; Renomeando a cópia presa para <nome>.toca-old<n>, o caminho original fica
+; livre e a extração cria um arquivo novo; quem tinha a DLL mapeada continua
+; usando a cópia renomeada até morrer. Verificado na máquina onde o erro
+; acontecia: o rename do arquivo mapeado passa, e a gravação no caminho
+; original logo depois também.
+;
+; A sobra .toca-old<n> NÃO pode ser agendada para exclusão no boot
+; (`Delete /REBOOTOK`): isso escreve em PendingFileRenameOperations, que exige
+; privilégio de administrador, e este instalador é per-user de propósito
+; (RequestExecutionLevel user) — a chamada volta com acesso negado (erro 5),
+; medido nessa mesma máquina. Por isso a limpeza é best-effort e acontece no
+; começo da atualização SEGUINTE, quando o processo que segurava o arquivo
+; normalmente já morreu.
+; ---------------------------------------------------------------------------
+!define TOCA_OLD_SUFFIX ".toca-old"
+
+!macro TocaLiberarDir Dir Mask
+    Push "${Dir}"
+    Push "${Mask}"
+    Call TocaLiberarArquivosDeUmDiretorio
+!macroend
+
+; Apaga sobras .toca-old<n> de atualizações anteriores (best effort).
+Function TocaApagarSobras
+    Exch $R0    ; diretório
+    Push $R1    ; handle da busca
+    Push $R2    ; nome do arquivo
+
+    FindFirst $R1 $R2 "$R0\*${TOCA_OLD_SUFFIX}*"
+    tas_loop:
+        StrCmp $R2 "" tas_done
+        Delete "$R0\$R2"
+        FindNext $R1 $R2
+        Goto tas_loop
+    tas_done:
+    FindClose $R1
+
+    Pop $R2
+    Pop $R1
+    Pop $R0
+FunctionEnd
+
+; Renomeia para .toca-old<n> todo arquivo do diretório+máscara que esteja
+; travado. Pilha: diretório, máscara (a máscara no topo).
+Function TocaLiberarArquivosDeUmDiretorio
+    Exch $R1    ; máscara (ex.: *.dll)
+    Exch
+    Exch $R0    ; diretório
+    Push $R2    ; handle da busca
+    Push $R3    ; nome do arquivo
+    Push $R4    ; handle do teste de escrita
+    Push $R5    ; sufixo numérico
+
+    FindFirst $R2 $R3 "$R0\$R1"
+    tld_loop:
+        StrCmp $R3 "" tld_done
+        ; Mesmo teste que a extração do NSIS faz — abrir para escrita. Um
+        ; arquivo mapeado como imagem por qualquer processo recusa aqui.
+        ClearErrors
+        FileOpen $R4 "$R0\$R3" a
+        IfErrors tld_travado
+        FileClose $R4
+        Goto tld_next
+    tld_travado:
+        StrCpy $R5 0
+    tld_nome:
+        IfFileExists "$R0\$R3${TOCA_OLD_SUFFIX}$R5" 0 tld_rename
+        IntOp $R5 $R5 + 1
+        IntCmp $R5 20 tld_desiste tld_nome tld_desiste
+    tld_rename:
+        ClearErrors
+        Rename "$R0\$R3" "$R0\$R3${TOCA_OLD_SUFFIX}$R5"
+        IfErrors tld_desiste
+        DetailPrint "Em uso por outro programa, liberado para atualizar: $R3"
+        Goto tld_next
+    tld_desiste:
+        DetailPrint "AVISO: $R3 esta em uso e nao pode ser liberado."
+    tld_next:
+        FindNext $R2 $R3
+        Goto tld_loop
+    tld_done:
+    FindClose $R2
+
+    Pop $R5
+    Pop $R4
+    Pop $R3
+    Pop $R2
+    Pop $R0
+    Pop $R1
+FunctionEnd
+
+Function TocaLiberarArquivosEmUso
+    ; Sobras primeiro: com o processo dono já morto, elas somem agora e o nome
+    ; .toca-old0 volta a ficar livre para esta rodada.
+    Push "$INSTDIR"
+    Call TocaApagarSobras
+    Push "$INSTDIR\_internal"
+    Call TocaApagarSobras
+    Push "$INSTDIR\_internal\playwright\driver"
+    Call TocaApagarSobras
+
+    ; Só binários: são os únicos que ficam mapeados por outro processo. Arquivo
+    ; de dados travado é problema diferente (e não acontece na prática aqui).
+    !insertmacro TocaLiberarDir "$INSTDIR" "*.exe"
+    !insertmacro TocaLiberarDir "$INSTDIR" "*.dll"
+    !insertmacro TocaLiberarDir "$INSTDIR\_internal" "*.dll"
+    !insertmacro TocaLiberarDir "$INSTDIR\_internal" "*.pyd"
+    ; O node do driver do Playwright roda fora da árvore do TocaDoCoelho.exe.
+    !insertmacro TocaLiberarDir "$INSTDIR\_internal\playwright\driver" "*.exe"
+FunctionEnd
+
 LangString DESC_SecApp ${LANG_PORTUGUESEBR} "Instala o Toca do Coelho"
 LangString DESC_SecShortcuts ${LANG_PORTUGUESEBR} "Cria atalhos na Área de Trabalho e no Menu Iniciar"
 LangString DESC_SecAutoStart ${LANG_PORTUGUESEBR} "Iniciar o Toca do Coelho automaticamente quando o Windows ligar"
@@ -100,6 +229,13 @@ Section "Instalar Toca do Coelho" SecApp
     DetailPrint "Encerrando WAHA-lite (node.exe)..."
     nsExec::Exec 'powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''*TocaDoCoelho*'' } | Stop-Process -Force"'
     Sleep 2500
+
+    ; Depois de matar o que é nosso, libera o que ficou preso por processos de
+    ; terceiros (ver o bloco de comentário de TocaLiberarArquivosEmUso). Tem de
+    ; rodar ANTES de qualquer File, senão a extração é que descobre o bloqueio —
+    ; e aí só sobra o diálogo Anular/Repetir/Ignorar para o usuário.
+    DetailPrint "Liberando arquivos em uso por outros programas..."
+    Call TocaLiberarArquivosEmUso
 
     ; Migração do layout antigo: remove a cópia anterior (ex.: C:\Program Files\
     ; TocaDoCoelho), best effort. Sem permissão de escrita (usuário sem admin) o RMDir
