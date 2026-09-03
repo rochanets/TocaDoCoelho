@@ -41,12 +41,22 @@ def test_libera_arquivos_em_uso_antes_de_extrair(script):
     saída é renomear o arquivo preso antes de extrair. Se a chamada for
     movida para depois de um `File`, é a extração que descobre o bloqueio — e
     aí o usuário só tem o diálogo Anular/Repetir/Ignorar.
+
+    Só conta `File` que grava na pasta de instalação. Os que gravam em
+    `$PLUGINSDIR` são assets da própria interface (a ilustração da tela de
+    conclusão, por exemplo): vão para o diretório temporário do instalador, não
+    para `$INSTDIR`, então nenhum arquivo travado lá pode atrapalhá-los. Eles
+    aparecem antes da chamada no texto do script porque estão dentro de
+    `Function` — e a posição de uma função no arquivo não define quando ela roda.
     """
     chamada = script.index('Call TocaLiberarArquivosEmUso')
-    primeiro_file = min(
-        m.start() for m in re.finditer(r'^\s*File\b', script, re.MULTILINE)
-    )
-    assert chamada < primeiro_file
+    extracoes_na_instalacao = [
+        m.start()
+        for m in re.finditer(r'^\s*File\b.*$', script, re.MULTILINE)
+        if '$PLUGINSDIR' not in m.group(0)
+    ]
+    assert extracoes_na_instalacao, 'nenhum File extraindo para $INSTDIR?'
+    assert chamada < min(extracoes_na_instalacao)
 
 
 def test_nao_usa_delete_rebootok(codigo):
